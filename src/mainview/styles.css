@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Dark-first design tokens. These are placeholder values owned by this shell;
+ * the `mast-design-system` spec replaces them with the real token set. Tailwind
+ * maps semantic color utilities (bg-bg, text-content, …) onto these vars in
+ * tailwind.config.js, so components never hardcode raw colors.
+ */
+:root {
+  --color-bg: #0b0d10;
+  --color-surface: #14171c;
+  --color-border: #262b33;
+  --color-content: #e6e9ee;
+  --color-muted: #8b93a1;
+  --color-accent: #5b8def;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-content);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}

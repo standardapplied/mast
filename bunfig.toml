@@ -1,0 +1,4 @@
+[test]
+# Register happy-dom so one `bun test` run covers webview DOM, the Bun main, and
+# any CLI — no second test framework (no vitest).
+preload = ["./test/setup.ts"]
