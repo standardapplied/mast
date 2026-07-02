@@ -16,6 +16,7 @@ const flush = async () => {
 
 beforeEach(() => {
   location.hash = "#/";
+  localStorage.removeItem("mast.board.lanes");
 });
 
 async function render() {
@@ -92,6 +93,37 @@ describe("App cockpit", () => {
 
     act(() => dispatchPush("bridge-status", { status: "connected" }));
     expect(container.querySelector('[data-testid="bridge-status"]')).toBeNull();
+  });
+
+  test("lane switches hide columns, persist, and guard the last lane", async () => {
+    await render();
+    expect(container.querySelectorAll(".kanban-column").length).toBe(5);
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="lanes-trigger"]')?.click();
+    });
+    const doneSwitch = container.querySelector<HTMLButtonElement>(
+      '[data-testid="lane-toggle-done"] .switch',
+    );
+    expect(doneSwitch?.getAttribute("aria-checked")).toBe("true");
+
+    act(() => doneSwitch?.click());
+    expect(container.querySelectorAll(".kanban-column").length).toBe(4);
+    expect(container.querySelector('[data-testid="column-done"]')).toBeNull();
+    expect(JSON.parse(localStorage.getItem("mast.board.lanes")!)).not.toContain("done");
+
+    for (const lane of ["draft", "pending", "review"]) {
+      act(() => {
+        container
+          .querySelector<HTMLButtonElement>(`[data-testid="lane-toggle-${lane}"] .switch`)
+          ?.click();
+      });
+    }
+    expect(container.querySelectorAll(".kanban-column").length).toBe(1);
+    const last = container.querySelector<HTMLButtonElement>(
+      '[data-testid="lane-toggle-in_progress"] .switch',
+    );
+    expect(last?.disabled).toBe(true);
   });
 
   test("user menu opens with the theme toggle and re-themes the document", async () => {
