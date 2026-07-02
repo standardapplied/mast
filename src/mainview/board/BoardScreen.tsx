@@ -14,11 +14,12 @@ import { unmetDependencies, useBoard } from "./useBoard";
 
 const LANES_KEY = "mast.board.lanes";
 
-const STATUS_TONE: Record<SpecStatus, "accent" | "warning" | "success" | "neutral"> = {
+const STATUS_TONE: Record<SpecStatus, "accent" | "warning" | "success" | "info" | "neutral"> = {
   draft: "neutral",
   pending: "neutral",
   in_progress: "accent",
   review: "warning",
+  awaiting_merge: "info",
   done: "success",
   archived: "neutral",
 };

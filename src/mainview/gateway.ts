@@ -138,6 +138,15 @@ export function createDemoGateway(): DemoGateway {
       assignee: "uday",
       agent: "claude-code",
     }),
+    demoSpec({
+      id: "chorus-webhooks",
+      project: "chorus",
+      title: "Outbound webhooks",
+      status: "awaiting_merge",
+      assignee: "ravi",
+      agent: "claude-code",
+      branch: "agent/chorus-webhooks",
+    }),
     demoSpec({ id: "chorus-onboarding", project: "chorus", title: "Tenant onboarding", status: "done" }),
     demoSpec({
       id: "mast-terminal",
@@ -199,6 +208,7 @@ export function createDemoGateway(): DemoGateway {
         pending: count("pending"),
         in_progress: count("in_progress"),
         review: count("review"),
+        awaiting_merge: count("awaiting_merge"),
         done: count("done"),
         archived: count("archived"),
         next_ready_id: scoped.find((s) => s.status === "pending" && !s.depends_on?.length)?.id,

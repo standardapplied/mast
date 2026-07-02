@@ -1143,9 +1143,13 @@
   padding-bottom: 8px;
 }
 
+/* Lanes grow to share the canvas width but clamp between a readable minimum
+   and a maximum so cards never spread; past the minimum × lane count the
+   canvas scrolls horizontally instead. */
 .kanban-column {
-  flex: 1 0 240px;
-  min-width: 0;
+  flex: 1 1 240px;
+  min-width: 240px;
+  max-width: 360px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1220,7 +1224,7 @@
 }
 
 .board-canvas .kanban-board {
-  min-width: max-content;
+  min-width: min-content;
   width: 100%;
 }
 

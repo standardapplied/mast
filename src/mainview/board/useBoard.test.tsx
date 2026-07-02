@@ -46,7 +46,7 @@ afterEach(() => {
 describe("useBoard", () => {
   test("loads specs, summary, and the derived project list", async () => {
     const { handle } = await render(createDemoGateway());
-    expect(handle().data.specs.length).toBe(6);
+    expect(handle().data.specs.length).toBe(7);
     expect(handle().data.summary?.in_progress).toBe(1);
     expect(handle().data.projects).toEqual(["chorus", "sail-mast"]);
   });
@@ -103,6 +103,10 @@ describe("lifecycle transitions", () => {
     expect(canTransition("draft", "pending")).toBe(true);
     expect(canTransition("pending", "draft")).toBe(true);
     expect(canTransition("review", "in_progress")).toBe(true);
+    expect(canTransition("review", "awaiting_merge")).toBe(true);
+    expect(canTransition("awaiting_merge", "done")).toBe(true);
+    expect(canTransition("awaiting_merge", "review")).toBe(true);
+    expect(canTransition("review", "done")).toBe(false);
     expect(canTransition("draft", "done")).toBe(false);
     expect(canTransition("pending", "review")).toBe(false);
     expect(canTransition("done", "archived")).toBe(true);

@@ -5,6 +5,7 @@ export const BOARD_COLUMNS: readonly SpecStatus[] = [
   "pending",
   "in_progress",
   "review",
+  "awaiting_merge",
   "done",
 ];
 
@@ -13,11 +14,19 @@ export const STATUS_LABEL: Record<SpecStatus, string> = {
   pending: "Pending",
   in_progress: "In progress",
   review: "Review",
+  awaiting_merge: "Awaiting merge",
   done: "Done",
   archived: "Archived",
 };
 
-const ORDER: readonly SpecStatus[] = ["draft", "pending", "in_progress", "review", "done"];
+const ORDER: readonly SpecStatus[] = [
+  "draft",
+  "pending",
+  "in_progress",
+  "review",
+  "awaiting_merge",
+  "done",
+];
 
 /**
  * Legal drag transitions: one step forward, one step back, archive from

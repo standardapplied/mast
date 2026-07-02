@@ -5,7 +5,14 @@
  * Success envelopes carry `schema_version: 1` alongside the payload keys.
  */
 
-export type SpecStatus = "draft" | "pending" | "in_progress" | "review" | "done" | "archived";
+export type SpecStatus =
+  | "draft"
+  | "pending"
+  | "in_progress"
+  | "review"
+  | "awaiting_merge"
+  | "done"
+  | "archived";
 
 export type GlobalSpecView = {
   id: string;
@@ -58,6 +65,7 @@ export type GlobalBoardResponse = {
   pending: number;
   in_progress: number;
   review: number;
+  awaiting_merge: number;
   done: number;
   archived: number;
   next_ready_id?: string;
