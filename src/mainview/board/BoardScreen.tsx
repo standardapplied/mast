@@ -151,7 +151,7 @@ export function BoardScreen({
 
       {data.error && <p className="board-error">{data.error}</p>}
 
-      <div className="board-canvas grid-bg">
+      <div className="board-canvas">
         <div className="kanban-board board-columns">
         {BOARD_COLUMNS.map((status) => {
           const specs = byStatus.get(status) ?? [];

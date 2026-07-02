@@ -152,7 +152,7 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
   };
 
   return (
-    <div className="grid-bg" style={{ minHeight: "100vh" }}>
+    <div style={{ minHeight: "100vh" }}>
       <div style={{ maxWidth: 960, margin: "0 auto", padding: "48px 32px", display: "grid", gap: 48 }}>
         <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
           <div>

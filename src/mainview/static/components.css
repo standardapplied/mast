@@ -1280,10 +1280,45 @@
   cursor: pointer;
 }
 
+.cockpit-brand svg {
+  display: block;
+}
+
 .cockpit-wordmark {
-  font-family: var(--font-display);
-  font-size: 17px;
-  letter-spacing: var(--tracking-display);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
+  transform: translateY(0.5px);
+}
+
+.toolbar-icon-btn {
+  appearance: none;
+  background: none;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.toolbar-icon-btn:hover:not(:disabled) {
+  color: var(--foreground);
+}
+
+.toolbar-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.toolbar-icon-note {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .cockpit-toolbar-spacer {

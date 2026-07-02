@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { App } from "./App";
 import { createDemoGateway, type DemoGateway } from "./gateway";
 import { dispatchPush } from "./push";
+import { browserThemeDeps, createThemeController } from "./theme";
 
 let root: Root;
 let container: HTMLElement;
@@ -19,10 +20,11 @@ beforeEach(() => {
 
 async function render() {
   gateway = createDemoGateway();
+  const theme = createThemeController(browserThemeDeps(() => {}));
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  act(() => root.render(<App gateway={gateway} />));
+  act(() => root.render(<App gateway={gateway} theme={theme} />));
   await flush();
 }
 
@@ -87,5 +89,17 @@ describe("App cockpit", () => {
     expect(
       container.querySelector('[data-testid="bridge-status"]')?.getAttribute("data-status"),
     ).toBe("reconnecting");
+  });
+
+  test("theme toggle cycles system → light → dark and re-themes the document", async () => {
+    localStorage.removeItem("mast.theme");
+    await render();
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="theme-toggle"]');
+    expect(toggle?.title).toContain("system");
+
+    act(() => toggle?.click());
+    expect(document.documentElement.dataset.theme).toBe("light");
+    act(() => toggle?.click());
+    expect(document.documentElement.dataset.theme).toBe("dark");
   });
 });

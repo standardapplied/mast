@@ -28,6 +28,6 @@ window.addEventListener("hashchange", () => {
 
 createRoot(container).render(
   <StrictMode>
-    {styleguideActive ? <Styleguide theme={theme} /> : <App gateway={gateway} />}
+    {styleguideActive ? <Styleguide theme={theme} /> : <App gateway={gateway} theme={theme} />}
   </StrictMode>,
 );

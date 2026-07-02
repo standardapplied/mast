@@ -3,10 +3,11 @@ import type { EventStreamState } from "../shared/sail-models";
 import type { BridgeStatus } from "../shared/types";
 import { BoardScreen } from "./board/BoardScreen";
 import { SpecDetail } from "./board/SpecDetail";
-import { Logo } from "./components/icons";
+import { Logo, Moon, Person, Sun } from "./components/icons";
 import { ToastProvider } from "./components/Toast";
 import type { Gateway } from "./gateway";
 import { onPush } from "./push";
+import type { ThemeController, ThemeMode } from "./theme";
 
 const BRIDGE_LABEL: Record<BridgeStatus, string> = {
   connected: "Bridge",
@@ -26,10 +27,19 @@ function specIdFromHash(hash: string): string | null {
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
-export function App({ gateway }: { gateway: Gateway }) {
+const NEXT_MODE: Record<ThemeMode, ThemeMode> = { light: "dark", dark: "system", system: "light" };
+
+export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeController }) {
   const [bridge, setBridge] = useState<BridgeStatus>("connected");
   const [stream, setStream] = useState<EventStreamState>("disconnected");
   const [specId, setSpecId] = useState<string | null>(specIdFromHash(location.hash));
+  const [themeMode, setThemeMode] = useState<ThemeMode>(theme.mode());
+
+  const cycleTheme = () => {
+    const next = NEXT_MODE[themeMode];
+    theme.setMode(next);
+    setThemeMode(next);
+  };
 
   useEffect(() => onPush("bridge-status", ({ status }) => setBridge(status)), []);
   useEffect(() => gateway.onStreamState(setStream), [gateway]);
@@ -69,6 +79,24 @@ export function App({ gateway }: { gateway: Gateway }) {
           >
             {BRIDGE_LABEL[bridge]}
           </span>
+          <button
+            type="button"
+            className="toolbar-icon-btn"
+            onClick={cycleTheme}
+            title={`Theme: ${themeMode} — click to switch`}
+            data-testid="theme-toggle"
+          >
+            {theme.resolved() === "dark" ? <Moon size={15} /> : <Sun size={15} />}
+            {themeMode === "system" && <span className="toolbar-icon-note">auto</span>}
+          </button>
+          <button
+            type="button"
+            className="toolbar-icon-btn"
+            title="Sign in with a passkey — lands with the cockpit shell"
+            disabled
+          >
+            <Person size={15} />
+          </button>
         </header>
         <main className="cockpit-main">
           {specId ? (
