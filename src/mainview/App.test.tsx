@@ -67,6 +67,29 @@ describe("App cockpit", () => {
     );
   });
 
+  test("dragging lifts the card and marks the board; a cancelled drag clears both", async () => {
+    await render();
+    const card = container.querySelector<HTMLElement>('[data-testid="card-chorus-billing-export"]');
+    const board = container.querySelector(".board");
+
+    const dt = new DataTransfer();
+    act(() => {
+      const e = new Event("dragstart", { bubbles: true }) as DragEvent;
+      Object.defineProperty(e, "dataTransfer", { value: dt });
+      card?.dispatchEvent(e);
+    });
+    expect(board?.classList.contains("is-dragging")).toBe(true);
+    expect(card?.classList.contains("is-lifted")).toBe(true);
+
+    act(() => {
+      const e = new Event("dragend", { bubbles: true }) as DragEvent;
+      Object.defineProperty(e, "dataTransfer", { value: dt });
+      card?.dispatchEvent(e);
+    });
+    expect(board?.classList.contains("is-dragging")).toBe(false);
+    expect(card?.classList.contains("is-lifted")).toBe(false);
+  });
+
   test("clicking a card routes to the spec detail with markdown, deps, and history", async () => {
     await render();
     act(() => {

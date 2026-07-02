@@ -134,20 +134,25 @@ function FilterMenu({
 function SpecCard({
   spec,
   blockedBy,
+  lifted,
   onOpen,
   onDragStart,
+  onDragEnd,
 }: {
   spec: GlobalSpecView;
   blockedBy: string[];
+  lifted: boolean;
   onOpen: () => void;
   onDragStart: (event: DragEvent) => void;
+  onDragEnd: () => void;
 }) {
   return (
     <button
       type="button"
-      className="kanban-card"
+      className={lifted ? "kanban-card is-lifted" : "kanban-card"}
       draggable
       onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       onClick={onOpen}
       data-testid={`card-${spec.id}`}
     >
@@ -355,7 +360,7 @@ export function BoardScreen({
   };
 
   return (
-    <div className="board">
+    <div className={dragging ? "board is-dragging" : "board"}>
       <div className="masthead">
         <div className="masthead-title">
           <Eyebrow>Spec board</Eyebrow>
@@ -433,6 +438,7 @@ export function BoardScreen({
                   onDragOver={(e) => {
                     if (droppable) {
                       e.preventDefault();
+                      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
                       setDropTarget(status);
                     }
                   }}
@@ -449,10 +455,16 @@ export function BoardScreen({
                         key={spec.id}
                         spec={spec}
                         blockedBy={unmetDependencies(spec, data.specs)}
+                        lifted={dragging?.id === spec.id}
                         onOpen={() => onOpenSpec(spec.id)}
                         onDragStart={(e) => {
                           e.dataTransfer?.setData("text/plain", spec.id);
+                          if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
                           setDragging(spec);
+                        }}
+                        onDragEnd={() => {
+                          setDragging(null);
+                          setDropTarget(null);
                         }}
                       />
                     ))}

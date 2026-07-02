@@ -1187,11 +1187,29 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 12px 14px;
-  cursor: pointer;
-  transition: border-color 120ms ease;
+  cursor: grab;
+  transition:
+    border-color 120ms ease,
+    opacity 120ms ease;
 }
 
 .kanban-card:hover {
+  border-color: var(--foreground);
+}
+
+.kanban-card:active {
+  cursor: grabbing;
+}
+
+/* While a drag is in flight the whole board reads grabbing (the native drag
+   image can otherwise leave the cursor ambiguous), and the lifted card dims. */
+.board.is-dragging,
+.board.is-dragging .kanban-card {
+  cursor: grabbing;
+}
+
+.kanban-card.is-lifted {
+  opacity: 0.4;
   border-color: var(--foreground);
 }
 
