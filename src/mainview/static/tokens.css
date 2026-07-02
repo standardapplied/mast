@@ -79,6 +79,7 @@
 :root {
   --background: #0a0e11;
   --surface: #12171b;
+  --surface-hover: rgba(246, 241, 233, 0.06);
   --background-deep: #040608;
   --foreground: #f6f1e9;
   --muted-foreground: rgba(246, 241, 233, 0.78);
@@ -91,10 +92,10 @@
   --on-primary: #0a0e11;
   --ring: #fc4926;
 
-  --error: #ff6b63;
-  --warning: #e5a83b;
-  --success: #4cc38a;
-  --info: #6ea8fe;
+  --error: #e07b6f;
+  --warning: #d2a24c;
+  --success: #86b89a;
+  --info: #93b3d7;
 
   --font-display: "Newsreader", Georgia, serif;
   --font-sans: "Switzer", system-ui, sans-serif;
@@ -110,6 +111,7 @@
 [data-theme="light"] {
   --background: #f8fafc;
   --surface: #fdffff;
+  --surface-hover: rgba(14, 18, 23, 0.05);
   --background-deep: #eef2f6;
   --foreground: #0e1217;
   --muted-foreground: #383e43;
@@ -122,10 +124,10 @@
   --on-primary: #f8fafc;
   --ring: #fc4926;
 
-  --error: #d92d20;
-  --warning: #b45309;
-  --success: #1f7a46;
-  --info: #2160d8;
+  --error: #b42318;
+  --warning: #8a5800;
+  --success: #256e4a;
+  --info: #31608f;
 
   color-scheme: light;
 }

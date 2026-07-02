@@ -1,5 +1,12 @@
-import { useState } from "react";
-import { Badge, Button, Card, Eyebrow, Field, Input, Select, Tabs, Textarea } from "./components/ui";
+import { useState, type ReactNode } from "react";
+import { DateTimePicker } from "./components/DateTimePicker";
+import { Input } from "./components/Input";
+import { Select } from "./components/Select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/Tabs";
+import { Textarea } from "./components/Textarea";
+import { ToastProvider, useToast } from "./components/Toast";
+import { Badge, Button, Card, Eyebrow } from "./components/ui";
+import type { TimeValue } from "./lib/date-utils";
 import type { ThemeController, ThemeMode } from "./theme";
 
 const COLOR_TOKENS = [
@@ -22,7 +29,19 @@ const COLOR_TOKENS = [
 
 const THEME_MODES: readonly ThemeMode[] = ["light", "dark", "system"];
 
-function Section({ index, title, children }: { index: string; title: string; children: React.ReactNode }) {
+const AGENTS = [
+  { value: "claude-code", label: "claude-code", description: "Anthropic coding agent" },
+  { value: "codex", label: "codex", description: "OpenAI coding agent" },
+  { value: "gemini", label: "gemini", description: "Google coding agent" },
+];
+
+const PROJECTS = [
+  { value: "sail", label: "sail", description: "Control plane" },
+  { value: "mast", label: "mast", description: "Desktop cockpit" },
+  { value: "chorus", label: "chorus", description: "Client contract" },
+];
+
+function Section({ index, title, children }: { index: string; title: string; children: ReactNode }) {
   return (
     <section style={{ display: "grid", gap: 16 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
@@ -49,13 +68,35 @@ function Swatch({ token }: { token: string }) {
   );
 }
 
-export function Styleguide({ theme }: { theme: ThemeController }) {
-  const [mode, setMode] = useState<ThemeMode>(theme.mode());
-  const [tab, setTab] = useState("Specs");
+function ToastDemo() {
+  const { showToast } = useToast();
+  return (
+    <div style={{ display: "flex", gap: 12 }}>
+      <Button variant="ghost" onClick={() => showToast("success", "Spec mast-design-system dispatched.")}>
+        Success toast
+      </Button>
+      <Button variant="ghost" onClick={() => showToast("error", "Agent failed: exit code 1 on bun test.")}>
+        Error toast
+      </Button>
+      <Button variant="ghost" onClick={() => showToast("info", "Sync complete — 3 specs updated.")}>
+        Info toast
+      </Button>
+    </div>
+  );
+}
 
-  const selectMode = (next: string) => {
-    theme.setMode(next as ThemeMode);
-    setMode(next as ThemeMode);
+function StyleguideBody({ theme }: { theme: ThemeController }) {
+  const [mode, setMode] = useState<ThemeMode>(theme.mode());
+  const [agent, setAgent] = useState("claude-code");
+  const [project, setProject] = useState("");
+  const [body, setBody] = useState("");
+  const [date, setDate] = useState<Date | null>(null);
+  const [time, setTime] = useState<TimeValue | null>(null);
+  const [month, setMonth] = useState<Date | null>(null);
+
+  const selectMode = (next: ThemeMode) => {
+    theme.setMode(next);
+    setMode(next);
   };
 
   return (
@@ -66,7 +107,7 @@ export function Styleguide({ theme }: { theme: ThemeController }) {
             <Eyebrow>SAIL design system</Eyebrow>
             <h1 style={{ fontSize: 34 }}>Mast styleguide</h1>
           </div>
-          <div style={{ display: "flex", gap: 0, border: "1px solid var(--border-strong)" }}>
+          <div style={{ display: "flex", border: "1px solid var(--border-strong)" }}>
             {THEME_MODES.map((m) => (
               <button
                 key={m}
@@ -118,37 +159,91 @@ export function Styleguide({ theme }: { theme: ThemeController }) {
         <Section index="04" title="Forms">
           <Card>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-              <Field label="Spec id">
-                <Input placeholder="mast-design-system" />
-              </Field>
-              <Field label="Agent">
-                <Select defaultValue="claude-code">
-                  <option value="claude-code">claude-code</option>
-                  <option value="codex">codex</option>
-                </Select>
-              </Field>
+              <Input id="spec-id" label="Spec id" placeholder="mast-design-system" />
+              <Input
+                id="spec-title"
+                label="Title"
+                defaultValue="Mast design"
+                error="Title must be at least 12 characters"
+              />
+              <Select label="Agent" value={agent} onChange={setAgent} options={AGENTS} />
+              <Select
+                label="Project (searchable)"
+                value={project}
+                onChange={setProject}
+                options={PROJECTS}
+                searchable
+                placeholder="Search projects…"
+              />
               <div style={{ gridColumn: "1 / -1" }}>
-                <Field label="Body">
-                  <Textarea placeholder="Overview, scope, acceptance…" />
-                </Field>
+                <Textarea
+                  id="spec-body"
+                  label="Body"
+                  placeholder="Overview, scope, acceptance…"
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  autoGrow
+                  showCount
+                  maxLength={280}
+                />
               </div>
             </div>
           </Card>
         </Section>
 
-        <Section index="05" title="Tabs & status">
-          <Tabs tabs={["Specs", "Agents", "Terminal"]} active={tab} onSelect={setTab} />
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <Badge>Draft</Badge>
-            <Badge tone="accent">Dispatched</Badge>
-            <Badge tone="info">In progress</Badge>
-            <Badge tone="warning">Review</Badge>
-            <Badge tone="success">Done</Badge>
-            <Badge tone="error">Agent failed</Badge>
-          </div>
+        <Section index="05" title="Date & time">
+          <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              <DateTimePicker
+                label="Dispatch after"
+                variant="datetime"
+                dateValue={date}
+                timeValue={time}
+                onDateChange={setDate}
+                onTimeChange={setTime}
+              />
+              <DateTimePicker
+                label="Billing month"
+                variant="month"
+                dateValue={month}
+                onDateChange={setMonth}
+              />
+            </div>
+          </Card>
         </Section>
 
-        <Section index="06" title="Table">
+        <Section index="06" title="Tabs & status">
+          <Tabs defaultValue="specs">
+            <TabsList>
+              <TabsTrigger value="specs">Specs</TabsTrigger>
+              <TabsTrigger value="agents">Agents</TabsTrigger>
+              <TabsTrigger value="terminal" disabled>
+                Terminal
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="specs">
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <Badge>Draft</Badge>
+                <Badge tone="accent">Dispatched</Badge>
+                <Badge tone="info">In progress</Badge>
+                <Badge tone="warning">Review</Badge>
+                <Badge tone="success">Done</Badge>
+                <Badge tone="error">Agent failed</Badge>
+              </div>
+            </TabsContent>
+            <TabsContent value="agents">
+              <p style={{ margin: 0, color: "var(--muted-foreground)", fontSize: 14 }}>
+                Agent monitor lands in its own spec.
+              </p>
+            </TabsContent>
+          </Tabs>
+        </Section>
+
+        <Section index="07" title="Toasts">
+          <ToastDemo />
+        </Section>
+
+        <Section index="08" title="Table">
           <Card>
             <table className="table">
               <thead>
@@ -179,5 +274,13 @@ export function Styleguide({ theme }: { theme: ThemeController }) {
         </Section>
       </div>
     </div>
+  );
+}
+
+export function Styleguide({ theme }: { theme: ThemeController }) {
+  return (
+    <ToastProvider>
+      <StyleguideBody theme={theme} />
+    </ToastProvider>
   );
 }
