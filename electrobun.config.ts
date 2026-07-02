@@ -22,7 +22,7 @@ const config: ElectrobunConfig = {
     },
     copy: {
       "src/mainview/index.html": "views/mainview/index.html",
-      "src/mainview/styles.css": "views/mainview/styles.css",
+      "src/mainview/static": "views/mainview/static",
     },
     mac: {
       bundleCEF: false,

@@ -1,0 +1,17 @@
+<!doctype html>
+<!-- Browser preview only: `bun src/mainview/dev.html` serves the webview with
+     Bun's dev server (HMR) outside Electrobun. The packaged app uses index.html,
+     which loads the prebuilt ./index.js instead of the .tsx source. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mast (dev preview)</title>
+    <link rel="stylesheet" href="./static/tokens.css" />
+    <link rel="stylesheet" href="./static/components.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./index.tsx"></script>
+  </body>
+</html>

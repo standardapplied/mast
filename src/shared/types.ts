@@ -22,6 +22,8 @@ export type AppInfo = {
 
 export type BridgeStatus = "connected" | "reconnecting" | "disconnected";
 
+export type ThemeName = "light" | "dark";
+
 /** Payloads for Bun → webview push messages. Keys are the message names. */
 export type AppPushMessages = {
   "bridge-status": { status: BridgeStatus };
@@ -37,6 +39,8 @@ export type AppRPCSchema = {
       ping: { params: { nonce: string }; response: { pong: string; nonce: string } };
       getAppInfo: { params: void; response: AppInfo };
       quit: { params: void; response: void };
+      /** Webview reports the active UI theme so terminals re-theme in lockstep. */
+      setTheme: { params: { theme: ThemeName }; response: void };
     };
     messages: Record<never, never>;
   };

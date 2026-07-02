@@ -1,4 +1,4 @@
-import type { AppInfo, AppRPCSchema } from "../shared/types";
+import type { AppInfo, AppRPCSchema, ThemeName } from "../shared/types";
 
 /**
  * The Bun main process's request handlers, expressed as pure functions over an
@@ -9,6 +9,7 @@ import type { AppInfo, AppRPCSchema } from "../shared/types";
 export type HandlerDeps = {
   appInfo: () => AppInfo;
   quit: () => void;
+  onTheme: (theme: ThemeName) => void;
 };
 
 type BunRequests = AppRPCSchema["bun"]["requests"];
@@ -25,6 +26,9 @@ export function createRequestHandlers(deps: HandlerDeps): BunRequestHandlers {
     getAppInfo: () => deps.appInfo(),
     quit: () => {
       deps.quit();
+    },
+    setTheme: ({ theme }) => {
+      deps.onTheme(theme);
     },
   };
 }

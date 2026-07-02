@@ -1,5 +1,6 @@
 import { Updater } from "electrobun/bun";
 import type { AppInfo } from "../shared/types";
+import { setActiveTheme } from "./theme-state";
 import { hydrateProcessEnv, resolveShellEnv } from "./shell-env";
 import { AutoUpdater } from "./updater";
 import { WindowManager } from "./window-manager";
@@ -19,7 +20,7 @@ const appInfo: AppInfo = {
   channel: local.channel || "dev",
 };
 
-const windows = new WindowManager(() => appInfo);
+const windows = new WindowManager(() => appInfo, setActiveTheme);
 windows.open();
 
 const updater = new AutoUpdater((status, message) => {

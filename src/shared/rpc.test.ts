@@ -28,6 +28,7 @@ describe("AppRPCSchema round-trip", () => {
   const handlers = createRequestHandlers({
     appInfo: () => ({ name: "Mast", version: "1.2.3", channel: "dev" }),
     quit: () => {},
+    onTheme: () => {},
   });
 
   const transports = linkedTransports();
