@@ -52,6 +52,17 @@ describe("config resolution (CLI parity)", () => {
   test("trailing slashes are stripped from the server", () => {
     expect(resolveConfig({ server: "http://x:1//" }, fakeIO()).server).toBe("http://x:1");
   });
+
+  test("parses the CLI's flow-style config (the real thin-client format)", () => {
+    const io = fakeIO({
+      "/home/u/.sail/config.yaml":
+        "{host: devbox, user: sail, server: 'http://localhost:7070', token: sess_b6b99639ab22}\n",
+    });
+    expect(resolveConfig({}, io)).toEqual({
+      server: "http://localhost:7070",
+      token: "sess_b6b99639ab22",
+    });
+  });
 });
 
 describe("writeConfig", () => {
@@ -61,13 +72,24 @@ describe("writeConfig", () => {
     });
     writeConfig({ server: "http://new:2", token: "sess_new" }, io);
     expect(io.files["/home/u/.sail/config.yaml"]).toBe(
-      "handle: uday\nserver: http://new:2\ntoken: sess_new\n",
+      "handle: uday\nserver: 'http://new:2'\ntoken: sess_new\n",
     );
   });
 
   test("appends missing keys to a fresh file", () => {
     const io = fakeIO();
     writeConfig({ server: "http://n:1", token: "t" }, io);
-    expect(io.files["/home/u/.sail/config.yaml"]).toBe("server: http://n:1\ntoken: t\n");
+    expect(io.files["/home/u/.sail/config.yaml"]).toBe("server: 'http://n:1'\ntoken: t\n");
+  });
+
+  test("updates a flow-style file in place, preserving style and other keys", () => {
+    const io = fakeIO({
+      "/home/u/.sail/config.yaml":
+        "{host: devbox, user: sail, server: 'http://localhost:7070', token: old}\n",
+    });
+    writeConfig({ token: "sess_new" }, io);
+    expect(io.files["/home/u/.sail/config.yaml"]).toBe(
+      "{host: devbox, user: sail, server: 'http://localhost:7070', token: sess_new}\n",
+    );
   });
 });
