@@ -208,7 +208,7 @@ describe("App cockpit", () => {
     });
     const panel = container.querySelector('[data-testid="user-menu-panel"]');
     expect(panel).not.toBeNull();
-    expect(panel?.textContent).toContain("Not signed in");
+    expect(panel?.textContent).toContain("Passkey session");
 
     const dark = [...container.querySelectorAll<HTMLButtonElement>(".toggle-option")].find(
       (b) => b.textContent === "Dark",

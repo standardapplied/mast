@@ -38,6 +38,7 @@ const READY_STATUS = {
   server: "http://127.0.0.1:7070",
   loginOrigin: "http://localhost:7070",
   tokenPresent: true,
+  tokenKind: "session",
   stream: "connected",
 } as const;
 

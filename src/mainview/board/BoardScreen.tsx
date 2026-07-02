@@ -261,11 +261,32 @@ export function BoardScreen({
   server?: string;
   tokenPresent?: boolean;
 }) {
-  const [project, setProject] = useState<string | undefined>(undefined);
-  const [onlyMine, setOnlyMine] = useState(false);
+  const [project, setProjectState] = useState<string | undefined>(
+    () => sessionStorage.getItem("mast.board.project") ?? undefined,
+  );
+  const [onlyMine, setOnlyMineState] = useState(
+    () => sessionStorage.getItem("mast.board.mine") === "1",
+  );
   const [query, setQuery] = useState("");
-  const [repo, setRepo] = useState<string | undefined>(undefined);
+  const [repo, setRepoState] = useState<string | undefined>(
+    () => sessionStorage.getItem("mast.board.repo") ?? undefined,
+  );
   const [visibleLanes, setVisibleLanes] = useState<Set<SpecStatus>>(loadLanes);
+
+  const setProject = (next: string | undefined) => {
+    setProjectState(next);
+    if (next) sessionStorage.setItem("mast.board.project", next);
+    else sessionStorage.removeItem("mast.board.project");
+  };
+  const setOnlyMine = (next: boolean) => {
+    setOnlyMineState(next);
+    sessionStorage.setItem("mast.board.mine", next ? "1" : "0");
+  };
+  const setRepo = (next: string | undefined) => {
+    setRepoState(next);
+    if (next) sessionStorage.setItem("mast.board.repo", next);
+    else sessionStorage.removeItem("mast.board.repo");
+  };
   const [dragging, setDragging] = useState<GlobalSpecView | null>(null);
   const [dropTarget, setDropTarget] = useState<SpecStatus | null>(null);
   const [view, setView] = useState<{ left: number; width: number } | null>(null);

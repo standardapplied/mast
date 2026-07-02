@@ -19,10 +19,12 @@ const THEME_OPTIONS = [
 export function UserMenu({
   theme,
   server,
+  tokenKind = "none",
   onLogin,
 }: {
   theme: ThemeController;
   server?: string;
+  tokenKind?: "session" | "api" | "none";
   onLogin?: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -60,7 +62,13 @@ export function UserMenu({
       {isOpen && (
         <div className="user-menu-panel" data-testid="user-menu-panel">
           <div className="user-menu-identity">
-            <span className="user-menu-name">Not signed in</span>
+            <span className="user-menu-name">
+              {tokenKind === "session"
+                ? "Passkey session"
+                : tokenKind === "api"
+                  ? "API token"
+                  : "Not signed in"}
+            </span>
             {server && <span className="user-menu-detail">{server}</span>}
           </div>
 

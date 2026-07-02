@@ -293,6 +293,7 @@ export type ConnectionStatus = {
   server: string;
   loginOrigin: string;
   tokenPresent: boolean;
+  tokenKind: "session" | "api" | "none";
   stream: EventStreamState;
   detail?: string;
 };

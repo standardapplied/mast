@@ -47,6 +47,11 @@ export type ManagerDeps = {
   onEvent: (event: SailEvent) => void;
 };
 
+function tokenKind(token: string | null): "session" | "api" | "none" {
+  if (!token) return "none";
+  return token.startsWith("sess_") ? "session" : "api";
+}
+
 export class ConnectionManager {
   private status: ConnectionStatus;
   private token: string | null;
@@ -63,6 +68,7 @@ export class ConnectionManager {
       server: config.server,
       loginOrigin: config.loginOrigin,
       tokenPresent: config.token !== null,
+      tokenKind: tokenKind(config.token),
       stream: "disconnected",
     };
   }
@@ -124,17 +130,18 @@ export class ConnectionManager {
     this.deps.onStack(server, this.token);
 
     if (!this.token) {
-      this.update({ phase: "unauthenticated", tokenPresent: false });
+      this.update({ phase: "unauthenticated", tokenPresent: false, tokenKind: "none" });
       return;
     }
     const verdict = await this.deps.validateToken(server, this.token);
     if (verdict === "ok") {
-      this.update({ phase: "ready", tokenPresent: true });
+      this.update({ phase: "ready", tokenPresent: true, tokenKind: tokenKind(this.token) });
       this.startStream(server, this.token);
     } else if (verdict === "unauthenticated") {
       this.update({
         phase: "unauthenticated",
         tokenPresent: true,
+        tokenKind: tokenKind(this.token),
         detail: "Session expired or token invalid — sign in again.",
       });
     } else {

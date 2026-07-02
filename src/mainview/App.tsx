@@ -136,7 +136,12 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
             </span>
           )}
           <span className="electrobun-webkit-app-region-no-drag">
-            <UserMenu theme={theme} server={status?.server} onLogin={() => void login()} />
+            <UserMenu
+              theme={theme}
+              server={status?.server}
+              tokenKind={status?.tokenKind}
+              onLogin={() => void login()}
+            />
           </span>
         </header>
         <main className="cockpit-main">

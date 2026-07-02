@@ -323,5 +323,6 @@ const DEMO_STATUS: ConnectionStatus = {
   server: "demo fixtures (browser preview)",
   loginOrigin: "http://localhost:7070",
   tokenPresent: true,
+  tokenKind: "session",
   stream: "connected",
 };
