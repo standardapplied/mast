@@ -135,24 +135,25 @@ export function SpecDetail({
     }
   };
 
-  const metaField = (label: string, key: keyof SpecUpdateRequest, value: string) =>
-    editing ? (
-      <Input
-        label={label}
-        defaultValue={value}
-        onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-      />
-    ) : (
-      <div className="meta-item">
-        <span className="eyebrow">{label}</span>
-        <span className="meta-value">{value || "—"}</span>
-      </div>
-    );
+  const propItem = (label: string, key: keyof SpecUpdateRequest, value: string) => (
+    <div className="prop">
+      <span className="prop-label">{label}</span>
+      {editing ? (
+        <Input
+          className="prop-input"
+          defaultValue={value}
+          onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+        />
+      ) : (
+        <span className="prop-value">{value || "—"}</span>
+      )}
+    </div>
+  );
 
   return (
     <div className="detail">
       <div className="detail-header">
-        <div>
+        <div className="detail-heading">
           <Eyebrow>{spec.project}</Eyebrow>
           <h1 className="detail-title">{spec.id}</h1>
           <p className="detail-subtitle">{spec.title}</p>
@@ -164,6 +165,56 @@ export function SpecDetail({
           <Button variant="ghost" onClick={onBack}>
             Board
           </Button>
+        </div>
+      </div>
+
+      <div className="prop-bar">
+        {propItem("Assignee", "assignee", spec.assignee ?? "")}
+        {propItem("Agent", "agent", spec.agent ?? "")}
+        {propItem("Model", "model", spec.model ?? "")}
+        <div className="prop">
+          <span className="prop-label">Priority</span>
+          {editing ? (
+            <Input
+              className="prop-input"
+              type="number"
+              defaultValue={String(spec.priority)}
+              onChange={(e) => setDraft((d) => ({ ...d, priority: Number(e.target.value) }))}
+            />
+          ) : (
+            <span className="prop-value">{spec.priority}</span>
+          )}
+        </div>
+        <div className="prop">
+          <span className="prop-label">Branch</span>
+          <span className="prop-value">{spec.branch ?? "—"}</span>
+        </div>
+        <div className="prop">
+          <span className="prop-label">Updated</span>
+          <span className="prop-value">
+            {spec.updated_at.slice(0, 16).replace("T", " ")}
+            {spec.updated_by ? ` · ${spec.updated_by}` : ""}
+          </span>
+        </div>
+        <div className="prop-actions">
+          {editing ? (
+            <>
+              <Button onClick={() => void saveMeta()}>Save</Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setEditing(false);
+                  setDraft({});
+                }}
+              >
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <Button variant="ghost" onClick={() => setEditing(true)}>
+              Edit
+            </Button>
+          )}
         </div>
       </div>
 
@@ -192,57 +243,6 @@ export function SpecDetail({
         </div>
 
         <div className="detail-side">
-          <Card title="Metadata">
-            <div className="meta-grid">
-              {metaField("Assignee", "assignee", spec.assignee ?? "")}
-              {metaField("Agent", "agent", spec.agent ?? "")}
-              {metaField("Model", "model", spec.model ?? "")}
-              {editing ? (
-                <Input
-                  label="Priority"
-                  type="number"
-                  defaultValue={String(spec.priority)}
-                  onChange={(e) => setDraft((d) => ({ ...d, priority: Number(e.target.value) }))}
-                />
-              ) : (
-                <div className="meta-item">
-                  <span className="eyebrow">Priority</span>
-                  <span className="meta-value">{spec.priority}</span>
-                </div>
-              )}
-              <div className="meta-item">
-                <span className="eyebrow">Branch</span>
-                <span className="meta-value">{spec.branch ?? "—"}</span>
-              </div>
-              <div className="meta-item">
-                <span className="eyebrow">Updated</span>
-                <span className="meta-value">
-                  {spec.updated_at} {spec.updated_by ? `· ${spec.updated_by}` : ""}
-                </span>
-              </div>
-            </div>
-            <div className="meta-actions">
-              {editing ? (
-                <>
-                  <Button onClick={() => void saveMeta()}>Save</Button>
-                  <Button
-                    variant="ghost"
-                    onClick={() => {
-                      setEditing(false);
-                      setDraft({});
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                </>
-              ) : (
-                <Button variant="ghost" onClick={() => setEditing(true)}>
-                  Edit
-                </Button>
-              )}
-            </div>
-          </Card>
-
           <Card title="Dependencies">
             <div className="dep-section">
               <span className="eyebrow">Depends on</span>
