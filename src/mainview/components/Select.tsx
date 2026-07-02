@@ -3,7 +3,7 @@ import { debounce } from "../lib/date-utils";
 import { cx } from "./cx";
 import { DropdownPanel } from "./DropdownPanel";
 import { CaretDown, Spinner } from "./icons";
-import { Switch } from "./Switch";
+import { ON_OFF, ToggleButton } from "./ToggleButton";
 
 export type SelectOption = {
   value: string;
@@ -224,30 +224,48 @@ export function Select({
           ) : filteredOptions.length === 0 ? (
             <div className="option-empty">No options found</div>
           ) : (
-            filteredOptions.map((option) => (
-              <button
-                key={option.value}
-                ref={option.value === value ? selectedButtonRef : null}
-                type="button"
-                disabled={option.disabled}
-                onClick={() => handleSelect(option.value)}
-                className={cx(
-                  "option",
-                  !multiple && option.value === value && "is-selected",
-                  multiple && "is-multi",
-                )}
-                data-testid={`option-${option.value}`}
-              >
-                {option.icon}
-                <span className="option-body">
-                  <span className="option-label">{option.label}</span>
-                  {option.description && <span className="option-description">{option.description}</span>}
-                </span>
-                {multiple && (
-                  <Switch checked={values.includes(option.value)} disabled={option.disabled} asIndicator />
-                )}
-              </button>
-            ))
+            filteredOptions.map((option) =>
+              multiple ? (
+                <div key={option.value} className="option is-multi" data-testid={`option-${option.value}`}>
+                  {option.icon}
+                  <span className="option-body">
+                    <span className="option-label">{option.label}</span>
+                    {option.description && (
+                      <span className="option-description">{option.description}</span>
+                    )}
+                  </span>
+                  <ToggleButton
+                    className="toggle-sm"
+                    options={ON_OFF}
+                    disabled={option.disabled}
+                    value={values.includes(option.value) ? "on" : "off"}
+                    onChange={(next) => {
+                      if ((next === "on") !== values.includes(option.value)) {
+                        handleSelect(option.value);
+                      }
+                    }}
+                  />
+                </div>
+              ) : (
+                <button
+                  key={option.value}
+                  ref={option.value === value ? selectedButtonRef : null}
+                  type="button"
+                  disabled={option.disabled}
+                  onClick={() => handleSelect(option.value)}
+                  className={cx("option", option.value === value && "is-selected")}
+                  data-testid={`option-${option.value}`}
+                >
+                  {option.icon}
+                  <span className="option-body">
+                    <span className="option-label">{option.label}</span>
+                    {option.description && (
+                      <span className="option-description">{option.description}</span>
+                    )}
+                  </span>
+                </button>
+              ),
+            )
           )}
         </div>
       </DropdownPanel>

@@ -5,9 +5,8 @@ import { Dialog } from "./components/Dialog";
 import { Input } from "./components/Input";
 import { KanbanBoard, KanbanCard, KanbanColumn } from "./components/Kanban";
 import { Select } from "./components/Select";
-import { Switch } from "./components/Switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/Tabs";
-import { ToggleButton } from "./components/ToggleButton";
+import { ON_OFF, ToggleButton } from "./components/ToggleButton";
 import { Textarea } from "./components/Textarea";
 import { ToastProvider, useToast } from "./components/Toast";
 import { Badge, Button, Card, Eyebrow } from "./components/ui";
@@ -147,7 +146,7 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
   const [date, setDate] = useState<Date | null>(null);
   const [time, setTime] = useState<TimeValue | null>(null);
   const [month, setMonth] = useState<Date | null>(null);
-  const [switchOn, setSwitchOn] = useState(true);
+  const [onOff, setOnOff] = useState("on");
   const [toggleValue, setToggleValue] = useState("board");
 
   const selectMode = (next: ThemeMode) => {
@@ -244,9 +243,9 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
                 />
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <Switch checked={switchOn} onChange={setSwitchOn} label="Auto-dispatch" />
+                <ToggleButton className="toggle-sm" options={ON_OFF} value={onOff} onChange={setOnOff} />
                 <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
-                  Switch — {switchOn ? "on" : "off"}
+                  On/off toggle — {onOff}
                 </span>
               </div>
               <ToggleButton

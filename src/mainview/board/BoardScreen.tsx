@@ -4,7 +4,7 @@ import { DropdownPanel } from "../components/DropdownPanel";
 import { Input } from "../components/Input";
 import { Funnel, Magnifier } from "../components/icons";
 import { Select } from "../components/Select";
-import { Switch } from "../components/Switch";
+import { ON_OFF, ToggleButton } from "../components/ToggleButton";
 import { useToast } from "../components/Toast";
 import { Badge, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
@@ -86,9 +86,14 @@ function FilterMenu({
       </button>
       <DropdownPanel triggerRef={triggerRef} isOpen={isOpen} maxHeight={360} align="right" minWidth={248}>
         <div className="filter-panel" data-testid="filter-panel">
-          <div className="filter-row">
+          <div className="filter-row" data-testid="filter-mine">
             <span className="lanes-label">Only mine</span>
-            <Switch checked={onlyMine} onChange={onOnlyMine} label="Only mine" />
+            <ToggleButton
+              className="toggle-sm"
+              options={ON_OFF}
+              value={onlyMine ? "on" : "off"}
+              onChange={(next) => onOnlyMine(next === "on")}
+            />
           </div>
           <div className="filter-section">
             <span className="eyebrow">Lanes</span>

@@ -109,9 +109,11 @@ describe("App cockpit", () => {
         .querySelector<HTMLButtonElement>('[data-testid="filter-panel"] .select-trigger')
         ?.click();
     });
-    act(() => {
-      container.querySelector<HTMLButtonElement>('[data-testid="option-done"]')?.click();
-    });
+    const laneOff = (lane: string) =>
+      [...container.querySelectorAll<HTMLButtonElement>(`[data-testid="option-${lane}"] .toggle-option`)].find(
+        (b) => b.textContent === "Off",
+      );
+    act(() => laneOff("done")?.click());
 
     expect(container.querySelectorAll(".kanban-column").length).toBe(4);
     expect(container.querySelector('[data-testid="column-done"]')).toBeNull();
@@ -119,13 +121,10 @@ describe("App cockpit", () => {
     expect(container.querySelector('[data-testid="filter-panel"]')).not.toBeNull();
 
     for (const lane of ["draft", "pending", "review"]) {
-      act(() => {
-        container.querySelector<HTMLButtonElement>(`[data-testid="option-${lane}"]`)?.click();
-      });
+      act(() => laneOff(lane)?.click());
     }
     expect(container.querySelectorAll(".kanban-column").length).toBe(1);
-    const last = container.querySelector<HTMLButtonElement>('[data-testid="option-in_progress"]');
-    expect(last?.disabled).toBe(true);
+    expect(laneOff("in_progress")?.disabled).toBe(true);
   });
 
   test("only-mine filter in the filter menu narrows the board", async () => {
@@ -133,8 +132,10 @@ describe("App cockpit", () => {
     act(() => {
       container.querySelector<HTMLButtonElement>('[data-testid="filter-trigger"]')?.click();
     });
-    const mine = container.querySelector<HTMLButtonElement>('[data-testid="filter-panel"] .switch');
-    act(() => mine?.click());
+    const mineOn = [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-testid="filter-mine"] .toggle-option'),
+    ].find((b) => b.textContent === "On");
+    act(() => mineOn?.click());
     await flush();
 
     expect(container.querySelector('[data-testid="card-chorus-ledger-sync"]')).toBeNull();

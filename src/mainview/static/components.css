@@ -1341,54 +1341,21 @@
   font-weight: 500;
 }
 
-/* Switch ---------------------------------------------------------------------- */
-
-/* Shares the ToggleButton's construction: hairline track, bordered surface
-   thumb sliding on the same 200ms ease-out; on-state fills the track ink. */
-.switch {
-  appearance: none;
-  position: relative;
-  width: 36px;
-  height: 20px;
-  padding: 0;
-  background: var(--background);
-  border: 1px solid var(--border-strong);
-  cursor: pointer;
-  transition: background-color 200ms ease-out, border-color 200ms ease-out;
-}
-
-.switch-knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 13px;
-  height: 13px;
-  box-sizing: border-box;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  transition: left 200ms ease-out, background-color 200ms ease-out, border-color 200ms ease-out;
-}
-
-.switch.is-on {
-  background: var(--foreground);
-  border-color: var(--foreground);
-}
-
-.switch.is-on .switch-knob {
-  left: 19px;
-  background: var(--background);
-  border-color: var(--background);
-}
-
-.switch:disabled,
-.switch.is-disabled {
+.toggle.is-disabled {
   opacity: 0.45;
+}
+
+.toggle.is-disabled .toggle-option {
   cursor: not-allowed;
 }
 
-span.switch {
-  display: inline-block;
+.toggle-sm {
   flex-shrink: 0;
+}
+
+.toggle-sm .toggle-option {
+  padding: 3px 9px;
+  font-size: 10px;
 }
 
 /* User menu ------------------------------------------------------------------ */

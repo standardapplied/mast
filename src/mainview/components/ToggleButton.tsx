@@ -14,18 +14,20 @@ export function ToggleButton({
   value,
   onChange,
   className,
+  disabled = false,
 }: {
   options: ToggleOption[];
   value: string;
   onChange: (value: string) => void;
   className?: string;
+  disabled?: boolean;
 }) {
   const selectedIndex = options.findIndex((o) => o.value === value);
   const count = options.length;
 
   return (
     <div
-      className={cx("toggle", className)}
+      className={cx("toggle", disabled && "is-disabled", className)}
       style={{ gridTemplateColumns: `repeat(${count}, 1fr)` }}
       role="radiogroup"
     >
@@ -44,6 +46,7 @@ export function ToggleButton({
           type="button"
           role="radio"
           aria-checked={value === option.value}
+          disabled={disabled}
           onClick={() => onChange(option.value)}
           className={cx("toggle-option", value === option.value && "is-selected")}
         >
@@ -53,3 +56,8 @@ export function ToggleButton({
     </div>
   );
 }
+
+export const ON_OFF: ToggleOption[] = [
+  { value: "off", label: "Off" },
+  { value: "on", label: "On" },
+];
