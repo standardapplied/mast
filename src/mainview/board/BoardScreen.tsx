@@ -104,21 +104,32 @@ export function BoardScreen({
         <div className="masthead-title">
           <Eyebrow>Spec board</Eyebrow>
           {data.summary && (
-            <p className="masthead-summary">
-              {data.summary.in_progress} in flight · {data.summary.review} in review
-              {data.summary.next_ready_id ? (
+            <div className="masthead-stats">
+              <span className="stat">
+                <span className="stat-value">{data.summary.in_progress}</span>
+                <span className="stat-label">in flight</span>
+              </span>
+              <span className="stat-divider" />
+              <span className="stat">
+                <span className="stat-value">{data.summary.review}</span>
+                <span className="stat-label">in review</span>
+              </span>
+              {data.summary.next_ready_id && (
                 <>
-                  {" · next "}
-                  <button
-                    type="button"
-                    className="dep-chip"
-                    onClick={() => onOpenSpec(data.summary!.next_ready_id!)}
-                  >
-                    {data.summary.next_ready_id}
-                  </button>
+                  <span className="stat-divider" />
+                  <span className="stat">
+                    <span className="stat-label">next</span>
+                    <button
+                      type="button"
+                      className="stat-link"
+                      onClick={() => onOpenSpec(data.summary!.next_ready_id!)}
+                    >
+                      {data.summary.next_ready_id}
+                    </button>
+                  </span>
                 </>
-              ) : null}
-            </p>
+              )}
+            </div>
           )}
         </div>
         <div className="board-controls">

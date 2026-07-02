@@ -1156,7 +1156,6 @@
   justify-content: space-between;
   gap: 8px;
   padding: 6px 2px;
-  border-bottom: 1px solid var(--border-strong);
 }
 
 .kanban-count {
@@ -1286,7 +1285,7 @@
 
 .cockpit-wordmark {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: var(--tracking-eyebrow);
@@ -1483,10 +1482,57 @@
   gap: 4px;
 }
 
-.masthead-summary {
-  margin: 0;
-  font-size: 13px;
+.masthead-stats {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.stat-value {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+}
+
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
   color: var(--subtle-foreground);
+}
+
+.stat-divider {
+  align-self: center;
+  width: 1px;
+  height: 14px;
+  background: var(--border-strong);
+}
+
+.stat-link {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--foreground);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--primary);
+  text-underline-offset: 3px;
+}
+
+.stat-link:hover {
+  color: var(--primary);
 }
 
 .board-controls {
