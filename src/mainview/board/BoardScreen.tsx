@@ -3,6 +3,7 @@ import type { GlobalSpecView, SpecFilter, SpecStatus } from "../../shared/sail-m
 import { Checkbox } from "../components/Checkbox";
 import { DropdownPanel } from "../components/DropdownPanel";
 import { Input } from "../components/Input";
+import { LoadingMark } from "../components/Loading";
 import { Funnel, Magnifier } from "../components/icons";
 import { Select } from "../components/Select";
 import { useToast } from "../components/Toast";
@@ -389,6 +390,9 @@ export function BoardScreen({
 
       <div className="board-canvas-wrap">
         <div className="board-canvas" ref={canvasRef}>
+          {data.loading && !data.error ? (
+            <LoadingMark label="Loading specs" />
+          ) : (
           <div className="kanban-board board-columns">
             {lanes.map((status) => {
               const specs = byStatus.get(status) ?? [];
@@ -435,6 +439,7 @@ export function BoardScreen({
               );
             })}
           </div>
+          )}
         </div>
         {view && <Minimap lanes={lanes} view={view} onJump={jumpTo} />}
       </div>

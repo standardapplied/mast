@@ -1237,6 +1237,56 @@
   border: 1px solid var(--border-strong);
 }
 
+/* Loading mark ---------------------------------------------------------------- */
+
+.loading-mark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 72px 0;
+  color: var(--muted-foreground);
+}
+
+.loading-mark-m {
+  stroke-dasharray: 100;
+  animation: loading-draw 1.8s ease-in-out infinite;
+}
+
+@keyframes loading-draw {
+  0% {
+    stroke-dashoffset: 100;
+    opacity: 0.35;
+  }
+  45% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  70% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: -100;
+    opacity: 0.35;
+  }
+}
+
+.loading-mark-flare {
+  animation: loading-flare 1.8s ease-in-out infinite;
+}
+
+@keyframes loading-flare {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  45% {
+    opacity: 1;
+  }
+}
+
 /* Spinner ---------------------------------------------------------------------- */
 
 .spinner {
@@ -1786,8 +1836,9 @@ span.checkbox {
 }
 
 /* Inside the Electrobun shell the toolbar doubles as the window drag region;
-   the webview sits below the traffic lights, so no clearance padding. */
+   extra top padding keeps the lockup clear of the traffic lights. */
 .in-shell .cockpit-toolbar {
+  padding-top: 22px;
   min-height: 44px;
 }
 

@@ -9,6 +9,7 @@ import type {
 import { Dialog } from "../components/Dialog";
 import { CaretLeft } from "../components/icons";
 import { Input } from "../components/Input";
+import { LoadingMark } from "../components/Loading";
 import { useToast } from "../components/Toast";
 import { Badge, Button, Card, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
@@ -104,7 +105,13 @@ export function SpecDetail({
       </div>
     );
   }
-  if (!loaded) return <div className="detail detail-loading">Loading…</div>;
+  if (!loaded) {
+    return (
+      <div className="detail">
+        <LoadingMark label={specId} />
+      </div>
+    );
+  }
 
   const spec = loaded.detail.spec;
   const unmet = unmetDependencies(spec, loaded.allSpecs);

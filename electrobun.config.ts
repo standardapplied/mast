@@ -27,6 +27,7 @@ const config: ElectrobunConfig = {
     mac: {
       bundleCEF: false,
       defaultRenderer: "native",
+      icons: "icons/AppIcon.iconset",
       codesign: process.env.MAST_CODESIGN === "1",
       notarize: process.env.MAST_NOTARIZE === "1",
       entitlements: {
