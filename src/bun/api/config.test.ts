@@ -19,14 +19,22 @@ function fakeIO(files: Record<string, string> = {}, env: Record<string, string> 
 describe("config resolution (CLI parity)", () => {
   test("defaults to loopback with no token", () => {
     const config = resolveConfig({}, fakeIO());
-    expect(config).toEqual({ server: "http://127.0.0.1:7070", token: null });
+    expect(config).toEqual({
+      server: "http://127.0.0.1:7070",
+      loginOrigin: "http://localhost:7070",
+      token: null,
+    });
   });
 
   test("reads server and token from ~/.sail/config.yaml", () => {
     const io = fakeIO({
       "/home/u/.sail/config.yaml": 'server: http://localhost:9999\ntoken: "sess_abc"\nhandle: uday\n',
     });
-    expect(resolveConfig({}, io)).toEqual({ server: "http://127.0.0.1:9999", token: "sess_abc" });
+    expect(resolveConfig({}, io)).toEqual({
+      server: "http://127.0.0.1:9999",
+      loginOrigin: "http://localhost:9999",
+      token: "sess_abc",
+    });
   });
 
   test("env beats file; SAIL_TOKEN_FILE is read and trimmed", () => {
@@ -37,7 +45,11 @@ describe("config resolution (CLI parity)", () => {
       },
       { SAIL_SERVER: "http://env:2", SAIL_TOKEN_FILE: "/secrets/token" },
     );
-    expect(resolveConfig({}, io)).toEqual({ server: "http://env:2", token: "tok_env_file" });
+    expect(resolveConfig({}, io)).toEqual({
+      server: "http://env:2",
+      loginOrigin: "http://env:2",
+      token: "tok_env_file",
+    });
   });
 
   test("SAIL_TOKEN beats SAIL_TOKEN_FILE; overrides beat everything", () => {
@@ -45,6 +57,7 @@ describe("config resolution (CLI parity)", () => {
     expect(resolveConfig({}, io).token).toBe("tok_env");
     expect(resolveConfig({ server: "http://cli:3", token: "tok_cli" }, io)).toEqual({
       server: "http://cli:3",
+      loginOrigin: "http://cli:3",
       token: "tok_cli",
     });
   });
@@ -60,6 +73,7 @@ describe("config resolution (CLI parity)", () => {
     });
     expect(resolveConfig({}, io)).toEqual({
       server: "http://127.0.0.1:7070",
+      loginOrigin: "http://localhost:7070",
       token: "sess_b6b99639ab22",
     });
   });

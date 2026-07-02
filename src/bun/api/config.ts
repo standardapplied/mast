@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -12,6 +12,12 @@ import { dirname, join } from "node:path";
 export type SailConfig = {
   server: string;
   token: string | null;
+  /**
+   * The raw configured origin (before the 127.0.0.1 pin) — the passkey
+   * ceremony must load from EXACTLY this origin string because WebAuthn
+   * string-matches clientDataJSON.origin against the server's allowlist.
+   */
+  loginOrigin: string;
 };
 
 export type ConfigIO = {
@@ -34,8 +40,9 @@ export function defaultConfigIO(): ConfigIO {
       }
     },
     writeFile: (path, content) => {
-      mkdirSync(dirname(path), { recursive: true });
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       writeFileSync(path, content, { mode: 0o600 });
+      chmodSync(path, 0o600);
     },
     configPath: join(homedir(), ".sail", "config.yaml"),
   };
@@ -89,25 +96,36 @@ export function parseFlowPairs(content: string): Array<[string, string]> {
   return pairs;
 }
 
+type ParsedConfig = Partial<SailConfig> & { host?: string };
+
 /**
  * The CLI's SnakeYAML writes small configs in FLOW style —
  * `{host: devbox, server: 'http://localhost:7070', token: ...}` — and larger
  * ones in block style. Parse both.
  */
-export function parseConfigYaml(content: string): Partial<SailConfig> {
-  const out: Partial<SailConfig> = {};
+export function parseConfigYaml(content: string): ParsedConfig {
+  const out: ParsedConfig = {};
+  const take = (key: string, value: string) => {
+    if (key === "server") out.server = value;
+    else if (key === "token") out.token = value;
+    else if (key === "host") out.host = value;
+  };
   if (isFlowStyle(content)) {
-    for (const [key, value] of parseFlowPairs(content)) {
-      if (key === "server") out.server = value;
-      else if (key === "token") out.token = value;
-    }
+    for (const [key, value] of parseFlowPairs(content)) take(key, value);
     return out;
   }
   for (const line of content.split("\n")) {
-    if (/^server\s*:/.test(line)) out.server = unquote(line.slice(line.indexOf(":") + 1));
-    else if (/^token\s*:/.test(line)) out.token = unquote(line.slice(line.indexOf(":") + 1));
+    const match = line.match(/^(server|token|host)\s*:/);
+    if (match) take(match[1]!, unquote(line.slice(line.indexOf(":") + 1)));
   }
   return out;
+}
+
+/** The ssh host/alias for the tunnel autopilot (null when not configured). */
+export function resolveSshHost(io: ConfigIO = defaultConfigIO()): string | null {
+  const file = io.readFile(io.configPath);
+  if (!file) return null;
+  return parseConfigYaml(file).host ?? null;
 }
 
 export function resolveConfig(
@@ -121,12 +139,12 @@ export function resolveConfig(
     io.env.SAIL_TOKEN ??
     (io.env.SAIL_TOKEN_FILE ? (io.readFile(io.env.SAIL_TOKEN_FILE)?.trim() ?? null) : undefined);
 
-  const server = (overrides.server ?? io.env.SAIL_SERVER ?? fromFile.server ?? DEFAULT_SERVER)
-    .replace(/\/+$/, "")
-    .replace("://localhost", "://127.0.0.1");
+  const rawServer = (overrides.server ?? io.env.SAIL_SERVER ?? fromFile.server ?? DEFAULT_SERVER)
+    .replace(/\/+$/, "");
 
   return {
-    server,
+    server: rawServer.replace("://localhost", "://127.0.0.1"),
+    loginOrigin: rawServer,
     token: overrides.token ?? envToken ?? fromFile.token ?? null,
   };
 }

@@ -33,15 +33,23 @@ function fakeSail(overrides: Partial<SailPort> = {}): SailPort {
   return { ...base, ...overrides };
 }
 
+const READY_STATUS = {
+  phase: "ready",
+  server: "http://127.0.0.1:7070",
+  loginOrigin: "http://localhost:7070",
+  tokenPresent: true,
+  stream: "connected",
+} as const;
+
 function makeDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
   return {
     appInfo: () => appInfo,
     quit: () => {},
     onTheme: () => {},
-    sail: fakeSail(),
-    streamState: () => "connected",
-    serverUrl: () => "http://localhost:7070",
-    tokenPresent: () => true,
+    sail: () => fakeSail(),
+    connection: () => READY_STATUS,
+    login: async () => ({ ok: true }),
+    onAuthError: () => {},
     ...overrides,
   };
 }
@@ -72,14 +80,14 @@ describe("bun request handlers", () => {
   });
 
   test("sail requests wrap success with the etag", async () => {
-    const sail = fakeSail({
+    const sailPort = fakeSail({
       getSpec: () =>
         Promise.resolve({
           data: { spec: { id: "s1" } },
           etag: '"2026-07-02T00:00:00Z"',
         }) as never,
     });
-    const handlers = createRequestHandlers(makeDeps({ sail }));
+    const handlers = createRequestHandlers(makeDeps({ sail: () => sailPort }));
     const result = await handlers.sailGetSpec({ id: "s1" });
     expect(result).toEqual({
       ok: true,
@@ -89,11 +97,11 @@ describe("bun request handlers", () => {
   });
 
   test("a 412 conflict crosses the boundary as a typed envelope", async () => {
-    const sail = fakeSail({
+    const sailPort = fakeSail({
       putSpecContent: () =>
         Promise.reject(new SailConflictError(412, "precondition_failed", "modified", "re-GET")),
     });
-    const handlers = createRequestHandlers(makeDeps({ sail }));
+    const handlers = createRequestHandlers(makeDeps({ sail: () => sailPort }));
     const result = await handlers.sailPutSpecContent({ id: "s1", content: { body: "x" } });
     expect(result).toEqual({
       ok: false,
@@ -102,8 +110,8 @@ describe("bun request handlers", () => {
   });
 
   test("network failures map to a status-0 envelope", async () => {
-    const sail = fakeSail({ board: () => Promise.reject(new Error("ECONNREFUSED")) });
-    const handlers = createRequestHandlers(makeDeps({ sail }));
+    const sailPort = fakeSail({ board: () => Promise.reject(new Error("ECONNREFUSED")) });
+    const handlers = createRequestHandlers(makeDeps({ sail: () => sailPort }));
     const result = await handlers.sailBoard({});
     expect(result).toEqual({
       ok: false,
@@ -112,21 +120,30 @@ describe("bun request handlers", () => {
   });
 
   test("api errors keep their code and status", async () => {
-    const sail = fakeSail({
+    const sailPort = fakeSail({
       dispatch: () => Promise.reject(new SailApiError(403, "forbidden", "ADMIN required")),
     });
-    const handlers = createRequestHandlers(makeDeps({ sail }));
+    const handlers = createRequestHandlers(makeDeps({ sail: () => sailPort }));
     const result = await handlers.sailDispatch({ project: "chorus", request: {} });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
-  test("sailConnection reports stream state, server, and token presence", () => {
+  test("sailConnection reports the manager's unified status", () => {
     const handlers = createRequestHandlers(makeDeps());
-    expect(handlers.sailConnection()).toEqual({
-      state: "connected",
-      server: "http://localhost:7070",
-      tokenPresent: true,
+    expect(handlers.sailConnection()).toEqual(READY_STATUS);
+  });
+
+  test("an auth-coded failure notifies onAuthError", async () => {
+    const flips: string[] = [];
+    const sailPort = fakeSail({
+      board: () => Promise.reject(new SailApiError(403, "invalid_bearer_token", "expired")),
     });
+    const handlers = createRequestHandlers(
+      makeDeps({ sail: () => sailPort, onAuthError: () => void flips.push("flip") }),
+    );
+    const result = await handlers.sailBoard({});
+    expect(result.ok).toBe(false);
+    expect(flips).toEqual(["flip"]);
   });
 });

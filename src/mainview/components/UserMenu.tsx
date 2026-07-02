@@ -16,7 +16,15 @@ const THEME_OPTIONS = [
  * click to close, theme toggle inside. Identity is a placeholder until the
  * passkey ceremony lands with mast-cockpit-shell.
  */
-export function UserMenu({ theme, server }: { theme: ThemeController; server?: string }) {
+export function UserMenu({
+  theme,
+  server,
+  onLogin,
+}: {
+  theme: ThemeController;
+  server?: string;
+  onLogin?: () => void;
+}) {
   const [isOpen, setIsOpen] = useState(false);
   const [mode, setMode] = useState<ThemeMode>(theme.mode());
   const menuRef = useRef<HTMLDivElement>(null);
@@ -65,8 +73,11 @@ export function UserMenu({ theme, server }: { theme: ThemeController; server?: s
             <Button
               variant="ghost"
               className="user-menu-signin"
-              disabled
-              title="The passkey ceremony lands with the cockpit shell"
+              disabled={!onLogin}
+              onClick={() => {
+                setIsOpen(false);
+                onLogin?.();
+              }}
             >
               Sign in with passkey
             </Button>

@@ -1,5 +1,5 @@
 import type {
-  EventStreamState,
+  ConnectionStatus,
   GlobalBoardResponse,
   GlobalSpecContentResponse,
   GlobalSpecDetailResponse,
@@ -35,9 +35,10 @@ export type Gateway = {
   specHistory(id: string): Promise<SailResult<GlobalSpecHistoryResponse>>;
   restoreSpec(id: string, rev: number): Promise<SailResult<GlobalSpecDetailResponse>>;
   specReviews(id: string): Promise<SailResult<ReviewListResponse>>;
-  connection(): Promise<{ state: EventStreamState; server: string; tokenPresent: boolean }>;
+  connection(): Promise<ConnectionStatus>;
+  login(): Promise<{ ok: boolean; detail?: string }>;
   onEvent(listener: (event: SailEvent) => void): () => void;
-  onStreamState(listener: (state: EventStreamState) => void): () => void;
+  onConnectionStatus(listener: (status: ConnectionStatus) => void): () => void;
 };
 
 export function createRpcGateway(bridge: Bridge): Gateway {
@@ -52,8 +53,9 @@ export function createRpcGateway(bridge: Bridge): Gateway {
     restoreSpec: (id, rev) => api.sailRestoreSpec({ id, rev }),
     specReviews: (id) => api.sailSpecReviews({ id }),
     connection: () => api.sailConnection(),
+    login: () => api.sailLogin(),
     onEvent: (listener) => onPush("sail-event", listener),
-    onStreamState: (listener) => onPush("sail-stream-state", ({ state }) => listener(state)),
+    onConnectionStatus: (listener) => onPush("connection-status", listener),
   };
 }
 
@@ -295,7 +297,11 @@ export function createDemoGateway(): DemoGateway {
     },
 
     async connection() {
-      return { state: "connected", server: "demo fixtures (browser preview)", tokenPresent: true };
+      return DEMO_STATUS;
+    },
+
+    async login() {
+      return { ok: true };
     },
 
     onEvent(listener) {
@@ -303,11 +309,19 @@ export function createDemoGateway(): DemoGateway {
       return () => listeners.delete(listener);
     },
 
-    onStreamState(listener) {
-      listener("connected");
+    onConnectionStatus(listener) {
+      listener(DEMO_STATUS);
       return () => {};
     },
 
     emit,
   };
 }
+
+const DEMO_STATUS: ConnectionStatus = {
+  phase: "ready",
+  server: "demo fixtures (browser preview)",
+  loginOrigin: "http://localhost:7070",
+  tokenPresent: true,
+  stream: "connected",
+};

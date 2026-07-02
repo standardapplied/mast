@@ -109,7 +109,8 @@ function makeClient(token = "sess_test") {
     limiter: new RateLimiter(600, 60_000),
     schedule: (fn) => void fn(),
   };
-  const http = new SailHttp({ server: `http://localhost:${server.port}`, token }, deps);
+  const base = `http://localhost:${server.port}`;
+  const http = new SailHttp({ server: base, loginOrigin: base, token }, deps);
   return { client: new SailClient(http), http };
 }
 

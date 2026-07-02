@@ -29,10 +29,10 @@ describe("AppRPCSchema round-trip", () => {
     appInfo: () => ({ name: "Mast", version: "1.2.3", channel: "dev" }),
     quit: () => {},
     onTheme: () => {},
-    sail: {} as never,
-    streamState: () => "disconnected",
-    serverUrl: () => "http://localhost:7070",
-    tokenPresent: () => false,
+    sail: () => ({}) as never,
+    connection: () => ({}) as never,
+    login: async () => ({ ok: false }),
+    onAuthError: () => {},
   });
 
   const transports = linkedTransports();

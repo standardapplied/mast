@@ -278,6 +278,25 @@ export type RecentEventsResponse = {
 
 export type EventStreamState = "connecting" | "connected" | "reconnecting" | "disconnected";
 
+export type ConnectionPhase =
+  | "probing"
+  | "ready"
+  | "unauthenticated"
+  | "tunnel-connecting"
+  | "tunnel-degraded"
+  | "no-host"
+  | "failed";
+
+/** One truth for the whole connection: reachability, credential, stream. */
+export type ConnectionStatus = {
+  phase: ConnectionPhase;
+  server: string;
+  loginOrigin: string;
+  tokenPresent: boolean;
+  stream: EventStreamState;
+  detail?: string;
+};
+
 export type SpecFilter = {
   project?: string;
   status?: SpecStatus;

@@ -16,6 +16,7 @@
 
 import type {
   AgentReportResponse,
+  ConnectionStatus,
   AgentStatusView,
   DispatchRequest,
   DispatchResponse,
@@ -71,7 +72,7 @@ export type AppPushMessages = {
   "update-status": { status: string; message: string };
   /** A control-plane event from the SSE stream, deduplicated and gap-filled. */
   "sail-event": SailEvent;
-  "sail-stream-state": { state: EventStreamState };
+  "connection-status": ConnectionStatus;
 };
 
 /** DOM CustomEvent names the webview dispatches for each push message. */
@@ -132,10 +133,9 @@ export type AppRPCSchema = {
         response: SailResult<FindingDismissResponse>;
       };
       sailRecentEvents: { params: { limit?: number }; response: SailResult<RecentEventsResponse> };
-      sailConnection: {
-        params: void;
-        response: { state: EventStreamState; server: string; tokenPresent: boolean };
-      };
+      sailConnection: { params: void; response: ConnectionStatus };
+      /** Runs the browser passkey ceremony; resolves when signed in (or not). */
+      sailLogin: { params: void; response: { ok: boolean; detail?: string } };
     };
     messages: Record<never, never>;
   };

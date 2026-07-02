@@ -158,6 +158,46 @@ describe("App cockpit", () => {
     expect(container.querySelector('[data-testid="card-chorus-billing-export"]')).not.toBeNull();
   });
 
+  test("unauthenticated status shows the connect screen and login flows through", async () => {
+    gateway = createDemoGateway();
+    const logins: string[] = [];
+    const signedOut = {
+      phase: "unauthenticated" as const,
+      server: "http://127.0.0.1:7070",
+      loginOrigin: "http://localhost:7070",
+      tokenPresent: true,
+      stream: "disconnected" as const,
+      detail: "Session expired or token invalid — sign in again.",
+    };
+    const authGateway = {
+      ...gateway,
+      connection: async () => signedOut,
+      onConnectionStatus: (l: (s: typeof signedOut) => void) => {
+        l(signedOut);
+        return () => {};
+      },
+      login: async () => {
+        logins.push("ceremony");
+        return { ok: true };
+      },
+    };
+    const theme = createThemeController(browserThemeDeps(() => {}));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root.render(<App gateway={authGateway as never} theme={theme} />));
+    await flush();
+
+    expect(container.querySelector('[data-testid="connect-screen"]')).not.toBeNull();
+    expect(container.textContent).toContain("Sign in to Sail");
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="connect-login"]')?.click();
+    });
+    await flush();
+    expect(logins).toEqual(["ceremony"]);
+  });
+
   test("user menu opens with the theme toggle and re-themes the document", async () => {
     localStorage.removeItem("mast.theme");
     await render();
