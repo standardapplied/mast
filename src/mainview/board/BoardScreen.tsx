@@ -270,21 +270,6 @@ export function BoardScreen({
                 <span className="stat-value">{data.summary.review}</span>
                 <span className="stat-label">in review</span>
               </span>
-              {data.summary.next_ready_id && (
-                <>
-                  <span className="stat-divider" />
-                  <span className="stat">
-                    <span className="stat-label">next</span>
-                    <button
-                      type="button"
-                      className="stat-link"
-                      onClick={() => onOpenSpec(data.summary!.next_ready_id!)}
-                    >
-                      {data.summary.next_ready_id}
-                    </button>
-                  </span>
-                </>
-              )}
             </div>
           )}
         </div>
