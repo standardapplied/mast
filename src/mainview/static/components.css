@@ -1775,26 +1775,10 @@
   gap: 20px;
 }
 
-.meta-grid {
-  display: grid;
-  gap: 12px;
-}
-
-.meta-item {
-  display: grid;
-  gap: 2px;
-}
-
 .meta-value {
   font-size: 13px;
   color: var(--muted-foreground);
   overflow-wrap: anywhere;
-}
-
-.meta-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 16px;
 }
 
 .dep-section {
