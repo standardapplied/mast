@@ -38,11 +38,17 @@ function FilterMenu({
   onOnlyMine,
   visibleLanes,
   onLanes,
+  repo,
+  repoOptions,
+  onRepo,
 }: {
   onlyMine: boolean;
   onOnlyMine: (on: boolean) => void;
   visibleLanes: Set<SpecStatus>;
   onLanes: (next: Set<SpecStatus>) => void;
+  repo: string | undefined;
+  repoOptions: string[];
+  onRepo: (repo: string | undefined) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -69,7 +75,7 @@ function FilterMenu({
   };
 
   const hiddenLanes = BOARD_COLUMNS.length - visibleLanes.size;
-  const activeCount = (onlyMine ? 1 : 0) + (hiddenLanes > 0 ? 1 : 0);
+  const activeCount = (onlyMine ? 1 : 0) + (hiddenLanes > 0 ? 1 : 0) + (repo ? 1 : 0);
 
   return (
     <div className="filter-menu" ref={containerRef}>
@@ -89,7 +95,21 @@ function FilterMenu({
           <div className="filter-row" data-testid="filter-mine">
             <Checkbox checked={onlyMine} onChange={onOnlyMine} label="Only mine" />
           </div>
-          <div className="filter-section">
+          {repoOptions.length > 0 && (
+            <div className="filter-section" data-testid="filter-repo">
+              <span className="eyebrow">Repo</span>
+              <Select
+                value={repo ?? ""}
+                onChange={(value) => onRepo(value || undefined)}
+                options={[
+                  { value: "", label: "All repos" },
+                  ...repoOptions.map((r) => ({ value: r, label: r })),
+                ]}
+                placeholder="All repos"
+              />
+            </div>
+          )}
+          <div className="filter-section" data-testid="filter-lanes">
             <span className="eyebrow">Lanes</span>
             <Select
               multiple
@@ -187,6 +207,7 @@ export function BoardScreen({
   const [project, setProject] = useState<string | undefined>(undefined);
   const [onlyMine, setOnlyMine] = useState(false);
   const [query, setQuery] = useState("");
+  const [repo, setRepo] = useState<string | undefined>(undefined);
   const [visibleLanes, setVisibleLanes] = useState<Set<SpecStatus>>(loadLanes);
   const [dragging, setDragging] = useState<GlobalSpecView | null>(null);
   const [dropTarget, setDropTarget] = useState<SpecStatus | null>(null);
@@ -195,8 +216,8 @@ export function BoardScreen({
   const { showToast } = useToast();
 
   const filter: SpecFilter = useMemo(
-    () => ({ assignee: onlyMine ? "me" : undefined, q: query || undefined }),
-    [onlyMine, query],
+    () => ({ assignee: onlyMine ? "me" : undefined, q: query || undefined, repo }),
+    [onlyMine, query, repo],
   );
   const { data, byStatus, move } = useBoard(gateway, project, filter);
 
@@ -294,6 +315,9 @@ export function BoardScreen({
             onOnlyMine={setOnlyMine}
             visibleLanes={visibleLanes}
             onLanes={setVisibleLanes}
+            repo={repo}
+            repoOptions={data.repos}
+            onRepo={setRepo}
           />
         </div>
       </div>

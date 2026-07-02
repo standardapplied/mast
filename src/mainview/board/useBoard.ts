@@ -13,6 +13,7 @@ export type BoardData = {
   specs: GlobalSpecView[];
   summary: GlobalBoardResponse | null;
   projects: string[];
+  repos: string[];
   loading: boolean;
   error: string | null;
 };
@@ -30,6 +31,7 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
     specs: [],
     summary: null,
     projects: [],
+    repos: [],
     loading: true,
     error: null,
   });
@@ -54,10 +56,14 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
     const projects = all.ok
       ? [...new Set(all.value.specs.map((s) => s.project))].sort()
       : [];
+    const repos = all.ok
+      ? [...new Set(all.value.specs.flatMap((s) => s.repos ?? []))].sort()
+      : [];
     setData({
       specs: scoped.value.specs,
       summary: summary.value,
       projects,
+      repos,
       loading: false,
       error: null,
     });

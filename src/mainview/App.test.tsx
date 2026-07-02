@@ -106,7 +106,7 @@ describe("App cockpit", () => {
 
     act(() => {
       container
-        .querySelector<HTMLButtonElement>('[data-testid="filter-panel"] .select-trigger')
+        .querySelector<HTMLButtonElement>('[data-testid="filter-lanes"] .select-trigger')
         ?.click();
     });
     const laneOption = (lane: string) =>
@@ -124,6 +124,25 @@ describe("App cockpit", () => {
     }
     expect(container.querySelectorAll(".kanban-column").length).toBe(1);
     expect(laneOption("in_progress")?.disabled).toBe(true);
+  });
+
+  test("repo filter narrows the board to specs touching that repo", async () => {
+    await render();
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="filter-trigger"]')?.click();
+    });
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="filter-repo"] .select-trigger')
+        ?.click();
+    });
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="option-api"]')?.click();
+    });
+    await flush();
+
+    expect(container.querySelector('[data-testid="card-chorus-billing-export"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="card-chorus-invoice-ui"]')).toBeNull();
   });
 
   test("only-mine filter in the filter menu narrows the board", async () => {

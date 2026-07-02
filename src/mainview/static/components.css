@@ -1932,6 +1932,10 @@ span.checkbox {
   font-size: 13px;
 }
 
+.prop-input-wide {
+  width: 220px;
+}
+
 .prop-actions {
   margin-left: auto;
   display: flex;

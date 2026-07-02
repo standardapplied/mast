@@ -195,6 +195,40 @@ export function SpecDetail({
           )}
         </div>
         <div className="prop">
+          <span className="prop-label">Repos</span>
+          {editing ? (
+            <Input
+              className="prop-input"
+              defaultValue={(spec.repos ?? []).join(", ")}
+              placeholder="api, web"
+              onChange={(e) =>
+                setDraft((d) => ({
+                  ...d,
+                  repos: e.target.value.split(",").map((r) => r.trim()).filter(Boolean),
+                }))
+              }
+            />
+          ) : (
+            <span className="prop-value">{(spec.repos ?? []).join(", ") || "—"}</span>
+          )}
+        </div>
+        {editing && (
+          <div className="prop">
+            <span className="prop-label">Depends on</span>
+            <Input
+              className="prop-input prop-input-wide"
+              defaultValue={(spec.depends_on ?? []).join(", ")}
+              placeholder="spec-a, spec-b"
+              onChange={(e) =>
+                setDraft((d) => ({
+                  ...d,
+                  depends_on: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                }))
+              }
+            />
+          </div>
+        )}
+        <div className="prop">
           <span className="prop-label">Branch</span>
           <span className="prop-value">{spec.branch ?? "—"}</span>
         </div>
