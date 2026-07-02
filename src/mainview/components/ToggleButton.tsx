@@ -57,7 +57,3 @@ export function ToggleButton({
   );
 }
 
-export const ON_OFF: ToggleOption[] = [
-  { value: "off", label: "Off" },
-  { value: "on", label: "On" },
-];

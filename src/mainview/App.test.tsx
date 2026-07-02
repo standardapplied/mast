@@ -109,22 +109,21 @@ describe("App cockpit", () => {
         .querySelector<HTMLButtonElement>('[data-testid="filter-panel"] .select-trigger')
         ?.click();
     });
-    const laneOff = (lane: string) =>
-      [...container.querySelectorAll<HTMLButtonElement>(`[data-testid="option-${lane}"] .toggle-option`)].find(
-        (b) => b.textContent === "Off",
-      );
-    act(() => laneOff("done")?.click());
+    const laneOption = (lane: string) =>
+      container.querySelector<HTMLButtonElement>(`[data-testid="option-${lane}"]`);
+    expect(laneOption("done")?.querySelector(".checkbox.is-checked")).not.toBeNull();
 
+    act(() => laneOption("done")?.click());
     expect(container.querySelectorAll(".kanban-column").length).toBe(4);
     expect(container.querySelector('[data-testid="column-done"]')).toBeNull();
     expect(JSON.parse(localStorage.getItem("mast.board.lanes")!)).not.toContain("done");
     expect(container.querySelector('[data-testid="filter-panel"]')).not.toBeNull();
 
     for (const lane of ["draft", "pending", "review"]) {
-      act(() => laneOff(lane)?.click());
+      act(() => laneOption(lane)?.click());
     }
     expect(container.querySelectorAll(".kanban-column").length).toBe(1);
-    expect(laneOff("in_progress")?.disabled).toBe(true);
+    expect(laneOption("in_progress")?.disabled).toBe(true);
   });
 
   test("only-mine filter in the filter menu narrows the board", async () => {
@@ -132,10 +131,8 @@ describe("App cockpit", () => {
     act(() => {
       container.querySelector<HTMLButtonElement>('[data-testid="filter-trigger"]')?.click();
     });
-    const mineOn = [
-      ...container.querySelectorAll<HTMLButtonElement>('[data-testid="filter-mine"] .toggle-option'),
-    ].find((b) => b.textContent === "On");
-    act(() => mineOn?.click());
+    const mine = container.querySelector<HTMLButtonElement>('[data-testid="filter-mine"] .checkbox');
+    act(() => mine?.click());
     await flush();
 
     expect(container.querySelector('[data-testid="card-chorus-ledger-sync"]')).toBeNull();

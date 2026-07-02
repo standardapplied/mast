@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import type { GlobalSpecView, SpecFilter, SpecStatus } from "../../shared/sail-models";
+import { Checkbox } from "../components/Checkbox";
 import { DropdownPanel } from "../components/DropdownPanel";
 import { Input } from "../components/Input";
 import { Funnel, Magnifier } from "../components/icons";
 import { Select } from "../components/Select";
-import { ON_OFF, ToggleButton } from "../components/ToggleButton";
 import { useToast } from "../components/Toast";
 import { Badge, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
@@ -87,13 +87,7 @@ function FilterMenu({
       <DropdownPanel triggerRef={triggerRef} isOpen={isOpen} maxHeight={360} align="right" minWidth={248}>
         <div className="filter-panel" data-testid="filter-panel">
           <div className="filter-row" data-testid="filter-mine">
-            <span className="lanes-label">Only mine</span>
-            <ToggleButton
-              className="toggle-sm"
-              options={ON_OFF}
-              value={onlyMine ? "on" : "off"}
-              onChange={(next) => onOnlyMine(next === "on")}
-            />
+            <Checkbox checked={onlyMine} onChange={onOnlyMine} label="Only mine" />
           </div>
           <div className="filter-section">
             <span className="eyebrow">Lanes</span>

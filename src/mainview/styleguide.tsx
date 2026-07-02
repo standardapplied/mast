@@ -4,9 +4,10 @@ import { DateTimePicker } from "./components/DateTimePicker";
 import { Dialog } from "./components/Dialog";
 import { Input } from "./components/Input";
 import { KanbanBoard, KanbanCard, KanbanColumn } from "./components/Kanban";
+import { Checkbox } from "./components/Checkbox";
 import { Select } from "./components/Select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/Tabs";
-import { ON_OFF, ToggleButton } from "./components/ToggleButton";
+import { ToggleButton } from "./components/ToggleButton";
 import { Textarea } from "./components/Textarea";
 import { ToastProvider, useToast } from "./components/Toast";
 import { Badge, Button, Card, Eyebrow } from "./components/ui";
@@ -146,7 +147,7 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
   const [date, setDate] = useState<Date | null>(null);
   const [time, setTime] = useState<TimeValue | null>(null);
   const [month, setMonth] = useState<Date | null>(null);
-  const [onOff, setOnOff] = useState("on");
+  const [checked, setChecked] = useState(true);
   const [toggleValue, setToggleValue] = useState("board");
 
   const selectMode = (next: ThemeMode) => {
@@ -242,11 +243,9 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
                   maxLength={280}
                 />
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <ToggleButton className="toggle-sm" options={ON_OFF} value={onOff} onChange={setOnOff} />
-                <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
-                  On/off toggle — {onOff}
-                </span>
+              <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                <Checkbox checked={checked} onChange={setChecked} label="Auto-dispatch" />
+                <Checkbox checked disabled label="Locked on" onChange={() => {}} />
               </div>
               <ToggleButton
                 options={[

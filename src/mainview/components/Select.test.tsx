@@ -72,7 +72,7 @@ describe("Select", () => {
     expect(options[0]?.textContent).toContain("codex");
   });
 
-  test("multiple mode toggles via the On/Off ToggleButton without closing", () => {
+  test("multiple mode toggles whole rows with checkbox indicators, panel stays open", () => {
     const toggles: Array<[string, boolean]> = [];
     render(
       <Select
@@ -88,19 +88,17 @@ describe("Select", () => {
     );
 
     act(() => container.querySelector<HTMLButtonElement>(".select-trigger")?.click());
-    const doneOn = [
-      ...document.querySelectorAll<HTMLButtonElement>('[data-testid="option-done"] .toggle-option'),
-    ].find((b) => b.textContent === "On");
-    expect(doneOn).not.toBeUndefined();
+    const done = document.querySelector<HTMLButtonElement>('[data-testid="option-done"]');
+    expect(done?.querySelector(".checkbox")).not.toBeNull();
+    expect(done?.querySelector(".checkbox.is-checked")).toBeNull();
 
-    act(() => doneOn?.click());
+    act(() => done?.click());
     expect(toggles).toEqual([["done", true]]);
     expect(document.querySelector(".dropdown-panel")).not.toBeNull();
 
-    const draftOff = [
-      ...document.querySelectorAll<HTMLButtonElement>('[data-testid="option-draft"] .toggle-option'),
-    ].find((b) => b.textContent === "Off");
-    expect(draftOff?.disabled).toBe(true);
+    const draft = document.querySelector<HTMLButtonElement>('[data-testid="option-draft"]');
+    expect(draft?.disabled).toBe(true);
+    expect(draft?.querySelector(".checkbox.is-checked")).not.toBeNull();
   });
 
   test("renders the error and closes on outside click", () => {

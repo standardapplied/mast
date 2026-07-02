@@ -1349,13 +1349,66 @@
   cursor: not-allowed;
 }
 
-.toggle-sm {
-  flex-shrink: 0;
+/* Checkbox ------------------------------------------------------------------ */
+
+.checkbox {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
 }
 
-.toggle-sm .toggle-option {
-  padding: 3px 9px;
-  font-size: 10px;
+.checkbox-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  background: var(--background);
+  border: 1px solid var(--border-strong);
+  color: var(--background);
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.checkbox-box svg {
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+}
+
+.checkbox:hover:not(:disabled) .checkbox-box {
+  border-color: var(--foreground);
+}
+
+.checkbox.is-checked .checkbox-box {
+  background: var(--foreground);
+  border-color: var(--foreground);
+}
+
+.checkbox.is-checked .checkbox-box svg {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.checkbox-label {
+  font-size: 13px;
+  color: var(--foreground);
+}
+
+.checkbox:disabled,
+.checkbox.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+span.checkbox {
+  flex-shrink: 0;
 }
 
 /* User menu ------------------------------------------------------------------ */
@@ -1590,10 +1643,6 @@
 .filter-section {
   display: grid;
   gap: 6px;
-}
-
-.option.is-multi {
-  justify-content: space-between;
 }
 
 .select-count {

@@ -91,6 +91,14 @@ export function Person(props: IconProps) {
   );
 }
 
+export function Check(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth={2}>
+      <path d="M3 8.5l3.2 3.2L13 5" />
+    </svg>
+  );
+}
+
 export function Funnel(props: IconProps) {
   return (
     <svg {...base(props)}>
