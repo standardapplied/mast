@@ -21,10 +21,10 @@ describe("application menu", () => {
   });
 
   test("installApplicationMenu hands the structure to the injected setter", () => {
-    let received: MenuItem[] | null = null;
+    const holder: { received: MenuItem[] | null } = { received: null };
     installApplicationMenu((menu) => {
-      received = menu;
+      holder.received = menu;
     });
-    expect(received).toEqual(applicationMenu());
+    expect(holder.received).toEqual(applicationMenu());
   });
 });
