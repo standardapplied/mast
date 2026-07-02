@@ -72,6 +72,33 @@ describe("Select", () => {
     expect(options[0]?.textContent).toContain("codex");
   });
 
+  test("multiple mode toggles values without closing and respects disabled", () => {
+    const toggles: Array<[string, boolean]> = [];
+    render(
+      <Select
+        multiple
+        placeholder="Lanes"
+        values={["draft"]}
+        onToggle={(v, s) => toggles.push([v, s])}
+        options={[
+          { value: "draft", label: "Draft", disabled: true },
+          { value: "done", label: "Done" },
+        ]}
+      />,
+    );
+
+    act(() => container.querySelector<HTMLButtonElement>(".select-trigger")?.click());
+    const done = document.querySelector<HTMLButtonElement>('[data-testid="option-done"]');
+    expect(done?.querySelector(".switch")).not.toBeNull();
+
+    act(() => done?.click());
+    expect(toggles).toEqual([["done", true]]);
+    expect(document.querySelector(".dropdown-panel")).not.toBeNull();
+
+    const draft = document.querySelector<HTMLButtonElement>('[data-testid="option-draft"]');
+    expect(draft?.disabled).toBe(true);
+  });
+
   test("renders the error and closes on outside click", () => {
     render(<Select value="" onChange={() => {}} options={OPTIONS} error="Required" />);
     expect(container.querySelector(".field-error")?.textContent).toBe("Required");

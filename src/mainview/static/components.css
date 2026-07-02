@@ -1375,9 +1375,15 @@
   background: var(--background);
 }
 
-.switch:disabled {
+.switch:disabled,
+.switch.is-disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+span.switch {
+  display: inline-block;
+  flex-shrink: 0;
 }
 
 /* User menu ------------------------------------------------------------------ */
@@ -1591,8 +1597,38 @@
   flex: none;
 }
 
-.lanes-menu {
+.filter-menu {
   position: relative;
+}
+
+.filter-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  min-width: 220px;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.filter-section {
+  display: grid;
+  gap: 6px;
+}
+
+.option.is-multi {
+  justify-content: space-between;
+}
+
+.select-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--primary);
 }
 
 .lanes-trigger {
@@ -1623,22 +1659,59 @@
   color: var(--primary);
 }
 
-.lanes-list {
-  display: grid;
-  padding: 6px;
-}
-
-.lanes-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 7px 8px;
-}
-
 .lanes-label {
   font-size: 13px;
   color: var(--foreground);
+}
+
+/* Board minimap ---------------------------------------------------------------- */
+
+.board-canvas-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.minimap {
+  position: absolute;
+  right: 20px;
+  bottom: 16px;
+  z-index: 30;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+}
+
+.minimap-track {
+  position: relative;
+  display: flex;
+  gap: 3px;
+}
+
+.minimap-cell {
+  appearance: none;
+  width: 15px;
+  height: 20px;
+  padding: 0;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.minimap-cell:hover {
+  border-color: var(--border-strong);
+}
+
+.minimap-view {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  border: 1.5px solid var(--primary);
+  pointer-events: none;
+  transition: left 60ms linear;
+  box-sizing: border-box;
 }
 
 @media (max-width: 720px) {

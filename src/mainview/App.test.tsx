@@ -95,35 +95,50 @@ describe("App cockpit", () => {
     expect(container.querySelector('[data-testid="bridge-status"]')).toBeNull();
   });
 
-  test("lane switches hide columns, persist, and guard the last lane", async () => {
+  test("the filter menu hides lanes via the multi-select, persists, guards the last lane", async () => {
     await render();
     expect(container.querySelectorAll(".kanban-column").length).toBe(5);
 
     act(() => {
-      container.querySelector<HTMLButtonElement>('[data-testid="lanes-trigger"]')?.click();
+      container.querySelector<HTMLButtonElement>('[data-testid="filter-trigger"]')?.click();
     });
-    const doneSwitch = container.querySelector<HTMLButtonElement>(
-      '[data-testid="lane-toggle-done"] .switch',
-    );
-    expect(doneSwitch?.getAttribute("aria-checked")).toBe("true");
+    expect(container.querySelector('[data-testid="filter-panel"]')).not.toBeNull();
 
-    act(() => doneSwitch?.click());
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="filter-panel"] .select-trigger')
+        ?.click();
+    });
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="option-done"]')?.click();
+    });
+
     expect(container.querySelectorAll(".kanban-column").length).toBe(4);
     expect(container.querySelector('[data-testid="column-done"]')).toBeNull();
     expect(JSON.parse(localStorage.getItem("mast.board.lanes")!)).not.toContain("done");
+    expect(container.querySelector('[data-testid="filter-panel"]')).not.toBeNull();
 
     for (const lane of ["draft", "pending", "review"]) {
       act(() => {
-        container
-          .querySelector<HTMLButtonElement>(`[data-testid="lane-toggle-${lane}"] .switch`)
-          ?.click();
+        container.querySelector<HTMLButtonElement>(`[data-testid="option-${lane}"]`)?.click();
       });
     }
     expect(container.querySelectorAll(".kanban-column").length).toBe(1);
-    const last = container.querySelector<HTMLButtonElement>(
-      '[data-testid="lane-toggle-in_progress"] .switch',
-    );
+    const last = container.querySelector<HTMLButtonElement>('[data-testid="option-in_progress"]');
     expect(last?.disabled).toBe(true);
+  });
+
+  test("only-mine filter in the filter menu narrows the board", async () => {
+    await render();
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="filter-trigger"]')?.click();
+    });
+    const mine = container.querySelector<HTMLButtonElement>('[data-testid="filter-panel"] .switch');
+    act(() => mine?.click());
+    await flush();
+
+    expect(container.querySelector('[data-testid="card-chorus-ledger-sync"]')).toBeNull();
+    expect(container.querySelector('[data-testid="card-chorus-billing-export"]')).not.toBeNull();
   });
 
   test("user menu opens with the theme toggle and re-themes the document", async () => {

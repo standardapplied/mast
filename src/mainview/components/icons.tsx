@@ -91,6 +91,14 @@ export function Person(props: IconProps) {
   );
 }
 
+export function Funnel(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M2 3h12L9.5 8.5V13l-3 1.5V8.5L2 3z" />
+    </svg>
+  );
+}
+
 export function Magnifier(props: IconProps) {
   return (
     <svg {...base(props)}>

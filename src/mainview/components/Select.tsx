@@ -3,17 +3,19 @@ import { debounce } from "../lib/date-utils";
 import { cx } from "./cx";
 import { DropdownPanel } from "./DropdownPanel";
 import { CaretDown, Spinner } from "./icons";
+import { Switch } from "./Switch";
 
 export type SelectOption = {
   value: string;
   label: string;
   icon?: ReactNode;
   description?: string;
+  disabled?: boolean;
 };
 
 export type SelectProps = {
-  value: string;
-  onChange: (value: string) => void;
+  value?: string;
+  onChange?: (value: string) => void;
   options?: SelectOption[];
   fetchOptions?: (search: string) => Promise<SelectOption[]>;
   initialOption?: SelectOption | null;
@@ -23,12 +25,18 @@ export type SelectProps = {
   label?: string;
   error?: string;
   disabled?: boolean;
+  /** Multi-select: option rows carry a Switch, the panel stays open. */
+  multiple?: boolean;
+  values?: string[];
+  onToggle?: (value: string, selected: boolean) => void;
 };
 
 /**
  * Custom select ported from light-grid-wapp: plain option list, searchable
  * filtering, or server-backed search via `fetchOptions` (debounced, aborting
- * stale requests). Renders through the viewport-aware DropdownPanel.
+ * stale requests). Renders through the viewport-aware DropdownPanel. In
+ * `multiple` mode each option row toggles a Switch and the panel stays open;
+ * the trigger shows the placeholder with a selected count.
  */
 export function Select({
   value,
@@ -42,6 +50,9 @@ export function Select({
   label,
   error,
   disabled = false,
+  multiple = false,
+  values = [],
+  onToggle,
 }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
@@ -124,15 +135,22 @@ export function Select({
   }, []);
 
   const handleSelect = (optionValue: string) => {
+    if (multiple) {
+      onToggle?.(optionValue, !values.includes(optionValue));
+      return;
+    }
     if (fetchOptions) {
       const selected = serverOptions.find((opt) => opt.value === optionValue);
       if (selected) setSelectedServerOption(selected);
     }
-    onChange(optionValue);
+    onChange?.(optionValue);
     setIsOpen(false);
   };
 
   const hasError = !!error;
+  const triggerText = multiple
+    ? placeholder
+    : selectedOption?.label || placeholder;
 
   return (
     <div ref={containerRef} className={cx("select", className)}>
@@ -186,9 +204,12 @@ export function Select({
           disabled={disabled}
           className={cx("select-trigger", hasError && "is-error")}
         >
-          <span className={cx("select-value", !selectedOption && "is-placeholder")}>
-            {selectedOption?.icon}
-            {selectedOption?.label || placeholder}
+          <span className={cx("select-value", !multiple && !selectedOption && "is-placeholder")}>
+            {!multiple && selectedOption?.icon}
+            {triggerText}
+            {multiple && values.length > 0 && values.length < options.length && (
+              <span className="select-count">{values.length}</span>
+            )}
           </span>
           <CaretDown size={14} className={cx("select-caret", isOpen && "is-open")} />
         </button>
@@ -208,14 +229,23 @@ export function Select({
                 key={option.value}
                 ref={option.value === value ? selectedButtonRef : null}
                 type="button"
+                disabled={option.disabled}
                 onClick={() => handleSelect(option.value)}
-                className={cx("option", option.value === value && "is-selected")}
+                className={cx(
+                  "option",
+                  !multiple && option.value === value && "is-selected",
+                  multiple && "is-multi",
+                )}
+                data-testid={`option-${option.value}`}
               >
                 {option.icon}
                 <span className="option-body">
                   <span className="option-label">{option.label}</span>
                   {option.description && <span className="option-description">{option.description}</span>}
                 </span>
+                {multiple && (
+                  <Switch checked={values.includes(option.value)} disabled={option.disabled} asIndicator />
+                )}
               </button>
             ))
           )}

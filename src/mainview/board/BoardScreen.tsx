@@ -1,8 +1,8 @@
-import { useMemo, useRef, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import type { GlobalSpecView, SpecFilter, SpecStatus } from "../../shared/sail-models";
 import { DropdownPanel } from "../components/DropdownPanel";
 import { Input } from "../components/Input";
-import { CaretDown, Magnifier } from "../components/icons";
+import { Funnel, Magnifier } from "../components/icons";
 import { Select } from "../components/Select";
 import { Switch } from "../components/Switch";
 import { useToast } from "../components/Toast";
@@ -12,6 +12,15 @@ import { BOARD_COLUMNS, canTransition, STATUS_LABEL } from "./lifecycle";
 import { unmetDependencies, useBoard } from "./useBoard";
 
 const LANES_KEY = "mast.board.lanes";
+
+const STATUS_TONE: Record<SpecStatus, "accent" | "warning" | "success" | "neutral"> = {
+  draft: "neutral",
+  pending: "neutral",
+  in_progress: "accent",
+  review: "warning",
+  done: "success",
+  archived: "neutral",
+};
 
 function loadLanes(): Set<SpecStatus> {
   try {
@@ -24,77 +33,82 @@ function loadLanes(): Set<SpecStatus> {
   return new Set(BOARD_COLUMNS);
 }
 
-function LanesMenu({
-  visible,
-  onChange,
+function FilterMenu({
+  onlyMine,
+  onOnlyMine,
+  visibleLanes,
+  onLanes,
 }: {
-  visible: Set<SpecStatus>;
-  onChange: (next: Set<SpecStatus>) => void;
+  onlyMine: boolean;
+  onOnlyMine: (on: boolean) => void;
+  visibleLanes: Set<SpecStatus>;
+  onLanes: (next: Set<SpecStatus>) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
-  const toggle = (lane: SpecStatus, on: boolean) => {
-    const next = new Set(visible);
-    if (on) next.add(lane);
-    else next.delete(lane);
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isOpen]);
+
+  const toggleLane = (lane: string, selected: boolean) => {
+    const next = new Set(visibleLanes);
+    if (selected) next.add(lane as SpecStatus);
+    else next.delete(lane as SpecStatus);
     if (next.size === 0) return;
     localStorage.setItem(LANES_KEY, JSON.stringify([...next]));
-    onChange(next);
+    onLanes(next);
   };
 
+  const hiddenLanes = BOARD_COLUMNS.length - visibleLanes.size;
+  const activeCount = (onlyMine ? 1 : 0) + (hiddenLanes > 0 ? 1 : 0);
+
   return (
-    <div
-      className="lanes-menu"
-      ref={containerRef}
-      onBlur={(e) => {
-        if (!containerRef.current?.contains(e.relatedTarget as Node)) setIsOpen(false);
-      }}
-    >
+    <div className="filter-menu" ref={containerRef}>
       <button
         ref={triggerRef}
         type="button"
         className="lanes-trigger"
         onClick={() => setIsOpen(!isOpen)}
-        data-testid="lanes-trigger"
+        data-testid="filter-trigger"
       >
-        Lanes
-        {visible.size < BOARD_COLUMNS.length && (
-          <span className="lanes-count">{visible.size}</span>
-        )}
-        <CaretDown size={12} className={isOpen ? "select-caret is-open" : "select-caret"} />
+        <Funnel size={13} />
+        Filter
+        {activeCount > 0 && <span className="lanes-count">{activeCount}</span>}
       </button>
-      <DropdownPanel triggerRef={triggerRef} isOpen={isOpen} maxHeight={280}>
-        <div className="lanes-list">
-          {BOARD_COLUMNS.map((lane) => {
-            const on = visible.has(lane);
-            return (
-              <div key={lane} className="lanes-row" data-testid={`lane-toggle-${lane}`}>
-                <span className="lanes-label">{STATUS_LABEL[lane]}</span>
-                <Switch
-                  checked={on}
-                  disabled={on && visible.size === 1}
-                  onChange={(next) => toggle(lane, next)}
-                  label={`Show ${STATUS_LABEL[lane]}`}
-                />
-              </div>
-            );
-          })}
+      <DropdownPanel triggerRef={triggerRef} isOpen={isOpen} maxHeight={320}>
+        <div className="filter-panel" data-testid="filter-panel">
+          <div className="filter-row">
+            <span className="lanes-label">Only mine</span>
+            <Switch checked={onlyMine} onChange={onOnlyMine} label="Only mine" />
+          </div>
+          <div className="filter-section">
+            <span className="eyebrow">Lanes</span>
+            <Select
+              multiple
+              placeholder="Lanes"
+              values={[...visibleLanes]}
+              onToggle={toggleLane}
+              options={BOARD_COLUMNS.map((lane) => ({
+                value: lane,
+                label: STATUS_LABEL[lane],
+                disabled: visibleLanes.has(lane) && visibleLanes.size === 1,
+              }))}
+            />
+          </div>
         </div>
       </DropdownPanel>
     </div>
   );
 }
-
-const STATUS_TONE: Record<SpecStatus, "accent" | "warning" | "success" | "neutral"> = {
-  draft: "neutral",
-  pending: "neutral",
-  in_progress: "accent",
-  review: "warning",
-  done: "success",
-  archived: "neutral",
-};
 
 function SpecCard({
   spec,
@@ -134,6 +148,36 @@ function SpecCard({
   );
 }
 
+function Minimap({
+  lanes,
+  view,
+  onJump,
+}: {
+  lanes: SpecStatus[];
+  view: { left: number; width: number };
+  onJump: (fraction: number) => void;
+}) {
+  return (
+    <div className="minimap" data-testid="board-minimap">
+      <div className="minimap-track">
+        {lanes.map((lane, index) => (
+          <button
+            key={lane}
+            type="button"
+            className="minimap-cell"
+            title={STATUS_LABEL[lane]}
+            onClick={() => onJump(index / lanes.length)}
+          />
+        ))}
+        <span
+          className="minimap-view"
+          style={{ left: `${view.left * 100}%`, width: `${view.width * 100}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function BoardScreen({
   gateway,
   onOpenSpec,
@@ -147,6 +191,8 @@ export function BoardScreen({
   const [visibleLanes, setVisibleLanes] = useState<Set<SpecStatus>>(loadLanes);
   const [dragging, setDragging] = useState<GlobalSpecView | null>(null);
   const [dropTarget, setDropTarget] = useState<SpecStatus | null>(null);
+  const [view, setView] = useState<{ left: number; width: number } | null>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
   const { showToast } = useToast();
 
   const filter: SpecFilter = useMemo(
@@ -154,6 +200,38 @@ export function BoardScreen({
     [onlyMine, query],
   );
   const { data, byStatus, move } = useBoard(gateway, project, filter);
+
+  const lanes = BOARD_COLUMNS.filter((status) => visibleLanes.has(status));
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const update = () => {
+      if (canvas.scrollWidth > canvas.clientWidth + 4) {
+        setView({
+          left: canvas.scrollLeft / canvas.scrollWidth,
+          width: canvas.clientWidth / canvas.scrollWidth,
+        });
+      } else {
+        setView(null);
+      }
+    };
+
+    update();
+    canvas.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    return () => {
+      canvas.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, [visibleLanes, data.specs]);
+
+  const jumpTo = (fraction: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.scrollTo({ left: fraction * canvas.scrollWidth, behavior: "smooth" });
+  };
 
   const projectOptions = [
     { value: "", label: "All projects" },
@@ -227,67 +305,67 @@ export function BoardScreen({
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <button
-            type="button"
-            className="tab"
-            aria-selected={onlyMine}
-            onClick={() => setOnlyMine(!onlyMine)}
-          >
-            Mine
-          </button>
-          <LanesMenu visible={visibleLanes} onChange={setVisibleLanes} />
+          <FilterMenu
+            onlyMine={onlyMine}
+            onOnlyMine={setOnlyMine}
+            visibleLanes={visibleLanes}
+            onLanes={setVisibleLanes}
+          />
         </div>
       </div>
 
       {data.error && <p className="board-error">{data.error}</p>}
 
-      <div className="board-canvas">
-        <div className="kanban-board board-columns">
-        {BOARD_COLUMNS.filter((status) => visibleLanes.has(status)).map((status) => {
-          const specs = byStatus.get(status) ?? [];
-          const droppable = dragging ? canTransition(dragging.status, status) : false;
-          return (
-            <div
-              key={status}
-              className={[
-                "kanban-column",
-                droppable && "is-droppable",
-                dropTarget === status && droppable && "is-drop-target",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-              data-testid={`column-${status}`}
-              onDragOver={(e) => {
-                if (droppable) {
-                  e.preventDefault();
-                  setDropTarget(status);
-                }
-              }}
-              onDragLeave={() => setDropTarget((t) => (t === status ? null : t))}
-              onDrop={() => void handleDrop(status)}
-            >
-              <div className="kanban-column-header">
-                <span className="eyebrow">{STATUS_LABEL[status]}</span>
-                <Badge tone={STATUS_TONE[status]}>{String(specs.length)}</Badge>
-              </div>
-              <div className="kanban-column-body">
-                {specs.map((spec) => (
-                  <SpecCard
-                    key={spec.id}
-                    spec={spec}
-                    blockedBy={unmetDependencies(spec, data.specs)}
-                    onOpen={() => onOpenSpec(spec.id)}
-                    onDragStart={(e) => {
-                      e.dataTransfer?.setData("text/plain", spec.id);
-                      setDragging(spec);
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          );
-        })}
+      <div className="board-canvas-wrap">
+        <div className="board-canvas" ref={canvasRef}>
+          <div className="kanban-board board-columns">
+            {lanes.map((status) => {
+              const specs = byStatus.get(status) ?? [];
+              const droppable = dragging ? canTransition(dragging.status, status) : false;
+              return (
+                <div
+                  key={status}
+                  className={[
+                    "kanban-column",
+                    droppable && "is-droppable",
+                    dropTarget === status && droppable && "is-drop-target",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  data-testid={`column-${status}`}
+                  onDragOver={(e) => {
+                    if (droppable) {
+                      e.preventDefault();
+                      setDropTarget(status);
+                    }
+                  }}
+                  onDragLeave={() => setDropTarget((t) => (t === status ? null : t))}
+                  onDrop={() => void handleDrop(status)}
+                >
+                  <div className="kanban-column-header">
+                    <span className="eyebrow">{STATUS_LABEL[status]}</span>
+                    <Badge tone={STATUS_TONE[status]}>{String(specs.length)}</Badge>
+                  </div>
+                  <div className="kanban-column-body">
+                    {specs.map((spec) => (
+                      <SpecCard
+                        key={spec.id}
+                        spec={spec}
+                        blockedBy={unmetDependencies(spec, data.specs)}
+                        onOpen={() => onOpenSpec(spec.id)}
+                        onDragStart={(e) => {
+                          e.dataTransfer?.setData("text/plain", spec.id);
+                          setDragging(spec);
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
+        {view && <Minimap lanes={lanes} view={view} onJump={jumpTo} />}
       </div>
     </div>
   );
