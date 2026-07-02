@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_SERVER, resolveConfig, writeConfig, type ConfigIO } from "./config";
+import { resolveConfig, writeConfig, type ConfigIO } from "./config";
 
 function fakeIO(files: Record<string, string> = {}, env: Record<string, string> = {}): ConfigIO & {
   files: Record<string, string>;
@@ -17,16 +17,16 @@ function fakeIO(files: Record<string, string> = {}, env: Record<string, string> 
 }
 
 describe("config resolution (CLI parity)", () => {
-  test("defaults to localhost with no token", () => {
+  test("defaults to loopback with no token", () => {
     const config = resolveConfig({}, fakeIO());
-    expect(config).toEqual({ server: DEFAULT_SERVER, token: null });
+    expect(config).toEqual({ server: "http://127.0.0.1:7070", token: null });
   });
 
   test("reads server and token from ~/.sail/config.yaml", () => {
     const io = fakeIO({
       "/home/u/.sail/config.yaml": 'server: http://localhost:9999\ntoken: "sess_abc"\nhandle: uday\n',
     });
-    expect(resolveConfig({}, io)).toEqual({ server: "http://localhost:9999", token: "sess_abc" });
+    expect(resolveConfig({}, io)).toEqual({ server: "http://127.0.0.1:9999", token: "sess_abc" });
   });
 
   test("env beats file; SAIL_TOKEN_FILE is read and trimmed", () => {
@@ -59,9 +59,19 @@ describe("config resolution (CLI parity)", () => {
         "{host: devbox, user: sail, server: 'http://localhost:7070', token: sess_b6b99639ab22}\n",
     });
     expect(resolveConfig({}, io)).toEqual({
-      server: "http://localhost:7070",
+      server: "http://127.0.0.1:7070",
       token: "sess_b6b99639ab22",
     });
+  });
+
+  test("localhost pins to 127.0.0.1 so fetch never dials the ::1 lane an ssh -L tunnel mishandles", () => {
+    expect(resolveConfig({ server: "http://localhost:9999" }, fakeIO()).server).toBe(
+      "http://127.0.0.1:9999",
+    );
+    expect(resolveConfig({}, fakeIO()).server).toBe("http://127.0.0.1:7070");
+    expect(resolveConfig({ server: "http://node.internal:7070" }, fakeIO()).server).toBe(
+      "http://node.internal:7070",
+    );
   });
 });
 

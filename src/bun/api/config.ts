@@ -121,11 +121,12 @@ export function resolveConfig(
     io.env.SAIL_TOKEN ??
     (io.env.SAIL_TOKEN_FILE ? (io.readFile(io.env.SAIL_TOKEN_FILE)?.trim() ?? null) : undefined);
 
+  const server = (overrides.server ?? io.env.SAIL_SERVER ?? fromFile.server ?? DEFAULT_SERVER)
+    .replace(/\/+$/, "")
+    .replace("://localhost", "://127.0.0.1");
+
   return {
-    server: (overrides.server ?? io.env.SAIL_SERVER ?? fromFile.server ?? DEFAULT_SERVER).replace(
-      /\/+$/,
-      "",
-    ),
+    server,
     token: overrides.token ?? envToken ?? fromFile.token ?? null,
   };
 }

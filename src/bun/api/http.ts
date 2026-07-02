@@ -39,6 +39,7 @@ export type ApiResult<T> = { data: T; etag?: string };
 
 const RETRY_BASE_MS = 1000;
 const MAX_ATTEMPTS = 3;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 function defaultDeps(): HttpDeps {
   return {
@@ -75,11 +76,21 @@ export class SailHttp {
 
     for (let attempt = 1; ; attempt++) {
       await this.deps.limiter.acquire();
-      const response = await this.deps.fetchFn(url, {
-        method,
-        headers,
-        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-      });
+      let response: Response;
+      try {
+        response = await this.deps.fetchFn(url, {
+          method,
+          headers,
+          body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+      } catch (error) {
+        const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+        if (timedOut) {
+          throw new SailApiError(0, "timeout", `No response from ${url.origin} within 15s.`);
+        }
+        throw error;
+      }
 
       if (response.status === 429 && attempt < MAX_ATTEMPTS) {
         await new Promise<void>((resolve) =>
