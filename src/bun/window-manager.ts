@@ -1,5 +1,6 @@
 import Electrobun, { BrowserWindow, Utils } from "electrobun/bun";
-import type { AppInfo, AppPushMessages, ThemeName } from "../shared/types";
+import type { AppPushMessages } from "../shared/types";
+import type { HandlerDeps } from "./handlers";
 import { isExternalHttpUrl, newWindowUrl } from "./navigation";
 import { createMainRPC, type MainRPC } from "./rpc";
 import { WindowRegistry } from "./window-registry";
@@ -17,18 +18,14 @@ export class WindowManager {
   private readonly registry = new WindowRegistry<WindowEntry>();
   private navigationGuardInstalled = false;
 
-  constructor(
-    private readonly appInfo: () => AppInfo,
-    private readonly onTheme: (theme: ThemeName) => void = () => {},
-  ) {}
+  constructor(private readonly deps: Omit<HandlerDeps, "quit">) {}
 
   open(): WindowEntry {
     this.installNavigationGuard();
 
     const rpc = createMainRPC({
-      appInfo: this.appInfo,
+      ...this.deps,
       quit: () => void this.requestQuit(),
-      onTheme: this.onTheme,
     });
 
     const window = new BrowserWindow<MainRPC>({

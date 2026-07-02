@@ -14,11 +14,52 @@
  * app code that reads these types.
  */
 
+import type {
+  AgentReportResponse,
+  AgentStatusView,
+  DispatchRequest,
+  DispatchResponse,
+  EventStreamState,
+  FindingDismissResponse,
+  GlobalBoardResponse,
+  GlobalSpecContentResponse,
+  GlobalSpecDetailResponse,
+  GlobalSpecHistoryResponse,
+  GlobalSpecsListResponse,
+  ProjectResponse,
+  RecentEventsResponse,
+  ReviewApproveResponse,
+  ReviewDetailResponse,
+  ReviewListResponse,
+  SailEvent,
+  SessionListResponse,
+  SpecContentRequest,
+  SpecCreateRequest,
+  SpecFilter,
+  SpecUpdateRequest,
+} from "./sail-models";
+
 export type AppInfo = {
   name: string;
   version: string;
   channel: string;
 };
+
+export type SailWireError = {
+  status: number;
+  code: string;
+  message: string;
+  action?: string;
+};
+
+/**
+ * API results crossing the RPC boundary keep their typed error envelope (a
+ * thrown error would arrive at the webview as a bare message string). A 412
+ * conflict is `{ ok: false, error: { code: "precondition_failed" } }`.
+ */
+export type SailResult<T> =
+  | { ok: true; value: T; etag?: string }
+  | { ok: false; error: SailWireError };
 
 export type BridgeStatus = "connected" | "reconnecting" | "disconnected";
 
@@ -28,6 +69,9 @@ export type ThemeName = "light" | "dark";
 export type AppPushMessages = {
   "bridge-status": { status: BridgeStatus };
   "update-status": { status: string; message: string };
+  /** A control-plane event from the SSE stream, deduplicated and gap-filled. */
+  "sail-event": SailEvent;
+  "sail-stream-state": { state: EventStreamState };
 };
 
 /** DOM CustomEvent names the webview dispatches for each push message. */
@@ -41,6 +85,54 @@ export type AppRPCSchema = {
       quit: { params: void; response: void };
       /** Webview reports the active UI theme so terminals re-theme in lockstep. */
       setTheme: { params: { theme: ThemeName }; response: void };
+
+      sailListSpecs: { params: SpecFilter; response: SailResult<GlobalSpecsListResponse> };
+      sailBoard: { params: { project?: string }; response: SailResult<GlobalBoardResponse> };
+      sailGetSpec: { params: { id: string }; response: SailResult<GlobalSpecDetailResponse> };
+      sailCreateSpec: { params: SpecCreateRequest; response: SailResult<GlobalSpecDetailResponse> };
+      sailUpdateSpec: {
+        params: { id: string; request: SpecUpdateRequest; ifMatch?: string };
+        response: SailResult<GlobalSpecDetailResponse>;
+      };
+      sailDeleteSpec: {
+        params: { id: string; ifMatch?: string };
+        response: SailResult<{ id: string; deleted: boolean }>;
+      };
+      sailGetSpecContent: { params: { id: string }; response: SailResult<GlobalSpecContentResponse> };
+      sailPutSpecContent: {
+        params: { id: string; content: SpecContentRequest; ifMatch?: string };
+        response: SailResult<GlobalSpecContentResponse>;
+      };
+      sailSpecReviews: { params: { id: string }; response: SailResult<ReviewListResponse> };
+      sailSpecHistory: { params: { id: string }; response: SailResult<GlobalSpecHistoryResponse> };
+      sailRestoreSpec: {
+        params: { id: string; rev: number };
+        response: SailResult<GlobalSpecDetailResponse>;
+      };
+      sailGetProject: { params: { project: string }; response: SailResult<ProjectResponse> };
+      sailDispatch: {
+        params: { project: string; request: DispatchRequest };
+        response: SailResult<DispatchResponse>;
+      };
+      sailAgentStatus: { params: { project: string }; response: SailResult<AgentStatusView> };
+      sailAgentLog: {
+        params: { project: string; tail: number };
+        response: SailResult<{ log: string }>;
+      };
+      sailAgentSessions: { params: { project: string }; response: SailResult<SessionListResponse> };
+      sailStopAgent: { params: { project: string }; response: SailResult<AgentStatusView> };
+      sailAgentReport: { params: { project: string }; response: SailResult<AgentReportResponse> };
+      sailGetReview: { params: { reviewId: string }; response: SailResult<ReviewDetailResponse> };
+      sailApproveReview: {
+        params: { reviewId: string };
+        response: SailResult<ReviewApproveResponse>;
+      };
+      sailDismissFinding: {
+        params: { reviewId: string; findingId: string };
+        response: SailResult<FindingDismissResponse>;
+      };
+      sailRecentEvents: { params: { limit?: number }; response: SailResult<RecentEventsResponse> };
+      sailConnection: { params: void; response: { state: EventStreamState; server: string } };
     };
     messages: Record<never, never>;
   };
