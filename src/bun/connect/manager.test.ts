@@ -152,6 +152,18 @@ describe("ConnectionManager", () => {
     expect(h.manager.currentStatus.phase).toBe("ready");
   });
 
+  test("login fails fast when the tunnel port differs from the ceremony origin", async () => {
+    const h = harness({ token: null, probeHealthy: false });
+    await h.manager.start();
+    h.tunnelUp("http://127.0.0.1:52814");
+    await flush();
+
+    const result = await h.manager.login();
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("7070 is busy");
+    expect(h.opened).toEqual([]);
+  });
+
   test("login failure surfaces the callback error and stays unauthenticated", async () => {
     const h = harness({ token: null, callbackResult: { error: "Sign-in timed out." } });
     await h.manager.start();

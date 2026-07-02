@@ -71,6 +71,18 @@ function isLoopbackOrigin(origin: string): boolean {
   }
 }
 
+function originPort(origin: string): string {
+  try {
+    return new URL(origin).port || "80";
+  } catch {
+    return "";
+  }
+}
+
+function portsMatch(a: string, b: string): boolean {
+  return originPort(a) === originPort(b);
+}
+
 export class ConnectionManager {
   private status: ConnectionStatus;
   private token: string | null;
@@ -225,6 +237,16 @@ export class ConnectionManager {
       return {
         ok: false,
         detail: "Passkey sign-in requires a local or tunnelled control plane, not a remote origin.",
+      };
+    }
+    // WebAuthn binds to the ceremony's page origin; it must be reachable. When
+    // a tunnel couldn't take the canonical port the reachable server sits on a
+    // different port than loginOrigin, so the ceremony can't work — fail fast
+    // rather than open a doomed browser and wait out the callback timeout.
+    if (!portsMatch(this.status.server, this.status.loginOrigin)) {
+      return {
+        ok: false,
+        detail: `Local port ${originPort(this.status.loginOrigin)} is busy, so sign-in can't reach the control plane. Free it and reconnect.`,
       };
     }
 
