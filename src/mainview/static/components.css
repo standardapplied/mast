@@ -1145,7 +1145,8 @@
 
 .kanban-column {
   flex: 0 0 260px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 
@@ -1166,8 +1167,11 @@
 }
 
 .kanban-column-body {
+  flex: 1;
+  min-height: 120px;
   display: grid;
   gap: 8px;
+  align-content: start;
 }
 
 .kanban-card {
@@ -1268,22 +1272,57 @@
   appearance: none;
   background: none;
   border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   padding: 2px 4px;
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.cockpit-wordmark {
   font-family: var(--font-display);
   font-size: 17px;
   letter-spacing: var(--tracking-display);
-  color: var(--foreground);
-  cursor: pointer;
 }
 
 .cockpit-toolbar-spacer {
   flex: 1;
 }
 
+.stream-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
+  color: var(--subtle-foreground);
+}
+
+.stream-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: var(--subtle-foreground);
+}
+
+.stream-pill[data-state="connected"]::before {
+  background: var(--success);
+}
+
+.stream-pill[data-state="reconnecting"]::before,
+.stream-pill[data-state="connecting"]::before {
+  background: var(--warning);
+}
+
 .cockpit-main {
   flex: 1;
-  overflow-y: auto;
-  padding: 20px 24px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
 }
 
 .bridge-badge {
@@ -1299,33 +1338,71 @@
 /* Board -------------------------------------------------------------------- */
 
 .board {
-  display: grid;
-  gap: 20px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-.board-toolbar {
+.masthead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 28px 32px 20px;
+}
+
+.masthead-title {
+  display: grid;
+  gap: 4px;
+}
+
+.masthead-title h1 {
+  font-size: 30px;
+  font-weight: 500;
+}
+
+.masthead-summary {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--subtle-foreground);
+}
+
+.board-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .board-project {
-  width: 220px;
+  width: 200px;
+  flex: none;
 }
 
 .board-search {
-  width: 240px;
-}
-
-.board-summary {
-  margin-left: auto;
+  width: 260px;
+  flex: none;
 }
 
 .board-error {
   margin: 0;
+  padding: 0 32px 12px;
   color: var(--error);
   font-size: 13px;
+}
+
+.board-canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 32px;
+  border-top: 1px solid var(--border);
+}
+
+.board-canvas .kanban-board {
+  height: 100%;
+  align-items: stretch;
 }
 
 .board-columns .kanban-column.is-droppable {
@@ -1368,10 +1445,17 @@
 /* Spec detail -------------------------------------------------------------------- */
 
 .detail {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: grid;
   gap: 20px;
+  align-content: start;
+  width: 100%;
   max-width: 1200px;
   margin: 0 auto;
+  padding: 28px 32px;
+  box-sizing: border-box;
 }
 
 .detail-loading {

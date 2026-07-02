@@ -1,5 +1,7 @@
 import { useMemo, useState, type DragEvent } from "react";
 import type { GlobalSpecView, SpecFilter, SpecStatus } from "../../shared/sail-models";
+import { Input } from "../components/Input";
+import { Magnifier } from "../components/icons";
 import { Select } from "../components/Select";
 import { useToast } from "../components/Toast";
 import { Badge, Eyebrow } from "../components/ui";
@@ -75,7 +77,7 @@ export function BoardScreen({
   const { data, byStatus, move } = useBoard(gateway, project, filter);
 
   const projectOptions = [
-    { value: "", label: "All contracts" },
+    { value: "", label: "All projects" },
     ...data.projects.map((p) => ({ value: p, label: p })),
   ];
 
@@ -98,41 +100,59 @@ export function BoardScreen({
 
   return (
     <div className="board">
-      <div className="board-toolbar">
-        <Select
-          className="board-project"
-          value={project ?? ""}
-          onChange={(value) => setProject(value || undefined)}
-          options={projectOptions}
-          placeholder="All contracts"
-        />
-        <input
-          className="input board-search"
-          placeholder="Search specs…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <button
-          type="button"
-          className="tab"
-          aria-selected={onlyMine}
-          onClick={() => setOnlyMine(!onlyMine)}
-        >
-          Mine
-        </button>
-        {data.summary && (
-          <span className="board-summary">
-            <Eyebrow>
+      <div className="masthead">
+        <div className="masthead-title">
+          <Eyebrow>Spec board</Eyebrow>
+          <h1>{project ?? "All projects"}</h1>
+          {data.summary && (
+            <p className="masthead-summary">
               {data.summary.in_progress} in flight · {data.summary.review} in review
-              {data.summary.next_ready_id ? ` · next: ${data.summary.next_ready_id}` : ""}
-            </Eyebrow>
-          </span>
-        )}
+              {data.summary.next_ready_id ? (
+                <>
+                  {" · next "}
+                  <button
+                    type="button"
+                    className="dep-chip"
+                    onClick={() => onOpenSpec(data.summary!.next_ready_id!)}
+                  >
+                    {data.summary.next_ready_id}
+                  </button>
+                </>
+              ) : null}
+            </p>
+          )}
+        </div>
+        <div className="board-controls">
+          <Select
+            className="board-project"
+            value={project ?? ""}
+            onChange={(value) => setProject(value || undefined)}
+            options={projectOptions}
+            placeholder="All projects"
+          />
+          <div className="board-search">
+            <Input
+              prefix={<Magnifier size={14} />}
+              placeholder="Search specs…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+          <button
+            type="button"
+            className="tab"
+            aria-selected={onlyMine}
+            onClick={() => setOnlyMine(!onlyMine)}
+          >
+            Mine
+          </button>
+        </div>
       </div>
 
       {data.error && <p className="board-error">{data.error}</p>}
 
-      <div className="kanban-board board-columns">
+      <div className="board-canvas grid-bg">
+        <div className="kanban-board board-columns">
         {BOARD_COLUMNS.map((status) => {
           const specs = byStatus.get(status) ?? [];
           const droppable = dragging ? canTransition(dragging.status, status) : false;
@@ -177,6 +197,7 @@ export function BoardScreen({
             </div>
           );
         })}
+        </div>
       </div>
     </div>
   );

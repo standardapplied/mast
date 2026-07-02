@@ -65,6 +65,32 @@ export function StatusDot({ size = 16, ...rest }: IconProps) {
   );
 }
 
+export function Magnifier(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="7" cy="7" r="4.5" />
+      <path d="M10.5 10.5L14 14" />
+    </svg>
+  );
+}
+
+/** The Mast mark: ink M, flare truck line above. */
+export function Logo({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" aria-label="Mast">
+      <path
+        d="M 80 28 L 14 28 L 50 58 L 14 88 L 80 88"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="15"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <line x1="32" y1="8" x2="68" y2="8" stroke="#e85a30" strokeWidth="7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function Spinner({ size = 16 }: { size?: number }) {
   return <span className="spinner" style={{ width: size, height: size }} aria-label="Loading" />;
 }

@@ -3,8 +3,8 @@ import type { EventStreamState } from "../shared/sail-models";
 import type { BridgeStatus } from "../shared/types";
 import { BoardScreen } from "./board/BoardScreen";
 import { SpecDetail } from "./board/SpecDetail";
+import { Logo } from "./components/icons";
 import { ToastProvider } from "./components/Toast";
-import { Eyebrow } from "./components/ui";
 import type { Gateway } from "./gateway";
 import { onPush } from "./push";
 
@@ -54,10 +54,13 @@ export function App({ gateway }: { gateway: Gateway }) {
       <div className="cockpit">
         <header className="toolbar cockpit-toolbar">
           <button type="button" className="cockpit-brand" onClick={backToBoard}>
-            Mast
+            <Logo size={20} />
+            <span className="cockpit-wordmark">Mast</span>
           </button>
           <span className="cockpit-toolbar-spacer" />
-          <Eyebrow>{STREAM_LABEL[stream]}</Eyebrow>
+          <span className="stream-pill" data-state={stream}>
+            {STREAM_LABEL[stream]}
+          </span>
           <span
             className="bridge-badge"
             data-testid="bridge-status"

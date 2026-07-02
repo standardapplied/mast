@@ -1,7 +1,7 @@
 import { useState, type InputHTMLAttributes, type ReactNode, type Ref } from "react";
 import { cx } from "./cx";
 
-export type InputProps = InputHTMLAttributes<HTMLInputElement> & {
+export type InputProps = Omit<InputHTMLAttributes<HTMLInputElement>, "prefix"> & {
   ref?: Ref<HTMLInputElement>;
   label?: string;
   error?: string;
