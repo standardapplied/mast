@@ -7,7 +7,7 @@ type Verdict = "ok" | "unauthenticated" | "unreachable";
 
 function harness(opts: {
   token?: string | null;
-  probeHealthy?: boolean;
+  probeHealthy?: boolean | (() => boolean);
   sshHost?: string | null;
   verdict?: Verdict;
   callbackResult?: { token: string } | { error: string };
@@ -17,7 +17,10 @@ function harness(opts: {
   const written: string[] = [];
   const opened: string[] = [];
   const stacks: Array<[string, string | null]> = [];
+  const supervisors: Array<() => void> = [];
   let verdict: Verdict = opts.verdict ?? "ok";
+  const probeHealthy = () =>
+    typeof opts.probeHealthy === "function" ? opts.probeHealthy() : (opts.probeHealthy ?? true);
 
   const deps: ManagerDeps = {
     config: () => ({
@@ -26,7 +29,7 @@ function harness(opts: {
       token: opts.token === undefined ? "sail_tok" : opts.token,
     }),
     sshHost: () => (opts.sshHost === undefined ? "devbox" : opts.sshHost),
-    probe: async () => opts.probeHealthy ?? true,
+    probe: async () => probeHealthy(),
     validateToken: async () => verdict,
     makeTunnel: () => ({
       start: async () => {},
@@ -53,10 +56,15 @@ function harness(opts: {
     startCallback: () => ({
       port: 45321,
       result: Promise.resolve(opts.callbackResult ?? { token: "sess_new" }),
+      cancel: () => {},
       stop: () => {},
     }),
     onStack: (server, token) => void stacks.push([server, token]),
     onEvent: () => {},
+    scheduleSupervisor: (fn) => {
+      supervisors.push(fn);
+      return () => {};
+    },
   };
 
   const manager = new ConnectionManager(deps);
@@ -74,6 +82,7 @@ function harness(opts: {
       tunnelListeners.forEach((l) => l({ phase: "up", port: 7070, server })),
     tunnelBackoff: () =>
       tunnelListeners.forEach((l) => l({ phase: "backoff", retryInMs: 1000, lastError: "ssh died" })),
+    fireSupervisor: () => supervisors.forEach((fn) => fn()),
     setVerdict: (v: Verdict) => {
       verdict = v;
     },
@@ -177,5 +186,42 @@ describe("ConnectionManager", () => {
     await flush();
     expect(h.manager.currentStatus.phase).toBe("ready");
     expect(h.manager.currentStatus.server).toBe("http://127.0.0.1:52701");
+  });
+
+  test("a transient 'unreachable' verdict self-heals when the supervisor fires", async () => {
+    let up = true;
+    const h = harness({ probeHealthy: () => up, verdict: "unreachable" });
+    await h.manager.start();
+    await flush();
+    expect(h.manager.currentStatus.phase).toBe("tunnel-degraded");
+
+    h.setVerdict("ok");
+    h.fireSupervisor();
+    await flush();
+    expect(h.manager.currentStatus.phase).toBe("ready");
+    void up;
+  });
+
+  test("no-host re-probes and recovers when the server later comes up", async () => {
+    let reachable = false;
+    const h = harness({ probeHealthy: () => reachable, sshHost: null });
+    await h.manager.start();
+    await flush();
+    expect(h.manager.currentStatus.phase).toBe("no-host");
+
+    reachable = true;
+    h.fireSupervisor();
+    await flush();
+    expect(h.manager.currentStatus.phase).toBe("ready");
+  });
+
+  test("a stale tunnel 'up' cannot revive a superseded generation", async () => {
+    const h = harness({ probeHealthy: false, verdict: "ok" });
+    await h.manager.start();
+    // Stop supersedes everything; a late tunnelUp must be ignored.
+    h.manager.stop();
+    h.tunnelUp("http://127.0.0.1:52700");
+    await flush();
+    expect(h.manager.currentStatus.phase).not.toBe("ready");
   });
 });

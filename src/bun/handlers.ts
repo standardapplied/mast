@@ -47,6 +47,8 @@ export type HandlerDeps = {
   connection: () => ConnectionStatus;
   login: () => Promise<{ ok: boolean; detail?: string }>;
   onAuthError: () => void;
+  /** Runs before a gated quit so the tunnel is torn down, not orphaned. */
+  onBeforeQuit?: () => void;
 };
 
 type BunRequests = AppRPCSchema["bun"]["requests"];

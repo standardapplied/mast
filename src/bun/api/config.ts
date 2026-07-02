@@ -142,10 +142,12 @@ export function resolveConfig(
   const rawServer = (overrides.server ?? io.env.SAIL_SERVER ?? fromFile.server ?? DEFAULT_SERVER)
     .replace(/\/+$/, "");
 
+  const rawToken = overrides.token ?? envToken ?? fromFile.token ?? null;
+
   return {
     server: rawServer.replace("://localhost", "://127.0.0.1"),
     loginOrigin: rawServer,
-    token: overrides.token ?? envToken ?? fromFile.token ?? null,
+    token: rawToken && rawToken.trim() !== "" ? rawToken : null,
   };
 }
 

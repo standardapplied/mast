@@ -17,7 +17,7 @@ function pill(status: ConnectionStatus): { label: string; state: string } {
     case "ready":
       return status.stream === "connected"
         ? { label: "Live", state: "connected" }
-        : { label: "Connected", state: "connecting" };
+        : { label: "Reconnecting…", state: "reconnecting" };
     case "probing":
     case "tunnel-connecting":
       return { label: "Connecting…", state: "connecting" };
@@ -41,9 +41,6 @@ function ConnectScreen({
   busy: boolean;
   loginError: string | null;
 }) {
-  if (status.phase === "probing" || status.phase === "tunnel-connecting") {
-    return <LoadingMark label={status.phase === "probing" ? "Finding the control plane" : "Opening the tunnel"} />;
-  }
   return (
     <div className="connect-screen" data-testid="connect-screen">
       <Logo size={40} />
@@ -78,14 +75,27 @@ function specIdFromHash(hash: string): string | null {
 export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeController }) {
   const [bridge, setBridge] = useState<BridgeStatus>("connected");
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
+  const [everReady, setEverReady] = useState(false);
   const [specId, setSpecId] = useState<string | null>(specIdFromHash(location.hash));
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   useEffect(() => onPush("bridge-status", ({ status: s }) => setBridge(s)), []);
-  useEffect(() => gateway.onConnectionStatus(setStatus), [gateway]);
+  useEffect(
+    () =>
+      gateway.onConnectionStatus((next) => {
+        setStatus(next);
+        if (next.phase === "ready") setEverReady(true);
+      }),
+    [gateway],
+  );
   useEffect(() => {
-    void gateway.connection().then(setStatus);
+    // The one-shot snapshot only seeds the first render — a later push always
+    // wins, so a stale snapshot resolving late can never clobber it.
+    void gateway.connection().then((snapshot) => {
+      setStatus((current) => current ?? snapshot);
+      if (snapshot.phase === "ready") setEverReady(true);
+    });
   }, [gateway]);
 
   useEffect(() => {
@@ -112,7 +122,15 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
   };
 
   const pillView = status ? pill(status) : { label: "Connecting…", state: "connecting" };
-  const connected = status?.phase === "ready";
+
+  // Board renders once we've ever been ready — transient degradation keeps the
+  // last view (pill carries the truth) instead of yanking it to a full-screen
+  // error. Only a genuinely unusable state takes over the whole surface:
+  // unauthenticated (needs sign-in), or first-connect probing/failure.
+  const needsLogin = status?.phase === "unauthenticated";
+  const firstConnectBlocking =
+    !everReady && (!status || status.phase !== "ready");
+  const showBoard = !needsLogin && !firstConnectBlocking;
 
   return (
     <ToastProvider>
@@ -140,13 +158,17 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
               theme={theme}
               server={status?.server}
               tokenKind={status?.tokenKind}
-              onLogin={() => void login()}
+              onLogin={needsLogin ? () => void login() : undefined}
             />
           </span>
         </header>
         <main className="cockpit-main">
-          {!connected && status ? (
-            <ConnectScreen status={status} onLogin={() => void login()} busy={loginBusy} loginError={loginError} />
+          {!showBoard ? (
+            status && (needsLogin || status.phase === "no-host" || status.phase === "failed") ? (
+              <ConnectScreen status={status} onLogin={() => void login()} busy={loginBusy} loginError={loginError} />
+            ) : (
+              <LoadingMark label={status?.phase === "tunnel-connecting" ? "Opening the tunnel" : "Finding the control plane"} />
+            )
           ) : specId ? (
             <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} />
           ) : (

@@ -49,24 +49,52 @@ describe("login callback server", () => {
     expect(again.status).toBe(410);
   });
 
-  test("rejects a wrong or missing state without leaking anything", async () => {
+  test("a wrong-state probe is rejected but does NOT cancel the pending sign-in", async () => {
     const f = fakeServe();
-    const handle = startCallbackServer(newState(), f.deps);
+    const state = newState();
+    const handle = startCallbackServer(state, f.deps);
+
+    // A stray loopback probe with a bad state must not settle the result.
     const bad = f.request(`/callback?token=sess_abc&state=${"0".repeat(32)}`);
     expect(bad.status).toBe(400);
-    const result = await handle.result;
-    expect("error" in result && result.error).toContain("State mismatch");
+
+    // The real callback still succeeds afterwards.
+    const ok = f.request(`/callback?token=sess_real&state=${state}`);
+    expect(ok.status).toBe(200);
+    expect(await handle.result).toEqual({ token: "sess_real" });
   });
 
-  test("rejects non-sess tokens and unknown paths", async () => {
+  test("a non-sess token probe is rejected without settling", async () => {
     const f = fakeServe();
     const state = newState();
     const handle = startCallbackServer(state, f.deps);
 
     expect(f.request("/robots.txt").status).toBe(404);
     expect(f.request(`/callback?token=notasession&state=${state}`).status).toBe(400);
+
+    const ok = f.request(`/callback?token=sess_ok&state=${state}`);
+    expect(ok.status).toBe(200);
+    expect(await handle.result).toEqual({ token: "sess_ok" });
+  });
+
+  test("state comparison survives a byte-length mismatch without throwing", async () => {
+    const f = fakeServe();
+    const handle = startCallbackServer("a".repeat(32), f.deps);
+    // "é" is 2 UTF-8 bytes but 1 UTF-16 unit — must not throw in timingSafeEqual.
+    const res = f.request(`/callback?token=sess_x&state=${encodeURIComponent("é".repeat(32))}`);
+    expect(res.status).toBe(400);
+    const ok = f.request(`/callback?token=sess_ok&state=${"a".repeat(32)}`);
+    expect(ok.status).toBe(200);
+    expect(await handle.result).toEqual({ token: "sess_ok" });
+  });
+
+  test("cancel settles the result with an error and tears down", async () => {
+    const f = fakeServe();
+    const handle = startCallbackServer(newState(), f.deps);
+    handle.cancel();
     const result = await handle.result;
-    expect("error" in result).toBe(true);
+    expect("error" in result && result.error).toContain("cancelled");
+    expect(f.isStopped()).toBe(true);
   });
 
   test("times out into an error and stops the listener", async () => {

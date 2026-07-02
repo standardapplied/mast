@@ -76,7 +76,14 @@ export class TunnelManager {
       }
 
       this.setState({ phase: "starting", port });
-      const child = this.deps.spawn(tunnelCommand(this.target, port));
+      let child: TunnelChild;
+      try {
+        child = this.deps.spawn(tunnelCommand(this.target, port));
+      } catch (error) {
+        await this.failAndMaybeRetry(`ssh failed to launch: ${message(error)}`);
+        if (this.state.phase === "failed" || this.stopped) return;
+        continue;
+      }
       this.child = child;
       const server = `http://127.0.0.1:${port}`;
 

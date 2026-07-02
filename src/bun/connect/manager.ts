@@ -9,13 +9,18 @@ import { loginUrl, newState, type CallbackServerHandle } from "./login-callback"
  * tunnel), credential validity, and the SSE stream. "Ready" means all three
  * are healthy — the UI's Live pill derives from nothing else.
  *
- * Login mirrors the CLI ceremony: the SYSTEM BROWSER opens
- * {loginOrigin}/login with a loopback redirect; WebAuthn binds to the page
- * origin (clientDataJSON.origin is authenticator-signed and string-matched
- * server-side), which is why the ceremony uses the canonical origin — the
- * raw configured server, typically http://localhost:7070 — and why the owned
- * tunnel prefers local port 7070 before falling back to an ephemeral port
- * (API traffic works on any port; the ceremony does not).
+ * A generation counter fences async transitions: every connect attempt bumps
+ * it, and a continuation whose generation is stale (a later attempt or stop()
+ * superseded it) is discarded — so a validateToken/tunnel-up resolving late
+ * can never revive a dead connection. A supervisor timer re-attempts the
+ * connect sequence from any recoverable-not-connected phase, so a transient
+ * blip self-heals instead of dead-ending.
+ *
+ * Login mirrors the CLI ceremony: the SYSTEM BROWSER opens {loginOrigin}/login
+ * with a loopback redirect; WebAuthn binds to the page origin (authenticator-
+ * signed, string-matched server-side), so the ceremony uses the canonical
+ * origin and is refused unless that origin is loopback (a remote cleartext
+ * origin would put the state nonce and session token on the wire).
  */
 
 export type { ConnectionStatus } from "../../shared/sail-models";
@@ -45,11 +50,25 @@ export type ManagerDeps = {
   startCallback: (state: string) => CallbackServerHandle;
   onStack: (server: string, token: string | null) => void;
   onEvent: (event: SailEvent) => void;
+  /** Re-attempt recoverable phases on this cadence; injected for tests. */
+  scheduleSupervisor: (fn: () => void) => () => void;
 };
+
+/** Phases that a periodic re-attempt can recover from (server may come back). */
+const RECOVERABLE = new Set<ConnectionStatus["phase"]>(["tunnel-degraded", "failed", "no-host"]);
 
 function tokenKind(token: string | null): "session" | "api" | "none" {
   if (!token) return "none";
   return token.startsWith("sess_") ? "session" : "api";
+}
+
+function isLoopbackOrigin(origin: string): boolean {
+  try {
+    const { hostname } = new URL(origin);
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  } catch {
+    return false;
+  }
 }
 
 export class ConnectionManager {
@@ -58,6 +77,9 @@ export class ConnectionManager {
   private tunnel: TunnelLike | null = null;
   private stream: StreamLike | null = null;
   private pendingLogin: CallbackServerHandle | null = null;
+  private generation = 0;
+  private stopped = false;
+  private cancelSupervisor: (() => void) | null = null;
   private readonly listeners = new Set<(status: ConnectionStatus) => void>();
 
   constructor(private readonly deps: ManagerDeps) {
@@ -87,14 +109,29 @@ export class ConnectionManager {
     this.listeners.forEach((l) => l(this.status));
   }
 
+  /** Begin, and arm the supervisor that re-attempts recoverable phases. */
   async start(): Promise<void> {
+    this.cancelSupervisor = this.deps.scheduleSupervisor(() => {
+      if (!this.stopped && RECOVERABLE.has(this.status.phase)) void this.connect();
+    });
+    await this.connect();
+  }
+
+  private async connect(): Promise<void> {
+    if (this.stopped) return;
+    const gen = ++this.generation;
+    this.tunnel?.stop();
+    this.tunnel = null;
+
     const config = this.deps.config();
-    this.update({ phase: "probing", server: config.server });
+    this.token = config.token;
+    this.update({ phase: "probing", server: config.server, loginOrigin: config.loginOrigin });
 
     if (await this.deps.probe(config.server)) {
-      await this.becomeReachable(config.server);
+      await this.becomeReachable(config.server, gen);
       return;
     }
+    if (gen !== this.generation || this.stopped) return;
 
     const host = validateSshTarget(this.deps.sshHost());
     if (!host) {
@@ -109,13 +146,14 @@ export class ConnectionManager {
     this.update({ phase: "tunnel-connecting" });
     const tunnel = this.deps.makeTunnel(host.host);
     this.tunnel = tunnel;
-    tunnel.onState((state) => void this.onTunnelState(state));
+    tunnel.onState((state) => void this.onTunnelState(state, gen));
     void tunnel.start();
   }
 
-  private async onTunnelState(state: TunnelState): Promise<void> {
+  private async onTunnelState(state: TunnelState, gen: number): Promise<void> {
+    if (gen !== this.generation || this.stopped) return;
     if (state.phase === "up") {
-      await this.becomeReachable(state.server);
+      await this.becomeReachable(state.server, gen);
     } else if (state.phase === "backoff") {
       this.stopStream();
       this.update({ phase: "tunnel-degraded", detail: state.lastError });
@@ -125,7 +163,8 @@ export class ConnectionManager {
     }
   }
 
-  private async becomeReachable(server: string): Promise<void> {
+  private async becomeReachable(server: string, gen: number): Promise<void> {
+    if (gen !== this.generation || this.stopped) return;
     this.update({ server });
     this.deps.onStack(server, this.token);
 
@@ -134,9 +173,11 @@ export class ConnectionManager {
       return;
     }
     const verdict = await this.deps.validateToken(server, this.token);
+    if (gen !== this.generation || this.stopped) return;
+
     if (verdict === "ok") {
       this.update({ phase: "ready", tokenPresent: true, tokenKind: tokenKind(this.token) });
-      this.startStream(server, this.token);
+      this.startStream(server, this.token, gen);
     } else if (verdict === "unauthenticated") {
       this.update({
         phase: "unauthenticated",
@@ -149,11 +190,13 @@ export class ConnectionManager {
     }
   }
 
-  private startStream(server: string, token: string): void {
+  private startStream(server: string, token: string, gen: number): void {
     this.stopStream();
     const stream = this.deps.makeStream(server, token);
     this.stream = stream;
-    stream.onState((state) => this.update({ stream: state }));
+    stream.onState((state) => {
+      if (gen === this.generation) this.update({ stream: state });
+    });
     stream.onEvent((event) => this.deps.onEvent(event));
     void stream.start();
   }
@@ -167,6 +210,7 @@ export class ConnectionManager {
   /** Any API call answered 401/403 auth-invalid lands here (via handlers). */
   onAuthError(): void {
     if (this.status.phase !== "ready") return;
+    this.generation++;
     this.stopStream();
     this.update({
       phase: "unauthenticated",
@@ -177,6 +221,12 @@ export class ConnectionManager {
   /** Browser ceremony: resolves true when signed in and ready. */
   async login(): Promise<{ ok: boolean; detail?: string }> {
     if (this.pendingLogin) return { ok: false, detail: "A sign-in is already in progress." };
+    if (!isLoopbackOrigin(this.status.loginOrigin)) {
+      return {
+        ok: false,
+        detail: "Passkey sign-in requires a local or tunnelled control plane, not a remote origin.",
+      };
+    }
 
     const state = newState();
     const callback = this.deps.startCallback(state);
@@ -185,18 +235,24 @@ export class ConnectionManager {
 
     const result = await callback.result;
     this.pendingLogin = null;
+    if (this.stopped) return { ok: false, detail: "Cancelled." };
 
     if ("error" in result) return { ok: false, detail: result.error };
 
     this.deps.writeToken(result.token);
     this.token = result.token;
-    await this.becomeReachable(this.status.server);
+    const gen = ++this.generation;
+    await this.becomeReachable(this.status.server, gen);
     const ready = this.status.phase === "ready";
     return ready ? { ok: true } : { ok: false, detail: this.status.detail };
   }
 
   stop(): void {
-    this.pendingLogin?.stop();
+    this.stopped = true;
+    this.generation++;
+    this.cancelSupervisor?.();
+    this.pendingLogin?.cancel();
+    this.pendingLogin = null;
     this.stopStream();
     this.tunnel?.stop();
     this.tunnel = null;

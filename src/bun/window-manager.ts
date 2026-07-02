@@ -66,6 +66,7 @@ export class WindowManager {
       const { allow } = await rpc.request.confirmQuit();
       if (!allow) return false;
     }
+    this.deps.onBeforeQuit?.();
     Utils.quit();
     return true;
   }

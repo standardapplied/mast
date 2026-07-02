@@ -7,8 +7,12 @@
  *
  * Hardening: binds 127.0.0.1 only; accepts exactly one GET /callback; the
  * state nonce is compared in constant time; the token is resolved once and
- * never logged; every other request gets 404 with no detail; the listener
- * dies after first use or timeout.
+ * never logged; every other request gets a terse error with no detail; the
+ * listener dies after first use or timeout.
+ *
+ * A bad-state or bad-token request is REJECTED (400) but does NOT settle the
+ * result — otherwise any local webpage probing loopback ports could cancel an
+ * in-flight sign-in. Only a valid callback, the timeout, or cancel() settles.
  */
 
 import { timingSafeEqual } from "node:crypto";
@@ -18,6 +22,8 @@ export type CallbackResult = { token: string } | { error: string };
 export type CallbackServerHandle = {
   port: number;
   result: Promise<CallbackResult>;
+  /** Settle with a cancellation error and tear down (for app teardown). */
+  cancel: () => void;
   stop: () => void;
 };
 
@@ -54,8 +60,11 @@ export function newState(): string {
 }
 
 function stateMatches(expected: string, received: string | null): boolean {
-  if (!received || received.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(expected), Buffer.from(received));
+  if (!received) return false;
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(received, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 export function startCallbackServer(
@@ -80,13 +89,13 @@ export function startCallbackServer(
     }
     if (settled) return new Response("Gone", { status: 410 });
 
+    // Bad state/token: reject WITHOUT settling — a stray probe must not be able
+    // to cancel the user's sign-in. Only a valid callback settles the result.
     if (!stateMatches(state, url.searchParams.get("state"))) {
-      settle({ error: "State mismatch — possible interception; sign-in aborted." });
       return new Response("Bad request", { status: 400 });
     }
     const token = url.searchParams.get("token");
     if (!token || !token.startsWith("sess_")) {
-      settle({ error: "Callback carried no session token." });
       return new Response("Bad request", { status: 400 });
     }
     settle({ token });
@@ -103,7 +112,16 @@ export function startCallbackServer(
     deps.schedule(() => server.stop(), 1000);
   });
 
-  return { port: server.port, result, stop: () => server.stop() };
+  return {
+    port: server.port,
+    result,
+    cancel: () => {
+      cancelTimeout();
+      settle({ error: "Sign-in cancelled." });
+      server.stop();
+    },
+    stop: () => server.stop(),
+  };
 }
 
 export function loginUrl(origin: string, callbackPort: number, state: string): string {

@@ -66,7 +66,9 @@ const manager = new ConnectionManager({
           const child = Bun.spawn(argv, { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
           return { exited: child.exited, kill: () => child.kill() };
         },
-        pickPort: pickTunnelPort,
+        // ssh needs the login-shell PATH (a Finder-launched .app has a bare
+        // one); only the tunnel spawn waits on it, not the whole startup.
+        pickPort: () => shellEnvReady.then(() => pickTunnelPort()),
         healthCheck: probe,
         schedule: (fn, ms) => {
           const timer = setTimeout(fn, ms);
@@ -87,6 +89,10 @@ const manager = new ConnectionManager({
     sail = new SailClient(new SailHttp({ ...config, server, token }));
   },
   onEvent: (event) => windows.broadcast("sail-event", event),
+  scheduleSupervisor: (fn) => {
+    const timer = setInterval(fn, 5000);
+    return () => clearInterval(timer);
+  },
 });
 
 installApplicationMenu((menu) => ApplicationMenu.setApplicationMenu(menu as never));
@@ -98,11 +104,19 @@ const windows = new WindowManager({
   connection: () => manager.currentStatus,
   login: () => manager.login(),
   onAuthError: () => manager.onAuthError(),
+  onBeforeQuit: () => manager.stop(),
 });
 windows.open();
 
 manager.onStatus((status) => windows.broadcast("connection-status", status));
-void shellEnvReady.then(() => manager.start());
+void manager.start();
+
+// The ssh child is not process-grouped; tear it down when the app exits so a
+// quit never orphans a tunnel holding the local port.
+const shutdown = () => manager.stop();
+process.on("exit", shutdown);
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 const updater = new AutoUpdater((status, message) => {
   windows.broadcast("update-status", { status, message });
