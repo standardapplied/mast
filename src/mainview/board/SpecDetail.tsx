@@ -252,24 +252,32 @@ export function SpecDetail({
         </div>
 
         <div className="detail-side">
-          <Card title="Dependencies">
-            <div className="dep-section">
-              <span className="eyebrow">Depends on</span>
-              <div className="dep-chips">
-                {(spec.depends_on ?? []).length === 0 && <span className="meta-value">—</span>}
-                {(spec.depends_on ?? []).map((id) => (
-                  <DepChip key={id} id={id} unmet={unmet.includes(id)} onOpen={onOpenSpec} />
-                ))}
+          {((spec.depends_on ?? []).length > 0 || dependents.length > 0) && (
+            <Card title="Dependencies">
+              <div className="dep-section">
+                {(spec.depends_on ?? []).length > 0 && (
+                  <>
+                    <span className="eyebrow">Depends on</span>
+                    <div className="dep-chips">
+                      {(spec.depends_on ?? []).map((id) => (
+                        <DepChip key={id} id={id} unmet={unmet.includes(id)} onOpen={onOpenSpec} />
+                      ))}
+                    </div>
+                  </>
+                )}
+                {dependents.length > 0 && (
+                  <>
+                    <span className="eyebrow">Blocked by this</span>
+                    <div className="dep-chips">
+                      {dependents.map((s) => (
+                        <DepChip key={s.id} id={s.id} unmet={false} onOpen={onOpenSpec} />
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
-              <span className="eyebrow">Blocked by this</span>
-              <div className="dep-chips">
-                {dependents.length === 0 && <span className="meta-value">—</span>}
-                {dependents.map((s) => (
-                  <DepChip key={s.id} id={s.id} unmet={false} onOpen={onOpenSpec} />
-                ))}
-              </div>
-            </div>
-          </Card>
+            </Card>
+          )}
 
           <Card title="Reviews">
             {loaded.reviews.length === 0 && <span className="meta-value">No reviews yet.</span>}
