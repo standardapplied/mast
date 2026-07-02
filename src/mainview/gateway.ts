@@ -35,6 +35,7 @@ export type Gateway = {
   specHistory(id: string): Promise<SailResult<GlobalSpecHistoryResponse>>;
   restoreSpec(id: string, rev: number): Promise<SailResult<GlobalSpecDetailResponse>>;
   specReviews(id: string): Promise<SailResult<ReviewListResponse>>;
+  connection(): Promise<{ state: EventStreamState; server: string }>;
   onEvent(listener: (event: SailEvent) => void): () => void;
   onStreamState(listener: (state: EventStreamState) => void): () => void;
 };
@@ -50,6 +51,7 @@ export function createRpcGateway(bridge: Bridge): Gateway {
     specHistory: (id) => api.sailSpecHistory({ id }),
     restoreSpec: (id, rev) => api.sailRestoreSpec({ id, rev }),
     specReviews: (id) => api.sailSpecReviews({ id }),
+    connection: () => api.sailConnection(),
     onEvent: (listener) => onPush("sail-event", listener),
     onStreamState: (listener) => onPush("sail-stream-state", ({ state }) => listener(state)),
   };
@@ -287,6 +289,10 @@ export function createDemoGateway(): DemoGateway {
             ]
           : [];
       return ok({ spec_id: id, reviews });
+    },
+
+    async connection() {
+      return { state: "connected", server: "demo fixtures (browser preview)" };
     },
 
     onEvent(listener) {

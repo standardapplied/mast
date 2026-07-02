@@ -1293,32 +1293,122 @@
   transform: translateY(0.5px);
 }
 
-.toolbar-icon-btn {
+/* Toggle (segmented control) ------------------------------------------------ */
+
+.toggle {
+  position: relative;
+  display: grid;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  background: var(--background);
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  box-sizing: border-box;
+  transition:
+    left 200ms ease-out,
+    width 200ms ease-out;
+  pointer-events: none;
+}
+
+.toggle-option {
   appearance: none;
+  position: relative;
+  z-index: 1;
   background: none;
   border: none;
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--subtle-foreground);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.toggle-option:hover {
+  color: var(--muted-foreground);
+}
+
+.toggle-option.is-selected {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+/* User menu ------------------------------------------------------------------ */
+
+.user-menu {
+  position: relative;
+}
+
+.user-menu-trigger {
+  appearance: none;
+  background: none;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border-strong);
   color: var(--muted-foreground);
   cursor: pointer;
 }
 
-.toolbar-icon-btn:hover:not(:disabled) {
+.user-menu-trigger:hover,
+.user-menu-trigger.is-open {
+  color: var(--foreground);
+  border-color: var(--foreground);
+}
+
+.user-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  width: 260px;
+  z-index: 1000;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+}
+
+.user-menu-identity {
+  display: grid;
+  gap: 2px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.user-menu-name {
+  font-size: 13px;
   color: var(--foreground);
 }
 
-.toolbar-icon-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.user-menu-detail {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--subtle-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.toolbar-icon-note {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.user-menu-section {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+.user-menu-section + .user-menu-section {
+  padding-top: 0;
+}
+
+.user-menu-signin {
+  width: 100%;
 }
 
 .cockpit-toolbar-spacer {
@@ -1381,11 +1471,11 @@
 
 .masthead {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
   flex-wrap: wrap;
-  padding: 28px 32px 20px;
+  padding: 14px 32px;
 }
 
 .masthead-title {
@@ -1393,13 +1483,8 @@
   gap: 4px;
 }
 
-.masthead-title h1 {
-  font-size: 30px;
-  font-weight: 500;
-}
-
 .masthead-summary {
-  margin: 2px 0 0;
+  margin: 0;
   font-size: 13px;
   color: var(--subtle-foreground);
 }

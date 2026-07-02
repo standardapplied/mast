@@ -103,7 +103,6 @@ export function BoardScreen({
       <div className="masthead">
         <div className="masthead-title">
           <Eyebrow>Spec board</Eyebrow>
-          <h1>{project ?? "All projects"}</h1>
           {data.summary && (
             <p className="masthead-summary">
               {data.summary.in_progress} in flight · {data.summary.review} in review

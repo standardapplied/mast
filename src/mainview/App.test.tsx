@@ -83,23 +83,39 @@ describe("App cockpit", () => {
     expect(container.querySelector(".dep-chip.is-unmet")?.textContent).toBe("chorus-billing-export");
   });
 
-  test("bridge badge reacts to bridge-status pushes", async () => {
+  test("bridge state stays invisible until degraded", async () => {
     await render();
+    expect(container.querySelector('[data-testid="bridge-status"]')).toBeNull();
+
     act(() => dispatchPush("bridge-status", { status: "reconnecting" }));
-    expect(
-      container.querySelector('[data-testid="bridge-status"]')?.getAttribute("data-status"),
-    ).toBe("reconnecting");
+    expect(container.querySelector('[data-testid="bridge-status"]')?.textContent).toBe("Recovering…");
+
+    act(() => dispatchPush("bridge-status", { status: "connected" }));
+    expect(container.querySelector('[data-testid="bridge-status"]')).toBeNull();
   });
 
-  test("theme toggle cycles system → light → dark and re-themes the document", async () => {
+  test("user menu opens with the theme toggle and re-themes the document", async () => {
     localStorage.removeItem("mast.theme");
     await render();
-    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="theme-toggle"]');
-    expect(toggle?.title).toContain("system");
+    expect(container.querySelector('[data-testid="user-menu-panel"]')).toBeNull();
 
-    act(() => toggle?.click());
-    expect(document.documentElement.dataset.theme).toBe("light");
-    act(() => toggle?.click());
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="user-menu-trigger"]')?.click();
+    });
+    const panel = container.querySelector('[data-testid="user-menu-panel"]');
+    expect(panel).not.toBeNull();
+    expect(panel?.textContent).toContain("Not signed in");
+
+    const dark = [...container.querySelectorAll<HTMLButtonElement>(".toggle-option")].find(
+      (b) => b.textContent === "Dark",
+    );
+    act(() => dark?.click());
     expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(dark?.getAttribute("aria-checked")).toBe("true");
+
+    act(() => {
+      document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+    expect(container.querySelector('[data-testid="user-menu-panel"]')).toBeNull();
   });
 });
