@@ -1265,7 +1265,7 @@
 .cockpit-toolbar {
   flex-shrink: 0;
   gap: 12px;
-  padding: 10px 32px;
+  padding: 10px 16px;
 }
 
 .cockpit-brand {
@@ -1475,7 +1475,7 @@
   justify-content: space-between;
   gap: 24px;
   flex-wrap: wrap;
-  padding: 14px 32px;
+  padding: 14px 16px;
 }
 
 .masthead-title {
@@ -1554,7 +1554,7 @@
 
 .board-error {
   margin: 0;
-  padding: 0 32px 12px;
+  padding: 0 16px 12px;
   color: var(--error);
   font-size: 13px;
 }
@@ -1563,7 +1563,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 24px 32px;
+  padding: 24px 16px;
   border-top: 1px solid var(--border);
 }
 
@@ -1621,7 +1621,7 @@
   width: 100%;
   max-width: 1200px;
   margin: 0 auto;
-  padding: 28px 32px;
+  padding: 28px 16px;
   box-sizing: border-box;
 }
 
