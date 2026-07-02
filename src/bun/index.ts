@@ -1,10 +1,11 @@
-import { Updater } from "electrobun/bun";
+import { ApplicationMenu, Updater } from "electrobun/bun";
 import type { EventStreamState } from "../shared/sail-models";
 import type { AppInfo } from "../shared/types";
 import { SailClient } from "./api/client";
 import { resolveConfig } from "./api/config";
 import { SailHttp } from "./api/http";
 import { defaultEventStreamDeps, EventStream } from "./api/sse";
+import { installApplicationMenu } from "./menu";
 import { hydrateProcessEnv, resolveShellEnv } from "./shell-env";
 import { setActiveTheme } from "./theme-state";
 import { AutoUpdater } from "./updater";
@@ -33,6 +34,8 @@ const stream = new EventStream(
   { server: sailConfig.server, token: sailConfig.token },
   defaultEventStreamDeps((limit) => sail.recentEvents(limit).then((r) => r.data)),
 );
+
+installApplicationMenu((menu) => ApplicationMenu.setApplicationMenu(menu as never));
 
 const windows = new WindowManager({
   appInfo: () => appInfo,

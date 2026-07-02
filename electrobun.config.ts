@@ -39,7 +39,7 @@ const config: ElectrobunConfig = {
     },
   },
   runtime: {
-    exitOnLastWindowClosed: false,
+    exitOnLastWindowClosed: true,
   },
   release: {
     baseUrl: process.env.MAST_RELEASE_BASE_URL ?? "https://sail-artifacts.standardapplied.sh/mast",

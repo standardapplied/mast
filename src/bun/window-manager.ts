@@ -11,8 +11,9 @@ type WindowEntry = { window: BrowserWindow<MainRPC>; rpc: MainRPC };
 
 /**
  * Owns the set of open windows: focus order, push broadcast, the quit gate, and
- * the popup policy. `exitOnLastWindowClosed` is false (set in electrobun.config),
- * so quitting always routes through `requestQuit`, which asks each webview.
+ * the popup policy. Closing the last window exits the app natively
+ * (`exitOnLastWindowClosed: true`); `requestQuit` remains the gated path for
+ * programmatic quits and will guard unsaved work once authoring introduces it.
  */
 export class WindowManager {
   private readonly registry = new WindowRegistry<WindowEntry>();
