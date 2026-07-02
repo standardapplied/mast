@@ -84,7 +84,7 @@ function FilterMenu({
         Filter
         {activeCount > 0 && <span className="lanes-count">{activeCount}</span>}
       </button>
-      <DropdownPanel triggerRef={triggerRef} isOpen={isOpen} maxHeight={320}>
+      <DropdownPanel triggerRef={triggerRef} isOpen={isOpen} maxHeight={360} align="right" minWidth={248}>
         <div className="filter-panel" data-testid="filter-panel">
           <div className="filter-row">
             <span className="lanes-label">Only mine</span>

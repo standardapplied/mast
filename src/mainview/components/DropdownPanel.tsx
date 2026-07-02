@@ -3,8 +3,11 @@ import { cx } from "./cx";
 
 /**
  * Viewport-aware floating panel anchored to a trigger: flips above when there
- * is no room below, clamps its height to the available space, and tracks
- * scroll/resize/visualViewport. Ported from light-grid-wapp, restyled flat.
+ * is no room below, clamps height AND horizontal position to the viewport
+ * (a right-edge trigger must not push the panel off-screen), and tracks
+ * scroll/resize/visualViewport. `align="right"` hangs the panel from the
+ * trigger's right edge; `minWidth` lets content demand more room than the
+ * trigger's own width. Ported from light-grid-wapp, restyled flat.
  */
 export function DropdownPanel({
   triggerRef,
@@ -12,12 +15,16 @@ export function DropdownPanel({
   children,
   className,
   maxHeight = 240,
+  align = "left",
+  minWidth = 0,
 }: {
   triggerRef: RefObject<HTMLElement | null>;
   isOpen: boolean;
   children: ReactNode;
   className?: string;
   maxHeight?: number;
+  align?: "left" | "right";
+  minWidth?: number;
 }) {
   const [style, setStyle] = useState<React.CSSProperties | null>(null);
 
@@ -41,10 +48,15 @@ export function DropdownPanel({
       const available = goAbove ? spaceAbove - 8 : spaceBelow - 8;
       const clampedMax = Math.min(maxHeight, Math.max(available, 60));
 
+      const viewportWidth = window.innerWidth;
+      const width = Math.min(Math.max(rect.width, minWidth), viewportWidth - 16);
+      let left = align === "right" ? rect.right - width : rect.left;
+      left = Math.max(8, Math.min(left, viewportWidth - width - 8));
+
       setStyle({
         position: "fixed",
-        left: rect.left,
-        width: rect.width,
+        left,
+        width,
         maxHeight: clampedMax,
         ...(goAbove
           ? { top: rect.top + vpTop - 4, transform: "translateY(-100%)" }
@@ -65,7 +77,7 @@ export function DropdownPanel({
       vv?.removeEventListener("resize", update);
       vv?.removeEventListener("scroll", update);
     };
-  }, [isOpen, triggerRef, maxHeight]);
+  }, [isOpen, triggerRef, maxHeight, align, minWidth]);
 
   if (!isOpen || !style) return null;
 

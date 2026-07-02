@@ -1343,26 +1343,30 @@
 
 /* Switch ---------------------------------------------------------------------- */
 
+/* Shares the ToggleButton's construction: hairline track, bordered surface
+   thumb sliding on the same 200ms ease-out; on-state fills the track ink. */
 .switch {
   appearance: none;
   position: relative;
-  width: 34px;
-  height: 18px;
+  width: 36px;
+  height: 20px;
   padding: 0;
   background: var(--background);
   border: 1px solid var(--border-strong);
   cursor: pointer;
-  transition: background-color 160ms ease, border-color 160ms ease;
+  transition: background-color 200ms ease-out, border-color 200ms ease-out;
 }
 
 .switch-knob {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 12px;
-  height: 12px;
-  background: var(--subtle-foreground);
-  transition: left 160ms ease-out, background-color 160ms ease;
+  width: 13px;
+  height: 13px;
+  box-sizing: border-box;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  transition: left 200ms ease-out, background-color 200ms ease-out, border-color 200ms ease-out;
 }
 
 .switch.is-on {
@@ -1371,8 +1375,9 @@
 }
 
 .switch.is-on .switch-knob {
-  left: 18px;
+  left: 19px;
   background: var(--background);
+  border-color: var(--background);
 }
 
 .switch:disabled,
@@ -1605,7 +1610,7 @@ span.switch {
   display: grid;
   gap: 12px;
   padding: 12px;
-  min-width: 220px;
+  box-sizing: border-box;
 }
 
 .filter-row {
