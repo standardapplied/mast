@@ -107,7 +107,7 @@ export function BoardScreen({
             <div className="masthead-stats">
               <span className="stat">
                 <span className="stat-value">{data.summary.in_progress}</span>
-                <span className="stat-label">in flight</span>
+                <span className="stat-label">in progress</span>
               </span>
               <span className="stat-divider" />
               <span className="stat">
