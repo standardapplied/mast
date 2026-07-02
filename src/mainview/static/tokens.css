@@ -93,9 +93,9 @@
   --ring: #fc4926;
 
   --error: #e07b6f;
-  --warning: #d2a24c;
+  --warning: #d08fa6;
   --success: #86b89a;
-  --info: #93b3d7;
+  --info: #7fbfca;
 
   --font-display: "Newsreader", Georgia, serif;
   --font-sans: "Switzer", system-ui, sans-serif;
@@ -125,9 +125,9 @@
   --ring: #fc4926;
 
   --error: #b42318;
-  --warning: #8a5800;
+  --warning: #9d4260;
   --success: #256e4a;
-  --info: #31608f;
+  --info: #17646f;
 
   color-scheme: light;
 }

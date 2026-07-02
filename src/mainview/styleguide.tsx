@@ -222,13 +222,19 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
               </TabsTrigger>
             </TabsList>
             <TabsContent value="specs">
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <Badge>Draft</Badge>
-                <Badge tone="accent">Dispatched</Badge>
-                <Badge tone="info">In progress</Badge>
-                <Badge tone="warning">Review</Badge>
-                <Badge tone="success">Done</Badge>
-                <Badge tone="error">Agent failed</Badge>
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <Badge>Draft</Badge>
+                  <Badge>Pending</Badge>
+                  <Badge tone="accent">In progress</Badge>
+                  <Badge tone="warning">Review</Badge>
+                  <Badge tone="success">Done</Badge>
+                  <Badge tone="error">Agent failed</Badge>
+                </div>
+                <p style={{ margin: 0, fontSize: 13, color: "var(--subtle-foreground)" }}>
+                  Text stays neutral; the dot alone carries status. Only a failed agent colors the
+                  whole badge.
+                </p>
               </div>
             </TabsContent>
             <TabsContent value="agents">
@@ -244,33 +250,55 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
         </Section>
 
         <Section index="08" title="Table">
-          <Card>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Spec</th>
-                  <th>Assignee</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>mast-design-system</td>
-                  <td>uday</td>
-                  <td>
-                    <Badge tone="info">In progress</Badge>
-                  </td>
-                </tr>
-                <tr>
-                  <td>mast-api-client</td>
-                  <td>—</td>
-                  <td>
-                    <Badge>Draft</Badge>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </Card>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Spec</th>
+                <th>Assignee</th>
+                <th>Agent</th>
+                <th className="is-numeric">Tests</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>mast-design-system</td>
+                <td>uday</td>
+                <td>claude-code</td>
+                <td className="is-numeric">69</td>
+                <td>
+                  <Badge tone="accent">In progress</Badge>
+                </td>
+              </tr>
+              <tr>
+                <td>mast-api-client</td>
+                <td>—</td>
+                <td>—</td>
+                <td className="is-numeric">0</td>
+                <td>
+                  <Badge>Draft</Badge>
+                </td>
+              </tr>
+              <tr>
+                <td>mast-app-shell</td>
+                <td>uday</td>
+                <td>claude-code</td>
+                <td className="is-numeric">30</td>
+                <td>
+                  <Badge tone="success">Done</Badge>
+                </td>
+              </tr>
+              <tr>
+                <td>sail-watch-live-phase</td>
+                <td>ravi</td>
+                <td>codex</td>
+                <td className="is-numeric">12</td>
+                <td>
+                  <Badge tone="error">Agent failed</Badge>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </Section>
       </div>
     </div>
