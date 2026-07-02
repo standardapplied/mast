@@ -20,11 +20,9 @@ jobs:
         run: bun run typecheck
       - name: Test (webview DOM + Bun main + CLI in one run)
         run: bun test
-      - name: Build webview
-        run: bun run build:view
       - name: Build app bundle (unsigned)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        run: bunx electrobun build
+        run: bun run build
 
   release:
     if: startsWith(github.ref, 'refs/tags/')

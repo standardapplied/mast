@@ -4,8 +4,7 @@ import { isExternalHttpUrl, newWindowUrl } from "./navigation";
 import { createMainRPC, type MainRPC } from "./rpc";
 import { WindowRegistry } from "./window-registry";
 
-const DEV_URL = "http://localhost:5173/";
-const PROD_URL = "views://mainview/index.html";
+const MAINVIEW_URL = "views://mainview/index.html";
 
 type WindowEntry = { window: BrowserWindow<MainRPC>; rpc: MainRPC };
 
@@ -30,7 +29,7 @@ export class WindowManager {
 
     const window = new BrowserWindow<MainRPC>({
       title: "Mast",
-      url: process.env.MAST_DEV ? DEV_URL : PROD_URL,
+      url: MAINVIEW_URL,
       frame: { x: 0, y: 0, width: 1024, height: 720 },
       titleBarStyle: "hiddenInset",
       rpc,

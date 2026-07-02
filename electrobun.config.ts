@@ -1,11 +1,12 @@
 import type { ElectrobunConfig } from "electrobun/bun";
 
 /**
- * Bundle/copy/release config. The React webview is built by vite into `dist/`
- * and copied whole into the bundle's `views/mainview/` (served via the
- * `views://` scheme). `bundleCEF` is false — we render with the OS WebView, no
- * Chromium. Signing/notarization are enabled by CI on tagged releases (via env),
- * never committed on by default.
+ * Bundle/copy/release config. `electrobun build` bundles the React webview
+ * itself via Bun.build (`build.views`, target browser) into the bundle's
+ * `views/mainview/` (served via the `views://` scheme); `build.copy` carries
+ * the static HTML/CSS alongside. `bundleCEF` is false — we render with the OS
+ * WebView, no Chromium. Signing/notarization are enabled by CI on tagged
+ * releases (via env), never committed on by default.
  */
 const config: ElectrobunConfig = {
   app: {
@@ -16,7 +17,13 @@ const config: ElectrobunConfig = {
   },
   build: {
     bun: { entrypoint: "src/bun/index.ts" },
-    copy: { dist: "views/mainview" },
+    views: {
+      mainview: { entrypoint: "src/mainview/index.tsx" },
+    },
+    copy: {
+      "src/mainview/index.html": "views/mainview/index.html",
+      "src/mainview/styles.css": "views/mainview/styles.css",
+    },
     mac: {
       bundleCEF: false,
       defaultRenderer: "native",

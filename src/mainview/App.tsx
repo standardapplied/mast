@@ -14,14 +14,10 @@ export function App() {
   useEffect(() => onPush("bridge-status", ({ status }) => setBridge(status)), []);
 
   return (
-    <main className="flex h-screen flex-col items-center justify-center gap-4 bg-bg text-content">
-      <h1 className="text-2xl font-semibold tracking-tight">Mast</h1>
-      <p className="text-sm text-muted">Isolated development environments for AI agents.</p>
-      <span
-        className="rounded-full border border-border px-3 py-1 text-xs text-muted"
-        data-testid="bridge-status"
-        data-status={bridge}
-      >
+    <main className="app-shell">
+      <h1 className="app-title">Mast</h1>
+      <p className="app-tagline">Isolated development environments for AI agents.</p>
+      <span className="bridge-badge" data-testid="bridge-status" data-status={bridge}>
         {STATUS_LABEL[bridge]}
       </span>
     </main>

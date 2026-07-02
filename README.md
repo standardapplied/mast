@@ -18,18 +18,16 @@ lands in its own specs on top of this foundation.
 
 ```bash
 bun install
-bun run dev        # vite dev server (:5173) + electrobun dev --watch
+bun run dev        # electrobun dev --watch (rebuilds Bun main + webview on change)
 bun test           # webview DOM + Bun main + CLI, one run (happy-dom preload)
 bun run typecheck  # tsc --noEmit
-bun run build      # vite build → electrobun build
+bun run build      # electrobun build (bundles the webview via Bun.build)
 ```
 
 ## Layout
 
 ```
-electrobun.config.ts   bundle/copy/release config (bundleCEF: false)
-vite.config.ts         builds the React webview (src/mainview → dist/)
-tailwind.config.js     dark-first CSS-var tokens (filled by the design system)
+electrobun.config.ts   bundle/views/copy/release config (bundleCEF: false)
 src/
   bun/         main process: window-manager, rpc, shell-env, updater
   mainview/    webview: React 19 entry, rpc bridge, watchdog, push events

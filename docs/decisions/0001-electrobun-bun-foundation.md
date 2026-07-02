@@ -13,10 +13,13 @@ Node main process; we want the OS WebView and a Bun main.
 
 - **Electrobun + Bun.** OS WebView (`bundleCEF: false`), Bun main process. Native
   window/RPC via Electrobun's Zig/ObjC bindings.
-- **One toolchain.** Bun is the package manager, runtime, and test runner.
-  `bun test` with a happy-dom preload (`bunfig.toml [test] preload`) covers the
-  webview DOM, the Bun main, and any CLI in a single run — no vitest. Vite stays
-  only as the React webview bundler that `electrobun build` consumes.
+- **One toolchain.** Bun is the package manager, runtime, bundler, and test
+  runner. `electrobun build` bundles the React webview itself via `Bun.build`
+  (`build.views`, target browser; TSX transpiled natively) — no vite. `bun test`
+  with a happy-dom preload (`bunfig.toml [test] preload`) covers the webview
+  DOM, the Bun main, and any CLI in a single run — no vitest. Styling is plain
+  CSS-variable tokens (`src/mainview/styles.css`) — no tailwind/postcss until
+  the design-system spec earns it.
 - **One RPC schema.** `src/shared/types.ts` `AppRPCSchema` is the single, typed,
   transport-agnostic contract for both sides; a future WS/remote transport drops
   in without touching app code.
