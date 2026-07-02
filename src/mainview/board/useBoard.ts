@@ -71,6 +71,7 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
   }, [gateway, project, filterKey]);
 
   useEffect(() => {
+    setData((prev) => ({ ...prev, loading: true }));
     void refresh();
   }, [refresh]);
 

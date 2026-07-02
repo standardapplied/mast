@@ -10,8 +10,16 @@ let container: HTMLElement;
 
 type Handle = ReturnType<typeof useBoard>;
 
-function Harness({ gateway, capture }: { gateway: DemoGateway; capture: (h: Handle) => void }) {
-  const handle = useBoard(gateway, "chorus", {});
+function Harness({
+  gateway,
+  project = "chorus",
+  capture,
+}: {
+  gateway: DemoGateway;
+  project?: string;
+  capture: (h: Handle) => void;
+}) {
+  const handle = useBoard(gateway, project, {});
   capture(handle);
   return <div data-count={handle.data.specs.length} />;
 }
@@ -21,9 +29,13 @@ async function render(gateway: DemoGateway) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
+  const rerender = (project: string) =>
+    act(() =>
+      root.render(<Harness gateway={gateway} project={project} capture={(h) => (latest = h)} />),
+    );
   act(() => root.render(<Harness gateway={gateway} capture={(h) => (latest = h)} />));
   await act(async () => {});
-  return () => latest!;
+  return { handle: () => latest!, rerender };
 }
 
 afterEach(() => {
@@ -33,15 +45,33 @@ afterEach(() => {
 
 describe("useBoard", () => {
   test("loads specs, summary, and the derived project list", async () => {
-    const handle = await render(createDemoGateway());
+    const { handle } = await render(createDemoGateway());
     expect(handle().data.specs.length).toBe(6);
     expect(handle().data.summary?.in_progress).toBe(1);
     expect(handle().data.projects).toEqual(["chorus", "sail-mast"]);
   });
 
+  test("switching project shows loading, then the new scope; SSE refetches stay silent", async () => {
+    const gateway = createDemoGateway();
+    const { handle, rerender } = await render(gateway);
+    expect(handle().data.loading).toBe(false);
+
+    rerender("sail-mast");
+    expect(handle().data.loading).toBe(true);
+
+    await act(async () => {});
+    expect(handle().data.loading).toBe(false);
+    expect(handle().data.specs.every((s) => s.project === "sail-mast")).toBe(true);
+
+    await act(async () => {
+      await gateway.updateSpec("mast-kanban-board", { status: "review" });
+    });
+    expect(handle().data.loading).toBe(false);
+  });
+
   test("move issues the PUT with If-Match and applies the result", async () => {
     const gateway = createDemoGateway();
-    const handle = await render(gateway);
+    const { handle } = await render(gateway);
 
     const result = { outcome: undefined as MoveOutcome | undefined };
     await act(async () => {
@@ -55,7 +85,7 @@ describe("useBoard", () => {
 
   test("a concurrent writer surfaces a conflict, not an overwrite", async () => {
     const gateway = createDemoGateway();
-    const handle = await render(gateway);
+    const { handle } = await render(gateway);
 
     await gateway.updateSpec("chorus-billing-export", { title: "changed elsewhere" });
     await act(async () => {});
