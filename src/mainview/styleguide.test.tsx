@@ -32,7 +32,7 @@ describe("Styleguide", () => {
     render(fakeTheme());
     expect(container.querySelectorAll("code").length).toBeGreaterThanOrEqual(15);
     expect(container.querySelector("h1")?.textContent).toBe("Mast styleguide");
-    expect(container.querySelectorAll("h2").length).toBe(8);
+    expect(container.querySelectorAll("h2").length).toBe(11);
   });
 
   test("theme buttons drive the controller", () => {

@@ -101,7 +101,7 @@
 }
 
 .field-label.is-focused {
-  color: var(--primary);
+  color: var(--foreground);
 }
 
 .field-label.is-error {
@@ -201,9 +201,9 @@
 
 .input:focus,
 .textarea:focus {
-  outline: 1px solid var(--ring);
+  outline: 1px solid var(--foreground);
   outline-offset: -1px;
-  border-color: var(--ring);
+  border-color: var(--foreground);
 }
 
 .input.is-error,
@@ -283,9 +283,9 @@
 
 .select-trigger:focus,
 .select-combobox:focus-within {
-  outline: 1px solid var(--ring);
+  outline: 1px solid var(--foreground);
   outline-offset: -1px;
-  border-color: var(--ring);
+  border-color: var(--foreground);
 }
 
 .select-trigger.is-error,
@@ -507,16 +507,16 @@
 }
 
 /*
- * Table: editorial rules — a strong rule opening the table and closing the
- * header, hairlines between rows, no vertical lines, no card chrome. Row
- * height is generous; identifiers read in mono ink, everything else recedes.
+ * Table: the header is a tinted band (no rules of its own), hairlines between
+ * rows, no vertical lines. Row height is generous; identifiers read in mono
+ * ink, everything else recedes. Below 640px each row restacks into a labeled
+ * list item (labels come from the cells' data-label attributes).
  */
 
 .table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  border-top: 1px solid var(--border-strong);
 }
 
 .table th {
@@ -526,15 +526,19 @@
   text-transform: uppercase;
   letter-spacing: var(--tracking-eyebrow);
   color: var(--subtle-foreground);
+  background: var(--surface-hover);
   text-align: left;
   padding: 10px 16px;
-  border-bottom: 1px solid var(--border-strong);
 }
 
 .table td {
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
   color: var(--muted-foreground);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .table td:first-child {
@@ -554,6 +558,51 @@
 .table .is-numeric {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .table,
+  .table tbody {
+    display: block;
+  }
+
+  .table thead {
+    display: none;
+  }
+
+  .table tbody tr {
+    display: block;
+    border: 1px solid var(--border);
+    padding: 4px 0;
+  }
+
+  .table tbody tr + tr {
+    margin-top: 8px;
+  }
+
+  .table td,
+  .table td:first-child {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: none;
+    padding: 6px 12px;
+  }
+
+  .table td::before {
+    content: attr(data-label);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-eyebrow);
+    color: var(--subtle-foreground);
+  }
+
+  .table .is-numeric {
+    text-align: inherit;
+  }
 }
 
 .toolbar {
@@ -587,9 +636,9 @@
 }
 
 .dtp-control:focus-within {
-  outline: 1px solid var(--ring);
+  outline: 1px solid var(--foreground);
   outline-offset: -1px;
-  border-color: var(--ring);
+  border-color: var(--foreground);
 }
 
 .dtp-control.is-error {
@@ -949,6 +998,240 @@
 
 .toast-dismiss:hover {
   color: var(--foreground);
+}
+
+/* Dialog ---------------------------------------------------------------------- */
+
+.dialog-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 6, 8, 0.55);
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+}
+
+.dialog-backdrop.is-open {
+  opacity: 1;
+}
+
+.dialog-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  width: calc(100% - 32px);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 160ms ease-out,
+    transform 160ms ease-out;
+}
+
+.dialog-panel.is-open {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.dialog-sm {
+  max-width: 400px;
+}
+
+.dialog-md {
+  max-width: 560px;
+}
+
+.dialog-lg {
+  max-width: 672px;
+}
+
+.dialog-xl {
+  max-width: 768px;
+}
+
+.dialog-full {
+  max-width: 896px;
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dialog-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 18px;
+  letter-spacing: var(--tracking-display);
+}
+
+.dialog-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dialog-close {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 6px;
+  color: var(--subtle-foreground);
+  cursor: pointer;
+  display: inline-flex;
+}
+
+.dialog-close:hover {
+  color: var(--foreground);
+}
+
+.dialog-content {
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 640px) {
+  .dialog-layer {
+    align-items: flex-end;
+  }
+
+  .dialog-panel {
+    width: 100%;
+    max-width: none;
+    max-height: 90vh;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    transform: translateY(100%);
+  }
+
+  .dialog-panel.is-open {
+    transform: translateY(0);
+  }
+}
+
+/* Kanban ---------------------------------------------------------------------- */
+
+.kanban-board {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.kanban-column {
+  flex: 0 0 260px;
+  display: grid;
+  gap: 10px;
+}
+
+.kanban-column-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.kanban-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--subtle-foreground);
+}
+
+.kanban-column-body {
+  display: grid;
+  gap: 8px;
+}
+
+.kanban-card {
+  appearance: none;
+  display: grid;
+  gap: 8px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 120ms ease;
+}
+
+.kanban-card:hover {
+  border-color: var(--foreground);
+}
+
+.kanban-card.is-active {
+  border-color: var(--primary);
+}
+
+.kanban-card-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kanban-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--subtle-foreground);
+}
+
+@media (max-width: 640px) {
+  .kanban-board {
+    flex-direction: column;
+    overflow-x: visible;
+  }
+
+  .kanban-column {
+    flex: none;
+    width: 100%;
+  }
+}
+
+/* Terminal palette preview ------------------------------------------------------ */
+
+.ansi-strip {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+}
+
+.ansi-chip {
+  height: 28px;
+  border: 1px solid var(--border-strong);
 }
 
 /* Spinner ---------------------------------------------------------------------- */

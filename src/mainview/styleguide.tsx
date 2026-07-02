@@ -1,6 +1,9 @@
 import { useState, type ReactNode } from "react";
+import { DARK_TERMINAL_THEME, LIGHT_TERMINAL_THEME, type TerminalTheme } from "./ansi";
 import { DateTimePicker } from "./components/DateTimePicker";
+import { Dialog } from "./components/Dialog";
 import { Input } from "./components/Input";
+import { KanbanBoard, KanbanCard, KanbanColumn } from "./components/Kanban";
 import { Select } from "./components/Select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/Tabs";
 import { Textarea } from "./components/Textarea";
@@ -64,6 +67,55 @@ function Swatch({ token }: { token: string }) {
         }}
       />
       <code style={{ fontSize: 11, color: "var(--muted-foreground)" }}>--{token}</code>
+    </div>
+  );
+}
+
+function AnsiStrip({ theme, label }: { theme: TerminalTheme; label: string }) {
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <Eyebrow>{label}</Eyebrow>
+      <div className="ansi-strip" style={{ background: theme.background, padding: 8 }}>
+        {theme.ansi.map((color, i) => (
+          <div key={i} className="ansi-chip" style={{ background: color }} title={`ansi ${i}`} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DialogDemo() {
+  const [open, setOpen] = useState(false);
+  const [guarded, setGuarded] = useState(false);
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+      <Button variant="ghost" onClick={() => setOpen(true)}>
+        Open dialog
+      </Button>
+      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+        <input type="checkbox" checked={guarded} onChange={(e) => setGuarded(e.target.checked)} />
+        veto close (onBeforeClose)
+      </label>
+      <Dialog
+        isOpen={open}
+        onClose={() => setOpen(false)}
+        onBeforeClose={guarded ? () => false : undefined}
+        title="Dispatch spec"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => setOpen(false)}>Dispatch</Button>
+          </>
+        }
+      >
+        <p style={{ margin: 0, fontSize: 14, color: "var(--muted-foreground)" }}>
+          Escape, backdrop click, and the close button all route through the async
+          <code> onBeforeClose</code> gate — tick the veto box and try to close. On a narrow window
+          this panel becomes a bottom sheet.
+        </p>
+      </Dialog>
     </div>
   );
 }
@@ -263,43 +315,88 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
             </thead>
             <tbody>
               <tr>
-                <td>mast-design-system</td>
-                <td>uday</td>
-                <td>claude-code</td>
-                <td className="is-numeric">69</td>
-                <td>
+                <td data-label="Spec">mast-design-system</td>
+                <td data-label="Assignee">uday</td>
+                <td data-label="Agent">claude-code</td>
+                <td data-label="Tests" className="is-numeric">
+                  69
+                </td>
+                <td data-label="Status">
                   <Badge tone="accent">In progress</Badge>
                 </td>
               </tr>
               <tr>
-                <td>mast-api-client</td>
-                <td>—</td>
-                <td>—</td>
-                <td className="is-numeric">0</td>
-                <td>
+                <td data-label="Spec">mast-api-client</td>
+                <td data-label="Assignee">—</td>
+                <td data-label="Agent">—</td>
+                <td data-label="Tests" className="is-numeric">
+                  0
+                </td>
+                <td data-label="Status">
                   <Badge>Draft</Badge>
                 </td>
               </tr>
               <tr>
-                <td>mast-app-shell</td>
-                <td>uday</td>
-                <td>claude-code</td>
-                <td className="is-numeric">30</td>
-                <td>
+                <td data-label="Spec">mast-app-shell</td>
+                <td data-label="Assignee">uday</td>
+                <td data-label="Agent">claude-code</td>
+                <td data-label="Tests" className="is-numeric">
+                  30
+                </td>
+                <td data-label="Status">
                   <Badge tone="success">Done</Badge>
                 </td>
               </tr>
               <tr>
-                <td>sail-watch-live-phase</td>
-                <td>ravi</td>
-                <td>codex</td>
-                <td className="is-numeric">12</td>
-                <td>
+                <td data-label="Spec">sail-watch-live-phase</td>
+                <td data-label="Assignee">ravi</td>
+                <td data-label="Agent">codex</td>
+                <td data-label="Tests" className="is-numeric">
+                  12
+                </td>
+                <td data-label="Status">
                   <Badge tone="error">Agent failed</Badge>
                 </td>
               </tr>
             </tbody>
           </table>
+          </Card>
+        </Section>
+
+        <Section index="09" title="Dialog">
+          <DialogDemo />
+        </Section>
+
+        <Section index="10" title="Kanban">
+          <KanbanBoard>
+            <KanbanColumn title="Pending" count={2}>
+              <KanbanCard title="mast-api-client" meta={<Badge>Pending</Badge>} />
+              <KanbanCard title="mast-terminal" meta={<Badge>Pending</Badge>} />
+            </KanbanColumn>
+            <KanbanColumn title="In progress" count={1}>
+              <KanbanCard
+                title="mast-design-system"
+                active
+                meta={
+                  <>
+                    <Badge tone="accent">In progress</Badge>
+                    <span>uday</span>
+                  </>
+                }
+              />
+            </KanbanColumn>
+            <KanbanColumn title="Review" count={1}>
+              <KanbanCard title="sail-watch-live-phase" meta={<Badge tone="warning">Review</Badge>} />
+            </KanbanColumn>
+          </KanbanBoard>
+        </Section>
+
+        <Section index="11" title="Terminal palettes">
+          <Card>
+            <div style={{ display: "grid", gap: 20 }}>
+              <AnsiStrip theme={DARK_TERMINAL_THEME} label="Ink — ghostty dark" />
+              <AnsiStrip theme={LIGHT_TERMINAL_THEME} label="Paper — ghostty light (dim pre-blended, no alpha washout)" />
+            </div>
           </Card>
         </Section>
       </div>
