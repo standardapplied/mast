@@ -1,3 +1,4 @@
+import { diag } from "../diagnostics";
 import { tunnelCommand, type SshTarget } from "./ssh-target";
 
 /**
@@ -57,6 +58,7 @@ export class TunnelManager {
 
   private setState(next: TunnelState): void {
     this.state = next;
+    diag.info("tunnel", next.phase, next.phase === "up" ? { port: next.port } : (next as Record<string, unknown>));
     this.listeners.forEach((l) => l(next));
   }
 

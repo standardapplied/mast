@@ -21,11 +21,13 @@ export function UserMenu({
   server,
   tokenKind = "none",
   onLogin,
+  onDiagnostics,
 }: {
   theme: ThemeController;
   server?: string;
   tokenKind?: "session" | "api" | "none";
   onLogin?: () => void;
+  onDiagnostics?: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [mode, setMode] = useState<ThemeMode>(theme.mode());
@@ -88,6 +90,17 @@ export function UserMenu({
               }}
             >
               Sign in with passkey
+            </Button>
+            <Button
+              variant="ghost"
+              className="user-menu-signin"
+              onClick={() => {
+                setIsOpen(false);
+                onDiagnostics?.();
+              }}
+              data-testid="open-diagnostics"
+            >
+              Diagnostics
             </Button>
           </div>
         </div>

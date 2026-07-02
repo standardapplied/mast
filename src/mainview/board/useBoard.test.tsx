@@ -83,6 +83,15 @@ describe("useBoard", () => {
     );
   });
 
+  test("a rejecting gateway clears loading and surfaces an error, never hangs", async () => {
+    const gateway = createDemoGateway();
+    gateway.listSpecs = () => Promise.reject(new Error("bridge died"));
+    const { handle } = await render(gateway);
+    expect(handle().data.loading).toBe(false);
+    expect(handle().data.error?.code).toBe("bridge");
+    expect(handle().data.error?.message).toContain("bridge died");
+  });
+
   test("a concurrent writer surfaces a conflict, not an overwrite", async () => {
     const gateway = createDemoGateway();
     const { handle } = await render(gateway);

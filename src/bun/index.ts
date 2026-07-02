@@ -1,9 +1,12 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { ApplicationMenu, Updater, Utils } from "electrobun/bun";
 import type { AppInfo } from "../shared/types";
 import { SailClient } from "./api/client";
 import { resolveConfig, resolveSshHost, writeConfig } from "./api/config";
 import { SailApiError, SailHttp } from "./api/http";
 import { defaultEventStreamDeps, EventStream } from "./api/sse";
+import { configureFileSink, diag, diagnosticsReport } from "./diagnostics";
 import { defaultServeDeps, startCallbackServer } from "./connect/login-callback";
 import { ConnectionManager } from "./connect/manager";
 import { pickTunnelPort } from "./connect/ports";
@@ -13,6 +16,9 @@ import { hydrateProcessEnv, resolveShellEnv } from "./shell-env";
 import { setActiveTheme } from "./theme-state";
 import { AutoUpdater } from "./updater";
 import { WindowManager } from "./window-manager";
+
+const LOG_PATH = join(homedir(), ".sail", "mast.log");
+configureFileSink(LOG_PATH);
 
 /**
  * Bun main process entry. The window opens IMMEDIATELY — the login-shell
@@ -36,11 +42,25 @@ async function probe(server: string): Promise<boolean> {
     const response = await fetch(`${server}/v1/health`, {
       signal: AbortSignal.timeout(2000),
     });
+    diag.info("probe", `${server}/v1/health → ${response.status}`);
     return response.ok;
-  } catch {
+  } catch (error) {
+    diag.warn("probe", `${server}/v1/health unreachable`, {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return false;
   }
 }
+
+const boot = resolveConfig();
+diag.info("boot", "starting", {
+  version: appInfo.version,
+  channel: appInfo.channel,
+  server: boot.server,
+  loginOrigin: boot.loginOrigin,
+  sshHost: resolveSshHost() ?? "(none)",
+  tokenKind: boot.token ? (boot.token.startsWith("sess_") ? "session" : "api") : "none",
+});
 
 const manager = new ConnectionManager({
   config: resolveConfig,
@@ -104,6 +124,24 @@ const windows = new WindowManager({
   connection: () => manager.currentStatus,
   login: () => manager.login(),
   onAuthError: () => manager.onAuthError(),
+  diagnostics: () => {
+    const status = manager.currentStatus;
+    return {
+      report: diagnosticsReport({
+        version: appInfo.version,
+        channel: appInfo.channel,
+        phase: status.phase,
+        server: status.server,
+        loginOrigin: status.loginOrigin,
+        tokenKind: status.tokenKind,
+        stream: status.stream,
+        detail: status.detail ?? "",
+        sshHost: resolveSshHost() ?? "(none)",
+        platform: process.platform,
+      }),
+      logPath: LOG_PATH,
+    };
+  },
   onBeforeQuit: () => manager.stop(),
 });
 windows.open();

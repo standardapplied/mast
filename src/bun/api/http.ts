@@ -1,6 +1,14 @@
 import type { ApiErrorBody } from "../../shared/sail-models";
+import { diag } from "../diagnostics";
 import type { SailConfig } from "./config";
 import { RateLimiter } from "./rate-limiter";
+
+let nanos: () => number;
+try {
+  nanos = () => Number(Bun.nanoseconds());
+} catch {
+  nanos = () => performance.now() * 1e6;
+}
 
 /** Typed failure carrying the server's error envelope. */
 export class SailApiError extends Error {
@@ -76,6 +84,7 @@ export class SailHttp {
 
     for (let attempt = 1; ; attempt++) {
       await this.deps.limiter.acquire();
+      const started = nanos();
       let response: Response;
       try {
         response = await this.deps.fetchFn(url, {
@@ -85,22 +94,35 @@ export class SailHttp {
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
       } catch (error) {
+        const ms = Math.round((nanos() - started) / 1e6);
         const timedOut = error instanceof DOMException && error.name === "TimeoutError";
         if (timedOut) {
+          diag.error("http", `${method} ${path} timed out`, { origin: url.origin, ms });
           throw new SailApiError(0, "timeout", `No response from ${url.origin} within 15s.`);
         }
+        diag.error("http", `${method} ${path} network error`, {
+          origin: url.origin,
+          ms,
+          error: error instanceof Error ? error.message : String(error),
+        });
         throw error;
       }
 
+      const ms = Math.round((nanos() - started) / 1e6);
       if (response.status === 429 && attempt < MAX_ATTEMPTS) {
+        diag.warn("http", `${method} ${path} rate-limited, retrying`, { attempt });
         await new Promise<void>((resolve) =>
           this.deps.schedule(resolve, RETRY_BASE_MS * 2 ** (attempt - 1)),
         );
         continue;
       }
 
-      if (!response.ok) throw await toApiError(response);
+      if (!response.ok) {
+        diag.warn("http", `${method} ${path} → ${response.status}`, { ms });
+        throw await toApiError(response);
+      }
 
+      diag.info("http", `${method} ${path} → ${response.status}`, { ms });
       const etag = response.headers.get("ETag") ?? undefined;
       const data = (await response.json()) as T;
       return { data, etag };

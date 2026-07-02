@@ -51,6 +51,7 @@ function makeDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
     connection: () => READY_STATUS,
     login: async () => ({ ok: true }),
     onAuthError: () => {},
+    diagnostics: () => ({ report: "diag", logPath: "/x/mast.log" }),
     ...overrides,
   };
 }

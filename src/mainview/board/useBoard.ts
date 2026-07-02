@@ -42,11 +42,23 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
 
   const refresh = useCallback(async () => {
     const gen = ++generation.current;
-    const [all, scoped, summary] = await Promise.all([
-      gateway.listSpecs({}),
-      gateway.listSpecs({ ...filter, project }),
-      gateway.board(project),
-    ]);
+    let all, scoped, summary;
+    try {
+      [all, scoped, summary] = await Promise.all([
+        gateway.listSpecs({}),
+        gateway.listSpecs({ ...filter, project }),
+        gateway.board(project),
+      ]);
+    } catch (error) {
+      // A rejecting RPC (bridge failure) must not leave "Loading specs" forever.
+      if (gen !== generation.current) return;
+      setData((prev) => ({
+        ...prev,
+        loading: false,
+        error: { status: 0, code: "bridge", message: message(error) },
+      }));
+      return;
+    }
     if (gen !== generation.current) return;
 
     if (!scoped.ok || !summary.ok) {
@@ -138,4 +150,8 @@ export function unmetDependencies(spec: GlobalSpecView, all: GlobalSpecView[]): 
     const target = all.find((s) => s.id === dep);
     return !target || target.status !== "done";
   });
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

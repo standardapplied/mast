@@ -3,6 +3,7 @@ import type { ConnectionStatus } from "../shared/sail-models";
 import type { BridgeStatus } from "../shared/types";
 import { BoardScreen } from "./board/BoardScreen";
 import { SpecDetail } from "./board/SpecDetail";
+import { Diagnostics } from "./components/Diagnostics";
 import { Logo } from "./components/icons";
 import { LoadingMark } from "./components/Loading";
 import { ToastProvider } from "./components/Toast";
@@ -79,6 +80,7 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
   const [specId, setSpecId] = useState<string | null>(specIdFromHash(location.hash));
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   useEffect(() => onPush("bridge-status", ({ status: s }) => setBridge(s)), []);
   useEffect(
@@ -159,6 +161,7 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
               server={status?.server}
               tokenKind={status?.tokenKind}
               onLogin={needsLogin ? () => void login() : undefined}
+              onDiagnostics={() => setShowDiagnostics(true)}
             />
           </span>
         </header>
@@ -180,6 +183,7 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
             />
           )}
         </main>
+        {showDiagnostics && <Diagnostics gateway={gateway} onClose={() => setShowDiagnostics(false)} />}
       </div>
     </ToastProvider>
   );

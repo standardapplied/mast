@@ -37,6 +37,7 @@ export type Gateway = {
   specReviews(id: string): Promise<SailResult<ReviewListResponse>>;
   connection(): Promise<ConnectionStatus>;
   login(): Promise<{ ok: boolean; detail?: string }>;
+  diagnostics(): Promise<{ report: string; logPath: string }>;
   onEvent(listener: (event: SailEvent) => void): () => void;
   onConnectionStatus(listener: (status: ConnectionStatus) => void): () => void;
 };
@@ -54,6 +55,7 @@ export function createRpcGateway(bridge: Bridge): Gateway {
     specReviews: (id) => api.sailSpecReviews({ id }),
     connection: () => api.sailConnection(),
     login: () => api.sailLogin(),
+    diagnostics: () => api.sailDiagnostics(),
     onEvent: (listener) => onPush("sail-event", listener),
     onConnectionStatus: (listener) => onPush("connection-status", listener),
   };
@@ -312,6 +314,13 @@ export function createDemoGateway(): DemoGateway {
 
     async login() {
       return { ok: true };
+    },
+
+    async diagnostics() {
+      return {
+        report: "=== Mast diagnostics ===\nDemo gateway (browser preview) — no live connection.",
+        logPath: "(browser preview)",
+      };
     },
 
     onEvent(listener) {

@@ -33,6 +33,7 @@ describe("AppRPCSchema round-trip", () => {
     connection: () => ({}) as never,
     login: async () => ({ ok: false }),
     onAuthError: () => {},
+    diagnostics: () => ({ report: "", logPath: "" }),
   });
 
   const transports = linkedTransports();

@@ -1,5 +1,6 @@
 import type { ConnectionStatus, EventStreamState, SailEvent } from "../../shared/sail-models";
 import type { SailConfig } from "../api/config";
+import { diag } from "../diagnostics";
 import { validateSshTarget } from "./ssh-target";
 import type { TunnelState } from "./tunnel";
 import { loginUrl, newState, type CallbackServerHandle } from "./login-callback";
@@ -117,7 +118,15 @@ export class ConnectionManager {
   }
 
   private update(patch: Partial<ConnectionStatus>): void {
+    const prevPhase = this.status.phase;
     this.status = { ...this.status, ...patch };
+    if (patch.phase && patch.phase !== prevPhase) {
+      diag.info("connect", `${prevPhase} → ${patch.phase}`, {
+        server: this.status.server,
+        tokenKind: this.status.tokenKind,
+        detail: patch.detail,
+      });
+    }
     this.listeners.forEach((l) => l(this.status));
   }
 
