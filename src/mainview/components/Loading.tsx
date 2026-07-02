@@ -1,7 +1,7 @@
 import { Eyebrow } from "./ui";
 
 /**
- * Loading state: the Mast mark drawing itself — the M strokes in ink on a
+ * Loading state: the Mast mark drawing itself — the sigma strokes in ink on a
  * loop while the flare truck line pulses in the primary color.
  */
 export function LoadingMark({ label = "Loading…", size = 44 }: { label?: string; size?: number }) {

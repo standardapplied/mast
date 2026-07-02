@@ -116,7 +116,7 @@ export function Magnifier(props: IconProps) {
   );
 }
 
-/** The Mast mark: ink M, flare truck line above. */
+/** The Mast mark: the SAIL sigma in ink, flare truck line above. */
 export function Logo({ size = 20 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" aria-label="Mast">
