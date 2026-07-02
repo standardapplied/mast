@@ -1,25 +1,80 @@
 import { useEffect, useState } from "react";
+import type { EventStreamState } from "../shared/sail-models";
 import type { BridgeStatus } from "../shared/types";
+import { BoardScreen } from "./board/BoardScreen";
+import { SpecDetail } from "./board/SpecDetail";
+import { ToastProvider } from "./components/Toast";
+import { Eyebrow } from "./components/ui";
+import type { Gateway } from "./gateway";
 import { onPush } from "./push";
 
-const STATUS_LABEL: Record<BridgeStatus, string> = {
-  connected: "Connected",
-  reconnecting: "Reconnecting…",
-  disconnected: "Disconnected",
+const BRIDGE_LABEL: Record<BridgeStatus, string> = {
+  connected: "Bridge",
+  reconnecting: "Bridge reconnecting…",
+  disconnected: "Bridge down",
 };
 
-export function App() {
+const STREAM_LABEL: Record<EventStreamState, string> = {
+  connecting: "Connecting…",
+  connected: "Live",
+  reconnecting: "Reconnecting…",
+  disconnected: "Offline",
+};
+
+function specIdFromHash(hash: string): string | null {
+  const match = hash.match(/^#\/spec\/(.+)$/);
+  return match ? decodeURIComponent(match[1]!) : null;
+}
+
+export function App({ gateway }: { gateway: Gateway }) {
   const [bridge, setBridge] = useState<BridgeStatus>("connected");
+  const [stream, setStream] = useState<EventStreamState>("disconnected");
+  const [specId, setSpecId] = useState<string | null>(specIdFromHash(location.hash));
 
   useEffect(() => onPush("bridge-status", ({ status }) => setBridge(status)), []);
+  useEffect(() => gateway.onStreamState(setStream), [gateway]);
+
+  useEffect(() => {
+    const onHashChange = () => setSpecId(specIdFromHash(location.hash));
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  const openSpec = (id: string) => {
+    location.hash = `#/spec/${encodeURIComponent(id)}`;
+    setSpecId(id);
+  };
+  const backToBoard = () => {
+    location.hash = "#/";
+    setSpecId(null);
+  };
 
   return (
-    <main className="app-shell">
-      <h1 className="app-title">Mast</h1>
-      <p className="app-tagline">Isolated development environments for AI agents.</p>
-      <span className="bridge-badge" data-testid="bridge-status" data-status={bridge}>
-        {STATUS_LABEL[bridge]}
-      </span>
-    </main>
+    <ToastProvider>
+      <div className="cockpit">
+        <header className="toolbar cockpit-toolbar">
+          <button type="button" className="cockpit-brand" onClick={backToBoard}>
+            Mast
+          </button>
+          <span className="cockpit-toolbar-spacer" />
+          <Eyebrow>{STREAM_LABEL[stream]}</Eyebrow>
+          <span
+            className="bridge-badge"
+            data-testid="bridge-status"
+            data-status={bridge}
+            title={BRIDGE_LABEL[bridge]}
+          >
+            {BRIDGE_LABEL[bridge]}
+          </span>
+        </header>
+        <main className="cockpit-main">
+          {specId ? (
+            <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} />
+          ) : (
+            <BoardScreen gateway={gateway} onOpenSpec={openSpec} />
+          )}
+        </main>
+      </div>
+    </ToastProvider>
   );
 }

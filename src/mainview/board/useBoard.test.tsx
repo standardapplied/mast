@@ -1,0 +1,82 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { createDemoGateway, type DemoGateway } from "../gateway";
+import { canTransition } from "./lifecycle";
+import { useBoard, type MoveOutcome } from "./useBoard";
+
+let root: Root;
+let container: HTMLElement;
+
+type Handle = ReturnType<typeof useBoard>;
+
+function Harness({ gateway, capture }: { gateway: DemoGateway; capture: (h: Handle) => void }) {
+  const handle = useBoard(gateway, "chorus", {});
+  capture(handle);
+  return <div data-count={handle.data.specs.length} />;
+}
+
+async function render(gateway: DemoGateway) {
+  let latest: Handle | null = null;
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  act(() => root.render(<Harness gateway={gateway} capture={(h) => (latest = h)} />));
+  await act(async () => {});
+  return () => latest!;
+}
+
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
+
+describe("useBoard", () => {
+  test("loads specs, summary, and the derived project list", async () => {
+    const handle = await render(createDemoGateway());
+    expect(handle().data.specs.length).toBe(6);
+    expect(handle().data.summary?.in_progress).toBe(1);
+    expect(handle().data.projects).toEqual(["chorus", "sail-mast"]);
+  });
+
+  test("move issues the PUT with If-Match and applies the result", async () => {
+    const gateway = createDemoGateway();
+    const handle = await render(gateway);
+
+    const result = { outcome: undefined as MoveOutcome | undefined };
+    await act(async () => {
+      result.outcome = await handle().move("chorus-billing-export", "in_progress");
+    });
+    expect(result.outcome).toBe("ok");
+    expect(handle().data.specs.find((s) => s.id === "chorus-billing-export")?.status).toBe(
+      "in_progress",
+    );
+  });
+
+  test("a concurrent writer surfaces a conflict, not an overwrite", async () => {
+    const gateway = createDemoGateway();
+    const handle = await render(gateway);
+
+    await gateway.updateSpec("chorus-billing-export", { title: "changed elsewhere" });
+    await act(async () => {});
+
+    const result = { outcome: undefined as MoveOutcome | undefined };
+    await act(async () => {
+      result.outcome = await handle().move("chorus-billing-export", "in_progress");
+    });
+    expect(result.outcome).toBe("conflict");
+  });
+});
+
+describe("lifecycle transitions", () => {
+  test("one step forward/back, archive from anywhere, unarchive to draft", () => {
+    expect(canTransition("draft", "pending")).toBe(true);
+    expect(canTransition("pending", "draft")).toBe(true);
+    expect(canTransition("review", "in_progress")).toBe(true);
+    expect(canTransition("draft", "done")).toBe(false);
+    expect(canTransition("pending", "review")).toBe(false);
+    expect(canTransition("done", "archived")).toBe(true);
+    expect(canTransition("archived", "draft")).toBe(true);
+    expect(canTransition("archived", "done")).toBe(false);
+  });
+});
