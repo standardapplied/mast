@@ -7,6 +7,7 @@ import type {
   SpecUpdateRequest,
 } from "../../shared/sail-models";
 import { Dialog } from "../components/Dialog";
+import { CaretLeft } from "../components/icons";
 import { Input } from "../components/Input";
 import { useToast } from "../components/Toast";
 import { Badge, Button, Card, Eyebrow } from "../components/ui";
@@ -153,18 +154,26 @@ export function SpecDetail({
   return (
     <div className="detail">
       <div className="detail-header">
-        <div className="detail-heading">
-          <Eyebrow>{spec.project}</Eyebrow>
-          <h1 className="detail-title">{spec.id}</h1>
-          <p className="detail-subtitle">{spec.title}</p>
+        <div className="detail-heading-row">
+          <button
+            type="button"
+            className="back-btn"
+            onClick={onBack}
+            aria-label="Back to board"
+            data-testid="back-to-board"
+          >
+            <CaretLeft size={16} />
+          </button>
+          <div className="detail-heading">
+            <Eyebrow>{spec.project}</Eyebrow>
+            <h1 className="detail-title">{spec.id}</h1>
+            <p className="detail-subtitle">{spec.title}</p>
+          </div>
         </div>
         <div className="detail-header-actions">
           <Badge tone={spec.status === "in_progress" ? "accent" : spec.status === "review" ? "warning" : spec.status === "done" ? "success" : "neutral"}>
             {STATUS_LABEL[spec.status]}
           </Badge>
-          <Button variant="ghost" onClick={onBack}>
-            Board
-          </Button>
         </div>
       </div>
 

@@ -1860,6 +1860,28 @@ span.checkbox {
   flex-wrap: wrap;
 }
 
+.detail-heading-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.back-btn {
+  appearance: none;
+  background: none;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.back-btn:hover {
+  color: var(--foreground);
+}
+
 .detail-title {
   font-family: var(--font-mono);
   font-size: 22px;
