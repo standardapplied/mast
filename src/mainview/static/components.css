@@ -1785,10 +1785,9 @@ span.checkbox {
   padding: 1px 5px;
 }
 
-/* Inside the Electrobun shell the toolbar doubles as the titlebar: clear the
-   hiddenInset traffic lights on the left and act as the window drag region. */
+/* Inside the Electrobun shell the toolbar doubles as the window drag region;
+   the webview sits below the traffic lights, so no clearance padding. */
 .in-shell .cockpit-toolbar {
-  padding-left: 84px;
   min-height: 44px;
 }
 

@@ -35,7 +35,7 @@ export type Gateway = {
   specHistory(id: string): Promise<SailResult<GlobalSpecHistoryResponse>>;
   restoreSpec(id: string, rev: number): Promise<SailResult<GlobalSpecDetailResponse>>;
   specReviews(id: string): Promise<SailResult<ReviewListResponse>>;
-  connection(): Promise<{ state: EventStreamState; server: string }>;
+  connection(): Promise<{ state: EventStreamState; server: string; tokenPresent: boolean }>;
   onEvent(listener: (event: SailEvent) => void): () => void;
   onStreamState(listener: (state: EventStreamState) => void): () => void;
 };
@@ -295,7 +295,7 @@ export function createDemoGateway(): DemoGateway {
     },
 
     async connection() {
-      return { state: "connected", server: "demo fixtures (browser preview)" };
+      return { state: "connected", server: "demo fixtures (browser preview)", tokenPresent: true };
     },
 
     onEvent(listener) {

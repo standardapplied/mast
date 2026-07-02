@@ -200,13 +200,16 @@ function Minimap({
 function ConnectionError({
   error,
   server,
+  tokenPresent,
   onRetry,
 }: {
   error: NonNullable<ReturnType<typeof useBoard>["data"]["error"]>;
   server: string | undefined;
+  tokenPresent: boolean;
   onRetry: () => void;
 }) {
   const unreachable = error.status === 0;
+  const noToken = !tokenPresent || error.code === "missing_bearer_token";
   return (
     <div className="board-error" data-testid="board-error">
       {unreachable ? (
@@ -219,6 +222,18 @@ function ConnectionError({
             (<code>ssh -L 7070:localhost:7070 &lt;your-node&gt;</code>) or a reachable{" "}
             <code>server:</code> in <code>~/.sail/config.yaml</code>. The CLI’s SSH-gateway lane
             works without a tunnel; Mast speaks HTTP.
+          </p>
+        </>
+      ) : noToken ? (
+        <>
+          <p className="board-error-title">
+            Connected{server ? ` to ${server}` : ""}, but no API token was found on this machine.
+          </p>
+          <p className="board-error-hint">
+            The CLI’s SSH lane authenticates with your SSH key; Mast’s HTTP lane needs a token.
+            Mint one on the node — <code>sail server token create mast member --fde &lt;you&gt;</code>{" "}
+            — then add <code>token: &lt;value&gt;</code> to <code>~/.sail/config.yaml</code> here and
+            hit Retry.
           </p>
         </>
       ) : (
@@ -238,10 +253,12 @@ export function BoardScreen({
   gateway,
   onOpenSpec,
   server,
+  tokenPresent = true,
 }: {
   gateway: Gateway;
   onOpenSpec: (id: string) => void;
   server?: string;
+  tokenPresent?: boolean;
 }) {
   const [project, setProject] = useState<string | undefined>(undefined);
   const [onlyMine, setOnlyMine] = useState(false);
@@ -361,7 +378,14 @@ export function BoardScreen({
         </div>
       </div>
 
-      {data.error && <ConnectionError error={data.error} server={server} onRetry={() => void refresh()} />}
+      {data.error && (
+        <ConnectionError
+          error={data.error}
+          server={server}
+          tokenPresent={tokenPresent}
+          onRetry={() => void refresh()}
+        />
+      )}
 
       <div className="board-canvas-wrap">
         <div className="board-canvas" ref={canvasRef}>

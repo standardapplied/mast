@@ -43,6 +43,7 @@ export type HandlerDeps = {
   sail: SailPort;
   streamState: () => EventStreamState;
   serverUrl: () => string;
+  tokenPresent: () => boolean;
 };
 
 type BunRequests = AppRPCSchema["bun"]["requests"];
@@ -106,6 +107,10 @@ export function createRequestHandlers(deps: HandlerDeps): BunRequestHandlers {
     sailDismissFinding: ({ reviewId, findingId }) =>
       wrap(() => sail.dismissFinding(reviewId, findingId)),
     sailRecentEvents: ({ limit }) => wrap(() => sail.recentEvents(limit)),
-    sailConnection: () => ({ state: deps.streamState(), server: deps.serverUrl() }),
+    sailConnection: () => ({
+      state: deps.streamState(),
+      server: deps.serverUrl(),
+      tokenPresent: deps.tokenPresent(),
+    }),
   };
 }

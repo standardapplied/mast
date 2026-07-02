@@ -32,6 +32,7 @@ describe("AppRPCSchema round-trip", () => {
     sail: {} as never,
     streamState: () => "disconnected",
     serverUrl: () => "http://localhost:7070",
+    tokenPresent: () => false,
   });
 
   const transports = linkedTransports();

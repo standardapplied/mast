@@ -26,12 +26,16 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
   const [bridge, setBridge] = useState<BridgeStatus>("connected");
   const [stream, setStream] = useState<EventStreamState>("disconnected");
   const [server, setServer] = useState<string | undefined>(undefined);
+  const [tokenPresent, setTokenPresent] = useState(true);
   const [specId, setSpecId] = useState<string | null>(specIdFromHash(location.hash));
 
   useEffect(() => onPush("bridge-status", ({ status }) => setBridge(status)), []);
   useEffect(() => gateway.onStreamState(setStream), [gateway]);
   useEffect(() => {
-    void gateway.connection().then(({ server: url }) => setServer(url));
+    void gateway.connection().then((conn) => {
+      setServer(conn.server);
+      setTokenPresent(conn.tokenPresent);
+    });
   }, [gateway]);
 
   useEffect(() => {
@@ -78,7 +82,12 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
           {specId ? (
             <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} />
           ) : (
-            <BoardScreen gateway={gateway} onOpenSpec={openSpec} server={server} />
+            <BoardScreen
+              gateway={gateway}
+              onOpenSpec={openSpec}
+              server={server}
+              tokenPresent={tokenPresent}
+            />
           )}
         </main>
       </div>

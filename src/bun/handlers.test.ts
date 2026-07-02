@@ -41,6 +41,7 @@ function makeDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
     sail: fakeSail(),
     streamState: () => "connected",
     serverUrl: () => "http://localhost:7070",
+    tokenPresent: () => true,
     ...overrides,
   };
 }
@@ -120,11 +121,12 @@ describe("bun request handlers", () => {
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
-  test("sailConnection reports stream state and server", () => {
+  test("sailConnection reports stream state, server, and token presence", () => {
     const handlers = createRequestHandlers(makeDeps());
     expect(handlers.sailConnection()).toEqual({
       state: "connected",
       server: "http://localhost:7070",
+      tokenPresent: true,
     });
   });
 });

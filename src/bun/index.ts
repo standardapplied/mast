@@ -11,12 +11,12 @@ import { AutoUpdater } from "./updater";
 import { WindowManager } from "./window-manager";
 
 /**
- * Bun main process entry. Resolves the login-shell environment FIRST (a Finder-
- * launched `.app` has a bare PATH and no LANG), then opens the window, connects
- * the control-plane client + SSE stream, and starts the auto-updater.
+ * Bun main process entry. The window opens IMMEDIATELY — the login-shell
+ * environment (a Finder-launched `.app` has a bare PATH and no LANG, and heavy
+ * dotfiles take 5-30s to source) resolves in the background; only future
+ * shell-outs (ssh/rsync/agents) need it, so they await `shellEnvReady`.
  */
-const shellEnv = await resolveShellEnv();
-hydrateProcessEnv(shellEnv);
+export const shellEnvReady = resolveShellEnv().then((env) => hydrateProcessEnv(env));
 
 const local = await Updater.getLocalInfo();
 const appInfo: AppInfo = {
@@ -40,6 +40,7 @@ const windows = new WindowManager({
   sail,
   streamState: () => streamState,
   serverUrl: () => sailConfig.server,
+  tokenPresent: () => sailConfig.token !== null,
 });
 windows.open();
 

@@ -132,7 +132,10 @@ export type AppRPCSchema = {
         response: SailResult<FindingDismissResponse>;
       };
       sailRecentEvents: { params: { limit?: number }; response: SailResult<RecentEventsResponse> };
-      sailConnection: { params: void; response: { state: EventStreamState; server: string } };
+      sailConnection: {
+        params: void;
+        response: { state: EventStreamState; server: string; tokenPresent: boolean };
+      };
     };
     messages: Record<never, never>;
   };
