@@ -1213,14 +1213,8 @@
 }
 
 @media (max-width: 640px) {
-  .kanban-board {
-    flex-direction: column;
-    overflow-x: visible;
-  }
-
   .kanban-column {
-    flex: none;
-    width: 100%;
+    flex-basis: 232px;
   }
 }
 
@@ -1552,6 +1546,45 @@
   flex: none;
 }
 
+@media (max-width: 720px) {
+  .masthead {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .board-controls {
+    width: 100%;
+  }
+
+  .board-project {
+    width: auto;
+    flex: 1;
+    min-width: 130px;
+  }
+
+  .board-search {
+    width: auto;
+    flex: 1.4;
+    min-width: 150px;
+  }
+}
+
+@media (max-width: 480px) {
+  .board-controls {
+    flex-wrap: wrap;
+  }
+
+  .board-search {
+    flex-basis: 100%;
+    order: 3;
+  }
+
+  .stream-pill {
+    display: none;
+  }
+}
+
 .board-error {
   margin: 0;
   padding: 0 16px 12px;
@@ -1562,9 +1595,11 @@
 .board-canvas {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
   padding: 24px 16px;
   border-top: 1px solid var(--border);
+  -webkit-overflow-scrolling: touch;
 }
 
 .board-canvas .kanban-board {
@@ -1635,6 +1670,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  flex-wrap: wrap;
 }
 
 .detail-title {
