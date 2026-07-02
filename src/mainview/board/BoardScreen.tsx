@@ -6,7 +6,7 @@ import { Input } from "../components/Input";
 import { Funnel, Magnifier } from "../components/icons";
 import { Select } from "../components/Select";
 import { useToast } from "../components/Toast";
-import { Badge, Eyebrow } from "../components/ui";
+import { Badge, Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { BOARD_COLUMNS, canTransition, STATUS_LABEL } from "./lifecycle";
 import { unmetDependencies, useBoard } from "./useBoard";
@@ -197,12 +197,51 @@ function Minimap({
   );
 }
 
+function ConnectionError({
+  error,
+  server,
+  onRetry,
+}: {
+  error: NonNullable<ReturnType<typeof useBoard>["data"]["error"]>;
+  server: string | undefined;
+  onRetry: () => void;
+}) {
+  const unreachable = error.status === 0;
+  return (
+    <div className="board-error" data-testid="board-error">
+      {unreachable ? (
+        <>
+          <p className="board-error-title">
+            Can’t reach the control plane{server ? ` at ${server}` : ""}.
+          </p>
+          <p className="board-error-hint">
+            The API listens on the node’s loopback — from this machine you need the SSH tunnel
+            (<code>ssh -L 7070:localhost:7070 &lt;your-node&gt;</code>) or a reachable{" "}
+            <code>server:</code> in <code>~/.sail/config.yaml</code>. The CLI’s SSH-gateway lane
+            works without a tunnel; Mast speaks HTTP.
+          </p>
+        </>
+      ) : (
+        <p className="board-error-title">
+          {error.message}
+          {error.action ? ` — ${error.action}` : ""}
+        </p>
+      )}
+      <Button variant="ghost" onClick={onRetry}>
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 export function BoardScreen({
   gateway,
   onOpenSpec,
+  server,
 }: {
   gateway: Gateway;
   onOpenSpec: (id: string) => void;
+  server?: string;
 }) {
   const [project, setProject] = useState<string | undefined>(undefined);
   const [onlyMine, setOnlyMine] = useState(false);
@@ -219,7 +258,7 @@ export function BoardScreen({
     () => ({ assignee: onlyMine ? "me" : undefined, q: query || undefined, repo }),
     [onlyMine, query, repo],
   );
-  const { data, byStatus, move } = useBoard(gateway, project, filter);
+  const { data, byStatus, move, refresh } = useBoard(gateway, project, filter);
 
   const lanes = BOARD_COLUMNS.filter((status) => visibleLanes.has(status));
 
@@ -322,7 +361,7 @@ export function BoardScreen({
         </div>
       </div>
 
-      {data.error && <p className="board-error">{data.error}</p>}
+      {data.error && <ConnectionError error={data.error} server={server} onRetry={() => void refresh()} />}
 
       <div className="board-canvas-wrap">
         <div className="board-canvas" ref={canvasRef}>

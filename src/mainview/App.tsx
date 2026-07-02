@@ -52,8 +52,12 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
   return (
     <ToastProvider>
       <div className="cockpit">
-        <header className="toolbar cockpit-toolbar">
-          <button type="button" className="cockpit-brand" onClick={backToBoard}>
+        <header className="toolbar cockpit-toolbar electrobun-webkit-app-region-drag">
+          <button
+            type="button"
+            className="cockpit-brand electrobun-webkit-app-region-no-drag"
+            onClick={backToBoard}
+          >
             <Logo size={20} />
             <span className="cockpit-wordmark">Mast</span>
           </button>
@@ -66,13 +70,15 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
               {bridge === "reconnecting" ? "Recovering…" : "Unresponsive"}
             </span>
           )}
-          <UserMenu theme={theme} server={server} />
+          <span className="electrobun-webkit-app-region-no-drag">
+            <UserMenu theme={theme} server={server} />
+          </span>
         </header>
         <main className="cockpit-main">
           {specId ? (
             <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} />
           ) : (
-            <BoardScreen gateway={gateway} onOpenSpec={openSpec} />
+            <BoardScreen gateway={gateway} onOpenSpec={openSpec} server={server} />
           )}
         </main>
       </div>

@@ -31,7 +31,7 @@ export class WindowManager {
     const window = new BrowserWindow<MainRPC>({
       title: "Mast",
       url: MAINVIEW_URL,
-      frame: { x: 0, y: 0, width: 1024, height: 720 },
+      frame: { x: 160, y: 120, width: 1280, height: 820 },
       titleBarStyle: "hiddenInset",
       rpc,
     });

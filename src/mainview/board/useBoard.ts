@@ -5,6 +5,7 @@ import type {
   SpecFilter,
   SpecStatus,
 } from "../../shared/sail-models";
+import type { SailWireError } from "../../shared/types";
 import type { Gateway } from "../gateway";
 
 export type MoveOutcome = "ok" | "conflict" | "blocked" | "error";
@@ -15,7 +16,7 @@ export type BoardData = {
   projects: string[];
   repos: string[];
   loading: boolean;
-  error: string | null;
+  error: SailWireError | null;
 };
 
 const RELOAD_EVENT_TYPES = /^(spec_|board_updated)/;
@@ -50,7 +51,7 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
 
     if (!scoped.ok || !summary.ok) {
       const error = !scoped.ok ? scoped.error : !summary.ok ? summary.error : null;
-      setData((prev) => ({ ...prev, loading: false, error: error?.message ?? "Failed to load" }));
+      setData((prev) => ({ ...prev, loading: false, error }));
       return;
     }
     const projects = all.ok

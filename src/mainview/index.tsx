@@ -7,6 +7,7 @@ import { Styleguide } from "./styleguide";
 import { browserThemeDeps, createThemeController } from "./theme";
 
 const inElectrobun = location.protocol === "views:";
+if (inElectrobun) document.documentElement.classList.add("in-shell");
 const bridge = inElectrobun ? createBridge() : null;
 const gateway = bridge ? createRpcGateway(bridge) : createDemoGateway();
 
