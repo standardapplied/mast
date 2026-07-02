@@ -250,7 +250,8 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
         </Section>
 
         <Section index="08" title="Table">
-          <table className="table">
+          <Card>
+            <table className="table">
             <thead>
               <tr>
                 <th>Spec</th>
@@ -299,6 +300,7 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
               </tr>
             </tbody>
           </table>
+          </Card>
         </Section>
       </div>
     </div>
