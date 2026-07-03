@@ -79,16 +79,22 @@ async fn connection_status(state: State<'_, AppState>) -> Result<serde_json::Val
 }
 
 #[tauri::command]
+async fn list_targets(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(state.backend().await?.list_targets())
+}
+
+#[tauri::command]
 async fn terminal_open(
     app: AppHandle,
     state: State<'_, AppState>,
     id: String,
+    target: Option<String>,
     cols: u32,
     rows: u32,
 ) -> Result<(), String> {
     let backend = state.backend().await?;
     backend
-        .terminal_open(app, id, cols, rows)
+        .terminal_open(app, id, target, cols, rows)
         .await
         .map_err(String::from)
 }
@@ -127,6 +133,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sail_request,
             connection_status,
+            list_targets,
             terminal_open,
             terminal_write,
             terminal_resize,

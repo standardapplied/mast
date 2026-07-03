@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { Styleguide } from "./styleguide";
 import { createTauriGateway } from "./tauri/gateway";
-import { TerminalPane } from "./tauri/TerminalPane";
+import { TerminalWorkspace } from "./tauri/TerminalWorkspace";
 import { browserThemeDeps, createThemeController } from "./theme";
 
 /**
@@ -31,7 +31,7 @@ window.addEventListener("hashchange", () => {
 
 function view() {
   if (current === "#/styleguide") return <Styleguide theme={theme} />;
-  return <App gateway={gateway} theme={theme} terminal={<TerminalPane />} />;
+  return <App gateway={gateway} theme={theme} terminal={<TerminalWorkspace />} />;
 }
 
 createRoot(container).render(<StrictMode>{view()}</StrictMode>);

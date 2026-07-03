@@ -4,6 +4,7 @@ import { FitAddon, init, Terminal, type ITheme } from "ghostty-web";
 import { useEffect, useRef, useState } from "react";
 import type { ThemeName } from "../../shared/types";
 import { terminalTheme, type TerminalTheme } from "../ansi";
+import { CaretLeft } from "../components/icons";
 
 /**
  * The terminal pillar: a real Ghostty VT (WASM) rendering a live PTY on the
@@ -33,7 +34,16 @@ function toGhosttyTheme(t: TerminalTheme): ITheme {
   };
 }
 
-export function TerminalPane() {
+export function TerminalPane({
+  target,
+  label,
+  onBack,
+}: {
+  /** ssh alias of a project container; omitted = a shell on the node. */
+  target?: string;
+  label?: string;
+  onBack?: () => void;
+}) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const [status, setStatus] = useState("connecting…");
@@ -120,7 +130,7 @@ export function TerminalPane() {
       void document.fonts?.ready.then(() => alive && doFit());
       for (const t of [0, 200, 500]) setTimeout(() => alive && doFit(), t);
 
-      await invoke("terminal_open", { id, cols: term.cols, rows: term.rows });
+      await invoke("terminal_open", { id, target: target ?? null, cols: term.cols, rows: term.rows });
       if (alive) {
         setStatus("connected");
         term.focus();
@@ -144,7 +154,12 @@ export function TerminalPane() {
   return (
     <div className="terminal-pane">
       <header className="terminal-pane__bar">
-        <span className="terminal-pane__title">devbox — ghostty</span>
+        {onBack && (
+          <button type="button" className="terminal-pane__back" onClick={onBack} aria-label="Projects">
+            <CaretLeft size={15} />
+          </button>
+        )}
+        <span className="terminal-pane__title">{label ?? target ?? "node · devbox"}</span>
         <span className="terminal-pane__status">{status}</span>
       </header>
       <div

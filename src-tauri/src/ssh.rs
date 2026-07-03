@@ -162,6 +162,33 @@ impl Backend {
         &self.config
     }
 
+    /// The project containers reachable from `~/.ssh/config`: concrete `Host`
+    /// aliases that have a `ProxyJump` (the node hops to the container), which
+    /// distinguishes them from the node/bastion aliases. `sail connect <project>`
+    /// writes exactly these blocks (Host = project name). The iOS-portable path
+    /// (no local ssh config) will instead source this list from the control
+    /// plane once sail exposes a connect endpoint.
+    pub fn list_targets(&self) -> Vec<String> {
+        let cfg = read_ssh_config();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut out = Vec::new();
+        for line in cfg.lines() {
+            let (keyword, value) = split_kv(line.trim());
+            if !keyword.eq_ignore_ascii_case("host") {
+                continue;
+            }
+            for pat in value.split_whitespace() {
+                if pat.contains('*') || pat.contains('?') || pat.starts_with('!') {
+                    continue;
+                }
+                if seen.insert(pat.to_string()) && resolve_host(pat, &cfg).proxy_jump.is_some() {
+                    out.push(pat.to_string());
+                }
+            }
+        }
+        out
+    }
+
     /// Actively establish the session (idempotent). The connection banner calls
     /// this so `phase` can reach `ready` — otherwise nothing dials until a board
     /// request, and the board is itself gated on `ready`.
@@ -173,10 +200,17 @@ impl Backend {
     /// `~/.ssh/config`: connect hop 1 directly, forward a channel to hop 2 and
     /// run SSH over it, and so on, until the target session rides the last hop.
     async fn dial(&self) -> Result<Session, Error> {
+        self.dial_alias(&self.config.ssh_host, self.config.fallback_user.clone())
+            .await
+    }
+
+    /// Dial any ssh alias (a project container as well as the node), resolving
+    /// its `~/.ssh/config` entry + ProxyJump chain the same way.
+    async fn dial_alias(&self, alias: &str, user_fallback: Option<String>) -> Result<Session, Error> {
         let cfg_text = read_ssh_config();
-        let mut target = resolve_host(&self.config.ssh_host, &cfg_text);
+        let mut target = resolve_host(alias, &cfg_text);
         if target.user.is_none() {
-            target.user = self.config.fallback_user.clone();
+            target.user = user_fallback;
         }
         let hops = build_hops(&target, &cfg_text);
         let ssh_cfg = Arc::new(Config::default());
@@ -331,10 +365,24 @@ impl Backend {
         &self,
         app: AppHandle,
         id: String,
+        target: Option<String>,
         cols: u32,
         rows: u32,
     ) -> Result<(), Error> {
-        let mut channel = self.open_session_channel().await?;
+        // A named target opens a dedicated session to that ssh alias (a project
+        // container); no target = a shell on the node over the shared session.
+        // The target session (and its jump handles) must outlive the channel,
+        // so it moves into the reader task.
+        let (owned, mut channel) = match target.as_deref().filter(|t| !t.is_empty()) {
+            Some(alias) => {
+                let session = tokio::time::timeout(CONNECT_TIMEOUT, self.dial_alias(alias, None))
+                    .await
+                    .map_err(|_| Error::Timeout(alias.to_string()))??;
+                let channel = session.handle.channel_open_session().await?;
+                (Some(session), channel)
+            }
+            None => (None, self.open_session_channel().await?),
+        };
         channel
             .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
             .await?;
@@ -347,6 +395,7 @@ impl Backend {
         let exit_event = format!("terminal://exit/{id}");
 
         tokio::spawn(async move {
+            let _session = owned; // keep the target session + its jumps alive
             loop {
                 tokio::select! {
                     msg = channel.wait() => match msg {
