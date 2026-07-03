@@ -5,9 +5,12 @@ import { Dialog } from "./components/Dialog";
 import { Input } from "./components/Input";
 import { KanbanBoard, KanbanCard, KanbanColumn } from "./components/Kanban";
 import { Checkbox } from "./components/Checkbox";
+import { Info } from "./components/icons";
+import { NumberStepper } from "./components/NumberStepper";
 import { Select } from "./components/Select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/Tabs";
 import { ToggleButton } from "./components/ToggleButton";
+import { Tooltip } from "./components/Tooltip";
 import { Textarea } from "./components/Textarea";
 import { ToastProvider, useToast } from "./components/Toast";
 import { Badge, Button, Card, Eyebrow } from "./components/ui";
@@ -149,6 +152,7 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
   const [month, setMonth] = useState<Date | null>(null);
   const [checked, setChecked] = useState(true);
   const [toggleValue, setToggleValue] = useState("board");
+  const [steps, setSteps] = useState(40);
 
   const selectMode = (next: ThemeMode) => {
     theme.setMode(next);
@@ -243,9 +247,15 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
                   maxLength={280}
                 />
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
                 <Checkbox checked={checked} onChange={setChecked} label="Auto-dispatch" />
                 <Checkbox checked disabled label="Locked on" onChange={() => {}} />
+                <NumberStepper value={steps} onChange={setSteps} min={0} max={100} step={10} />
+                <Tooltip content="Higher number = higher priority.">
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "help" }}>
+                    <Info size={14} /> Hover me
+                  </span>
+                </Tooltip>
               </div>
               <ToggleButton
                 options={[

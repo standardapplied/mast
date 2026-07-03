@@ -1469,6 +1469,101 @@ html.is-dragging-active * {
   cursor: not-allowed;
 }
 
+/* Tooltip -------------------------------------------------------------------- */
+
+.tooltip-trigger {
+  display: inline-flex;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: 260px;
+  padding: 6px 9px;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+  user-select: none;
+  animation: tooltip-in 120ms ease-out;
+}
+
+.tooltip-arrow {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: var(--foreground);
+  transform: rotate(45deg);
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(1px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Number stepper ------------------------------------------------------------- */
+
+.stepper {
+  display: inline-flex;
+  align-items: stretch;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  background: var(--background);
+}
+
+.stepper.is-disabled {
+  opacity: 0.45;
+}
+
+.stepper-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  background: none;
+  border: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.stepper-btn:hover:not(:disabled) {
+  color: var(--foreground);
+  background: var(--surface-hover);
+}
+
+.stepper-btn:disabled {
+  color: var(--subtle-foreground);
+  cursor: not-allowed;
+}
+
+.stepper-value {
+  appearance: none;
+  width: 44px;
+  min-width: 0;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+  cursor: text;
+}
+
+.stepper-value:focus {
+  outline: none;
+}
+
 /* Checkbox ------------------------------------------------------------------ */
 
 .checkbox {
@@ -1955,7 +2050,7 @@ span.checkbox {
 }
 
 .board-columns .kanban-column.is-drop-target {
-  border-style: solid;
+  border-style: dashed;
   border-color: var(--primary);
   background: var(--surface);
 }
@@ -1981,6 +2076,10 @@ span.checkbox {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.spec-card-unassigned {
+  color: var(--subtle-foreground);
 }
 
 .spec-card-priority {
@@ -2091,6 +2190,22 @@ span.checkbox {
   text-transform: uppercase;
   letter-spacing: var(--tracking-eyebrow);
   color: var(--subtle-foreground);
+}
+
+.prop-label-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.prop-hint-icon {
+  display: inline-flex;
+  color: var(--subtle-foreground);
+  cursor: help;
+}
+
+.prop-hint-icon:hover {
+  color: var(--foreground);
 }
 
 .prop-value {

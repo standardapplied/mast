@@ -164,7 +164,9 @@ function SpecCard({
         </span>
       )}
       <span className="kanban-card-meta">
-        <span>{spec.assignee ?? "—"}</span>
+        <span className={spec.assignee ? undefined : "spec-card-unassigned"}>
+          {spec.assignee ?? "Unassigned"}
+        </span>
         <span className="spec-card-agent">
           {spec.agent && `${spec.agent}${spec.model ? ` · ${spec.model}` : ""}`}
         </span>
@@ -382,8 +384,8 @@ export function BoardScreen({
               </span>
               <span className="stat-divider" />
               <span className="stat">
-                <span className="stat-value">{data.summary.review}</span>
-                <span className="stat-label">in review</span>
+                <span className="stat-value">{data.summary.awaiting_merge}</span>
+                <span className="stat-label">awaiting merge</span>
               </span>
             </div>
           )}

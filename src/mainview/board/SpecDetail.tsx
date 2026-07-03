@@ -8,9 +8,11 @@ import type {
 } from "../../shared/sail-models";
 import type { SailWireError } from "../../shared/types";
 import { Dialog } from "../components/Dialog";
-import { CaretLeft } from "../components/icons";
+import { CaretLeft, Info } from "../components/icons";
 import { Input } from "../components/Input";
 import { LoadingMark } from "../components/Loading";
+import { NumberStepper } from "../components/NumberStepper";
+import { Tooltip } from "../components/Tooltip";
 import { useToast } from "../components/Toast";
 import { Badge, Button, Card, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
@@ -224,13 +226,21 @@ export function SpecDetail({
         {propItem("Agent", "agent", spec.agent ?? "")}
         {propItem("Model", "model", spec.model ?? "")}
         <div className="prop">
-          <span className="prop-label">Priority</span>
+          <span className="prop-label prop-label-hint">
+            Priority
+            <Tooltip content="Higher number = higher priority. Dispatch picks the highest-priority ready spec first.">
+              <span className="prop-hint-icon" tabIndex={0}>
+                <Info size={13} />
+              </span>
+            </Tooltip>
+          </span>
           {editing ? (
-            <Input
-              className="prop-input"
-              type="number"
-              defaultValue={String(spec.priority)}
-              onChange={(e) => setDraft((d) => ({ ...d, priority: Number(e.target.value) }))}
+            <NumberStepper
+              value={draft.priority ?? spec.priority}
+              min={0}
+              max={100}
+              step={10}
+              onChange={(priority) => setDraft((d) => ({ ...d, priority }))}
             />
           ) : (
             <span className="prop-value">{spec.priority}</span>

@@ -107,6 +107,32 @@ export function Funnel(props: IconProps) {
   );
 }
 
+export function Minus(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth={2}>
+      <path d="M3 8h10" />
+    </svg>
+  );
+}
+
+export function Plus(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth={2}>
+      <path d="M8 3v10M3 8h10" />
+    </svg>
+  );
+}
+
+export function Info(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="8" cy="8" r="6.5" />
+      <path d="M8 7.5v3.5" />
+      <rect x="7.4" y="4.6" width="1.2" height="1.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function Magnifier(props: IconProps) {
   return (
     <svg {...base(props)}>
