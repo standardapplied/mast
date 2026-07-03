@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import type { GlobalSpecView, SpecFilter, SpecStatus } from "../../shared/sail-models";
 import { Checkbox } from "../components/Checkbox";
+import { ContextMenu, type MenuNode } from "../components/ContextMenu";
 import { DropdownPanel } from "../components/DropdownPanel";
 import { Input } from "../components/Input";
 import { LoadingMark } from "../components/Loading";
@@ -138,6 +139,7 @@ function SpecCard({
   onOpen,
   onDragStart,
   onDragEnd,
+  onContextMenu,
 }: {
   spec: GlobalSpecView;
   blockedBy: string[];
@@ -145,6 +147,7 @@ function SpecCard({
   onOpen: () => void;
   onDragStart: (event: DragEvent) => void;
   onDragEnd: () => void;
+  onContextMenu: (event: React.MouseEvent) => void;
 }) {
   return (
     <button
@@ -154,6 +157,7 @@ function SpecCard({
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onOpen}
+      onContextMenu={onContextMenu}
       data-testid={`card-${spec.id}`}
     >
       <span className="kanban-card-title">{spec.id}</span>
@@ -291,6 +295,7 @@ export function BoardScreen({
   const [dragging, setDragging] = useState<GlobalSpecView | null>(null);
   const [dropTarget, setDropTarget] = useState<SpecStatus | null>(null);
   const [view, setView] = useState<{ left: number; width: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; spec: GlobalSpecView } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const { showToast } = useToast();
 
@@ -369,6 +374,44 @@ export function BoardScreen({
     } else if (outcome === "error") {
       showToast("error", `Could not move ${spec.id}.`);
     }
+  };
+
+  const dispatchSpec = async (spec: GlobalSpecView) => {
+    const result = await gateway.dispatch(spec.project, { specId: spec.id, mode: "background" });
+    if (!result.ok) {
+      showToast("error", `Dispatch failed: ${result.error.message}`);
+      return;
+    }
+    if (result.value.dispatched) showToast("success", `Dispatched ${spec.id}.`);
+    else showToast("error", `Could not dispatch ${spec.id}: ${result.value.reason || "not ready"}.`);
+    void refresh();
+  };
+
+  // The server accepts dispatch for any ready spec (dispatch doesn't check
+  // ownership — this devbox's FDE can dispatch anyone's), so the rule mirrors
+  // "ready": pending, assigned, no unmet dependencies.
+  const menuItems = (spec: GlobalSpecView): MenuNode[] => {
+    const unmet = unmetDependencies(spec, data.specs);
+    const dispatchable = spec.status === "pending" && !!spec.assignee && unmet.length === 0;
+    const hint =
+      spec.status !== "pending"
+        ? "Pending only"
+        : !spec.assignee
+          ? "Assign first"
+          : unmet.length > 0
+            ? "Blocked"
+            : undefined;
+    return [
+      { kind: "item", label: "View", onSelect: () => onOpenSpec(spec.id) },
+      { kind: "separator" },
+      {
+        kind: "item",
+        label: "Dispatch",
+        disabled: !dispatchable,
+        hint,
+        onSelect: () => void dispatchSpec(spec),
+      },
+    ];
   };
 
   return (
@@ -478,6 +521,10 @@ export function BoardScreen({
                           setDragging(null);
                           setDropTarget(null);
                         }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setMenu({ x: e.clientX, y: e.clientY, spec });
+                        }}
                       />
                     ))}
                   </div>
@@ -489,6 +536,14 @@ export function BoardScreen({
         </div>
         {view && <Minimap lanes={lanes} view={view} onJump={jumpTo} />}
       </div>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems(menu.spec)}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }

@@ -125,6 +125,72 @@ describe("App cockpit", () => {
     expect(text).not.toContain("RPC request timed out");
   });
 
+  test("right-click opens a context menu; Dispatch enabled only for a ready pending spec", async () => {
+    await render();
+    const rightClick = (id: string) => {
+      const card = container.querySelector<HTMLElement>(`[data-testid="card-${id}"]`);
+      act(() => {
+        card?.dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 100, clientY: 100 }),
+        );
+      });
+    };
+    const dispatchItem = () =>
+      [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find(
+        (b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch",
+      );
+
+    // Pending + assigned + no unmet deps → dispatchable.
+    rightClick("chorus-billing-export");
+    expect(container.querySelector('[data-testid="context-menu"]')).not.toBeNull();
+    expect(dispatchItem()?.disabled).toBe(false);
+
+    // Pending but blocked by an unmet dependency → disabled.
+    act(() => document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+    rightClick("chorus-ledger-sync");
+    expect(dispatchItem()?.disabled).toBe(true);
+
+    // In-progress spec → not dispatchable.
+    act(() => document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+    rightClick("chorus-invoice-ui");
+    expect(dispatchItem()?.disabled).toBe(true);
+  });
+
+  test("context menu View routes to the spec detail", async () => {
+    await render();
+    const card = container.querySelector<HTMLElement>('[data-testid="card-chorus-auth-flow"]');
+    act(() => {
+      card?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 60, clientY: 60 }),
+      );
+    });
+    const view = [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find(
+      (b) => b.querySelector(".context-menu-label")?.textContent === "View",
+    );
+    act(() => view?.click());
+    await flush();
+    expect(container.querySelector(".detail-title")?.textContent).toBe("chorus-auth-flow");
+  });
+
+  test("dispatching a ready spec moves it to in progress", async () => {
+    await render();
+    const card = container.querySelector<HTMLElement>('[data-testid="card-chorus-billing-export"]');
+    act(() => {
+      card?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 80 }),
+      );
+    });
+    const dispatch = [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find(
+      (b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch",
+    );
+    act(() => dispatch?.click());
+    await flush();
+    await flush();
+    expect(container.querySelector('[data-testid="column-in_progress"]')?.textContent).toContain(
+      "chorus-billing-export",
+    );
+  });
+
   test("bridge state stays invisible until degraded", async () => {
     await render();
     expect(container.querySelector('[data-testid="bridge-status"]')).toBeNull();

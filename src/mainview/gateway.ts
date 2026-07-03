@@ -1,5 +1,7 @@
 import type {
   ConnectionStatus,
+  DispatchRequest,
+  DispatchResponse,
   GlobalBoardResponse,
   GlobalSpecContentResponse,
   GlobalSpecDetailResponse,
@@ -35,6 +37,7 @@ export type Gateway = {
   specHistory(id: string): Promise<SailResult<GlobalSpecHistoryResponse>>;
   restoreSpec(id: string, rev: number): Promise<SailResult<GlobalSpecDetailResponse>>;
   specReviews(id: string): Promise<SailResult<ReviewListResponse>>;
+  dispatch(project: string, request: DispatchRequest): Promise<SailResult<DispatchResponse>>;
   connection(): Promise<ConnectionStatus>;
   login(): Promise<{ ok: boolean; detail?: string }>;
   diagnostics(): Promise<{ report: string; logPath: string }>;
@@ -87,6 +90,7 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     specHistory: (id) => read(() => api.sailSpecHistory({ id })),
     restoreSpec: (id, rev) => api.sailRestoreSpec({ id, rev }),
     specReviews: (id) => read(() => api.sailSpecReviews({ id })),
+    dispatch: (project, request) => api.sailDispatch({ project, request }),
     connection: () => api.sailConnection(),
     login: () => api.sailLogin(),
     diagnostics: () => api.sailDiagnostics(),
@@ -316,6 +320,24 @@ export function createDemoGateway(): DemoGateway {
       return ok({ spec: view(spec) }, etagOf(spec));
     },
 
+    async dispatch(_project, request) {
+      const spec = request.specId ? find(request.specId) : undefined;
+      if (!spec) return { ok: true, value: demoDispatch(false, "no_pending_specs") };
+      spec.status = "in_progress";
+      spec.updated_at = new Date().toISOString();
+      emit({
+        v: 1,
+        id: ++eventId,
+        ts: spec.updated_at,
+        project: spec.project,
+        spec: spec.id,
+        type: "spec_dispatched",
+        agent: "mast",
+        host: "demo",
+      });
+      return { ok: true, value: demoDispatch(true) };
+    },
+
     async specReviews(id) {
       if (!find(id)) return notFound(id);
       const reviews =
@@ -369,6 +391,10 @@ export function createDemoGateway(): DemoGateway {
 
     emit,
   };
+}
+
+function demoDispatch(dispatched: boolean, reason = ""): DispatchResponse {
+  return { name: "demo", dispatched, reason, branch_created: dispatched };
 }
 
 const DEMO_STATUS: ConnectionStatus = {

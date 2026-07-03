@@ -327,6 +327,25 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
           <ToastDemo />
         </Section>
 
+        <Section index="07b" title="Context menu">
+          <div style={{ position: "relative", height: 180 }}>
+            <div className="context-menu" style={{ position: "absolute", width: 200 }}>
+              <div className="context-menu-row">
+                <button type="button" className="context-menu-item">
+                  <span className="context-menu-label">View</span>
+                </button>
+              </div>
+              <div className="context-menu-sep" />
+              <div className="context-menu-row">
+                <button type="button" className="context-menu-item" disabled>
+                  <span className="context-menu-label">Dispatch</span>
+                  <span className="context-menu-hint">Pending only</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </Section>
+
         <Section index="08" title="Table">
           <Card>
             <table className="table">
