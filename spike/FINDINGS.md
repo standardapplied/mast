@@ -24,14 +24,42 @@ technical basis for mobile Mast.
 
 Run it:  `cargo run -- <private_key_path> <user>`  (needs a reachable sshd).
 
+## Assumption 1 (the app itself compiles as Tauri): PROVEN on Linux
+
+The `src-tauri/` app now builds end to end — the **existing React frontend** (bundled by
+Bun into `dist-tauri/`, no Vite) wired to a **Rust core** that wraps the proven russh stack
+behind Tauri `invoke` commands:
+
+- `sail_request` — HTTP to the control plane over a direct-tcpip forward (token injected in
+  Rust, never in the webview) → the whole board/spec/dispatch surface.
+- `terminal_open` / `_write` / `_resize` / `_close` — a PTY channel streamed to the webview
+  as Tauri events → the terminal half (`#/terminal` route, `TerminalPane.tsx`).
+- `connection_status` — config + session state for the connection banner.
+
+`cargo build` links `tauri` + `russh` + `tokio` + WebKitGTK in one binary, zero warnings.
+`bun test` (181) and `tsc` stay green. The React Gateway is unchanged — only the transport
+seam swapped (`createTauriGateway` instead of the Electrobun bridge).
+
 ## Still to prove — on the Mac (need Xcode / a device)
 
-1. Render — the existing React build in Tauri's webview (desktop WebKitGTK + iOS WKWebView).
-2. Auth — passkey / WebAuthn in the mobile system webview.
-3. On-device — tunnel over cellular + a container terminal from a phone.
+1. **Render** — the bundle in iOS WKWebView (desktop WebKitGTK already compiles; visual
+   check pending). `bun run tauri dev` on the Mac is the fastest look.
+2. **Auth** — passkey / WebAuthn in the mobile system webview (the `login()` loopback
+   ceremony is stubbed pending this).
+3. **On-device** — `bun run tauri ios init && bun run tauri ios dev`, then a container
+   terminal + control-plane board from a phone over cellular.
 
-## Verdict so far
+## Verdict
 
-The riskiest, most decision-relevant unknown (can Rust do the whole SSH stack in-process,
-incl. mobile) is settled GREEN. Nothing here argues against the Tauri pivot; the remaining
-checks are UI/mobile validation that only the Mac can do.
+Both make-or-break unknowns are now GREEN: (a) Rust does the full SSH stack in-process
+(mobile-capable), and (b) the real Mast app compiles as a Tauri binary with the React
+frontend intact. Everything left is on-device UI validation the Mac owns.
+
+## Known scaffold gaps (deliberate, for the productization pass)
+
+- SSH auth is key-file only (`~/.ssh/id_ed25519|ecdsa|rsa`); ssh-agent + `~/.ssh/config`
+  alias / ProxyJump resolution is a follow-up.
+- Host key is trusted-on-first-use (no known_hosts pinning yet).
+- `TerminalPane` is a raw byte harness, not a VT emulator — ghostty-web / xterm needs a
+  dependency-approval decision.
+- Live SSE events (`onEvent`) and the passkey `login()` ceremony are stubbed.

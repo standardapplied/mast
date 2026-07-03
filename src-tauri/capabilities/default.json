@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core capabilities for the Mast webview: invoke commands, listen for terminal events, and open URLs in the system browser (passkey ceremony).",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "opener:default"
+  ]
+}

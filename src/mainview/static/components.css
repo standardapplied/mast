@@ -2507,3 +2507,42 @@ span.checkbox {
   text-decoration-color: var(--primary);
   text-underline-offset: 3px;
 }
+
+/* Tauri spike terminal harness — proves the russh PTY pipe end to end. */
+.terminal-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--background-deep);
+}
+.terminal-pane__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font: 500 12px/1 var(--font-sans);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--subtle-foreground);
+}
+.terminal-pane__status {
+  color: var(--muted-foreground);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.terminal-pane__screen {
+  flex: 1;
+  margin: 0;
+  padding: 14px 16px;
+  overflow: auto;
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font: 13px/1.45 var(--font-mono);
+  color: var(--foreground);
+  caret-color: var(--primary);
+}
+.terminal-pane__screen:focus {
+  box-shadow: inset 0 0 0 1px var(--ring);
+}

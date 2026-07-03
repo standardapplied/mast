@@ -1,0 +1,34 @@
+[package]
+name = "mast"
+version = "0.1.0"
+description = "Mast — the SAIL agentic cockpit"
+authors = ["Standard Applied"]
+edition = "2021"
+rust-version = "1.77"
+
+# Mobile (iOS/Android) links the app as a shared library and calls the
+# `mobile_entry_point` in lib.rs; desktop uses the thin binary in main.rs.
+# Both share one `run()`.
+[lib]
+name = "mast_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "sync", "net"] }
+async-trait = "0.1"
+russh = "0.45"
+russh-sftp = "2.0"
+dirs = "5"
+thiserror = "1"
+
+[features]
+# Turned on by `tauri build --debug` and `tauri dev`.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

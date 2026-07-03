@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Mast</title>
+    <script>
+      try {
+        var mode = localStorage.getItem("mast.theme");
+        var dark =
+          mode === "dark" ||
+          ((mode === "system" || !mode) && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      } catch (e) {}
+    </script>
+    <link rel="stylesheet" href="./static/tokens.css" />
+    <link rel="stylesheet" href="./static/components.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./index.js"></script>
+  </body>
+</html>

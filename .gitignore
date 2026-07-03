@@ -1,6 +1,9 @@
 node_modules/
 build/
+dist-tauri/
 artifacts/
+src-tauri/target/
+src-tauri/gen/schemas/
 *.log
 .DS_Store
 .env
