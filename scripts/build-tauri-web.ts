@@ -28,5 +28,7 @@ if (!result.success) {
 
 cpSync("src/mainview/static", `${OUT}/static`, { recursive: true });
 cpSync("src/mainview/index.tauri.html", `${OUT}/index.html`);
+// ghostty loads its ~400KB VT parser at runtime from `/ghostty-vt.wasm`.
+cpSync("node_modules/ghostty-web/ghostty-vt.wasm", `${OUT}/ghostty-vt.wasm`);
 
 console.log(`Built ${OUT}/ (${result.outputs.length} outputs)`);

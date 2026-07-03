@@ -1,103 +1,129 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { FitAddon, init, Terminal, type ITheme } from "ghostty-web";
 import { useEffect, useRef, useState } from "react";
+import type { ThemeName } from "../../shared/types";
+import { terminalTheme, type TerminalTheme } from "../ansi";
 
 /**
- * A deliberately minimal terminal harness for the Tauri spike: it opens a PTY
- * on the devbox over the russh session, streams the raw bytes back through a
- * Tauri event, and sends keystrokes the other way. It proves the terminal half
- * of Mast works in-process on desktop AND mobile — the pipe that a real
- * emulator (ghostty-web / xterm, pending dependency approval) will render.
- *
- * Not a full VT: escape sequences pass through to a <pre>. Enough to run
- * `ls`, `top`, and confirm bytes flow end to end on a real phone.
+ * The terminal pillar: a real Ghostty VT (WASM) rendering a live PTY on the
+ * devbox over the in-process russh session. Bytes arrive as Tauri events and
+ * are handed to ghostty for parsing/rendering; keystrokes and resizes go back
+ * over `invoke`. ghostty owns the escape-sequence handling the raw harness
+ * couldn't — colors, cursor, scrollback, alt-screen.
  */
 
-const KEY_BYTES: Record<string, string> = {
-  Enter: "\r",
-  Backspace: "\x7f",
-  Tab: "\t",
-  Escape: "\x1b",
-  ArrowUp: "\x1b[A",
-  ArrowDown: "\x1b[B",
-  ArrowRight: "\x1b[C",
-  ArrowLeft: "\x1b[D",
-};
+// ghostty's WASM parser initialises once per document; share the promise.
+let ghosttyReady: Promise<void> | null = null;
+const ensureGhostty = () => (ghosttyReady ??= init());
 
-function keyToBytes(e: React.KeyboardEvent): string | null {
-  if (e.ctrlKey && e.key.length === 1) {
-    const code = e.key.toUpperCase().charCodeAt(0);
-    if (code >= 64 && code <= 95) return String.fromCharCode(code - 64);
-  }
-  if (KEY_BYTES[e.key]) return KEY_BYTES[e.key]!;
-  if (e.key.length === 1 && !e.metaKey) return e.key;
-  return null;
+function toGhosttyTheme(t: TerminalTheme): ITheme {
+  const [
+    black, red, green, yellow, blue, magenta, cyan, white,
+    brightBlack, brightRed, brightGreen, brightYellow, brightBlue, brightMagenta, brightCyan, brightWhite,
+  ] = t.ansi;
+  return {
+    background: t.background,
+    foreground: t.foreground,
+    cursor: t.cursor,
+    selectionBackground: t.selectionBackground,
+    selectionForeground: t.selectionForeground,
+    black, red, green, yellow, blue, magenta, cyan, white,
+    brightBlack, brightRed, brightGreen, brightYellow, brightBlue, brightMagenta, brightCyan, brightWhite,
+  };
 }
 
 export function TerminalPane() {
-  const [output, setOutput] = useState("");
+  const hostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("connecting…");
-  const idRef = useRef("");
-  const preRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
-    // A fresh id per effect run so StrictMode's mount→unmount→remount can't
-    // cross the torn-down terminal's exit event into the live one's listeners.
+    const host = hostRef.current;
+    if (!host) return;
+
     const id = crypto.randomUUID();
-    idRef.current = id;
-    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
     let alive = true;
+    let term: Terminal | null = null;
+    let dataOff: Promise<() => void> | null = null;
+    let exitOff: Promise<() => void> | null = null;
+    let observer: ResizeObserver | null = null;
 
-    const dataOff = listen<number[]>(`terminal://data/${id}`, (e) => {
+    const send = (data: string) =>
+      void invoke("terminal_write", { id, data: Array.from(encoder.encode(data)) }).catch(() => {});
+
+    void (async () => {
+      await ensureGhostty();
       if (!alive) return;
-      const text = decoder.decode(new Uint8Array(e.payload), { stream: true });
-      setOutput((prev) => (prev + text).slice(-200_000));
-    });
-    const exitOff = listen(`terminal://exit/${id}`, () => {
-      if (alive) setStatus("session closed");
-    });
 
-    invoke("terminal_open", { id, cols: 100, rows: 30 })
-      .then(() => alive && setStatus("connected"))
-      .catch((err) => alive && setStatus(`failed: ${err}`));
+      const themeName = (document.documentElement.dataset.theme as ThemeName) || "dark";
+      term = new Terminal({
+        fontSize: 13,
+        fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace',
+        cursorBlink: true,
+        scrollback: 5000,
+        theme: toGhosttyTheme(terminalTheme(themeName)),
+      });
+      const fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(host);
+      fit.fit();
+
+      term.onData(send);
+      term.onResize(({ cols, rows }) =>
+        void invoke("terminal_resize", { id, cols, rows }).catch(() => {}),
+      );
+      // ghostty-web 0.4 swallows Shift+Tab / Shift+Enter — the sequences Claude
+      // Code needs. Intercept and hand-send them (return false = we handled it).
+      term.attachCustomKeyEventHandler((e) => {
+        if (e.type !== "keydown") return true;
+        if (e.key === "Tab" && e.shiftKey) return send("\x1b[Z"), false;
+        if (e.key === "Enter" && e.shiftKey) return send("\r"), false;
+        return true;
+      });
+
+      dataOff = listen<number[]>(`terminal://data/${id}`, (ev) => {
+        if (alive && term) term.write(new Uint8Array(ev.payload));
+      });
+      exitOff = listen(`terminal://exit/${id}`, () => {
+        if (alive) setStatus("session closed");
+      });
+
+      observer = new ResizeObserver(() => {
+        try {
+          fit.fit();
+        } catch {
+          /* pane detached mid-resize */
+        }
+      });
+      observer.observe(host);
+
+      await invoke("terminal_open", { id, cols: term.cols, rows: term.rows });
+      if (alive && term) {
+        setStatus("connected");
+        term.focus();
+      }
+    })().catch((err) => {
+      if (alive) setStatus(`failed: ${err}`);
+    });
 
     return () => {
       alive = false;
+      observer?.disconnect();
       void invoke("terminal_close", { id }).catch(() => {});
-      void dataOff.then((off) => off());
-      void exitOff.then((off) => off());
+      void dataOff?.then((off) => off());
+      void exitOff?.then((off) => off());
+      term?.dispose();
     };
   }, []);
-
-  useEffect(() => {
-    const el = preRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [output]);
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    const bytes = keyToBytes(e);
-    if (bytes === null) return;
-    e.preventDefault();
-    void invoke("terminal_write", {
-      id: idRef.current,
-      data: Array.from(new TextEncoder().encode(bytes)),
-    }).catch(() => {});
-  };
 
   return (
     <div className="terminal-pane">
       <header className="terminal-pane__bar">
-        <span className="terminal-pane__title">devbox — russh PTY</span>
+        <span className="terminal-pane__title">devbox — ghostty</span>
         <span className="terminal-pane__status">{status}</span>
       </header>
-      <pre
-        ref={preRef}
-        className="terminal-pane__screen"
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-      >
-        {output || "Click here and type — bytes travel over the in-process SSH session.\n"}
-      </pre>
+      <div ref={hostRef} className="terminal-pane__screen" />
     </div>
   );
 }
