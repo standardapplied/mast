@@ -1440,7 +1440,7 @@ html.is-dragging-active * {
 }
 .cockpit-nav-item[data-active="true"] {
   color: var(--foreground);
-  border-bottom-color: var(--foreground);
+  border-bottom-color: var(--primary);
 }
 
 .cockpit-view {
