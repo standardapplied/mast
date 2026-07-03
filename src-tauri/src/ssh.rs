@@ -9,17 +9,22 @@
 //! russh 0.45 API wired behind Tauri commands.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use russh::client::{self, Config, Handle, Handler, Msg};
 use russh::keys::key;
 use russh::keys::load_secret_key;
-use russh::{Channel, ChannelMsg};
+use russh::{Channel, ChannelMsg, ChannelStream};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, Mutex};
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -31,6 +36,8 @@ pub enum Error {
     NoKey,
     #[error("publickey auth rejected for {0}")]
     AuthRejected(String),
+    #[error("timed out reaching {0} — check the host/ProxyJump in ~/.ssh/config")]
+    Timeout(String),
     #[error("malformed HTTP response from the control plane")]
     BadResponse,
     #[error("no terminal with id {0}")]
@@ -50,13 +57,12 @@ impl From<Error> for String {
 }
 
 /// Resolved connection facts, mirroring the `sail` CLI's `~/.sail/config.yaml`:
-/// the SSH hop to the devbox and the loopback address the control plane listens
-/// on there.
+/// the SSH hop to the devbox (`host` is an ssh alias, resolved through
+/// `~/.ssh/config`) and the loopback address the control plane listens on there.
 #[derive(Clone, Debug)]
 pub struct SailConfig {
     pub ssh_host: String,
-    pub ssh_user: String,
-    pub ssh_port: u16,
+    pub fallback_user: Option<String>,
     pub server_host: String,
     pub server_port: u16,
     pub token: Option<String>,
@@ -70,11 +76,6 @@ impl SailConfig {
         let map = parse_yaml(&raw);
 
         let ssh_host = map.get("host").cloned().ok_or(Error::MissingField("host"))?;
-        let ssh_user = map
-            .get("user")
-            .cloned()
-            .or_else(|| std::env::var("USER").ok())
-            .unwrap_or_else(|| "root".into());
         let server = map
             .get("server")
             .cloned()
@@ -83,14 +84,34 @@ impl SailConfig {
 
         Ok(SailConfig {
             ssh_host,
-            ssh_user,
-            ssh_port: 22,
+            fallback_user: map.get("user").cloned(),
             server_host,
             server_port,
             token: map.get("token").cloned().filter(|t| !t.trim().is_empty()),
             key_path: map.get("key").cloned(),
         })
     }
+}
+
+/// One resolved SSH hop from `~/.ssh/config` (the alias merged with any matching
+/// `Host` blocks). `hostname` defaults to the alias; unresolved user falls back
+/// to the local `$USER`.
+#[derive(Clone, Debug, Default)]
+struct SshHost {
+    hostname: String,
+    user: Option<String>,
+    port: u16,
+    identity_files: Vec<PathBuf>,
+    proxy_jump: Option<String>,
+}
+
+/// A live session to the devbox, plus every jump-host handle it rides through.
+/// The jumps MUST stay alive: dropping one closes its channel, which is the
+/// transport under the next hop's session.
+struct Session {
+    handle: Handle<Client>,
+    #[allow(dead_code)]
+    jumps: Vec<Handle<Client>>,
 }
 
 /// Accepts the devbox host key. Mast trusts the SSH hop the same way the `sail`
@@ -116,7 +137,7 @@ enum TermCmd {
 /// terminal. Held in Tauri managed state.
 pub struct Backend {
     config: SailConfig,
-    session: Mutex<Option<Handle<Client>>>,
+    session: Mutex<Option<Session>>,
     terminals: Mutex<HashMap<String, mpsc::Sender<TermCmd>>>,
 }
 
@@ -147,29 +168,69 @@ impl Backend {
             .unwrap_or(true)
     }
 
-    async fn dial(&self) -> Result<Handle<Client>, Error> {
-        let identity = load_identity(self.config.key_path.as_deref())?;
-        let mut handle = client::connect(
-            Arc::new(Config::default()),
-            (self.config.ssh_host.as_str(), self.config.ssh_port),
-            Client,
-        )
-        .await?;
-        let ok = handle
-            .authenticate_publickey(&self.config.ssh_user, Arc::new(identity))
-            .await?;
-        if !ok {
-            return Err(Error::AuthRejected(self.config.ssh_user.clone()));
+    /// Dials the devbox, chaining through every `ProxyJump` hop resolved from
+    /// `~/.ssh/config`: connect hop 1 directly, forward a channel to hop 2 and
+    /// run SSH over it, and so on, until the target session rides the last hop.
+    async fn dial(&self) -> Result<Session, Error> {
+        let cfg_text = read_ssh_config();
+        let mut target = resolve_host(&self.config.ssh_host, &cfg_text);
+        if target.user.is_none() {
+            target.user = self.config.fallback_user.clone();
+        }
+        let hops = build_hops(&target, &cfg_text);
+        let ssh_cfg = Arc::new(Config::default());
+
+        let mut jumps: Vec<Handle<Client>> = Vec::new();
+        let mut carried: Option<ChannelStream<Msg>> = None;
+
+        for (i, hop) in hops.iter().enumerate() {
+            let next = hops.get(i + 1).unwrap_or(&target);
+            let handle = self.handshake(ssh_cfg.clone(), carried.take(), hop).await?;
+            let channel = handle
+                .channel_open_direct_tcpip(next.hostname.as_str(), next.port as u32, "127.0.0.1", 0)
+                .await?;
+            carried = Some(channel.into_stream());
+            jumps.push(handle);
+        }
+
+        let handle = self.handshake(ssh_cfg, carried.take(), &target).await?;
+        Ok(Session { handle, jumps })
+    }
+
+    /// Establish + authenticate one SSH session, either over a carried stream
+    /// (through a jump) or a fresh TCP connection (the first/only hop).
+    async fn handshake(
+        &self,
+        ssh_cfg: Arc<Config>,
+        carried: Option<ChannelStream<Msg>>,
+        host: &SshHost,
+    ) -> Result<Handle<Client>, Error> {
+        let mut handle = match carried {
+            Some(stream) => client::connect_stream(ssh_cfg, stream, Client).await?,
+            None => client::connect(ssh_cfg, (host.hostname.as_str(), host.port), Client).await?,
+        };
+        let user = host
+            .user
+            .clone()
+            .or_else(|| std::env::var("USER").ok())
+            .unwrap_or_else(|| "root".into());
+        let identity = load_identity(&host.identity_files, self.config.key_path.as_deref())?;
+        if !handle.authenticate_publickey(&user, Arc::new(identity)).await? {
+            return Err(Error::AuthRejected(format!("{user}@{}", host.hostname)));
         }
         Ok(handle)
     }
 
-    /// Connects the session if it isn't already up. A dead session is cleared
-    /// by `open_*` so the next call redials (devbox reboot, laptop sleep).
+    /// Connects the session if it isn't already up, with a timeout so a bad
+    /// host/ProxyJump surfaces as an error instead of a hung loader. A dead
+    /// session is cleared by `open_*` so the next call redials.
     async fn ensure(&self) -> Result<(), Error> {
         let mut guard = self.session.lock().await;
         if guard.is_none() {
-            *guard = Some(self.dial().await?);
+            let session = tokio::time::timeout(CONNECT_TIMEOUT, self.dial())
+                .await
+                .map_err(|_| Error::Timeout(self.config.ssh_host.clone()))??;
+            *guard = Some(session);
         }
         Ok(())
     }
@@ -177,7 +238,7 @@ impl Backend {
     async fn open_session_channel(&self) -> Result<Channel<Msg>, Error> {
         self.ensure().await?;
         let mut guard = self.session.lock().await;
-        let result = guard.as_ref().expect("ensured").channel_open_session().await;
+        let result = guard.as_ref().expect("ensured").handle.channel_open_session().await;
         if result.is_err() {
             *guard = None;
         }
@@ -190,6 +251,7 @@ impl Backend {
         let result = guard
             .as_ref()
             .expect("ensured")
+            .handle
             .channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0)
             .await;
         if result.is_err() {
@@ -233,11 +295,16 @@ impl Backend {
         req.push_str("\r\n");
         req.push_str(&body_bytes);
 
-        stream.write_all(req.as_bytes()).await?;
-        stream.flush().await?;
+        let raw = tokio::time::timeout(REQUEST_TIMEOUT, async {
+            stream.write_all(req.as_bytes()).await?;
+            stream.flush().await?;
+            let mut raw = Vec::new();
+            stream.read_to_end(&mut raw).await?;
+            Ok::<_, Error>(raw)
+        })
+        .await
+        .map_err(|_| Error::Timeout(format!("{}:{}", self.config.server_host, self.config.server_port)))??;
 
-        let mut raw = Vec::new();
-        stream.read_to_end(&mut raw).await?;
         parse_http(&raw)
     }
 
@@ -311,10 +378,12 @@ impl Backend {
     }
 }
 
-fn load_identity(explicit: Option<&str>) -> Result<key::KeyPair, Error> {
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+/// Pick the first usable private key: the host's `IdentityFile`s, then any
+/// `key:` from `~/.sail/config.yaml`, then the default `~/.ssh/id_*`.
+fn load_identity(host_files: &[PathBuf], explicit: Option<&str>) -> Result<key::KeyPair, Error> {
+    let mut candidates: Vec<PathBuf> = host_files.to_vec();
     if let Some(path) = explicit {
-        candidates.push(path.into());
+        candidates.push(expand_tilde(path));
     }
     if let Some(home) = dirs::home_dir() {
         for name in ["id_ed25519", "id_ecdsa", "id_rsa"] {
@@ -329,6 +398,145 @@ fn load_identity(explicit: Option<&str>) -> Result<key::KeyPair, Error> {
         }
     }
     Err(Error::NoKey)
+}
+
+fn read_ssh_config() -> String {
+    dirs::home_dir()
+        .map(|home| std::fs::read_to_string(home.join(".ssh/config")).unwrap_or_default())
+        .unwrap_or_default()
+}
+
+fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+/// Resolve an ssh alias against `~/.ssh/config`: hostname defaults to the alias,
+/// port to 22, and any matching `Host` block fills in the rest (first value
+/// wins, matching ssh's own precedence).
+fn resolve_host(alias: &str, cfg: &str) -> SshHost {
+    let mut host = SshHost {
+        hostname: alias.to_string(),
+        port: 22,
+        ..Default::default()
+    };
+    apply_ssh_config(&mut host, alias, cfg);
+    host
+}
+
+/// Parse a `ProxyJump` spec (`[user@]host[:port]`), then layer the referenced
+/// alias's own config underneath so a jump can carry its own HostName/key.
+fn resolve_from_spec(spec: &str, cfg: &str) -> SshHost {
+    let (user, rest) = match spec.split_once('@') {
+        Some((u, r)) => (Some(u.to_string()), r),
+        None => (None, spec),
+    };
+    let (name, port) = match rest.rsplit_once(':') {
+        Some((h, p)) => (h, p.parse::<u16>().ok()),
+        None => (rest, None),
+    };
+    let mut host = resolve_host(name, cfg);
+    if user.is_some() {
+        host.user = user;
+    }
+    if let Some(p) = port {
+        host.port = p;
+    }
+    host
+}
+
+/// The ordered list of jump hops in front of `target` (its `ProxyJump` chain,
+/// each hop's own jumps first). Depth-capped against config cycles.
+fn build_hops(target: &SshHost, cfg: &str) -> Vec<SshHost> {
+    let mut out = Vec::new();
+    collect_hops(target, cfg, &mut out, 0);
+    out
+}
+
+fn collect_hops(host: &SshHost, cfg: &str, out: &mut Vec<SshHost>, depth: usize) {
+    if depth > 10 {
+        return;
+    }
+    if let Some(jump) = &host.proxy_jump {
+        for spec in jump.split(',') {
+            let spec = spec.trim();
+            if spec.is_empty() || spec.eq_ignore_ascii_case("none") {
+                continue;
+            }
+            let hop = resolve_from_spec(spec, cfg);
+            collect_hops(&hop, cfg, out, depth + 1);
+            out.push(hop);
+        }
+    }
+}
+
+fn apply_ssh_config(host: &mut SshHost, alias: &str, cfg: &str) {
+    let mut matching = false;
+    let (mut set_hostname, mut set_user, mut set_port, mut set_jump) = (false, false, false, false);
+
+    for line in cfg.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (keyword, value) = split_kv(line);
+        let keyword = keyword.to_ascii_lowercase();
+
+        match keyword.as_str() {
+            "host" => matching = value.split_whitespace().any(|p| glob_match(p, alias)),
+            "match" => matching = false,
+            _ if !matching => {}
+            "hostname" if !set_hostname => {
+                host.hostname = value.to_string();
+                set_hostname = true;
+            }
+            "user" if !set_user => {
+                host.user = Some(value.to_string());
+                set_user = true;
+            }
+            "port" if !set_port => {
+                if let Ok(p) = value.parse() {
+                    host.port = p;
+                }
+                set_port = true;
+            }
+            "identityfile" => host.identity_files.push(expand_tilde(value)),
+            "proxyjump" if !set_jump => {
+                if !value.eq_ignore_ascii_case("none") {
+                    host.proxy_jump = Some(value.to_string());
+                }
+                set_jump = true;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Split an ssh_config line into keyword + value (`Key value` or `Key=value`).
+fn split_kv(line: &str) -> (&str, &str) {
+    let idx = line
+        .find(|c: char| c.is_whitespace() || c == '=')
+        .unwrap_or(line.len());
+    let key = &line[..idx];
+    let value = line[idx..].trim_start_matches(|c: char| c.is_whitespace() || c == '=').trim();
+    (key, value)
+}
+
+/// Minimal ssh_config pattern match: `*` (any run) and `?` (one char).
+fn glob_match(pattern: &str, name: &str) -> bool {
+    fn matches(p: &[u8], n: &[u8]) -> bool {
+        match p.first() {
+            None => n.is_empty(),
+            Some(b'*') => matches(&p[1..], n) || (!n.is_empty() && matches(p, &n[1..])),
+            Some(b'?') => !n.is_empty() && matches(&p[1..], &n[1..]),
+            Some(&c) => !n.is_empty() && n[0] == c && matches(&p[1..], &n[1..]),
+        }
+    }
+    matches(pattern.as_bytes(), name.as_bytes())
 }
 
 /// Split `HTTP/1.1 200 OK\r\n<headers>\r\n\r\n<body>` into status, ETag, body.
@@ -478,5 +686,87 @@ fn default_port(scheme: &str) -> u16 {
         443
     } else {
         80
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CONFIG: &str = "\
+Host devbox
+  HostName 10.0.0.5
+  User sail
+  Port 2222
+  IdentityFile ~/.ssh/sail_key
+  ProxyJump bastion
+
+Host bastion
+  HostName jump.example.com
+  User ec2-user
+";
+
+    #[test]
+    fn glob_matches_wildcards() {
+        assert!(glob_match("*", "devbox"));
+        assert!(glob_match("dev*", "devbox"));
+        assert!(glob_match("d?vbox", "devbox"));
+        assert!(!glob_match("prod*", "devbox"));
+    }
+
+    #[test]
+    fn split_kv_handles_space_and_equals() {
+        assert_eq!(split_kv("HostName example.com"), ("HostName", "example.com"));
+        assert_eq!(split_kv("Port=2222"), ("Port", "2222"));
+        assert_eq!(split_kv("  User   sail  ".trim()), ("User", "sail"));
+    }
+
+    #[test]
+    fn resolve_host_reads_alias_block() {
+        let host = resolve_host("devbox", CONFIG);
+        assert_eq!(host.hostname, "10.0.0.5");
+        assert_eq!(host.user.as_deref(), Some("sail"));
+        assert_eq!(host.port, 2222);
+        assert_eq!(host.proxy_jump.as_deref(), Some("bastion"));
+        assert_eq!(host.identity_files.len(), 1);
+    }
+
+    #[test]
+    fn unknown_alias_falls_back_to_itself() {
+        let host = resolve_host("nowhere", CONFIG);
+        assert_eq!(host.hostname, "nowhere");
+        assert_eq!(host.port, 22);
+        assert!(host.proxy_jump.is_none());
+    }
+
+    #[test]
+    fn build_hops_expands_proxy_jump_chain() {
+        let target = resolve_host("devbox", CONFIG);
+        let hops = build_hops(&target, CONFIG);
+        assert_eq!(hops.len(), 1);
+        assert_eq!(hops[0].hostname, "jump.example.com");
+        assert_eq!(hops[0].user.as_deref(), Some("ec2-user"));
+        assert_eq!(hops[0].port, 22);
+    }
+
+    #[test]
+    fn parse_server_pins_localhost_and_defaults_port() {
+        assert_eq!(parse_server("http://localhost:7070"), ("127.0.0.1".into(), 7070));
+        assert_eq!(parse_server("https://api.example.com"), ("api.example.com".into(), 443));
+    }
+
+    #[test]
+    fn dechunk_decodes_framing() {
+        let raw = b"4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n";
+        assert_eq!(dechunk(raw), b"Wikipedia");
+    }
+
+    #[test]
+    fn parse_http_reads_status_and_etag() {
+        let raw = b"HTTP/1.1 200 OK\r\nETag: \"v7\"\r\nContent-Length: 2\r\n\r\n{}";
+        let resp = parse_http(raw).unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.etag.as_deref(), Some("\"v7\""));
+        assert_eq!(resp.body, "{}");
     }
 }

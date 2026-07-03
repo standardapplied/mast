@@ -55,10 +55,20 @@ Both make-or-break unknowns are now GREEN: (a) Rust does the full SSH stack in-p
 (mobile-capable), and (b) the real Mast app compiles as a Tauri binary with the React
 frontend intact. Everything left is on-device UI validation the Mac owns.
 
+## `~/.ssh/config` + ProxyJump: RESOLVED in-process
+
+The Rust core now reads `~/.ssh/config`: it resolves the `host` alias
+(`HostName`/`User`/`Port`/`IdentityFile`/`ProxyJump`, first-value-wins with `*`/`?` globs)
+and dials the full jump chain in-process — connect hop 1, forward a channel to hop 2, run
+SSH over it, repeat, until the devbox session rides the last hop (every jump handle kept
+alive so its channel stays open). Connect + request are timeout-bounded (20s) so a bad host
+surfaces an error instead of a hung loader. 8 Rust unit tests cover the config parsing,
+hop expansion, chunk decoding, and HTTP parsing.
+
 ## Known scaffold gaps (deliberate, for the productization pass)
 
-- SSH auth is key-file only (`~/.ssh/id_ed25519|ecdsa|rsa`); ssh-agent + `~/.ssh/config`
-  alias / ProxyJump resolution is a follow-up.
+- SSH auth tries `IdentityFile` from ssh_config, then `key:` from `~/.sail`, then the
+  default `~/.ssh/id_*`; ssh-agent (and encrypted-key passphrase prompts) is a follow-up.
 - Host key is trusted-on-first-use (no known_hosts pinning yet).
 - `TerminalPane` is a raw byte harness, not a VT emulator — ghostty-web / xterm needs a
   dependency-approval decision.
