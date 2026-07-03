@@ -59,7 +59,7 @@ diag.info("boot", "starting", {
   server: boot.server,
   loginOrigin: boot.loginOrigin,
   sshHost: resolveSshHost() ?? "(none)",
-  tokenKind: boot.token ? (boot.token.startsWith("sess_") ? "session" : "api") : "none",
+  credential: boot.token ? (boot.token.startsWith("sess_") ? "session" : "api") : "none",
 });
 
 const manager = new ConnectionManager({

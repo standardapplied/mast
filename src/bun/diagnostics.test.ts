@@ -13,10 +13,15 @@ describe("diagnostics logger", () => {
     expect(entries[1]?.data).toEqual({ ms: 900 });
   });
 
-  test("redacts tokens in keys and in string values", () => {
-    diag.info("connect", "using token sail_abcdef1234567890", { token: "sess_deadbeef", server: "http://x" });
+  test("redacts secret keys and token-shaped values but not descriptive fields", () => {
+    diag.info("connect", "using token sail_abcdef1234567890", {
+      token: "sess_deadbeef",
+      tokenKind: "api",
+      server: "http://x",
+    });
     const entry = recentLogs()[0]!;
     expect(entry.data?.token).toBe("<13 chars>");
+    expect(entry.data?.tokenKind).toBe("api");
     expect(entry.data?.server).toBe("http://x");
     expect(entry.message).toContain("sail_<redacted>");
     expect(entry.message).not.toContain("abcdef1234567890");

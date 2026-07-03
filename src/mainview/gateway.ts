@@ -42,17 +42,51 @@ export type Gateway = {
   onConnectionStatus(listener: (status: ConnectionStatus) => void): () => void;
 };
 
-export function createRpcGateway(bridge: Bridge): Gateway {
+/**
+ * The Electrobun RPC bridge (webview↔Bun socket) can drop or time out a
+ * response under load even when the HTTP call behind it succeeded — a
+ * transient status-0 that is NOT a real network failure. Retry reads a couple
+ * of times with a short backoff so a bridge blip self-heals instead of
+ * surfacing as a spurious "can't reach the control plane". Writes are not
+ * retried here (the caller owns idempotency and conflict handling).
+ */
+export type RetrySleep = (ms: number) => Promise<void>;
+
+const realSleep: RetrySleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function retryRead<T>(
+  call: () => Promise<SailResult<T>>,
+  sleep: RetrySleep,
+  attempts = 3,
+): Promise<SailResult<T>> {
+  for (let attempt = 1; ; attempt++) {
+    let result: SailResult<T>;
+    try {
+      result = await call();
+    } catch (error) {
+      if (attempt >= attempts) {
+        return { ok: false, error: { status: 0, code: "bridge", message: String(error) } };
+      }
+      await sleep(150 * attempt);
+      continue;
+    }
+    if (result.ok || result.error.status !== 0 || attempt >= attempts) return result;
+    await sleep(150 * attempt);
+  }
+}
+
+export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep): Gateway {
   const api = bridge.api;
+  const read = <T>(call: () => Promise<SailResult<T>>) => retryRead(call, sleep);
   return {
-    listSpecs: (filter) => api.sailListSpecs(filter ?? {}),
-    board: (project) => api.sailBoard({ project }),
-    getSpec: (id) => api.sailGetSpec({ id }),
-    getSpecContent: (id) => api.sailGetSpecContent({ id }),
+    listSpecs: (filter) => read(() => api.sailListSpecs(filter ?? {})),
+    board: (project) => read(() => api.sailBoard({ project })),
+    getSpec: (id) => read(() => api.sailGetSpec({ id })),
+    getSpecContent: (id) => read(() => api.sailGetSpecContent({ id })),
     updateSpec: (id, request, ifMatch) => api.sailUpdateSpec({ id, request, ifMatch }),
-    specHistory: (id) => api.sailSpecHistory({ id }),
+    specHistory: (id) => read(() => api.sailSpecHistory({ id })),
     restoreSpec: (id, rev) => api.sailRestoreSpec({ id, rev }),
-    specReviews: (id) => api.sailSpecReviews({ id }),
+    specReviews: (id) => read(() => api.sailSpecReviews({ id })),
     connection: () => api.sailConnection(),
     login: () => api.sailLogin(),
     diagnostics: () => api.sailDiagnostics(),

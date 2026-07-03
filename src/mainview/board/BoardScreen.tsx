@@ -215,23 +215,11 @@ function ConnectionError({
   tokenPresent: boolean;
   onRetry: () => void;
 }) {
-  const unreachable = error.status === 0;
   const noToken = !tokenPresent || error.code === "missing_bearer_token";
+  const lostContact = error.status === 0;
   return (
     <div className="board-error" data-testid="board-error">
-      {unreachable ? (
-        <>
-          <p className="board-error-title">
-            Can’t reach the control plane{server ? ` at ${server}` : ""}.
-          </p>
-          <p className="board-error-hint">
-            The API listens on the node’s loopback — from this machine you need the SSH tunnel
-            (<code>ssh -L 7070:localhost:7070 &lt;your-node&gt;</code>) or a reachable{" "}
-            <code>server:</code> in <code>~/.sail/config.yaml</code>. The CLI’s SSH-gateway lane
-            works without a tunnel; Mast speaks HTTP.
-          </p>
-        </>
-      ) : noToken ? (
+      {noToken ? (
         <>
           <p className="board-error-title">
             Connected{server ? ` to ${server}` : ""}, but no API token was found on this machine.
@@ -243,6 +231,11 @@ function ConnectionError({
             hit Retry.
           </p>
         </>
+      ) : lostContact ? (
+        <p className="board-error-title">
+          Lost contact with the control plane{server ? ` at ${server}` : ""} — it may be restarting
+          or the connection dropped. Retrying…
+        </p>
       ) : (
         <p className="board-error-title">
           {error.message}
@@ -304,6 +297,15 @@ export function BoardScreen({
     [onlyMine, query, repo],
   );
   const { data, byStatus, move, refresh } = useBoard(gateway, project, filter);
+
+  // A lost-contact (status 0) error keeps retrying in the background — the
+  // connection usually heals (bridge blip, node restart) without the user
+  // needing to touch anything.
+  useEffect(() => {
+    if (data.error?.status !== 0) return;
+    const timer = setInterval(() => void refresh(), 5000);
+    return () => clearInterval(timer);
+  }, [data.error, refresh]);
 
   const lanes = BOARD_COLUMNS.filter((status) => visibleLanes.has(status));
 

@@ -30,12 +30,16 @@ function line(entry: LogEntry): string {
   return `${entry.ts} ${entry.level.toUpperCase().padEnd(5)} [${entry.scope}] ${entry.message}${data}`;
 }
 
+// Exact secret-bearing keys — a substring match would clobber descriptive
+// fields like `tokenKind`/`tokenPresent`, which are not secrets.
+const SECRET_KEYS = new Set(["token", "secret", "authorization", "bearer", "apikey", "api_key", "password"]);
+
 /** Redact obvious secrets so a pasted report never carries a live token. */
 function scrub(data?: Record<string, unknown>): Record<string, unknown> | undefined {
   if (!data) return undefined;
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    if (/token|secret|authorization|bearer/i.test(key)) {
+    if (SECRET_KEYS.has(key.toLowerCase())) {
       out[key] = typeof value === "string" && value.length > 0 ? `<${value.length} chars>` : value;
     } else if (typeof value === "string") {
       out[key] = scrubText(value);
