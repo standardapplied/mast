@@ -11,6 +11,7 @@ import type {
   GlobalSpecsListResponse,
   ProjectResponse,
   RecentEventsResponse,
+  WhoAmI,
   ReviewApproveResponse,
   ReviewDetailResponse,
   ReviewListResponse,
@@ -121,6 +122,10 @@ export class SailClient {
 
   dismissFinding(reviewId: string, findingId: string): Promise<ApiResult<FindingDismissResponse>> {
     return this.http.request("POST", `/v1/reviews/${reviewId}/dismiss/${findingId}`);
+  }
+
+  whoami(): Promise<ApiResult<WhoAmI>> {
+    return this.http.request("GET", "/v1/whoami");
   }
 
   recentEvents(limit?: number): Promise<ApiResult<RecentEventsResponse>> {

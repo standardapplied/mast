@@ -13,6 +13,7 @@ import type {
   SpecFilter,
   SpecStatus,
   SpecUpdateRequest,
+  WhoAmI,
 } from "../shared/sail-models";
 import type { SailResult } from "../shared/types";
 import { onPush } from "./push";
@@ -38,6 +39,7 @@ export type Gateway = {
   restoreSpec(id: string, rev: number): Promise<SailResult<GlobalSpecDetailResponse>>;
   specReviews(id: string): Promise<SailResult<ReviewListResponse>>;
   dispatch(project: string, request: DispatchRequest): Promise<SailResult<DispatchResponse>>;
+  whoami(): Promise<SailResult<WhoAmI>>;
   connection(): Promise<ConnectionStatus>;
   login(): Promise<{ ok: boolean; detail?: string }>;
   diagnostics(): Promise<{ report: string; logPath: string }>;
@@ -91,6 +93,7 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     restoreSpec: (id, rev) => api.sailRestoreSpec({ id, rev }),
     specReviews: (id) => read(() => api.sailSpecReviews({ id })),
     dispatch: (project, request) => api.sailDispatch({ project, request }),
+    whoami: () => api.sailWhoami(),
     connection: () => api.sailConnection(),
     login: () => api.sailLogin(),
     diagnostics: () => api.sailDiagnostics(),
@@ -318,6 +321,13 @@ export function createDemoGateway(): DemoGateway {
       if (!spec) return notFound(id);
       spec.updated_at = new Date().toISOString();
       return ok({ spec: view(spec) }, etagOf(spec));
+    },
+
+    async whoami() {
+      return {
+        ok: true,
+        value: { fde: "uday", name: "uday", role: "admin", capabilities: ["read", "write", "admin"] },
+      };
     },
 
     async dispatch(_project, request) {

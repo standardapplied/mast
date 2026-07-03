@@ -5,6 +5,7 @@ import { ContextMenu, type MenuNode } from "../components/ContextMenu";
 import { DropdownPanel } from "../components/DropdownPanel";
 import { Input } from "../components/Input";
 import { LoadingMark } from "../components/Loading";
+import { DispatchDialog } from "./DispatchDialog";
 import { Funnel, Magnifier } from "../components/icons";
 import { Select } from "../components/Select";
 import { useToast } from "../components/Toast";
@@ -296,8 +297,26 @@ export function BoardScreen({
   const [dropTarget, setDropTarget] = useState<SpecStatus | null>(null);
   const [view, setView] = useState<{ left: number; width: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; spec: GlobalSpecView } | null>(null);
+  const [dispatchTarget, setDispatchTarget] = useState<GlobalSpecView | null>(null);
+  const [role, setRole] = useState<{ canDispatch: boolean; known: boolean }>({
+    canDispatch: false,
+    known: false,
+  });
   const canvasRef = useRef<HTMLDivElement>(null);
   const { showToast } = useToast();
+
+  // Fetch identity once so dispatch can be role-gated up front; if the server
+  // has no whoami endpoint yet (404), role stays unknown and dispatch is
+  // attempted, with the server's 403 handled cleanly.
+  useEffect(() => {
+    void gateway.whoami().then((result) => {
+      if (result.ok) {
+        setRole({ canDispatch: result.value.capabilities.includes("admin"), known: true });
+      } else {
+        setRole({ canDispatch: true, known: false });
+      }
+    });
+  }, [gateway]);
 
   const filter: SpecFilter = useMemo(
     () => ({ assignee: onlyMine ? "me" : undefined, q: query || undefined, repo }),
@@ -376,20 +395,10 @@ export function BoardScreen({
     }
   };
 
-  const dispatchSpec = async (spec: GlobalSpecView) => {
-    const result = await gateway.dispatch(spec.project, { specId: spec.id, mode: "background" });
-    if (!result.ok) {
-      showToast("error", `Dispatch failed: ${result.error.message}`);
-      return;
-    }
-    if (result.value.dispatched) showToast("success", `Dispatched ${spec.id}.`);
-    else showToast("error", `Could not dispatch ${spec.id}: ${result.value.reason || "not ready"}.`);
-    void refresh();
-  };
-
   // The server accepts dispatch for any ready spec (dispatch doesn't check
   // ownership — this devbox's FDE can dispatch anyone's), so the rule mirrors
-  // "ready": pending, assigned, no unmet dependencies.
+  // "ready": pending, assigned, no unmet dependencies. Role (admin) is enforced
+  // inside the dialog, which can explain it.
   const menuItems = (spec: GlobalSpecView): MenuNode[] => {
     const unmet = unmetDependencies(spec, data.specs);
     const dispatchable = spec.status === "pending" && !!spec.assignee && unmet.length === 0;
@@ -406,10 +415,10 @@ export function BoardScreen({
       { kind: "separator" },
       {
         kind: "item",
-        label: "Dispatch",
+        label: "Dispatch…",
         disabled: !dispatchable,
         hint,
-        onSelect: () => void dispatchSpec(spec),
+        onSelect: () => setDispatchTarget(spec),
       },
     ];
   };
@@ -542,6 +551,20 @@ export function BoardScreen({
           y={menu.y}
           items={menuItems(menu.spec)}
           onClose={() => setMenu(null)}
+        />
+      )}
+      {dispatchTarget && (
+        <DispatchDialog
+          gateway={gateway}
+          spec={dispatchTarget}
+          allSpecs={data.specs}
+          canDispatch={role.canDispatch}
+          roleKnown={role.known}
+          onClose={() => setDispatchTarget(null)}
+          onResult={(message, ok) => {
+            showToast(ok ? "success" : "error", message);
+            if (ok) void refresh();
+          }}
         />
       )}
     </div>

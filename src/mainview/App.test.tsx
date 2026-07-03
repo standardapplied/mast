@@ -137,7 +137,7 @@ describe("App cockpit", () => {
     };
     const dispatchItem = () =>
       [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find(
-        (b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch",
+        (b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch…",
       );
 
     // Pending + assigned + no unmet deps → dispatchable.
@@ -172,7 +172,40 @@ describe("App cockpit", () => {
     expect(container.querySelector(".detail-title")?.textContent).toBe("chorus-auth-flow");
   });
 
-  test("dispatching a ready spec moves it to in progress", async () => {
+  test("dispatch dialog role-gates a non-admin credential", async () => {
+    gateway = createDemoGateway();
+    gateway.whoami = () =>
+      Promise.resolve({
+        ok: true,
+        value: { fde: "ravi", name: "ravi", role: "member", capabilities: ["read", "write"] },
+      });
+    const theme = createThemeController(browserThemeDeps(() => {}));
+    location.hash = "#/";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root.render(<App gateway={gateway} theme={theme} />));
+    await flush();
+    await flush();
+
+    const card = container.querySelector<HTMLElement>('[data-testid="card-chorus-billing-export"]');
+    act(() => {
+      card?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 80 }),
+      );
+    });
+    act(() => {
+      [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")]
+        .find((b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch…")
+        ?.click();
+    });
+    await flush();
+
+    expect(container.querySelector('[data-testid="dispatch-role"]')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="dispatch-go"]')?.disabled).toBe(true);
+  });
+
+  test("dispatch dialog: dry run then dispatch moves the spec to in progress", async () => {
     await render();
     const card = container.querySelector<HTMLElement>('[data-testid="card-chorus-billing-export"]');
     act(() => {
@@ -180,10 +213,18 @@ describe("App cockpit", () => {
         new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 80 }),
       );
     });
-    const dispatch = [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find(
-      (b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch",
+    const menuDispatch = [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find(
+      (b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch…",
     );
-    act(() => dispatch?.click());
+    act(() => menuDispatch?.click());
+    await flush();
+
+    // The dialog opens with the spec's facts and an enabled Dispatch button.
+    expect(container.querySelector(".dialog-title")?.textContent).toBe("Dispatch chorus-billing-export");
+    const go = container.querySelector<HTMLButtonElement>('[data-testid="dispatch-go"]');
+    expect(go?.disabled).toBe(false);
+
+    act(() => go?.click());
     await flush();
     await flush();
     expect(container.querySelector('[data-testid="column-in_progress"]')?.textContent).toContain(

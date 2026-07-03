@@ -38,6 +38,7 @@ import type {
   SpecCreateRequest,
   SpecFilter,
   SpecUpdateRequest,
+  WhoAmI,
 } from "./sail-models";
 
 export type AppInfo = {
@@ -133,6 +134,7 @@ export type AppRPCSchema = {
         response: SailResult<FindingDismissResponse>;
       };
       sailRecentEvents: { params: { limit?: number }; response: SailResult<RecentEventsResponse> };
+      sailWhoami: { params: void; response: SailResult<WhoAmI> };
       sailConnection: { params: void; response: ConnectionStatus };
       /** Runs the browser passkey ceremony; resolves when signed in (or not). */
       sailLogin: { params: void; response: { ok: boolean; detail?: string } };

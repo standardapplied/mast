@@ -306,6 +306,13 @@ export type ConnectionStatus = {
   detail?: string;
 };
 
+export type WhoAmI = {
+  fde?: string;
+  name: string;
+  role: "admin" | "member" | "viewer";
+  capabilities: string[];
+};
+
 export type SpecFilter = {
   project?: string;
   status?: SpecStatus;

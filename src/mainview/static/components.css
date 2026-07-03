@@ -1469,6 +1469,47 @@ html.is-dragging-active * {
   cursor: not-allowed;
 }
 
+/* Dispatch dialog ------------------------------------------------------------ */
+
+.dispatch-body {
+  display: grid;
+  gap: 18px;
+}
+
+.dispatch-summary {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted-foreground);
+}
+
+.dispatch-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.dispatch-mode {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dispatch-block {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dispatch-preview {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
 /* Context menu --------------------------------------------------------------- */
 
 .context-menu-layer {

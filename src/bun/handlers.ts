@@ -36,6 +36,7 @@ export type SailPort = Pick<
   | "approveReview"
   | "dismissFinding"
   | "recentEvents"
+  | "whoami"
 >;
 
 export type HandlerDeps = {
@@ -118,6 +119,7 @@ export function createRequestHandlers(deps: HandlerDeps): BunRequestHandlers {
     sailDismissFinding: ({ reviewId, findingId }) =>
       wrap(() => sail().dismissFinding(reviewId, findingId)),
     sailRecentEvents: ({ limit }) => wrap(() => sail().recentEvents(limit)),
+    sailWhoami: () => wrap(() => sail().whoami()),
     sailConnection: () => deps.connection(),
     sailLogin: () => deps.login(),
     sailDiagnostics: () => deps.diagnostics(),
