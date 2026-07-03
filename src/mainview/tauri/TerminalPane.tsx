@@ -52,6 +52,15 @@ export function TerminalPane() {
     const send = (data: string) =>
       void invoke("terminal_write", { id, data: Array.from(encoder.encode(data)) }).catch(() => {});
     let doFit = () => {};
+    let fitScheduled = false;
+    const scheduleFit = () => {
+      if (fitScheduled) return;
+      fitScheduled = true;
+      requestAnimationFrame(() => {
+        fitScheduled = false;
+        doFit();
+      });
+    };
 
     void (async () => {
       await ensureGhostty();
@@ -101,13 +110,15 @@ export function TerminalPane() {
         if (alive) setStatus("session closed");
       });
 
-      // Keep the PTY sized to the pane. ResizeObserver catches layout changes;
-      // window resize is the belt-and-suspenders for viewport-driven ones.
-      observer = new ResizeObserver(() => doFit());
+      // Keep the PTY sized to the pane. Coalesce fits onto a frame so a burst
+      // of resize events settles to one measure after layout has updated.
+      observer = new ResizeObserver(scheduleFit);
       observer.observe(host);
-      window.addEventListener("resize", doFit);
-      // Re-fit once the monospace font's real metrics are in.
+      window.addEventListener("resize", scheduleFit);
+      // The first synchronous fit can run before layout/fonts settle; re-fit a
+      // few times so the grid ends up matching the real pane size.
       void document.fonts?.ready.then(() => alive && doFit());
+      for (const t of [0, 200, 500]) setTimeout(() => alive && doFit(), t);
 
       await invoke("terminal_open", { id, cols: term.cols, rows: term.rows });
       if (alive) {
@@ -121,7 +132,7 @@ export function TerminalPane() {
     return () => {
       alive = false;
       observer?.disconnect();
-      window.removeEventListener("resize", doFit);
+      window.removeEventListener("resize", scheduleFit);
       void invoke("terminal_close", { id }).catch(() => {});
       void dataOff?.then((off) => off());
       void exitOff?.then((off) => off());
