@@ -307,6 +307,14 @@ export function BoardScreen({
     return () => clearInterval(timer);
   }, [data.error, refresh]);
 
+  // Force the grabbing cursor at the document root for the whole drag (native
+  // HTML5 drag otherwise lets the OS reset it to an arrow mid-move).
+  useEffect(() => {
+    if (!dragging) return;
+    document.documentElement.classList.add("is-dragging-active");
+    return () => document.documentElement.classList.remove("is-dragging-active");
+  }, [dragging]);
+
   const lanes = BOARD_COLUMNS.filter((status) => visibleLanes.has(status));
 
   useEffect(() => {

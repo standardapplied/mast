@@ -1146,13 +1146,20 @@
 /* Lanes grow to share the canvas width but clamp between a readable minimum
    and a maximum so cards never spread; past the minimum × lane count the
    canvas scrolls horizontally instead. */
+/* Each lane is a faint tinted column so the swimlanes read as distinct; cards
+   (opaque --surface) sit inside and stand off the tint. Grows to share the
+   canvas width, clamped between a readable min and a generous max that lets
+   lanes breathe on xl screens before the canvas scrolls. */
 .kanban-column {
-  flex: 1 1 240px;
-  min-width: 240px;
-  max-width: 360px;
+  flex: 1 1 260px;
+  min-width: 260px;
+  max-width: 460px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  padding: 8px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
 }
 
 .kanban-column-header {
@@ -1160,7 +1167,7 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 2px;
+  padding: 4px 4px 6px;
 }
 
 .kanban-count {
@@ -1201,11 +1208,12 @@
   cursor: grabbing;
 }
 
-/* While a drag is in flight the whole board reads grabbing (the native drag
-   image can otherwise leave the cursor ambiguous), and the lifted card dims. */
-.board.is-dragging,
-.board.is-dragging .kanban-card {
-  cursor: grabbing;
+/* While a drag is in flight force grabbing everywhere. Native HTML5 drag hands
+   the cursor to the OS, so this !important on the root is the only lever that
+   overrides it; without it WebKit shows a plain arrow mid-drag. */
+html.is-dragging-active,
+html.is-dragging-active * {
+  cursor: grabbing !important;
 }
 
 .kanban-card.is-lifted {
@@ -1940,12 +1948,14 @@ span.checkbox {
 }
 
 .board-columns .kanban-column.is-droppable {
-  outline: 1px dashed var(--border-strong);
-  outline-offset: 4px;
+  border-style: dashed;
+  border-color: var(--border-strong);
 }
 
 .board-columns .kanban-column.is-drop-target {
-  outline-color: var(--primary);
+  border-style: solid;
+  border-color: var(--primary);
+  background: var(--surface);
 }
 
 .spec-card-summary {
