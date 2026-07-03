@@ -161,11 +161,11 @@ impl Backend {
         &self.config
     }
 
-    pub fn connected(&self) -> bool {
-        self.session
-            .try_lock()
-            .map(|g| g.is_some())
-            .unwrap_or(true)
+    /// Actively establish the session (idempotent). The connection banner calls
+    /// this so `phase` can reach `ready` — otherwise nothing dials until a board
+    /// request, and the board is itself gated on `ready`.
+    pub async fn connect(&self) -> Result<(), Error> {
+        self.ensure().await
     }
 
     /// Dials the devbox, chaining through every `ProxyJump` hop resolved from

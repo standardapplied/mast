@@ -42,27 +42,40 @@ async fn sail_request(
 
 #[tauri::command]
 async fn connection_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    match state.backend().await {
-        Ok(backend) => {
-            let cfg = backend.describe();
-            Ok(json!({
-                "phase": if backend.connected() { "ready" } else { "idle" },
-                "server": format!("{}:{}", cfg.server_host, cfg.server_port),
-                "sshHost": cfg.ssh_host,
-                "tokenPresent": cfg.token.is_some(),
-                "tokenKind": if cfg.token.is_some() { "session" } else { "none" },
-                "stream": "idle",
+    let backend = match state.backend().await {
+        Ok(backend) => backend,
+        Err(detail) => {
+            return Ok(json!({
+                "phase": "error",
+                "server": "",
+                "tokenPresent": false,
+                "tokenKind": "none",
+                "stream": "disconnected",
+                "detail": detail,
             }))
         }
-        Err(detail) => Ok(json!({
-            "phase": "error",
-            "server": "",
-            "tokenPresent": false,
-            "tokenKind": "none",
-            "stream": "idle",
-            "detail": detail,
-        })),
+    };
+
+    let connected = backend.connect().await;
+    let cfg = backend.describe();
+    let mut status = json!({
+        "server": format!("{}:{}", cfg.server_host, cfg.server_port),
+        "sshHost": cfg.ssh_host,
+        "tokenPresent": cfg.token.is_some(),
+        "tokenKind": if cfg.token.is_some() { "session" } else { "none" },
+    });
+    match connected {
+        Ok(()) => {
+            status["phase"] = json!("ready");
+            status["stream"] = json!("connected");
+        }
+        Err(e) => {
+            status["phase"] = json!("error");
+            status["stream"] = json!("disconnected");
+            status["detail"] = json!(e.to_string());
+        }
     }
+    Ok(status)
 }
 
 #[tauri::command]
