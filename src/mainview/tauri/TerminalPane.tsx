@@ -37,13 +37,15 @@ function keyToBytes(e: React.KeyboardEvent): string | null {
 export function TerminalPane() {
   const [output, setOutput] = useState("");
   const [status, setStatus] = useState("connecting…");
-  const idRef = useRef(crypto.randomUUID());
-  const decoderRef = useRef(new TextDecoder());
+  const idRef = useRef("");
   const preRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
-    const id = idRef.current;
-    const decoder = decoderRef.current;
+    // A fresh id per effect run so StrictMode's mount→unmount→remount can't
+    // cross the torn-down terminal's exit event into the live one's listeners.
+    const id = crypto.randomUUID();
+    idRef.current = id;
+    const decoder = new TextDecoder();
     let alive = true;
 
     const dataOff = listen<number[]>(`terminal://data/${id}`, (e) => {
@@ -51,7 +53,9 @@ export function TerminalPane() {
       const text = decoder.decode(new Uint8Array(e.payload), { stream: true });
       setOutput((prev) => (prev + text).slice(-200_000));
     });
-    const exitOff = listen(`terminal://exit/${id}`, () => setStatus("session closed"));
+    const exitOff = listen(`terminal://exit/${id}`, () => {
+      if (alive) setStatus("session closed");
+    });
 
     invoke("terminal_open", { id, cols: 100, rows: 30 })
       .then(() => alive && setStatus("connected"))
