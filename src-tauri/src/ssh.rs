@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use russh::client::{self, Config, Handle, Handler, Msg};
+use russh::keys::agent::client::AgentClient;
 use russh::keys::key;
 use russh::keys::load_secret_key;
 use russh::{Channel, ChannelMsg, ChannelStream};
@@ -32,7 +33,7 @@ pub enum Error {
     NoConfig,
     #[error("config is missing `{0}`")]
     MissingField(&'static str),
-    #[error("no usable SSH key in ~/.ssh (tried id_ed25519, id_ecdsa, id_rsa)")]
+    #[error("no SSH key available — nothing in the ssh-agent and no readable key file (~/.ssh/id_ed25519|ecdsa|rsa). Run `ssh-add`, or point IdentityFile at an unencrypted key.")]
     NoKey,
     #[error("publickey auth rejected for {0}")]
     AuthRejected(String),
@@ -214,11 +215,29 @@ impl Backend {
             .clone()
             .or_else(|| std::env::var("USER").ok())
             .unwrap_or_else(|| "root".into());
-        let identity = load_identity(&host.identity_files, self.config.key_path.as_deref())?;
-        if !handle.authenticate_publickey(&user, Arc::new(identity)).await? {
-            return Err(Error::AuthRejected(format!("{user}@{}", host.hostname)));
+
+        // The ssh-agent first — on macOS the key usually lives in the keychain /
+        // agent, not as a plaintext file russh can read. Then fall back to key
+        // files (ssh_config IdentityFile, ~/.sail `key:`, default id_*).
+        let mut attempted = false;
+        if let Some(authed) = agent_auth(&mut handle, &user).await {
+            attempted = true;
+            if authed {
+                return Ok(handle);
+            }
         }
-        Ok(handle)
+        if let Ok(identity) = load_identity(&host.identity_files, self.config.key_path.as_deref()) {
+            attempted = true;
+            if handle.authenticate_publickey(&user, Arc::new(identity)).await? {
+                return Ok(handle);
+            }
+        }
+
+        Err(if attempted {
+            Error::AuthRejected(format!("{user}@{}", host.hostname))
+        } else {
+            Error::NoKey
+        })
     }
 
     /// Connects the session if it isn't already up, with a timeout so a bad
@@ -376,6 +395,25 @@ impl Backend {
         self.terminals.lock().await.remove(id);
         Ok(())
     }
+}
+
+/// Try every identity the ssh-agent holds. Returns `None` if there's no agent
+/// or it's empty (so the caller falls back to key files), `Some(true)` on a
+/// successful auth, `Some(false)` if the agent had keys but none were accepted.
+async fn agent_auth(handle: &mut Handle<Client>, user: &str) -> Option<bool> {
+    let mut agent = AgentClient::connect_env().await.ok()?;
+    let identities = agent.request_identities().await.ok()?;
+    if identities.is_empty() {
+        return None;
+    }
+    for key in identities {
+        let (returned, result) = handle.authenticate_future(user, key, agent).await;
+        agent = returned;
+        if matches!(result, Ok(true)) {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 /// Pick the first usable private key: the host's `IdentityFile`s, then any
@@ -768,5 +806,18 @@ Host bastion
         assert_eq!(resp.status, 200);
         assert_eq!(resp.etag.as_deref(), Some("\"v7\""));
         assert_eq!(resp.body, "{}");
+    }
+
+    /// Live check that ssh-agent auth works end to end: needs a running sshd on
+    /// 127.0.0.1:22 and an agent (SSH_AUTH_SOCK) holding a key authorized for
+    /// $USER. Ignored by default; run with `--ignored` in that setup.
+    #[tokio::test]
+    #[ignore]
+    async fn agent_auth_against_localhost() {
+        let user = std::env::var("USER").unwrap();
+        let mut handle = client::connect(Arc::new(Config::default()), ("127.0.0.1", 22), Client)
+            .await
+            .expect("connect");
+        assert_eq!(agent_auth(&mut handle, &user).await, Some(true));
     }
 }
