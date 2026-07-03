@@ -6,6 +6,7 @@ import type {
   SpecRevisionView,
   SpecUpdateRequest,
 } from "../../shared/sail-models";
+import type { SailWireError } from "../../shared/types";
 import { Dialog } from "../components/Dialog";
 import { CaretLeft } from "../components/icons";
 import { Input } from "../components/Input";
@@ -51,22 +52,21 @@ export function SpecDetail({
   onBack: () => void;
 }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<SailWireError | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<SpecUpdateRequest>({});
   const [restoring, setRestoring] = useState<number | null>(null);
   const { showToast } = useToast();
 
   const load = useCallback(async () => {
-    const [detail, content, history, reviews, all] = await Promise.all([
+    // Core first — just what the page needs to render — so the detail appears
+    // after two calls and a bridge timeout on enrichment never blocks it.
+    const [detail, content] = await Promise.all([
       gateway.getSpec(specId),
       gateway.getSpecContent(specId),
-      gateway.specHistory(specId),
-      gateway.specReviews(specId),
-      gateway.listSpecs({}),
     ]);
     if (!detail.ok) {
-      setError(detail.error.message);
+      setError(detail.error);
       return;
     }
     setError(null);
@@ -75,10 +75,28 @@ export function SpecDetail({
       etag: detail.etag,
       body: content.ok ? content.value.body : (detail.value.body ?? ""),
       plan: content.ok ? content.value.plan : "",
-      history: history.ok ? history.value.revisions : [],
-      reviews: reviews.ok ? reviews.value.reviews : [],
-      allSpecs: all.ok ? all.value.specs : [],
+      history: [],
+      reviews: [],
+      allSpecs: [],
     });
+
+    // Enrichment — history, reviews, dependency graph — is non-fatal and
+    // merged in as it arrives; a failure here leaves the page usable.
+    const [history, reviews, all] = await Promise.all([
+      gateway.specHistory(specId),
+      gateway.specReviews(specId),
+      gateway.listSpecs({}),
+    ]);
+    setLoaded((prev) =>
+      prev
+        ? {
+            ...prev,
+            history: history.ok ? history.value.revisions : prev.history,
+            reviews: reviews.ok ? reviews.value.reviews : prev.reviews,
+            allSpecs: all.ok ? all.value.specs : prev.allSpecs,
+          }
+        : prev,
+    );
   }, [gateway, specId]);
 
   useEffect(() => {
@@ -95,13 +113,30 @@ export function SpecDetail({
     [gateway, specId, load],
   );
 
+  // A lost-contact (status 0) error retries in the background, like the board.
+  useEffect(() => {
+    if (error?.status !== 0) return;
+    const timer = setInterval(() => void load(), 5000);
+    return () => clearInterval(timer);
+  }, [error, load]);
+
   if (error) {
+    const lostContact = error.status === 0;
     return (
       <div className="detail">
-        <p className="board-error">{error}</p>
-        <Button variant="ghost" onClick={onBack}>
-          Back to board
-        </Button>
+        <div className="detail-heading-row">
+          <button type="button" className="back-btn" onClick={onBack} aria-label="Back to board">
+            <CaretLeft size={16} />
+          </button>
+          <div className="detail-heading">
+            <Eyebrow>{specId}</Eyebrow>
+            <p className="detail-subtitle">
+              {lostContact
+                ? "Lost contact with the control plane — retrying…"
+                : `${error.message}${error.action ? ` — ${error.action}` : ""}`}
+            </p>
+          </div>
+        </div>
       </div>
     );
   }

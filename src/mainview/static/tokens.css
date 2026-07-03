@@ -80,6 +80,7 @@
   --background: #0a0e11;
   --surface: #12171b;
   --surface-hover: rgba(246, 241, 233, 0.06);
+  --lane-bg: rgba(246, 241, 233, 0.03);
   --background-deep: #040608;
   --foreground: #f6f1e9;
   --muted-foreground: rgba(246, 241, 233, 0.78);
@@ -112,6 +113,7 @@
   --background: #f8fafc;
   --surface: #fdffff;
   --surface-hover: rgba(14, 18, 23, 0.05);
+  --lane-bg: rgba(14, 18, 23, 0.025);
   --background-deep: #eef2f6;
   --foreground: #0e1217;
   --muted-foreground: #383e43;

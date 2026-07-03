@@ -1146,10 +1146,12 @@
 /* Lanes grow to share the canvas width but clamp between a readable minimum
    and a maximum so cards never spread; past the minimum × lane count the
    canvas scrolls horizontally instead. */
-/* Each lane is a faint tinted column so the swimlanes read as distinct; cards
-   (opaque --surface) sit inside and stand off the tint. Grows to share the
-   canvas width, clamped between a readable min and a generous max that lets
-   lanes breathe on xl screens before the canvas scrolls. */
+/* Each lane is a very faint tinted column so the swimlanes read as distinct;
+   cards (opaque --surface) sit inside and stand off the tint. No visible
+   border by default — the transparent border only reserves space so the
+   drop-target highlight doesn't reflow. Grows to share the canvas width,
+   clamped between a readable min and a generous max that lets lanes breathe on
+   xl screens before the canvas scrolls. */
 .kanban-column {
   flex: 1 1 260px;
   min-width: 260px;
@@ -1158,8 +1160,8 @@
   flex-direction: column;
   gap: 8px;
   padding: 8px;
-  background: var(--surface-hover);
-  border: 1px solid var(--border);
+  background: var(--lane-bg);
+  border: 1px solid transparent;
 }
 
 .kanban-column-header {

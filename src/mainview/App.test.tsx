@@ -107,6 +107,24 @@ describe("App cockpit", () => {
     expect(container.querySelector(".dep-chip.is-unmet")?.textContent).toBe("chorus-billing-export");
   });
 
+  test("a bridge timeout in spec detail shows 'lost contact', not the raw RPC error", async () => {
+    gateway = createDemoGateway();
+    gateway.getSpec = () =>
+      Promise.resolve({ ok: false, error: { status: 0, code: "bridge", message: "Error: RPC request timed out." } });
+    const theme = createThemeController(browserThemeDeps(() => {}));
+    location.hash = "#/spec/chorus-invoice-ui";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root.render(<App gateway={gateway} theme={theme} />));
+    await flush();
+    await flush();
+
+    const text = container.querySelector(".detail")?.textContent ?? "";
+    expect(text).toContain("Lost contact with the control plane");
+    expect(text).not.toContain("RPC request timed out");
+  });
+
   test("bridge state stays invisible until degraded", async () => {
     await render();
     expect(container.querySelector('[data-testid="bridge-status"]')).toBeNull();
