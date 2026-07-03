@@ -35,6 +35,7 @@ function toGhosttyTheme(t: TerminalTheme): ITheme {
 
 export function TerminalPane() {
   const hostRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
   const [status, setStatus] = useState("connecting…");
 
   useEffect(() => {
@@ -44,62 +45,72 @@ export function TerminalPane() {
     const id = crypto.randomUUID();
     const encoder = new TextEncoder();
     let alive = true;
-    let term: Terminal | null = null;
     let dataOff: Promise<() => void> | null = null;
     let exitOff: Promise<() => void> | null = null;
     let observer: ResizeObserver | null = null;
 
     const send = (data: string) =>
       void invoke("terminal_write", { id, data: Array.from(encoder.encode(data)) }).catch(() => {});
+    let doFit = () => {};
 
     void (async () => {
       await ensureGhostty();
       if (!alive) return;
 
       const themeName = (document.documentElement.dataset.theme as ThemeName) || "dark";
-      term = new Terminal({
+      const term = new Terminal({
         fontSize: 13,
         fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace',
         cursorBlink: true,
         scrollback: 5000,
         theme: toGhosttyTheme(terminalTheme(themeName)),
       });
+      termRef.current = term;
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
-      fit.fit();
+
+      doFit = () => {
+        try {
+          fit.fit();
+        } catch {
+          /* pane detached / metrics not ready */
+        }
+      };
+      doFit();
 
       term.onData(send);
       term.onResize(({ cols, rows }) =>
         void invoke("terminal_resize", { id, cols, rows }).catch(() => {}),
       );
-      // ghostty-web 0.4 swallows Shift+Tab / Shift+Enter — the sequences Claude
-      // Code needs. Intercept and hand-send them (return false = we handled it).
+      // ghostty-web 0.4 returns truthy from customKeyEventHandler = "consume +
+      // preventDefault". So return false to let ghostty encode normal keys
+      // (otherwise every keystroke is swallowed); return true only for the keys
+      // it mishandles (Shift+Tab / Shift+Enter), which we hand-send for Claude.
       term.attachCustomKeyEventHandler((e) => {
-        if (e.type !== "keydown") return true;
-        if (e.key === "Tab" && e.shiftKey) return send("\x1b[Z"), false;
-        if (e.key === "Enter" && e.shiftKey) return send("\r"), false;
-        return true;
+        if (e.type !== "keydown") return false;
+        if (e.key === "Tab" && e.shiftKey) return send("\x1b[Z"), true;
+        if (e.key === "Enter" && e.shiftKey) return send("\r"), true;
+        return false;
       });
 
       dataOff = listen<number[]>(`terminal://data/${id}`, (ev) => {
-        if (alive && term) term.write(new Uint8Array(ev.payload));
+        if (alive && termRef.current) termRef.current.write(new Uint8Array(ev.payload));
       });
       exitOff = listen(`terminal://exit/${id}`, () => {
         if (alive) setStatus("session closed");
       });
 
-      observer = new ResizeObserver(() => {
-        try {
-          fit.fit();
-        } catch {
-          /* pane detached mid-resize */
-        }
-      });
+      // Keep the PTY sized to the pane. ResizeObserver catches layout changes;
+      // window resize is the belt-and-suspenders for viewport-driven ones.
+      observer = new ResizeObserver(() => doFit());
       observer.observe(host);
+      window.addEventListener("resize", doFit);
+      // Re-fit once the monospace font's real metrics are in.
+      void document.fonts?.ready.then(() => alive && doFit());
 
       await invoke("terminal_open", { id, cols: term.cols, rows: term.rows });
-      if (alive && term) {
+      if (alive) {
         setStatus("connected");
         term.focus();
       }
@@ -110,10 +121,12 @@ export function TerminalPane() {
     return () => {
       alive = false;
       observer?.disconnect();
+      window.removeEventListener("resize", doFit);
       void invoke("terminal_close", { id }).catch(() => {});
       void dataOff?.then((off) => off());
       void exitOff?.then((off) => off());
-      term?.dispose();
+      termRef.current?.dispose();
+      termRef.current = null;
     };
   }, []);
 
@@ -123,7 +136,11 @@ export function TerminalPane() {
         <span className="terminal-pane__title">devbox — ghostty</span>
         <span className="terminal-pane__status">{status}</span>
       </header>
-      <div ref={hostRef} className="terminal-pane__screen" />
+      <div
+        ref={hostRef}
+        className="terminal-pane__screen"
+        onMouseDown={() => termRef.current?.focus()}
+      />
     </div>
   );
 }
