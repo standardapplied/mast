@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { ConnectionStatus } from "../shared/sail-models";
 import type { BridgeStatus } from "../shared/types";
 import { BoardScreen } from "./board/BoardScreen";
@@ -73,11 +73,24 @@ function specIdFromHash(hash: string): string | null {
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
-export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeController }) {
+export function App({
+  gateway,
+  theme,
+  terminal,
+}: {
+  gateway: Gateway;
+  theme: ThemeController;
+  /** The terminal section, injected by the Tauri entry (absent on Electrobun/demo). */
+  terminal?: ReactNode;
+}) {
   const [bridge, setBridge] = useState<BridgeStatus>("connected");
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [everReady, setEverReady] = useState(false);
   const [specId, setSpecId] = useState<string | null>(specIdFromHash(location.hash));
+  const [view, setView] = useState<"board" | "terminal">("board");
+  // Mount the terminal on first visit and keep it alive (hidden) thereafter, so
+  // switching to the board and back doesn't tear down the shell session.
+  const [terminalOpened, setTerminalOpened] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -115,6 +128,15 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
     setSpecId(null);
   };
 
+  const goBoard = () => {
+    setView("board");
+    backToBoard();
+  };
+  const goTerminal = () => {
+    setTerminalOpened(true);
+    setView("terminal");
+  };
+
   const login = async () => {
     setLoginBusy(true);
     setLoginError(null);
@@ -141,11 +163,31 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
           <button
             type="button"
             className="cockpit-brand electrobun-webkit-app-region-no-drag"
-            onClick={backToBoard}
+            onClick={goBoard}
           >
             <Logo size={20} />
             <span className="cockpit-wordmark">Mast</span>
           </button>
+          {terminal && (
+            <nav className="cockpit-nav electrobun-webkit-app-region-no-drag">
+              <button
+                type="button"
+                className="cockpit-nav-item"
+                data-active={view === "board"}
+                onClick={goBoard}
+              >
+                Board
+              </button>
+              <button
+                type="button"
+                className="cockpit-nav-item"
+                data-active={view === "terminal"}
+                onClick={goTerminal}
+              >
+                Terminal
+              </button>
+            </nav>
+          )}
           <span className="cockpit-toolbar-spacer" />
           <span className="stream-pill" data-state={pillView.state} title={status?.detail ?? "Connection"}>
             {pillView.label}
@@ -166,21 +208,28 @@ export function App({ gateway, theme }: { gateway: Gateway; theme: ThemeControll
           </span>
         </header>
         <main className="cockpit-main">
-          {!showBoard ? (
-            status && (needsLogin || status.phase === "no-host" || status.phase === "failed") ? (
-              <ConnectScreen status={status} onLogin={() => void login()} busy={loginBusy} loginError={loginError} />
+          <section className="cockpit-view" style={{ display: view === "board" ? "flex" : "none" }}>
+            {!showBoard ? (
+              status && (needsLogin || status.phase === "no-host" || status.phase === "failed") ? (
+                <ConnectScreen status={status} onLogin={() => void login()} busy={loginBusy} loginError={loginError} />
+              ) : (
+                <LoadingMark label={status?.phase === "tunnel-connecting" ? "Opening the tunnel" : "Finding the control plane"} />
+              )
+            ) : specId ? (
+              <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} />
             ) : (
-              <LoadingMark label={status?.phase === "tunnel-connecting" ? "Opening the tunnel" : "Finding the control plane"} />
-            )
-          ) : specId ? (
-            <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} />
-          ) : (
-            <BoardScreen
-              gateway={gateway}
-              onOpenSpec={openSpec}
-              server={status?.server}
-              tokenPresent={status?.tokenPresent ?? true}
-            />
+              <BoardScreen
+                gateway={gateway}
+                onOpenSpec={openSpec}
+                server={status?.server}
+                tokenPresent={status?.tokenPresent ?? true}
+              />
+            )}
+          </section>
+          {terminal && terminalOpened && (
+            <section className="cockpit-view" style={{ display: view === "terminal" ? "flex" : "none" }}>
+              {terminal}
+            </section>
           )}
         </main>
         {showDiagnostics && <Diagnostics gateway={gateway} onClose={() => setShowDiagnostics(false)} />}

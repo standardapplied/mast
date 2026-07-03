@@ -1413,6 +1413,43 @@ html.is-dragging-active * {
   transform: translateY(0.5px);
 }
 
+.cockpit-nav {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  margin-left: 10px;
+  align-self: stretch;
+}
+.cockpit-nav-item {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 120ms ease;
+}
+.cockpit-nav-item:hover {
+  color: var(--foreground);
+}
+.cockpit-nav-item[data-active="true"] {
+  color: var(--foreground);
+  border-bottom-color: var(--foreground);
+}
+
+.cockpit-view {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+}
+
 /* Toggle (segmented control) ------------------------------------------------ */
 
 .toggle {
@@ -2512,7 +2549,7 @@ span.checkbox {
 .terminal-pane {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   background: var(--background-deep);
 }
 .terminal-pane__bar {

@@ -30,9 +30,8 @@ window.addEventListener("hashchange", () => {
 });
 
 function view() {
-  if (current === "#/terminal") return <TerminalPane />;
   if (current === "#/styleguide") return <Styleguide theme={theme} />;
-  return <App gateway={gateway} theme={theme} />;
+  return <App gateway={gateway} theme={theme} terminal={<TerminalPane />} />;
 }
 
 createRoot(container).render(<StrictMode>{view()}</StrictMode>);

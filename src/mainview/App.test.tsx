@@ -19,13 +19,13 @@ beforeEach(() => {
   localStorage.removeItem("mast.board.lanes");
 });
 
-async function render() {
+async function render(terminal?: React.ReactNode) {
   gateway = createDemoGateway();
   const theme = createThemeController(browserThemeDeps(() => {}));
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  act(() => root.render(<App gateway={gateway} theme={theme} />));
+  act(() => root.render(<App gateway={gateway} theme={theme} terminal={terminal} />));
   await flush();
 }
 
@@ -43,6 +43,33 @@ describe("App cockpit", () => {
     expect(container.querySelector('[data-testid="column-done"]')?.textContent).toContain(
       "mast-api-client",
     );
+  });
+
+  test("no Board/Terminal nav when no terminal is injected", async () => {
+    await render();
+    expect(container.querySelector(".cockpit-nav")).toBeNull();
+  });
+
+  test("Board/Terminal nav switches views and keeps the terminal mounted", async () => {
+    await render(<div data-testid="term-stub">TERM</div>);
+    const labels = [...container.querySelectorAll(".cockpit-nav-item")].map((i) => i.textContent);
+    expect(labels).toEqual(["Board", "Terminal"]);
+    expect(container.querySelector('.cockpit-nav-item[data-active="true"]')?.textContent).toBe("Board");
+    expect(container.querySelector('[data-testid="term-stub"]')).toBeNull();
+
+    const nav = () => [...container.querySelectorAll<HTMLButtonElement>(".cockpit-nav-item")];
+    await act(async () => nav()[1]!.click());
+    const stub = container.querySelector('[data-testid="term-stub"]');
+    expect(stub).not.toBeNull();
+    expect((stub!.closest(".cockpit-view") as HTMLElement).style.display).toBe("flex");
+    expect(container.querySelector('.cockpit-nav-item[data-active="true"]')?.textContent).toBe("Terminal");
+
+    // Back to the board: the terminal stays mounted (session preserved), just hidden.
+    await act(async () => nav()[0]!.click());
+    const stillThere = container.querySelector('[data-testid="term-stub"]');
+    expect(stillThere).not.toBeNull();
+    expect((stillThere!.closest(".cockpit-view") as HTMLElement).style.display).toBe("none");
+    expect(container.querySelector('.cockpit-nav-item[data-active="true"]')?.textContent).toBe("Board");
   });
 
   test("shows a blocked card with its unmet dependencies", async () => {
