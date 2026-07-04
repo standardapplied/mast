@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { CaretRight } from "../components/icons";
+import { useToast } from "../components/Toast";
+import { FileTree } from "./FileTree";
 import { TerminalPane } from "./TerminalPane";
 
 /**
@@ -16,6 +18,7 @@ export function TerminalWorkspace() {
   const [targets, setTargets] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<Active | null>(null);
+  const { showToast } = useToast();
 
   useEffect(() => {
     invoke<string[]>("list_targets")
@@ -24,13 +27,24 @@ export function TerminalWorkspace() {
   }, []);
 
   if (active) {
-    return (
+    const pane = (
       <TerminalPane
         key={active.label}
         target={active.target}
         label={active.label}
         onBack={() => setActive(null)}
       />
+    );
+    // The node shell has no container filesystem; a project gets the split.
+    if (!active.target) return pane;
+    return (
+      <div className="term-split">
+        <div className="term-split__main">{pane}</div>
+        <FileTree
+          target={active.target}
+          onToast={(message, ok) => showToast(ok ? "success" : "error", message)}
+        />
+      </div>
     );
   }
 

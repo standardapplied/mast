@@ -84,6 +84,35 @@ async fn list_targets(state: State<'_, AppState>) -> Result<Vec<String>, String>
 }
 
 #[tauri::command]
+async fn fs_list(
+    state: State<'_, AppState>,
+    target: String,
+    path: Option<String>,
+) -> Result<ssh::FsListing, String> {
+    state.backend().await?.fs_list(&target, path).await.map_err(String::from)
+}
+
+#[tauri::command]
+async fn fs_read(state: State<'_, AppState>, target: String, path: String) -> Result<Vec<u8>, String> {
+    state.backend().await?.fs_read(&target, path).await.map_err(String::from)
+}
+
+#[tauri::command]
+async fn fs_upload(
+    state: State<'_, AppState>,
+    target: String,
+    remote_dir: String,
+    local_paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    state
+        .backend()
+        .await?
+        .fs_upload(&target, remote_dir, local_paths)
+        .await
+        .map_err(String::from)
+}
+
+#[tauri::command]
 async fn terminal_open(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -134,6 +163,9 @@ pub fn run() {
             sail_request,
             connection_status,
             list_targets,
+            fs_list,
+            fs_read,
+            fs_upload,
             terminal_open,
             terminal_write,
             terminal_resize,

@@ -2596,6 +2596,120 @@ span.checkbox {
   background: var(--background-deep);
 }
 
+/* Terminal + file-tree split ------------------------------------------------ */
+.term-split {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+.term-split__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.file-tree {
+  width: 300px;
+  flex-shrink: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+}
+.file-tree--dropping {
+  outline: 2px dashed var(--primary);
+  outline-offset: -2px;
+}
+.file-tree__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font: 500 11px/1 var(--font-sans);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--subtle-foreground);
+}
+.file-tree__refresh {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.file-tree__refresh:hover {
+  color: var(--foreground);
+}
+.file-tree__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0;
+}
+.file-tree__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.file-tree__row {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: none;
+  border: none;
+  color: var(--foreground);
+  cursor: default;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.file-tree__row[data-dir="true"] {
+  cursor: pointer;
+}
+.file-tree__row:hover {
+  background: var(--surface-hover);
+}
+.file-tree__twist {
+  display: inline-flex;
+  width: 12px;
+  color: var(--subtle-foreground);
+  flex-shrink: 0;
+}
+.file-tree__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-tree__row[data-dir="true"] .file-tree__name {
+  font-weight: 500;
+}
+.file-tree__note {
+  padding: 6px 12px;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.file-tree__note--error {
+  color: var(--error);
+}
+@media (max-width: 768px) {
+  .term-split {
+    flex-direction: column;
+  }
+  .file-tree {
+    width: auto;
+    height: 42%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}
+
 /* Terminal project picker --------------------------------------------------- */
 .term-picker {
   flex: 1;

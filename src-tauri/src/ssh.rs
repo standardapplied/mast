@@ -19,6 +19,7 @@ use russh::keys::agent::client::AgentClient;
 use russh::keys::key;
 use russh::keys::load_secret_key;
 use russh::{Channel, ChannelMsg, ChannelStream};
+use russh_sftp::client::SftpSession;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -43,6 +44,8 @@ pub enum Error {
     BadResponse,
     #[error("no terminal with id {0}")]
     NoTerminal(String),
+    #[error("sftp: {0}")]
+    Sftp(String),
     #[error(transparent)]
     Ssh(#[from] russh::Error),
     #[error(transparent)]
@@ -139,6 +142,10 @@ enum TermCmd {
 pub struct Backend {
     config: SailConfig,
     session: Mutex<Option<Session>>,
+    /// One cached SSH session per project container (keyed by ssh alias), shared
+    /// by that container's terminals and SFTP channels — one connection, many
+    /// multiplexed channels. Evicted and redialed if it dies.
+    containers: Mutex<HashMap<String, Arc<Session>>>,
     terminals: Mutex<HashMap<String, mpsc::Sender<TermCmd>>>,
 }
 
@@ -149,11 +156,31 @@ pub struct SailResponse {
     pub body: String,
 }
 
+/// One entry in a container directory listing.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+/// A directory listing plus the absolute path it resolved to (so the client can
+/// default uploads/refreshes to it).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsListing {
+    pub path: String,
+    pub entries: Vec<FileEntry>,
+}
+
 impl Backend {
     pub fn new() -> Result<Self, Error> {
         Ok(Backend {
             config: SailConfig::load()?,
             session: Mutex::new(None),
+            containers: Mutex::new(HashMap::new()),
             terminals: Mutex::new(HashMap::new()),
         })
     }
@@ -313,6 +340,126 @@ impl Backend {
         Ok(result?)
     }
 
+    /// The cached SSH session for a project container, dialing (and caching) it
+    /// on first use. Two concurrent first-calls may both dial; the last insert
+    /// wins and the extra session is dropped — cheap and rare.
+    async fn container_session(&self, target: &str) -> Result<Arc<Session>, Error> {
+        if let Some(session) = self.containers.lock().await.get(target).cloned() {
+            return Ok(session);
+        }
+        let session = Arc::new(
+            tokio::time::timeout(CONNECT_TIMEOUT, self.dial_alias(target, None))
+                .await
+                .map_err(|_| Error::Timeout(target.to_string()))??,
+        );
+        self.containers
+            .lock()
+            .await
+            .insert(target.to_string(), session.clone());
+        Ok(session)
+    }
+
+    /// Open a channel on a container's session, redialing once if the cached
+    /// session has died (container restart / idle drop).
+    async fn container_channel(&self, target: &str) -> Result<Channel<Msg>, Error> {
+        let mut last = None;
+        for attempt in 0..2 {
+            let session = self.container_session(target).await?;
+            match session.handle.channel_open_session().await {
+                Ok(channel) => return Ok(channel),
+                Err(e) => {
+                    self.containers.lock().await.remove(target);
+                    last = Some(e);
+                    let _ = attempt;
+                }
+            }
+        }
+        Err(last.map(Error::from).unwrap_or(Error::Sftp("channel".into())))
+    }
+
+    async fn sftp(&self, target: &str) -> Result<SftpSession, Error> {
+        let channel = self.container_channel(target).await?;
+        channel.request_subsystem(true, "sftp").await?;
+        SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|e| Error::Sftp(e.to_string()))
+    }
+
+    /// List a directory in a container over SFTP, resolving an empty path to the
+    /// login directory. Dirs first, then case-insensitive by name.
+    pub async fn fs_list(&self, target: &str, path: Option<String>) -> Result<FsListing, Error> {
+        let sftp = self.sftp(target).await?;
+        let dir = match path {
+            Some(p) if !p.is_empty() => p,
+            _ => sftp
+                .canonicalize(".")
+                .await
+                .map_err(|e| Error::Sftp(e.to_string()))?,
+        };
+        let read = sftp
+            .read_dir(dir.clone())
+            .await
+            .map_err(|e| Error::Sftp(e.to_string()))?;
+        let mut entries: Vec<FileEntry> = read
+            .filter(|e| e.file_name() != "." && e.file_name() != "..")
+            .map(|e| {
+                let meta = e.metadata();
+                let name = e.file_name();
+                FileEntry {
+                    path: join_remote(&dir, &name),
+                    name,
+                    is_dir: meta.is_dir(),
+                    size: meta.len(),
+                }
+            })
+            .collect();
+        entries.sort_by(|a, b| {
+            b.is_dir
+                .cmp(&a.is_dir)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Ok(FsListing { path: dir, entries })
+    }
+
+    /// Download a file's bytes from a container (pull / open).
+    pub async fn fs_read(&self, target: &str, path: String) -> Result<Vec<u8>, Error> {
+        self.sftp(target)
+            .await?
+            .read(path)
+            .await
+            .map_err(|e| Error::Sftp(e.to_string()))
+    }
+
+    /// Upload local files into a container directory (drag-and-drop). Returns the
+    /// landed remote paths.
+    pub async fn fs_upload(
+        &self,
+        target: &str,
+        remote_dir: String,
+        local_paths: Vec<String>,
+    ) -> Result<Vec<String>, Error> {
+        let sftp = self.sftp(target).await?;
+        let mut landed = Vec::new();
+        for local in local_paths {
+            let bytes = tokio::fs::read(&local).await?;
+            let name = std::path::Path::new(&local)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| Error::Sftp(format!("bad source path: {local}")))?;
+            let remote = join_remote(&remote_dir, name);
+            // create() opens CREATE|TRUNCATE|WRITE; plain write() would 404 a new
+            // file (it opens WRITE-only).
+            let mut file = sftp
+                .create(&remote)
+                .await
+                .map_err(|e| Error::Sftp(e.to_string()))?;
+            file.write_all(&bytes).await?;
+            file.flush().await?;
+            landed.push(remote);
+        }
+        Ok(landed)
+    }
+
     /// Proxies one HTTP request to the control plane over a direct-tcpip
     /// forward. `Connection: close` lets us read the response to EOF without a
     /// chunked-body parser. The bearer token is injected here so it never
@@ -369,19 +516,12 @@ impl Backend {
         cols: u32,
         rows: u32,
     ) -> Result<(), Error> {
-        // A named target opens a dedicated session to that ssh alias (a project
-        // container); no target = a shell on the node over the shared session.
-        // The target session (and its jump handles) must outlive the channel,
-        // so it moves into the reader task.
-        let (owned, mut channel) = match target.as_deref().filter(|t| !t.is_empty()) {
-            Some(alias) => {
-                let session = tokio::time::timeout(CONNECT_TIMEOUT, self.dial_alias(alias, None))
-                    .await
-                    .map_err(|_| Error::Timeout(alias.to_string()))??;
-                let channel = session.handle.channel_open_session().await?;
-                (Some(session), channel)
-            }
-            None => (None, self.open_session_channel().await?),
+        // A named target opens a shell in that project container (over its
+        // cached session, shared with the file bridge); no target = a shell on
+        // the node over the control-plane session.
+        let mut channel = match target.as_deref().filter(|t| !t.is_empty()) {
+            Some(alias) => self.container_channel(alias).await?,
+            None => self.open_session_channel().await?,
         };
         channel
             .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
@@ -395,7 +535,8 @@ impl Backend {
         let exit_event = format!("terminal://exit/{id}");
 
         tokio::spawn(async move {
-            let _session = owned; // keep the target session + its jumps alive
+            // The container session is kept alive by the `containers` cache; the
+            // node session lives in `self`. Nothing to own here.
             loop {
                 tokio::select! {
                     msg = channel.wait() => match msg {
@@ -754,6 +895,12 @@ fn split_flow(inner: &str) -> Vec<String> {
     parts
 }
 
+/// Join a remote directory and a file name into an absolute POSIX path,
+/// tolerating a trailing slash and a root ("/") base.
+fn join_remote(dir: &str, name: &str) -> String {
+    format!("{}/{}", dir.trim_end_matches('/'), name)
+}
+
 fn parse_server(server: &str) -> (String, u16) {
     let (scheme, rest) = match server.split_once("://") {
         Some((s, r)) => (s, r),
@@ -837,6 +984,14 @@ Host bastion
     }
 
     #[test]
+    fn join_remote_handles_root_and_trailing_slash() {
+        assert_eq!(join_remote("/home/dev", "a.txt"), "/home/dev/a.txt");
+        assert_eq!(join_remote("/home/dev/", "a.txt"), "/home/dev/a.txt");
+        assert_eq!(join_remote("/", "a.txt"), "/a.txt");
+        assert_eq!(join_remote("", "a.txt"), "/a.txt");
+    }
+
+    #[test]
     fn parse_server_pins_localhost_and_defaults_port() {
         assert_eq!(parse_server("http://localhost:7070"), ("127.0.0.1".into(), 7070));
         assert_eq!(parse_server("https://api.example.com"), ("api.example.com".into(), 443));
@@ -868,5 +1023,43 @@ Host bastion
             .await
             .expect("connect");
         assert_eq!(agent_auth(&mut handle, &user).await, Some(true));
+    }
+
+    /// Live SFTP round-trip (list + upload + download) with the same russh-sftp
+    /// calls the file bridge uses. Same prerequisites as the agent test; run
+    /// with `--ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn sftp_roundtrip_against_localhost() {
+        let user = std::env::var("USER").unwrap();
+        let mut handle = client::connect(Arc::new(Config::default()), ("127.0.0.1", 22), Client)
+            .await
+            .expect("connect");
+        assert_eq!(agent_auth(&mut handle, &user).await, Some(true));
+
+        let mut channel = handle.channel_open_session().await.expect("channel");
+        channel.request_subsystem(true, "sftp").await.expect("subsystem");
+        let sftp = SftpSession::new(channel.into_stream()).await.expect("sftp");
+
+        let home = sftp.canonicalize(".").await.expect("canonicalize");
+        assert!(home.starts_with('/'), "home should be absolute: {home}");
+
+        let path = join_remote(&home, "mast_fs_bridge_test.txt");
+        let body = b"file bridge over russh-sftp\n";
+        let mut file = sftp.create(&path).await.expect("create");
+        file.write_all(body).await.expect("write_all");
+        file.flush().await.expect("flush");
+        drop(file);
+        assert_eq!(sftp.read(&path).await.expect("read"), body);
+
+        let names: Vec<String> = sftp
+            .read_dir(home)
+            .await
+            .expect("read_dir")
+            .map(|e| e.file_name())
+            .collect();
+        assert!(names.iter().any(|n| n == "mast_fs_bridge_test.txt"));
+
+        sftp.remove_file(&path).await.ok();
     }
 }
