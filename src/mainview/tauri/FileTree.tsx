@@ -7,6 +7,33 @@ export type { FileEntry, FsApi, FsListing } from "./fileTreeStore";
 
 type Menu = { x: number; y: number; entry: FileEntry };
 
+export type FileActions = {
+  edit: (entry: FileEntry) => void;
+  open: (entry: FileEntry) => void;
+  download: (entry: FileEntry) => void;
+  rename: (entry: FileEntry) => void;
+  remove: (entry: FileEntry) => void;
+  newFolder: (parentDir: string) => void;
+};
+
+/** The right-click menu for an entry — files edit/open, dirs get New folder. */
+export function fileMenuItems(entry: FileEntry, a: FileActions): MenuNode[] {
+  const common: MenuNode[] = [
+    { kind: "item", label: entry.isDir ? "Download folder" : "Download", hint: "→ ~/Downloads", onSelect: () => a.download(entry) },
+    { kind: "separator" },
+    { kind: "item", label: "Rename…", onSelect: () => a.rename(entry) },
+    { kind: "item", label: "Delete", danger: true, onSelect: () => a.remove(entry) },
+  ];
+  if (entry.isDir) {
+    return [{ kind: "item", label: "New folder…", onSelect: () => a.newFolder(entry.path) }, ...common];
+  }
+  return [
+    { kind: "item", label: "Edit", onSelect: () => a.edit(entry) },
+    { kind: "item", label: "Open", hint: "default app", onSelect: () => a.open(entry) },
+    ...common,
+  ];
+}
+
 /**
  * A lazy file tree, a pure view over an injected `FileTreeStore` (which owns the
  * caching / prefetch / revalidation rules). Drag-drop is handled by the parent
@@ -15,11 +42,11 @@ type Menu = { x: number; y: number; entry: FileEntry };
 export function FileTree({
   store,
   dropDir,
-  onDownload,
+  actions,
 }: {
   store: FileTreeStore;
   dropDir?: string | null;
-  onDownload?: (entry: FileEntry) => void;
+  actions?: FileActions;
 }) {
   useSyncExternalStore(
     useCallback((cb) => store.subscribe(cb), [store]),
@@ -30,7 +57,7 @@ export function FileTree({
   }, [store]);
 
   const [menu, setMenu] = useState<Menu | null>(null);
-  const onRowMenu = onDownload
+  const onRowMenu = actions
     ? (entry: FileEntry, e: React.MouseEvent) => {
         e.preventDefault();
         setMenu({ x: e.clientX, y: e.clientY, entry });
@@ -46,14 +73,26 @@ export function FileTree({
     >
       <header className="file-tree__bar">
         <span className="file-tree__title">Files</span>
-        <button
-          type="button"
-          className={`file-tree__refresh${store.busy ? " file-tree__refresh--busy" : ""}`}
-          onClick={() => store.refresh()}
-          aria-label="Refresh"
-        >
-          ↻
-        </button>
+        <span className="file-tree__actions">
+          {actions && store.rootPath && (
+            <button
+              type="button"
+              className="file-tree__refresh"
+              onClick={() => actions.newFolder(store.rootPath!)}
+              aria-label="New folder"
+            >
+              ＋
+            </button>
+          )}
+          <button
+            type="button"
+            className={`file-tree__refresh${store.busy ? " file-tree__refresh--busy" : ""}`}
+            onClick={() => store.refresh()}
+            aria-label="Refresh"
+          >
+            ↻
+          </button>
+        </span>
       </header>
       <div className="file-tree__body">
         {store.rootError ? (
@@ -64,27 +103,16 @@ export function FileTree({
           <TreeLevel store={store} path={store.rootPath} depth={0} dropDir={dropDir} onRowMenu={onRowMenu} />
         )}
       </div>
-      {menu && (
+      {menu && actions && (
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          items={downloadMenu(menu.entry, onDownload!)}
+          items={fileMenuItems(menu.entry, actions)}
           onClose={() => setMenu(null)}
         />
       )}
     </div>
   );
-}
-
-function downloadMenu(entry: FileEntry, onDownload: (e: FileEntry) => void): MenuNode[] {
-  return [
-    {
-      kind: "item",
-      label: entry.isDir ? "Download folder" : "Download",
-      hint: "→ ~/Downloads",
-      onSelect: () => onDownload(entry),
-    },
-  ];
 }
 
 function TreeLevel({

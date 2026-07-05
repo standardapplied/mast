@@ -2708,6 +2708,40 @@ span.checkbox {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* File editor + danger button ---------------------------------------------- */
+.editor__area {
+  width: 100%;
+  height: 52vh;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--background-deep);
+  color: var(--foreground);
+  font: 13px/1.5 var(--font-mono);
+  tab-size: 4;
+}
+.editor__area:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+.editor__note {
+  margin: 0;
+  padding: 24px 4px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.editor__note--error {
+  color: var(--error);
+}
+.btn-danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
+}
+.btn-danger:hover {
+  filter: brightness(1.05);
+}
 .file-tree__bar {
   display: flex;
   align-items: center;
@@ -2718,6 +2752,10 @@ span.checkbox {
   letter-spacing: var(--tracking-eyebrow);
   text-transform: uppercase;
   color: var(--subtle-foreground);
+}
+.file-tree__actions {
+  display: inline-flex;
+  gap: 4px;
 }
 .file-tree__refresh {
   appearance: none;

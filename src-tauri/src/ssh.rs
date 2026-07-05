@@ -499,7 +499,12 @@ impl Backend {
         remote_dir: String,
         local_paths: Vec<String>,
         transfer_id: String,
-    ) -> Result<usize, Error> {
+    ) -> Result<Vec<String>, Error> {
+        // The top-level landed path per dropped item (for terminal-drop inject).
+        let landed: Vec<String> = local_paths
+            .iter()
+            .map(|p| join_remote(&remote_dir, base_name(p)))
+            .collect();
         let rd = remote_dir.clone();
         let plan = tokio::task::spawn_blocking(move || plan_upload(&local_paths, &rd))
             .await
@@ -520,7 +525,7 @@ impl Backend {
             progress.detail = Some(e.to_string());
         }
         emit_transfer(app, &progress);
-        outcome.map(|_| progress.files_done as usize)
+        outcome.map(|_| landed)
     }
 
     async fn run_upload(
@@ -567,13 +572,17 @@ impl Backend {
         remote_paths: Vec<String>,
         local_dir: Option<String>,
         transfer_id: String,
-    ) -> Result<usize, Error> {
+    ) -> Result<Vec<String>, Error> {
         let base = local_dir
             .filter(|d| !d.is_empty())
             .map(PathBuf::from)
             .or_else(dirs::download_dir)
             .or_else(dirs::home_dir)
             .ok_or_else(|| Error::Sftp("no local download directory".into()))?;
+        let landed: Vec<String> = remote_paths
+            .iter()
+            .map(|r| base.join(base_name(r)).to_string_lossy().into_owned())
+            .collect();
 
         let sftp = self.sftp(target).await?;
         let plan = plan_download(&sftp, &remote_paths, &base).await?;
@@ -593,7 +602,38 @@ impl Backend {
             progress.detail = Some(e.to_string());
         }
         emit_transfer(app, &progress);
-        outcome.map(|_| progress.files_done as usize)
+        outcome.map(|_| landed)
+    }
+
+    /// Overwrite a remote file with `contents` (editor save).
+    pub async fn fs_write(&self, target: &str, path: String, contents: Vec<u8>) -> Result<(), Error> {
+        let sftp = self.sftp(target).await?;
+        let mut file = sftp.create(&path).await.map_err(|e| Error::Sftp(e.to_string()))?;
+        file.write_all(&contents).await?;
+        file.flush().await?;
+        Ok(())
+    }
+
+    pub async fn fs_rename(&self, target: &str, from: String, to: String) -> Result<(), Error> {
+        self.sftp(target)
+            .await?
+            .rename(from, to)
+            .await
+            .map_err(|e| Error::Sftp(e.to_string()))
+    }
+
+    pub async fn fs_mkdir(&self, target: &str, path: String) -> Result<(), Error> {
+        self.sftp(target)
+            .await?
+            .create_dir(path)
+            .await
+            .map_err(|e| Error::Sftp(e.to_string()))
+    }
+
+    /// Delete a file, or a directory and everything under it.
+    pub async fn fs_delete(&self, target: &str, path: String) -> Result<(), Error> {
+        let sftp = self.sftp(target).await?;
+        remove_recursive(&sftp, &path).await
     }
 
     /// Proxies one HTTP request to the control plane over a direct-tcpip
@@ -1156,6 +1196,38 @@ async fn run_download(
     Ok(())
 }
 
+/// Delete a remote path: a file directly, or a directory by removing all its
+/// contents (files first, then dirs deepest-first) before the dir itself.
+async fn remove_recursive(sftp: &SftpSession, path: &str) -> Result<(), Error> {
+    let meta = sftp.metadata(path.to_string()).await.map_err(|e| Error::Sftp(e.to_string()))?;
+    if !meta.is_dir() {
+        return sftp.remove_file(path).await.map_err(|e| Error::Sftp(e.to_string()));
+    }
+    let mut dirs = vec![path.to_string()];
+    let mut stack = vec![path.to_string()];
+    while let Some(current) = stack.pop() {
+        let read = sftp.read_dir(current.clone()).await.map_err(|e| Error::Sftp(e.to_string()))?;
+        for entry in read {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let child = join_remote(&current, &name);
+            if entry.metadata().is_dir() {
+                dirs.push(child.clone());
+                stack.push(child);
+            } else {
+                sftp.remove_file(&child).await.map_err(|e| Error::Sftp(e.to_string()))?;
+            }
+        }
+    }
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.matches('/').count()));
+    for dir in dirs {
+        sftp.remove_dir(&dir).await.map_err(|e| Error::Sftp(e.to_string()))?;
+    }
+    Ok(())
+}
+
 fn parse_server(server: &str) -> (String, u16) {
     let (scheme, rest) = match server.split_once("://") {
         Some((s, r)) => (s, r),
@@ -1356,7 +1428,15 @@ Host bastion
         nf.flush().await.expect("flush nested");
         drop(nf);
         assert_eq!(sftp.read(&nested).await.expect("read nested"), b"nested");
-        sftp.remove_file(&nested).await.ok();
-        sftp.remove_dir(&subdir).await.ok();
+
+        // Rename.
+        let renamed = join_remote(&home, "mast_fs_renamed.txt");
+        sftp.rename(nested.clone(), renamed.clone()).await.expect("rename");
+        assert_eq!(sftp.read(&renamed).await.expect("read renamed"), b"nested");
+        sftp.rename(renamed, nested.clone()).await.ok();
+
+        // Recursive delete of the populated directory.
+        remove_recursive(&sftp, &subdir).await.expect("remove_recursive");
+        assert!(sftp.metadata(subdir).await.is_err(), "dir should be gone");
     }
 }

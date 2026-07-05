@@ -8,6 +8,7 @@ mod ssh;
 use serde_json::json;
 use ssh::Backend;
 use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 use tokio::sync::OnceCell;
 
 /// Lazily-built backend. Construction reads `~/.sail/config.yaml`; if that is
@@ -105,7 +106,7 @@ async fn fs_upload(
     remote_dir: String,
     local_paths: Vec<String>,
     transfer_id: String,
-) -> Result<usize, String> {
+) -> Result<Vec<String>, String> {
     state
         .backend()
         .await?
@@ -122,13 +123,61 @@ async fn fs_download(
     remote_paths: Vec<String>,
     local_dir: Option<String>,
     transfer_id: String,
-) -> Result<usize, String> {
+) -> Result<Vec<String>, String> {
     state
         .backend()
         .await?
         .fs_download(&app, &target, remote_paths, local_dir, transfer_id)
         .await
         .map_err(String::from)
+}
+
+#[tauri::command]
+async fn fs_write(
+    state: State<'_, AppState>,
+    target: String,
+    path: String,
+    contents: Vec<u8>,
+) -> Result<(), String> {
+    state.backend().await?.fs_write(&target, path, contents).await.map_err(String::from)
+}
+
+#[tauri::command]
+async fn fs_rename(state: State<'_, AppState>, target: String, from: String, to: String) -> Result<(), String> {
+    state.backend().await?.fs_rename(&target, from, to).await.map_err(String::from)
+}
+
+#[tauri::command]
+async fn fs_mkdir(state: State<'_, AppState>, target: String, path: String) -> Result<(), String> {
+    state.backend().await?.fs_mkdir(&target, path).await.map_err(String::from)
+}
+
+#[tauri::command]
+async fn fs_delete(state: State<'_, AppState>, target: String, path: String) -> Result<(), String> {
+    state.backend().await?.fs_delete(&target, path).await.map_err(String::from)
+}
+
+/// Download a file to ~/Downloads and open it in the OS default app.
+#[tauri::command]
+async fn fs_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target: String,
+    remote_path: String,
+    transfer_id: String,
+) -> Result<(), String> {
+    let landed = state
+        .backend()
+        .await?
+        .fs_download(&app, &target, vec![remote_path], None, transfer_id)
+        .await
+        .map_err(String::from)?;
+    if let Some(local) = landed.first() {
+        app.opener()
+            .open_path(local.clone(), None::<&str>)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -186,6 +235,11 @@ pub fn run() {
             fs_read,
             fs_upload,
             fs_download,
+            fs_write,
+            fs_rename,
+            fs_mkdir,
+            fs_delete,
+            fs_open,
             terminal_open,
             terminal_write,
             terminal_resize,
