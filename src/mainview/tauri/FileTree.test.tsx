@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { FileTree, type FsApi, type FsListing } from "./FileTree";
+import { FileTree } from "./FileTree";
+import { FileTreeStore, type FsApi, type FsListing } from "./fileTreeStore";
 
 let root: Root;
 let container: HTMLElement;
@@ -36,7 +37,7 @@ async function render(fs: FsApi) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  act(() => root.render(<FileTree target="mast" fs={fs} />));
+  act(() => root.render(<FileTree store={new FileTreeStore(fs)} />));
   await flush();
 }
 

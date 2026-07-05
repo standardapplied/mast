@@ -126,6 +126,19 @@ export class FileTreeStore {
     else void this.loadRoot();
   }
 
+  /** Expand a directory (loading it if needed) so a just-dropped file is seen.
+   * The root is always visible, so revealing it is a no-op. */
+  reveal(path: string): void {
+    if (path === this.rootPath || this.expanded.has(path)) return;
+    this.expanded.add(path);
+    const cached = this.nodes.get(path);
+    if (!cached || cached.status !== "ready") {
+      this.nodes.set(path, { status: "loading" });
+      void this.fetch(path, false);
+    }
+    this.emit();
+  }
+
   private async fetch(path: string, background: boolean): Promise<void> {
     if (this.inflight.has(path)) return;
     this.inflight.add(path);

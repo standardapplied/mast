@@ -2620,6 +2620,21 @@ span.checkbox {
   outline: 2px dashed var(--primary);
   outline-offset: -2px;
 }
+.term-split__main {
+  position: relative;
+}
+.term-split__main--drop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  outline: 2px dashed var(--primary);
+  outline-offset: -2px;
+  pointer-events: none;
+}
+.file-tree__row--drop {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
 .file-tree__bar {
   display: flex;
   align-items: center;

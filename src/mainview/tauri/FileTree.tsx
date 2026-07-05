@@ -1,93 +1,28 @@
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { CaretDown, CaretRight } from "../components/icons";
-import { FileTreeStore, type DirState, type FileEntry, type FsApi } from "./fileTreeStore";
+import type { DirState, FileEntry, FileTreeStore } from "./fileTreeStore";
 
 export type { FileEntry, FsApi, FsListing } from "./fileTreeStore";
 
 /**
- * A lazy file tree over a project container's filesystem (SFTP `fs_list`), with
- * caching, background revalidation, and next-level prefetch — all in
- * `FileTreeStore` so the rules are tested independently. Dropping OS files
- * uploads them into the current directory. The fs seam is injectable for tests.
+ * A lazy file tree, a pure view over an injected `FileTreeStore` (which owns the
+ * caching / prefetch / revalidation rules). Drag-drop is handled by the parent
+ * coordinator, which highlights the target directory via `dropDir`.
  */
-
-function tauriFs(target: string): FsApi {
-  return {
-    list: (path) => invoke("fs_list", { target, path }),
-    upload: (remoteDir, paths) => invoke("fs_upload", { target, remoteDir, localPaths: paths }),
-  };
-}
-
-export function FileTree({
-  target,
-  fs,
-  onToast,
-}: {
-  target: string;
-  fs?: FsApi;
-  onToast?: (message: string, ok: boolean) => void;
-}) {
-  const [store] = useState(() => new FileTreeStore(fs ?? tauriFs(target)));
-  const treeRef = useRef<HTMLDivElement>(null);
-
+export function FileTree({ store, dropDir }: { store: FileTreeStore; dropDir?: string | null }) {
   useSyncExternalStore(
     useCallback((cb) => store.subscribe(cb), [store]),
     () => store.version,
   );
-
   useEffect(() => {
     void store.loadRoot();
-    return () => store.dispose();
   }, [store]);
 
-  const upload = useCallback(
-    async (paths: string[]) => {
-      const dir = store.rootPath;
-      if (!dir || paths.length === 0) return;
-      try {
-        const landed = await store.upload(dir, paths);
-        onToast?.(`Uploaded ${landed.length} file${landed.length === 1 ? "" : "s"} to ${dir}`, true);
-      } catch (e) {
-        onToast?.(`Upload failed: ${e}`, false);
-      }
-    },
-    [store, onToast],
-  );
-
-  const [dropping, setDropping] = useState(false);
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    try {
-      void getCurrentWebview()
-        .onDragDropEvent((event) => {
-          // The drop event is window-global; ignore it unless this tree is the
-          // visible view (offsetParent is null under a `display:none` ancestor,
-          // e.g. the Board tab), so a drop elsewhere can't upload here.
-          if (!treeRef.current || treeRef.current.offsetParent === null) return;
-          const p = event.payload;
-          if (p.type === "over") setDropping(true);
-          else if (p.type === "leave") setDropping(false);
-          else if (p.type === "drop") {
-            setDropping(false);
-            void upload(p.paths);
-          }
-        })
-        .then((off) => {
-          unlisten = off;
-        })
-        .catch(() => {});
-    } catch {
-      /* not in a Tauri webview */
-    }
-    return () => unlisten?.();
-  }, [upload]);
+  const rootIsTarget = dropDir != null && dropDir === store.rootPath;
 
   return (
     <div
-      ref={treeRef}
-      className={`file-tree${dropping ? " file-tree--dropping" : ""}`}
+      className={`file-tree${rootIsTarget ? " file-tree--dropping" : ""}`}
       data-testid="file-tree"
     >
       <header className="file-tree__bar">
@@ -107,29 +42,49 @@ export function FileTree({
         ) : store.rootPath === null ? (
           <Skeleton depth={0} />
         ) : (
-          <TreeLevel store={store} path={store.rootPath} depth={0} />
+          <TreeLevel store={store} path={store.rootPath} depth={0} dropDir={dropDir} />
         )}
       </div>
     </div>
   );
 }
 
-function TreeLevel({ store, path, depth }: { store: FileTreeStore; path: string; depth: number }) {
+function TreeLevel({
+  store,
+  path,
+  depth,
+  dropDir,
+}: {
+  store: FileTreeStore;
+  path: string;
+  depth: number;
+  dropDir?: string | null;
+}) {
   const node: DirState | undefined = store.dir(path);
   if (!node || node.status === "loading") return <Skeleton depth={depth} />;
   if (node.status === "error") {
     return <p className="file-tree__note file-tree__note--error">{node.error}</p>;
   }
   if (node.entries.length === 0) {
-    return <p className="file-tree__note" style={{ paddingLeft: 8 + depth * 14 }}>Empty</p>;
+    return (
+      <p className="file-tree__note" style={{ paddingLeft: 8 + depth * 14 }}>
+        Empty
+      </p>
+    );
   }
   return (
     <ul className="file-tree__list">
       {node.entries.map((entry) => (
         <li key={entry.path}>
-          <Row entry={entry} depth={depth} expanded={store.isExpanded(entry.path)} onToggle={() => store.toggle(entry)} />
+          <Row
+            entry={entry}
+            depth={depth}
+            expanded={store.isExpanded(entry.path)}
+            isDropTarget={dropDir === entry.path}
+            onToggle={() => store.toggle(entry)}
+          />
           {entry.isDir && store.isExpanded(entry.path) && (
-            <TreeLevel store={store} path={entry.path} depth={depth + 1} />
+            <TreeLevel store={store} path={entry.path} depth={depth + 1} dropDir={dropDir} />
           )}
         </li>
       ))}
@@ -141,19 +96,22 @@ function Row({
   entry,
   depth,
   expanded,
+  isDropTarget,
   onToggle,
 }: {
   entry: FileEntry;
   depth: number;
   expanded: boolean;
+  isDropTarget: boolean;
   onToggle: () => void;
 }) {
   return (
     <button
       type="button"
-      className="file-tree__row"
+      className={`file-tree__row${isDropTarget ? " file-tree__row--drop" : ""}`}
       style={{ paddingLeft: 8 + depth * 14 }}
       onClick={onToggle}
+      data-path={entry.path}
       data-dir={entry.isDir}
     >
       <span className="file-tree__twist">

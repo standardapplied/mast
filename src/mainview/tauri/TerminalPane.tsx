@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { FitAddon, init, Terminal, type ITheme } from "ghostty-web";
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ThemeName } from "../../shared/types";
 import { terminalTheme, type TerminalTheme } from "../ansi";
 import { CaretLeft } from "../components/icons";
+
+export type TerminalHandle = { paste: (text: string) => void };
 
 /**
  * The terminal pillar: a real Ghostty VT (WASM) rendering a live PTY on the
@@ -34,25 +36,35 @@ function toGhosttyTheme(t: TerminalTheme): ITheme {
   };
 }
 
-export function TerminalPane({
-  target,
-  label,
-  onBack,
-}: {
-  /** ssh alias of a project container; omitted = a shell on the node. */
-  target?: string;
-  label?: string;
-  onBack?: () => void;
-}) {
+export const TerminalPane = forwardRef<
+  TerminalHandle,
+  {
+    /** ssh alias of a project container; omitted = a shell on the node. */
+    target?: string;
+    label?: string;
+    onBack?: () => void;
+  }
+>(function TerminalPane({ target, label, onBack }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const idRef = useRef("");
   const [status, setStatus] = useState("connecting…");
+
+  const write = (data: string) =>
+    void invoke("terminal_write", {
+      id: idRef.current,
+      data: Array.from(new TextEncoder().encode(data)),
+    }).catch(() => {});
+
+  // Lets the drop coordinator inject an uploaded file's path into the shell.
+  useImperativeHandle(ref, () => ({ paste: (text) => idRef.current && write(text) }), []);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
 
     const id = crypto.randomUUID();
+    idRef.current = id;
     const encoder = new TextEncoder();
     let alive = true;
     let dataOff: Promise<() => void> | null = null;
@@ -169,4 +181,4 @@ export function TerminalPane({
       />
     </div>
   );
-}
+});

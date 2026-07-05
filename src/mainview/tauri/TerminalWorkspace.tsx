@@ -1,9 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { CaretRight } from "../components/icons";
-import { useToast } from "../components/Toast";
-import { FileTree } from "./FileTree";
 import { TerminalPane } from "./TerminalPane";
+import { TerminalSplit } from "./TerminalSplit";
 
 /**
  * The Terminal section: first pick which project container to open (project
@@ -18,7 +17,6 @@ export function TerminalWorkspace() {
   const [targets, setTargets] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<Active | null>(null);
-  const { showToast } = useToast();
 
   useEffect(() => {
     invoke<string[]>("list_targets")
@@ -27,25 +25,18 @@ export function TerminalWorkspace() {
   }, []);
 
   if (active) {
-    const pane = (
-      <TerminalPane
-        key={active.label}
+    // The node shell has no container filesystem; a project gets the split
+    // (terminal + file tree + drag-drop), keyed so it resets per project.
+    if (!active.target) {
+      return <TerminalPane key={active.label} label={active.label} onBack={() => setActive(null)} />;
+    }
+    return (
+      <TerminalSplit
+        key={active.target}
         target={active.target}
         label={active.label}
         onBack={() => setActive(null)}
       />
-    );
-    // The node shell has no container filesystem; a project gets the split.
-    if (!active.target) return pane;
-    return (
-      <div className="term-split">
-        <div className="term-split__main">{pane}</div>
-        <FileTree
-          key={active.target}
-          target={active.target}
-          onToast={(message, ok) => showToast(ok ? "success" : "error", message)}
-        />
-      </div>
     );
   }
 
