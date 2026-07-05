@@ -2698,6 +2698,50 @@ span.checkbox {
 .file-tree__note--error {
   color: var(--error);
 }
+.file-tree__refresh--busy {
+  animation: file-tree-spin 0.8s linear infinite;
+  color: var(--foreground);
+}
+@keyframes file-tree-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.file-tree__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 8px 12px;
+}
+.file-tree__skel {
+  height: 11px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--surface-hover) 0%,
+    var(--border) 40%,
+    var(--surface-hover) 80%
+  );
+  background-size: 200% 100%;
+  animation: file-tree-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes file-tree-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .file-tree__skel,
+  .file-tree__refresh--busy {
+    animation: none;
+  }
+  .file-tree__skel {
+    opacity: 0.6;
+  }
+}
 @media (max-width: 768px) {
   .term-split {
     flex-direction: column;

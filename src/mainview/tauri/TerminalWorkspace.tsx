@@ -41,6 +41,7 @@ export function TerminalWorkspace() {
       <div className="term-split">
         <div className="term-split__main">{pane}</div>
         <FileTree
+          key={active.target}
           target={active.target}
           onToast={(message, ok) => showToast(ok ? "success" : "error", message)}
         />

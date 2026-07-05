@@ -8,8 +8,7 @@ let container: HTMLElement;
 
 const flush = async () => {
   await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
   });
 };
 
