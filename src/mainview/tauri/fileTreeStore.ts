@@ -3,7 +3,6 @@ export type FsListing = { path: string; entries: FileEntry[] };
 
 export type FsApi = {
   list: (path: string | null) => Promise<FsListing>;
-  upload: (remoteDir: string, paths: string[]) => Promise<string[]>;
 };
 
 export type DirState =
@@ -63,13 +62,6 @@ export class FileTreeStore {
     this.version++;
     if (this.disposed) return;
     for (const listener of this.listeners) listener();
-  }
-
-  /** Upload files into a directory, then silently refresh it. */
-  async upload(remoteDir: string, paths: string[]): Promise<string[]> {
-    const landed = await this.fs.upload(remoteDir, paths);
-    this.revalidate(remoteDir);
-    return landed;
   }
 
   async loadRoot(): Promise<void> {

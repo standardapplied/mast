@@ -99,15 +99,34 @@ async fn fs_read(state: State<'_, AppState>, target: String, path: String) -> Re
 
 #[tauri::command]
 async fn fs_upload(
+    app: AppHandle,
     state: State<'_, AppState>,
     target: String,
     remote_dir: String,
     local_paths: Vec<String>,
-) -> Result<Vec<String>, String> {
+    transfer_id: String,
+) -> Result<usize, String> {
     state
         .backend()
         .await?
-        .fs_upload(&target, remote_dir, local_paths)
+        .fs_upload(&app, &target, remote_dir, local_paths, transfer_id)
+        .await
+        .map_err(String::from)
+}
+
+#[tauri::command]
+async fn fs_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target: String,
+    remote_paths: Vec<String>,
+    local_dir: Option<String>,
+    transfer_id: String,
+) -> Result<usize, String> {
+    state
+        .backend()
+        .await?
+        .fs_download(&app, &target, remote_paths, local_dir, transfer_id)
         .await
         .map_err(String::from)
 }
@@ -166,6 +185,7 @@ pub fn run() {
             fs_list,
             fs_read,
             fs_upload,
+            fs_download,
             terminal_open,
             terminal_write,
             terminal_resize,

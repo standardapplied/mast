@@ -29,7 +29,6 @@ function fakeFs(): FsApi {
   };
   return {
     list: async (path) => dirs[path ?? "/home/dev"] ?? { path: path ?? "", entries: [] },
-    upload: async () => [],
   };
 }
 
@@ -76,7 +75,7 @@ describe("FileTree", () => {
   });
 
   test("surfaces a listing error", async () => {
-    const fs: FsApi = { list: async () => Promise.reject(new Error("boom")), upload: async () => [] };
+    const fs: FsApi = { list: async () => Promise.reject(new Error("boom")) };
     await render(fs);
     expect(container.querySelector(".file-tree__note--error")?.textContent).toContain("boom");
   });

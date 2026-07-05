@@ -2635,6 +2635,79 @@ span.checkbox {
   background: color-mix(in srgb, var(--primary) 18%, transparent);
   box-shadow: inset 2px 0 0 var(--primary);
 }
+
+/* Transfers tray ------------------------------------------------------------ */
+.transfers {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 300px;
+  max-width: calc(100% - 32px);
+  pointer-events: none;
+}
+.transfer {
+  pointer-events: auto;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+}
+.transfer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.transfer__label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transfer__status {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+}
+.transfer__bar {
+  height: 3px;
+  margin: 8px 0 6px;
+  background: var(--border);
+  overflow: hidden;
+}
+.transfer__fill {
+  height: 100%;
+  background: var(--primary);
+  transition: width 200ms ease;
+}
+.transfer--done .transfer__fill {
+  background: var(--success);
+}
+.transfer--error .transfer__fill {
+  background: var(--error);
+}
+.transfer--done .transfer__status {
+  color: var(--success);
+}
+.transfer--error .transfer__status {
+  color: var(--error);
+}
+.transfer__meta {
+  font-size: 11px;
+  color: var(--subtle-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .file-tree__bar {
   display: flex;
   align-items: center;

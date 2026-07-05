@@ -9,7 +9,7 @@
 //! russh 0.45 API wired behind Tauri commands.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -173,6 +173,66 @@ pub struct FileEntry {
 pub struct FsListing {
     pub path: String,
     pub entries: Vec<FileEntry>,
+}
+
+/// Live progress for a file transfer, emitted on the `transfer` event so the UI
+/// can show a real bar while bytes crawl over a high-latency link.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferProgress {
+    pub id: String,
+    pub kind: &'static str,
+    pub label: String,
+    pub files_done: u64,
+    pub files_total: u64,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub status: &'static str,
+    pub detail: Option<String>,
+}
+
+impl TransferProgress {
+    fn start(id: String, kind: &'static str, label: String, files_total: u64, bytes_total: u64) -> Self {
+        TransferProgress {
+            id,
+            kind,
+            label,
+            files_done: 0,
+            files_total,
+            bytes_done: 0,
+            bytes_total,
+            status: "active",
+            detail: None,
+        }
+    }
+}
+
+struct UploadItem {
+    local: PathBuf,
+    remote: String,
+}
+#[derive(Default)]
+struct UploadPlan {
+    dirs: Vec<String>,
+    files: Vec<UploadItem>,
+    bytes: u64,
+}
+
+struct DownloadItem {
+    remote: String,
+    local: PathBuf,
+}
+#[derive(Default)]
+struct DownloadPlan {
+    files: Vec<DownloadItem>,
+    bytes: u64,
+}
+
+const CHUNK: usize = 64 * 1024;
+const EMIT_EVERY: u64 = 256 * 1024;
+
+fn emit_transfer(app: &AppHandle, progress: &TransferProgress) {
+    let _ = app.emit("transfer", progress);
 }
 
 impl Backend {
@@ -430,34 +490,110 @@ impl Backend {
             .map_err(|e| Error::Sftp(e.to_string()))
     }
 
-    /// Upload local files into a container directory (drag-and-drop). Returns the
-    /// landed remote paths.
+    /// Upload files and/or folders into a container directory (drag-and-drop),
+    /// recursing into folders, and streaming `transfer` progress the whole time.
     pub async fn fs_upload(
         &self,
+        app: &AppHandle,
         target: &str,
         remote_dir: String,
         local_paths: Vec<String>,
-    ) -> Result<Vec<String>, Error> {
-        let sftp = self.sftp(target).await?;
-        let mut landed = Vec::new();
-        for local in local_paths {
-            let bytes = tokio::fs::read(&local).await?;
-            let name = std::path::Path::new(&local)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .ok_or_else(|| Error::Sftp(format!("bad source path: {local}")))?;
-            let remote = join_remote(&remote_dir, name);
-            // create() opens CREATE|TRUNCATE|WRITE; plain write() would 404 a new
-            // file (it opens WRITE-only).
-            let mut file = sftp
-                .create(&remote)
-                .await
-                .map_err(|e| Error::Sftp(e.to_string()))?;
-            file.write_all(&bytes).await?;
-            file.flush().await?;
-            landed.push(remote);
+        transfer_id: String,
+    ) -> Result<usize, Error> {
+        let rd = remote_dir.clone();
+        let plan = tokio::task::spawn_blocking(move || plan_upload(&local_paths, &rd))
+            .await
+            .map_err(|e| Error::Sftp(e.to_string()))??;
+
+        let mut progress = TransferProgress::start(
+            transfer_id,
+            "upload",
+            transfer_label(&plan.files.iter().map(|i| i.remote.as_str()).collect::<Vec<_>>()),
+            plan.files.len() as u64,
+            plan.bytes,
+        );
+        emit_transfer(app, &progress);
+
+        let outcome = self.run_upload(app, target, &plan, &mut progress).await;
+        progress.status = if outcome.is_ok() { "done" } else { "error" };
+        if let Err(e) = &outcome {
+            progress.detail = Some(e.to_string());
         }
-        Ok(landed)
+        emit_transfer(app, &progress);
+        outcome.map(|_| progress.files_done as usize)
+    }
+
+    async fn run_upload(
+        &self,
+        app: &AppHandle,
+        target: &str,
+        plan: &UploadPlan,
+        progress: &mut TransferProgress,
+    ) -> Result<(), Error> {
+        let sftp = self.sftp(target).await?;
+        for dir in &plan.dirs {
+            let _ = sftp.create_dir(dir).await; // ignore "already exists"
+        }
+        let mut last_emit = 0u64;
+        for item in &plan.files {
+            let mut src = tokio::fs::File::open(&item.local).await?;
+            let mut dst = sftp.create(&item.remote).await.map_err(|e| Error::Sftp(e.to_string()))?;
+            let mut buf = vec![0u8; CHUNK];
+            loop {
+                let n = src.read(&mut buf).await?;
+                if n == 0 {
+                    break;
+                }
+                dst.write_all(&buf[..n]).await?;
+                progress.bytes_done += n as u64;
+                if progress.bytes_done - last_emit >= EMIT_EVERY {
+                    last_emit = progress.bytes_done;
+                    emit_transfer(app, progress);
+                }
+            }
+            dst.flush().await?;
+            progress.files_done += 1;
+            emit_transfer(app, progress);
+        }
+        Ok(())
+    }
+
+    /// Download files and/or folders from a container to a local directory
+    /// (default `~/Downloads`), recursing, with `transfer` progress.
+    pub async fn fs_download(
+        &self,
+        app: &AppHandle,
+        target: &str,
+        remote_paths: Vec<String>,
+        local_dir: Option<String>,
+        transfer_id: String,
+    ) -> Result<usize, Error> {
+        let base = local_dir
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+            .or_else(dirs::download_dir)
+            .or_else(dirs::home_dir)
+            .ok_or_else(|| Error::Sftp("no local download directory".into()))?;
+
+        let sftp = self.sftp(target).await?;
+        let plan = plan_download(&sftp, &remote_paths, &base).await?;
+
+        let mut progress = TransferProgress::start(
+            transfer_id,
+            "download",
+            transfer_label(&remote_paths.iter().map(String::as_str).collect::<Vec<_>>()),
+            plan.files.len() as u64,
+            plan.bytes,
+        );
+        emit_transfer(app, &progress);
+
+        let outcome = run_download(&sftp, &plan, app, &mut progress).await;
+        progress.status = if outcome.is_ok() { "done" } else { "error" };
+        if let Err(e) = &outcome {
+            progress.detail = Some(e.to_string());
+        }
+        emit_transfer(app, &progress);
+        outcome.map(|_| progress.files_done as usize)
     }
 
     /// Proxies one HTTP request to the control plane over a direct-tcpip
@@ -901,6 +1037,125 @@ fn join_remote(dir: &str, name: &str) -> String {
     format!("{}/{}", dir.trim_end_matches('/'), name)
 }
 
+fn base_name(path: &str) -> &str {
+    path.trim_end_matches('/').rsplit('/').next().unwrap_or(path)
+}
+
+/// "readme.md" for one item, "readme.md +2" for several.
+fn transfer_label(paths: &[&str]) -> String {
+    match paths.split_first() {
+        Some((first, rest)) if rest.is_empty() => base_name(first).to_string(),
+        Some((first, rest)) => format!("{} +{}", base_name(first), rest.len()),
+        None => "(nothing)".to_string(),
+    }
+}
+
+/// Walk the local paths (files and/or folders) into a flat upload plan: the
+/// remote directories to create (parents first) and every file to send.
+fn plan_upload(local_paths: &[String], remote_dir: &str) -> std::io::Result<UploadPlan> {
+    let mut plan = UploadPlan::default();
+    for local in local_paths {
+        let path = Path::new(local);
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "bad source path"))?;
+        let remote = join_remote(remote_dir, name);
+        let meta = std::fs::symlink_metadata(path)?;
+        if meta.is_dir() {
+            plan.dirs.push(remote.clone());
+            walk_upload(path, &remote, &mut plan)?;
+        } else if meta.is_file() {
+            plan.bytes += meta.len();
+            plan.files.push(UploadItem { local: path.to_path_buf(), remote });
+        }
+    }
+    Ok(plan)
+}
+
+fn walk_upload(dir: &Path, remote_base: &str, plan: &mut UploadPlan) -> std::io::Result<()> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?.collect::<Result<_, _>>()?;
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let remote = join_remote(remote_base, name);
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            plan.dirs.push(remote.clone());
+            walk_upload(&entry.path(), &remote, plan)?;
+        } else if meta.is_file() {
+            plan.bytes += meta.len();
+            plan.files.push(UploadItem { local: entry.path(), remote });
+        }
+    }
+    Ok(())
+}
+
+/// Walk the remote paths over SFTP into a flat download plan (local dirs are
+/// made on the fly by `run_download`). Iterative to avoid boxed async recursion.
+async fn plan_download(
+    sftp: &SftpSession,
+    remote_paths: &[String],
+    base: &Path,
+) -> Result<DownloadPlan, Error> {
+    let mut plan = DownloadPlan::default();
+    let mut stack: Vec<(String, PathBuf)> = remote_paths
+        .iter()
+        .map(|r| (r.clone(), base.join(base_name(r))))
+        .collect();
+    while let Some((remote, local)) = stack.pop() {
+        let meta = sftp.metadata(remote.clone()).await.map_err(|e| Error::Sftp(e.to_string()))?;
+        if meta.is_dir() {
+            let read = sftp.read_dir(remote.clone()).await.map_err(|e| Error::Sftp(e.to_string()))?;
+            for entry in read {
+                let name = entry.file_name();
+                if name == "." || name == ".." {
+                    continue;
+                }
+                stack.push((join_remote(&remote, &name), local.join(&name)));
+            }
+        } else {
+            plan.bytes += meta.len();
+            plan.files.push(DownloadItem { remote, local });
+        }
+    }
+    Ok(plan)
+}
+
+async fn run_download(
+    sftp: &SftpSession,
+    plan: &DownloadPlan,
+    app: &AppHandle,
+    progress: &mut TransferProgress,
+) -> Result<(), Error> {
+    let mut last_emit = 0u64;
+    for item in &plan.files {
+        if let Some(parent) = item.local.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let mut src = sftp.open(item.remote.clone()).await.map_err(|e| Error::Sftp(e.to_string()))?;
+        let mut dst = tokio::fs::File::create(&item.local).await?;
+        let mut buf = vec![0u8; CHUNK];
+        loop {
+            let n = src.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            dst.write_all(&buf[..n]).await?;
+            progress.bytes_done += n as u64;
+            if progress.bytes_done - last_emit >= EMIT_EVERY {
+                last_emit = progress.bytes_done;
+                emit_transfer(app, progress);
+            }
+        }
+        dst.flush().await?;
+        progress.files_done += 1;
+        emit_transfer(app, progress);
+    }
+    Ok(())
+}
+
 fn parse_server(server: &str) -> (String, u16) {
     let (scheme, rest) = match server.split_once("://") {
         Some((s, r)) => (s, r),
@@ -992,6 +1247,37 @@ Host bastion
     }
 
     #[test]
+    fn transfer_label_singular_and_plural() {
+        assert_eq!(base_name("/a/b/readme.md"), "readme.md");
+        assert_eq!(base_name("/a/b/"), "b");
+        assert_eq!(transfer_label(&["/a/x.txt"]), "x.txt");
+        assert_eq!(transfer_label(&["/a/x.txt", "/a/y.txt", "/a/z.txt"]), "x.txt +2");
+        assert_eq!(transfer_label(&[]), "(nothing)");
+    }
+
+    #[test]
+    fn plan_upload_walks_folders_recursively() {
+        let base = std::env::temp_dir().join(format!("mast_plan_{}", std::process::id()));
+        let sub = base.join("nested");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(base.join("top.txt"), b"1234").unwrap();
+        std::fs::write(sub.join("deep.txt"), b"567").unwrap();
+
+        let plan = plan_upload(&[base.to_string_lossy().into_owned()], "/remote").unwrap();
+        let name = base.file_name().unwrap().to_str().unwrap();
+
+        assert_eq!(plan.bytes, 7); // 4 + 3
+        assert_eq!(plan.files.len(), 2);
+        assert!(plan.dirs.contains(&format!("/remote/{name}")));
+        assert!(plan.dirs.contains(&format!("/remote/{name}/nested")));
+        let remotes: Vec<_> = plan.files.iter().map(|f| f.remote.clone()).collect();
+        assert!(remotes.contains(&format!("/remote/{name}/top.txt")));
+        assert!(remotes.contains(&format!("/remote/{name}/nested/deep.txt")));
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
     fn parse_server_pins_localhost_and_defaults_port() {
         assert_eq!(parse_server("http://localhost:7070"), ("127.0.0.1".into(), 7070));
         assert_eq!(parse_server("https://api.example.com"), ("api.example.com".into(), 443));
@@ -1053,13 +1339,24 @@ Host bastion
         assert_eq!(sftp.read(&path).await.expect("read"), body);
 
         let names: Vec<String> = sftp
-            .read_dir(home)
+            .read_dir(home.clone())
             .await
             .expect("read_dir")
             .map(|e| e.file_name())
             .collect();
         assert!(names.iter().any(|n| n == "mast_fs_bridge_test.txt"));
-
         sftp.remove_file(&path).await.ok();
+
+        // Folder path: mkdir + a nested file (what recursive upload/download do).
+        let subdir = join_remote(&home, "mast_fs_bridge_dir");
+        sftp.create_dir(&subdir).await.ok();
+        let nested = join_remote(&subdir, "inside.txt");
+        let mut nf = sftp.create(&nested).await.expect("create nested");
+        nf.write_all(b"nested").await.expect("write nested");
+        nf.flush().await.expect("flush nested");
+        drop(nf);
+        assert_eq!(sftp.read(&nested).await.expect("read nested"), b"nested");
+        sftp.remove_file(&nested).await.ok();
+        sftp.remove_dir(&subdir).await.ok();
     }
 }

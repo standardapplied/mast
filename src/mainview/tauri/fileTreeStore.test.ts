@@ -25,7 +25,6 @@ function controllableFs() {
         };
         pending.push(p);
       }),
-    upload: async () => [],
   };
   const settle = async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve();
