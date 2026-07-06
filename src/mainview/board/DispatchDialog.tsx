@@ -1,21 +1,15 @@
 import { useState } from "react";
 import type { DispatchResponse, GlobalSpecView } from "../../shared/sail-models";
 import { Dialog } from "../components/Dialog";
-import { ToggleButton } from "../components/ToggleButton";
 import { Badge, Button } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { unmetDependencies } from "./useBoard";
 
-const MODE_OPTIONS = [
-  { value: "background", label: "Background" },
-  { value: "foreground", label: "Foreground" },
-];
-
 /**
- * Dispatch confirmation: shows the agent/model/branch the launch will use, the
- * target mode, a dry-run preview (plan without launching), and the real
- * dispatch — role-gated for non-admins, readiness-gated for blocked specs.
- * Dispatch is a control-plane action; there is no terminal here.
+ * Dispatch confirmation: shows the agent/model/branch the launch will use, a
+ * dry-run preview (plan without launching), and the real dispatch — role-gated
+ * for non-admins, readiness-gated for blocked specs. Dispatch always runs the
+ * agent in the background (autonomous in the container); there is no terminal here.
  */
 export function DispatchDialog({
   gateway,
@@ -34,7 +28,6 @@ export function DispatchDialog({
   onClose: () => void;
   onResult: (message: string, ok: boolean) => void;
 }) {
-  const [mode, setMode] = useState("background");
   const [busy, setBusy] = useState<"dry" | "go" | null>(null);
   const [preview, setPreview] = useState<DispatchResponse | null>(null);
 
@@ -45,7 +38,7 @@ export function DispatchDialog({
 
   const run = async (dryRun: boolean) => {
     setBusy(dryRun ? "dry" : "go");
-    const result = await gateway.dispatch(spec.project, { specId: spec.id, mode, dryRun });
+    const result = await gateway.dispatch(spec.project, { specId: spec.id, mode: "background", dryRun });
     setBusy(null);
     if (!result.ok) {
       const forbidden = result.error.status === 403;
@@ -110,11 +103,6 @@ export function DispatchDialog({
             <span className="prop-label">Assignee</span>
             <span className="prop-value">{spec.assignee ?? "—"}</span>
           </div>
-        </div>
-
-        <div className="dispatch-mode">
-          <span className="prop-label">Mode</span>
-          <ToggleButton className="toggle-sm" options={MODE_OPTIONS} value={mode} onChange={setMode} />
         </div>
 
         {blocked && (
