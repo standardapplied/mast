@@ -1164,12 +1164,23 @@
   border: 1px solid transparent;
 }
 
+/* Sticky so the lane's label + count stay visible while its cards scroll under
+   it. The background composites the lane tint over the solid canvas colour so
+   it exactly matches the lane yet is fully opaque — cards slide cleanly behind
+   it. Negative margins bleed it to the lane's padding edges; z-index lifts it
+   over the scrolling cards (but under the drag ghost / menus). */
 .kanban-column-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 4px 6px;
+  margin: -8px -8px 0;
+  padding: 12px 12px 8px;
+  background: linear-gradient(var(--lane-bg), var(--lane-bg)), var(--background);
+  border-bottom: 1px solid var(--border);
 }
 
 .kanban-count {
@@ -2207,6 +2218,9 @@ span.checkbox {
 .board-canvas .kanban-board {
   min-height: 100%;
   align-items: stretch;
+  /* The canvas owns both scroll axes; keep the board non-scrolling so the lane
+     headers stick to the canvas viewport rather than to a nested scroller. */
+  overflow: visible;
 }
 
 .board-columns .kanban-column.is-droppable {
@@ -2258,6 +2272,9 @@ span.checkbox {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* A details page must never scroll horizontally; wide children (tables, code)
+     scroll inside their own box instead. This is the backstop. */
+  overflow-x: hidden;
   display: grid;
   gap: 16px;
   align-content: start;
@@ -2283,6 +2300,11 @@ span.checkbox {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  min-width: 0;
+}
+
+.detail-heading {
+  min-width: 0;
 }
 
 .back-btn {
@@ -2306,6 +2328,7 @@ span.checkbox {
   font-size: 22px;
   letter-spacing: 0;
   margin: 2px 0;
+  overflow-wrap: anywhere;
 }
 
 .detail-subtitle {
@@ -2376,7 +2399,7 @@ span.checkbox {
 .prop-value {
   font-size: 13px;
   color: var(--foreground);
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .prop-input {
@@ -2528,6 +2551,7 @@ span.checkbox {
   line-height: 1.65;
   color: var(--muted-foreground);
   max-width: 78ch;
+  overflow-wrap: break-word;
 }
 
 .markdown h1,
@@ -2574,6 +2598,7 @@ span.checkbox {
   font-size: 12.5px;
   background: var(--surface-hover);
   padding: 1px 5px;
+  overflow-wrap: anywhere;
 }
 
 .markdown pre {
@@ -2604,6 +2629,35 @@ span.checkbox {
   color: var(--foreground);
   text-decoration-color: var(--primary);
   text-underline-offset: 3px;
+}
+
+.markdown img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* A wide table scrolls inside its own box (display:block makes it a scroll
+   container) so it never widens the page. */
+.markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.markdown :is(th, td) {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.markdown th {
+  color: var(--foreground);
+  font-weight: 600;
+  background: var(--surface-hover);
 }
 
 /* Tauri spike terminal harness — proves the russh PTY pipe end to end. */
