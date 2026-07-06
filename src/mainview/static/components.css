@@ -1442,18 +1442,24 @@ html.is-dragging-active * {
   transform: translateY(0.5px);
 }
 
+/* Primary section switch — a segmented "key rail". Deliberately a filled key,
+   not an underline, so it can't be confused with the terminal's underline tabs:
+   filled box = which section of the app, underline = which tab within it. */
 .cockpit-nav {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  margin-left: 10px;
-  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 18px;
+  align-self: center;
+  padding: 3px;
+  border: 1px solid var(--border);
+  background: var(--background-deep);
 }
 .cockpit-nav-item {
   appearance: none;
   background: none;
   border: none;
-  padding: 0 10px;
+  padding: 6px 15px;
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
@@ -1461,15 +1467,18 @@ html.is-dragging-active * {
   letter-spacing: var(--tracking-eyebrow);
   color: var(--muted-foreground);
   cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: color 120ms ease;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
 }
 .cockpit-nav-item:hover {
   color: var(--foreground);
 }
 .cockpit-nav-item[data-active="true"] {
   color: var(--foreground);
-  border-bottom-color: var(--primary);
+  background: var(--surface);
+  box-shadow: inset 0 -2px 0 var(--primary);
 }
 
 .cockpit-view {

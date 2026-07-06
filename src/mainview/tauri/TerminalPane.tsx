@@ -106,7 +106,6 @@ export const TerminalPane = forwardRef<
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
-
       doFit = () => {
         try {
           fit.fit();
@@ -114,6 +113,15 @@ export const TerminalPane = forwardRef<
           /* pane detached / metrics not ready */
         }
       };
+
+      // Wait for the browser to lay out the (possibly just-shown) pane before
+      // the first measure. A reopened tab has ghostty's WASM already loaded, so
+      // without this the first fit runs pre-layout at a stale size — the PTY
+      // opens with the wrong column count and the shell's banner prints garbled
+      // (until `clear` redraws). Measure once, at the real size, then open — and
+      // don't resize the PTY afterwards except on a genuine pane/window resize.
+      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      if (!alive) return;
       doFit();
 
       term.onData(send);
@@ -138,15 +146,9 @@ export const TerminalPane = forwardRef<
         if (alive) setStatus("session closed");
       });
 
-      // Keep the PTY sized to the pane. Coalesce fits onto a frame so a burst
-      // of resize events settles to one measure after layout has updated.
       observer = new ResizeObserver(scheduleFit);
       observer.observe(host);
       window.addEventListener("resize", scheduleFit);
-      // The first synchronous fit can run before layout/fonts settle; re-fit a
-      // few times so the grid ends up matching the real pane size.
-      void document.fonts?.ready.then(() => alive && doFit());
-      for (const t of [0, 200, 500]) setTimeout(() => alive && doFit(), t);
 
       await invoke("terminal_open", { id, target: target ?? null, cols: term.cols, rows: term.rows });
       if (alive) {
