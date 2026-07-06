@@ -94,25 +94,21 @@ describe("App cockpit", () => {
     );
   });
 
-  test("dragging lifts the card and marks the board; a cancelled drag clears both", async () => {
+  test("pointer drag lifts the card and marks the board; releasing clears both", async () => {
     await render();
     const card = container.querySelector<HTMLElement>('[data-testid="card-chorus-billing-export"]');
     const board = container.querySelector(".board");
 
-    const dt = new DataTransfer();
-    act(() => {
-      const e = new Event("dragstart", { bubbles: true }) as DragEvent;
-      Object.defineProperty(e, "dataTransfer", { value: dt });
-      card?.dispatchEvent(e);
-    });
+    const pointer = (type: string, x: number, y: number) =>
+      new PointerEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y });
+
+    act(() => card?.dispatchEvent(pointer("pointerdown", 10, 10)));
+    // move past the 6px threshold to activate the drag
+    act(() => window.dispatchEvent(pointer("pointermove", 100, 100)));
     expect(board?.classList.contains("is-dragging")).toBe(true);
     expect(card?.classList.contains("is-lifted")).toBe(true);
 
-    act(() => {
-      const e = new Event("dragend", { bubbles: true }) as DragEvent;
-      Object.defineProperty(e, "dataTransfer", { value: dt });
-      card?.dispatchEvent(e);
-    });
+    act(() => window.dispatchEvent(pointer("pointerup", 100, 100)));
     expect(board?.classList.contains("is-dragging")).toBe(false);
     expect(card?.classList.contains("is-lifted")).toBe(false);
   });

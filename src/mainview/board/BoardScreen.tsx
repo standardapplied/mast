@@ -138,25 +138,21 @@ function SpecCard({
   blockedBy,
   lifted,
   onOpen,
-  onDragStart,
-  onDragEnd,
+  onPointerDown,
   onContextMenu,
 }: {
   spec: GlobalSpecView;
   blockedBy: string[];
   lifted: boolean;
   onOpen: () => void;
-  onDragStart: (event: DragEvent) => void;
-  onDragEnd: () => void;
+  onPointerDown: (event: React.PointerEvent) => void;
   onContextMenu: (event: React.MouseEvent) => void;
 }) {
   return (
     <button
       type="button"
       className={lifted ? "kanban-card is-lifted" : "kanban-card"}
-      draggable
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
+      onPointerDown={onPointerDown}
       onClick={onOpen}
       onContextMenu={onContextMenu}
       data-testid={`card-${spec.id}`}
@@ -295,6 +291,8 @@ export function BoardScreen({
   };
   const [dragging, setDragging] = useState<GlobalSpecView | null>(null);
   const [dropTarget, setDropTarget] = useState<SpecStatus | null>(null);
+  const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null);
+  const draggedRef = useRef(false);
   const [view, setView] = useState<{ left: number; width: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; spec: GlobalSpecView } | null>(null);
   const [dispatchTarget, setDispatchTarget] = useState<GlobalSpecView | null>(null);
@@ -378,12 +376,7 @@ export function BoardScreen({
     ...data.projects.map((p) => ({ value: p, label: p })),
   ];
 
-  const handleDrop = async (to: SpecStatus) => {
-    const spec = dragging;
-    setDragging(null);
-    setDropTarget(null);
-    if (!spec || !canTransition(spec.status, to)) return;
-
+  const commitMove = async (spec: GlobalSpecView, to: SpecStatus) => {
     const { outcome, error } = await move(spec.id, to);
     if (outcome === "conflict") {
       showToast(
@@ -398,6 +391,48 @@ export function BoardScreen({
           : `Couldn’t move ${spec.id}.`,
       );
     }
+  };
+
+  const laneAt = (x: number, y: number): SpecStatus | undefined => {
+    const lane = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-column]");
+    return (lane?.dataset.column as SpecStatus | undefined) || undefined;
+  };
+
+  // Pointer-based drag (not HTML5 DnD): Tauri's OS drag-drop — which the file
+  // bridge needs — intercepts native drag events, so the board drives its own.
+  const beginDrag = (spec: GlobalSpecView) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const start = { x: e.clientX, y: e.clientY };
+    let active = false;
+    const validTarget = (to?: SpecStatus) =>
+      to && to !== spec.status && canTransition(spec.status, to) ? to : undefined;
+
+    const onMove = (ev: PointerEvent) => {
+      if (!active) {
+        if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 6) return;
+        active = true;
+        setDragging(spec);
+      }
+      setGhost({ x: ev.clientX, y: ev.clientY });
+      setDropTarget(validTarget(laneAt(ev.clientX, ev.clientY)) ?? null);
+    };
+    const finish = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      if (active) {
+        draggedRef.current = true; // suppress the click that follows the drag
+        setTimeout(() => (draggedRef.current = false), 0);
+        const to = ev.type === "pointerup" ? validTarget(laneAt(ev.clientX, ev.clientY)) : undefined;
+        if (to) void commitMove(spec, to);
+      }
+      setDragging(null);
+      setDropTarget(null);
+      setGhost(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
   };
 
   // The server accepts dispatch for any ready spec (dispatch doesn't check
@@ -504,15 +539,7 @@ export function BoardScreen({
                     .filter(Boolean)
                     .join(" ")}
                   data-testid={`column-${status}`}
-                  onDragOver={(e) => {
-                    if (droppable) {
-                      e.preventDefault();
-                      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-                      setDropTarget(status);
-                    }
-                  }}
-                  onDragLeave={() => setDropTarget((t) => (t === status ? null : t))}
-                  onDrop={() => void handleDrop(status)}
+                  data-column={status}
                 >
                   <div className="kanban-column-header">
                     <span className="eyebrow">{STATUS_LABEL[status]}</span>
@@ -525,16 +552,11 @@ export function BoardScreen({
                         spec={spec}
                         blockedBy={unmetDependencies(spec, data.specs)}
                         lifted={dragging?.id === spec.id}
-                        onOpen={() => onOpenSpec(spec.id)}
-                        onDragStart={(e) => {
-                          e.dataTransfer?.setData("text/plain", spec.id);
-                          if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-                          setDragging(spec);
+                        onOpen={() => {
+                          if (draggedRef.current) return; // a drag just ended, not a click
+                          onOpenSpec(spec.id);
                         }}
-                        onDragEnd={() => {
-                          setDragging(null);
-                          setDropTarget(null);
-                        }}
+                        onPointerDown={beginDrag(spec)}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           setMenu({ x: e.clientX, y: e.clientY, spec });
@@ -571,6 +593,12 @@ export function BoardScreen({
             if (ok) void refresh();
           }}
         />
+      )}
+      {dragging && ghost && (
+        <div className="kanban-ghost" style={{ left: ghost.x, top: ghost.y }}>
+          <span className="kanban-card-title">{dragging.id}</span>
+          <span className="spec-card-summary">{dragging.title}</span>
+        </div>
       )}
     </div>
   );

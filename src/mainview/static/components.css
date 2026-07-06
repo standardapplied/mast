@@ -1187,6 +1187,35 @@
   align-content: start;
 }
 
+.kanban-ghost {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  transform: translate(10px, 8px);
+  width: 240px;
+  max-width: 40vw;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--primary);
+  box-shadow: var(--shadow);
+  opacity: 0.96;
+}
+.kanban-ghost .kanban-card-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+}
+.kanban-ghost .spec-card-summary {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .kanban-card {
   appearance: none;
   display: grid;
@@ -2178,7 +2207,6 @@ span.checkbox {
 /* Inside the Electrobun shell the toolbar doubles as the window drag region;
    extra top padding keeps the lockup clear of the traffic lights. */
 .in-shell .cockpit-toolbar {
-  padding-top: 22px;
   min-height: 44px;
 }
 
@@ -2389,6 +2417,9 @@ span.checkbox {
   gap: 16px;
   align-items: start;
 }
+.detail-grid.is-editing {
+  grid-template-columns: minmax(0, 1fr);
+}
 
 @media (max-width: 1000px) {
   .detail-grid {
@@ -2402,15 +2433,19 @@ span.checkbox {
   min-width: 0;
 }
 
+.prop-status-select {
+  width: 170px;
+}
 .md-editor {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
   min-width: 0;
 }
 .md-editor__input {
   width: 100%;
-  min-height: 420px;
+  min-width: 0;
+  min-height: 460px;
   resize: vertical;
   padding: 12px;
   border: 1px solid var(--border-strong);
@@ -2425,9 +2460,13 @@ span.checkbox {
 }
 .md-editor__preview {
   min-width: 0;
-  overflow: auto;
-  padding: 0 4px;
+  overflow-x: auto;
+  padding: 0 4px 0 16px;
   border-left: 1px solid var(--border);
+}
+.md-editor__preview :is(pre, code) {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 @media (max-width: 900px) {
   .md-editor {

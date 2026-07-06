@@ -258,6 +258,7 @@ export function SpecDetail({
           <span className="prop-label">Status</span>
           {editing ? (
             <Select
+              className="prop-status-select"
               value={draft.status ?? spec.status}
               options={STATUS_OPTIONS}
               onChange={(v) => setDraft((d) => ({ ...d, status: v as SpecStatus }))}
@@ -374,7 +375,7 @@ export function SpecDetail({
         </p>
       )}
 
-      <div className="detail-grid">
+      <div className={editing ? "detail-grid is-editing" : "detail-grid"}>
         <div className="detail-main">
           <Card>
             {editing ? (
@@ -401,6 +402,7 @@ export function SpecDetail({
           )}
         </div>
 
+        {!editing && (
         <div className="detail-side">
           {((spec.depends_on ?? []).length > 0 || dependents.length > 0) && (
             <Card title="Dependencies">
@@ -456,6 +458,7 @@ export function SpecDetail({
             ))}
           </Card>
         </div>
+        )}
       </div>
 
       <Dialog
