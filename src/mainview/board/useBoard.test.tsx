@@ -44,10 +44,10 @@ afterEach(() => {
 });
 
 describe("useBoard", () => {
-  test("loads specs, summary, and the derived project list", async () => {
+  test("loads specs, groups by status, and derives the project list", async () => {
     const { handle } = await render(createDemoGateway());
     expect(handle().data.specs.length).toBe(7);
-    expect(handle().data.summary?.in_progress).toBe(1);
+    expect(handle().byStatus.get("in_progress")?.length).toBe(1);
     expect(handle().data.projects).toEqual(["chorus", "sail-mast"]);
   });
 

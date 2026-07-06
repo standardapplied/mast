@@ -468,19 +468,17 @@ export function BoardScreen({
       <div className="masthead">
         <div className="masthead-title">
           <Eyebrow>Spec board</Eyebrow>
-          {data.summary && (
-            <div className="masthead-stats">
-              <span className="stat">
-                <span className="stat-value">{data.summary.in_progress}</span>
-                <span className="stat-label">in progress</span>
-              </span>
-              <span className="stat-divider" />
-              <span className="stat">
-                <span className="stat-value">{data.summary.awaiting_merge}</span>
-                <span className="stat-label">awaiting merge</span>
-              </span>
-            </div>
-          )}
+          <div className="masthead-stats">
+            <span className="stat">
+              <span className="stat-value">{byStatus.get("in_progress")?.length ?? 0}</span>
+              <span className="stat-label">in progress</span>
+            </span>
+            <span className="stat-divider" />
+            <span className="stat">
+              <span className="stat-value">{byStatus.get("awaiting_merge")?.length ?? 0}</span>
+              <span className="stat-label">awaiting merge</span>
+            </span>
+          </div>
         </div>
         <div className="board-controls">
           <Select

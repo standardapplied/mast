@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  GlobalBoardResponse,
-  GlobalSpecView,
-  SpecFilter,
-  SpecStatus,
-} from "../../shared/sail-models";
+import type { GlobalSpecView, SpecFilter, SpecStatus } from "../../shared/sail-models";
 import type { SailWireError } from "../../shared/types";
 import type { Gateway } from "../gateway";
 
@@ -13,7 +8,6 @@ export type MoveResult = { outcome: MoveOutcome; error?: SailWireError };
 
 export type BoardData = {
   specs: GlobalSpecView[];
-  summary: GlobalBoardResponse | null;
   projects: string[];
   repos: string[];
   loading: boolean;
@@ -31,7 +25,6 @@ const RELOAD_EVENT_TYPES = /^(spec_|board_updated)/;
 export function useBoard(gateway: Gateway, project: string | undefined, filter: SpecFilter) {
   const [data, setData] = useState<BoardData>({
     specs: [],
-    summary: null,
     projects: [],
     repos: [],
     loading: true,
@@ -43,12 +36,11 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
 
   const refresh = useCallback(async () => {
     const gen = ++generation.current;
-    let all, scoped, summary;
+    let all, scoped;
     try {
-      [all, scoped, summary] = await Promise.all([
+      [all, scoped] = await Promise.all([
         gateway.listSpecs({}),
         gateway.listSpecs({ ...filter, project }),
-        gateway.board(project),
       ]);
     } catch (error) {
       // A rejecting RPC (bridge failure) must not leave "Loading specs" forever.
@@ -62,9 +54,8 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
     }
     if (gen !== generation.current) return;
 
-    if (!scoped.ok || !summary.ok) {
-      const error = !scoped.ok ? scoped.error : !summary.ok ? summary.error : null;
-      setData((prev) => ({ ...prev, loading: false, error }));
+    if (!scoped.ok) {
+      setData((prev) => ({ ...prev, loading: false, error: scoped.error }));
       return;
     }
     const projects = all.ok
@@ -75,7 +66,6 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
       : [];
     setData({
       specs: scoped.value.specs,
-      summary: summary.value,
       projects,
       repos,
       loading: false,
