@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { ConnectionStatus } from "../shared/sail-models";
+import type { ConnectionStatus, WhoAmI } from "../shared/sail-models";
 import type { BridgeStatus } from "../shared/types";
 import { BoardScreen } from "./board/BoardScreen";
 import { SpecDetail } from "./board/SpecDetail";
@@ -100,6 +100,7 @@ export function App({
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [identity, setIdentity] = useState<WhoAmI | null>(null);
 
   useEffect(() => onPush("bridge-status", ({ status: s }) => setBridge(s)), []);
   useEffect(
@@ -118,6 +119,15 @@ export function App({
       if (snapshot.phase === "ready") setEverReady(true);
     });
   }, [gateway]);
+
+  // Load the caller's identity once the connection is live, and drop it the
+  // moment it isn't (logout → unauthenticated), so the menu never shows a stale
+  // name. Refetched automatically when a login flips the phase back to ready.
+  const ready = status?.phase === "ready";
+  useEffect(() => {
+    if (!ready) return void setIdentity(null);
+    void gateway.whoami().then((r) => setIdentity(r.ok ? r.value : null));
+  }, [gateway, ready]);
 
   useEffect(() => {
     const onHashChange = () => setSpecId(specIdFromHash(location.hash));
@@ -205,6 +215,7 @@ export function App({
               theme={theme}
               server={status?.server}
               tokenKind={status?.tokenKind}
+              identity={identity}
               onLogin={() => void login()}
               onLogout={() => void logout()}
               onDiagnostics={() => setShowDiagnostics(true)}

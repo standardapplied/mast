@@ -1831,7 +1831,17 @@ span.checkbox {
 
 .user-menu-name {
   font-size: 13px;
+  font-weight: 600;
   color: var(--foreground);
+}
+
+.user-menu-identity .badge {
+  justify-self: start;
+  margin-top: 4px;
+}
+
+.user-menu-server {
+  margin-top: 4px;
 }
 
 .user-menu-detail {

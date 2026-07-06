@@ -309,6 +309,8 @@ export type ConnectionStatus = {
 export type WhoAmI = {
   fde?: string;
   name: string;
+  display_name?: string;
+  email?: string;
   role: "admin" | "member" | "viewer";
   capabilities: string[];
 };

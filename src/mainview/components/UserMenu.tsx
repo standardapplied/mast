@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import type { WhoAmI } from "../../shared/sail-models";
 import { cx } from "./cx";
 import { Person } from "./icons";
 import { ToggleButton } from "./ToggleButton";
-import { Button } from "./ui";
+import { Badge, Button } from "./ui";
 import type { ThemeController, ThemeMode } from "../theme";
 
 const THEME_OPTIONS = [
@@ -20,6 +21,7 @@ export function UserMenu({
   theme,
   server,
   tokenKind = "none",
+  identity,
   onLogin,
   onLogout,
   onDiagnostics,
@@ -27,6 +29,7 @@ export function UserMenu({
   theme: ThemeController;
   server?: string;
   tokenKind?: "session" | "api" | "none";
+  identity?: WhoAmI | null;
   onLogin?: () => void;
   onLogout?: () => void;
   onDiagnostics?: () => void;
@@ -66,14 +69,24 @@ export function UserMenu({
       {isOpen && (
         <div className="user-menu-panel" data-testid="user-menu-panel">
           <div className="user-menu-identity">
-            <span className="user-menu-name">
-              {tokenKind === "session"
-                ? "Passkey session"
-                : tokenKind === "api"
-                  ? "API token"
-                  : "Not signed in"}
-            </span>
-            {server && <span className="user-menu-detail">{server}</span>}
+            {identity ? (
+              <>
+                <span className="user-menu-name">
+                  {identity.display_name ?? identity.fde ?? identity.name}
+                </span>
+                <span className="user-menu-detail">{identity.email ?? `@${identity.fde ?? identity.name}`}</span>
+                <Badge tone={identity.role === "admin" ? "success" : "neutral"}>{identity.role}</Badge>
+              </>
+            ) : (
+              <span className="user-menu-name">
+                {tokenKind === "session"
+                  ? "Passkey session"
+                  : tokenKind === "api"
+                    ? "API token"
+                    : "Not signed in"}
+              </span>
+            )}
+            {server && <span className="user-menu-detail user-menu-server">{server}</span>}
           </div>
 
           <div className="user-menu-section">

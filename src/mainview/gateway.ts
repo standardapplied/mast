@@ -354,7 +354,14 @@ export function createDemoGateway(): DemoGateway {
     async whoami() {
       return {
         ok: true,
-        value: { fde: "uday", name: "uday", role: "admin", capabilities: ["read", "write", "admin"] },
+        value: {
+          fde: "uday",
+          name: "uday",
+          display_name: "Uday K",
+          email: "uday@singlr.ai",
+          role: "admin",
+          capabilities: ["read", "write", "admin"],
+        },
       };
     },
 
