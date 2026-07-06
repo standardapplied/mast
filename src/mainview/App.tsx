@@ -54,12 +54,9 @@ function ConnectScreen({
       <h1 className="connect-title">
         {status.phase === "unauthenticated" ? "Sign in to Sail" : "Can’t reach the control plane"}
       </h1>
-      <p className="connect-detail">
-        {status.detail ??
-          (status.phase === "unauthenticated"
-            ? `Your passkey unlocks ${status.loginOrigin} — the browser will open for Touch ID.`
-            : `Nothing answered at ${status.server}.`)}
-      </p>
+      {status.phase !== "unauthenticated" && (
+        <p className="connect-detail">{status.detail ?? `Nothing answered at ${status.server}.`}</p>
+      )}
       {status.phase === "unauthenticated" ? (
         <Button onClick={onLogin} disabled={busy} data-testid="connect-login">
           {busy ? "Waiting for Touch ID…" : "Sign in with passkey"}
