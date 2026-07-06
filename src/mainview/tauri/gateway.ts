@@ -26,6 +26,7 @@ type RawStatus = {
   server: string;
   sshHost?: string;
   tokenPresent: boolean;
+  tokenKind: "session" | "api" | "none";
   detail?: string;
 };
 
@@ -92,6 +93,8 @@ export function createTauriGateway(): Gateway {
     board: (project) => read("GET", `/v1/specs/board${queryString({ project })}`),
     getSpec: (id) => read("GET", `/v1/specs/${encodeURIComponent(id)}`),
     getSpecContent: (id) => read("GET", `/v1/specs/${encodeURIComponent(id)}/content`),
+    putSpecContent: (id, content, ifMatch) =>
+      read("PUT", `/v1/specs/${encodeURIComponent(id)}/content`, { body: content, ifMatch }),
     updateSpec: (id, request, ifMatch) =>
       read("PUT", `/v1/specs/${encodeURIComponent(id)}`, { body: request, ifMatch }),
     specHistory: (id) => read("GET", `/v1/specs/${encodeURIComponent(id)}/history`),
@@ -110,7 +113,7 @@ export function createTauriGateway(): Gateway {
           server: raw.server,
           loginOrigin: raw.sshHost ? `ssh://${raw.sshHost}` : raw.server,
           tokenPresent: raw.tokenPresent,
-          tokenKind: raw.tokenPresent ? "session" : "none",
+          tokenKind: raw.tokenKind ?? (raw.tokenPresent ? "api" : "none"),
           stream: raw.phase === "ready" ? "connected" : "disconnected",
           detail: raw.detail,
         };

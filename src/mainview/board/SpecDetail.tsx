@@ -184,21 +184,33 @@ export function SpecDetail({
     setEditing(true);
   };
 
-  const saveMeta = async () => {
-    const changes: SpecUpdateRequest = { ...draft };
-    if (bodyDraft !== loaded.body) changes.body = bodyDraft;
-    const result = await gateway.updateSpec(spec.id, changes, loaded.etag);
-    if (result.ok) {
-      setEditing(false);
-      setDraft({});
-      void load();
-      showToast("success", `${spec.id} updated.`);
-    } else if (result.error.status === 412) {
+  const saveError = (err: SailWireError) => {
+    if (err.status === 412) {
       showToast("error", `${spec.id} was changed by someone else — reloaded, replay your edit.`);
       void load();
     } else {
-      showToast("error", result.error.message);
+      showToast("error", err.message);
     }
+  };
+
+  const saveMeta = async () => {
+    // Metadata (status/assignee/…) and the body are separate resources on the
+    // server — PUT /v1/specs/{id} ignores the body; the body goes to
+    // …/content. Save metadata first, then chain its fresh ETag to the body PUT.
+    let etag = loaded.etag;
+    if (Object.keys(draft).length > 0) {
+      const result = await gateway.updateSpec(spec.id, draft, etag);
+      if (!result.ok) return saveError(result.error);
+      etag = result.etag ?? etag;
+    }
+    if (bodyDraft !== loaded.body) {
+      const result = await gateway.putSpecContent(spec.id, { body: bodyDraft }, etag);
+      if (!result.ok) return saveError(result.error);
+    }
+    setEditing(false);
+    setDraft({});
+    void load();
+    showToast("success", `${spec.id} updated.`);
   };
 
   const restore = async (rev: number) => {

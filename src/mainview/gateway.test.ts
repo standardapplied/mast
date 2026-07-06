@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SailResult } from "../shared/types";
-import { createRpcGateway } from "./gateway";
+import { createDemoGateway, createRpcGateway } from "./gateway";
 
 type Bridge = Parameters<typeof createRpcGateway>[0];
 
@@ -63,5 +63,23 @@ describe("RPC gateway retry (bridge blips are transient, not real network failur
     const result = await gateway.board();
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.status).toBe(0);
+  });
+});
+
+describe("spec body edits go through the content resource", () => {
+  test("putSpecContent updates the body and getSpecContent reflects it", async () => {
+    const gateway = createDemoGateway();
+    const put = await gateway.putSpecContent("chorus-billing-export", { body: "# Rewritten body" });
+    expect(put.ok).toBe(true);
+
+    const after = await gateway.getSpecContent("chorus-billing-export");
+    expect(after.ok && after.value.body).toBe("# Rewritten body");
+  });
+
+  test("a stale If-Match is a 412 conflict, not a silent overwrite", async () => {
+    const gateway = createDemoGateway();
+    const result = await gateway.putSpecContent("chorus-billing-export", { body: "x" }, '"stale"');
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error.status).toBe(412);
   });
 });

@@ -63,7 +63,12 @@ async fn connection_status(state: State<'_, AppState>) -> Result<serde_json::Val
         "server": format!("{}:{}", cfg.server_host, cfg.server_port),
         "sshHost": cfg.ssh_host,
         "tokenPresent": cfg.token.is_some(),
-        "tokenKind": if cfg.token.is_some() { "session" } else { "none" },
+        // `sess_` = passkey-login session; anything else is a long-lived API token.
+        "tokenKind": match cfg.token.as_deref() {
+            Some(t) if t.starts_with("sess_") => "session",
+            Some(_) => "api",
+            None => "none",
+        },
     });
     match connected {
         Ok(()) => {

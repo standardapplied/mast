@@ -10,6 +10,7 @@ import type {
   GlobalSpecView,
   ReviewListResponse,
   SailEvent,
+  SpecContentRequest,
   SpecFilter,
   SpecStatus,
   SpecUpdateRequest,
@@ -30,6 +31,11 @@ export type Gateway = {
   board(project?: string): Promise<SailResult<GlobalBoardResponse>>;
   getSpec(id: string): Promise<SailResult<GlobalSpecDetailResponse>>;
   getSpecContent(id: string): Promise<SailResult<GlobalSpecContentResponse>>;
+  putSpecContent(
+    id: string,
+    content: SpecContentRequest,
+    ifMatch?: string,
+  ): Promise<SailResult<GlobalSpecContentResponse>>;
   updateSpec(
     id: string,
     request: SpecUpdateRequest,
@@ -88,6 +94,7 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     board: (project) => read(() => api.sailBoard({ project })),
     getSpec: (id) => read(() => api.sailGetSpec({ id })),
     getSpecContent: (id) => read(() => api.sailGetSpecContent({ id })),
+    putSpecContent: (id, content, ifMatch) => api.sailPutSpecContent({ id, content, ifMatch }),
     updateSpec: (id, request, ifMatch) => api.sailUpdateSpec({ id, request, ifMatch }),
     specHistory: (id) => read(() => api.sailSpecHistory({ id })),
     restoreSpec: (id, rev) => api.sailRestoreSpec({ id, rev }),
@@ -269,6 +276,25 @@ export function createDemoGateway(): DemoGateway {
       const spec = find(id);
       if (!spec) return notFound(id);
       return ok({ spec_id: id, body: spec.body, plan: spec.plan });
+    },
+
+    async putSpecContent(id, content, ifMatch) {
+      const spec = find(id);
+      if (!spec) return notFound(id);
+      if (ifMatch && ifMatch !== "*" && ifMatch !== etagOf(spec)) {
+        return {
+          ok: false,
+          error: {
+            status: 412,
+            code: "precondition_failed",
+            message: `Spec '${id}' was modified by another writer.`,
+          },
+        };
+      }
+      if (content.body !== undefined) spec.body = content.body;
+      if (content.plan !== undefined) spec.plan = content.plan;
+      spec.updated_at = new Date().toISOString();
+      return ok({ spec_id: id, body: spec.body, plan: spec.plan }, etagOf(spec));
     },
 
     async updateSpec(id, request, ifMatch) {
