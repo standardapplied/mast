@@ -94,20 +94,11 @@ export const TerminalPane = forwardRef<
     let alive = true;
     let dataOff: Promise<() => void> | null = null;
     let exitOff: Promise<() => void> | null = null;
-    let observer: ResizeObserver | null = null;
+    let fitAddon: FitAddon | null = null;
+    let onWinResize: (() => void) | null = null;
 
     const send = (data: string) =>
       void invoke("terminal_write", { id, data: Array.from(encoder.encode(data)) }).catch(() => {});
-    let doFit = () => {};
-    let fitScheduled = false;
-    const scheduleFit = () => {
-      if (fitScheduled) return;
-      fitScheduled = true;
-      requestAnimationFrame(() => {
-        fitScheduled = false;
-        doFit();
-      });
-    };
 
     void (async () => {
       await ensureGhostty();
@@ -123,25 +114,23 @@ export const TerminalPane = forwardRef<
       });
       termRef.current = term;
       const fit = new FitAddon();
+      fitAddon = fit;
       term.loadAddon(fit);
       term.open(host);
-      doFit = () => {
-        try {
-          fit.fit();
-        } catch {
-          /* pane detached / metrics not ready */
-        }
-      };
 
-      // Open the PTY only once the pane size is final AND ghostty has painted a
-      // frame at that size — otherwise a reopened tab (cached SSH session →
-      // instant banner) prints its first output before ghostty settles, and it
-      // renders garbled until `clear`. Size → paint → THEN open.
+      // A reopened tab mounts into a still-settling flex layout; wait for the
+      // pane box to stop changing so the one fit measures the real size (a fit
+      // at a stale size opens the PTY at the wrong column count → the shell's
+      // first output, instant on a cached SSH session, renders garbled). Then
+      // hand resizing to the addon's own DEBOUNCED observer, so a settling burst
+      // can't reflow the PTY mid-banner (an eager per-frame observer did).
       await waitStableSize(host);
       if (!alive) return;
-      doFit();
-      await nextFrame();
-      if (!alive) return;
+      try {
+        fit.fit();
+      } catch {
+        /* metrics not ready — the observer will fit shortly */
+      }
 
       term.onData(send);
       term.onResize(({ cols, rows }) =>
@@ -165,9 +154,15 @@ export const TerminalPane = forwardRef<
         if (alive) setStatus("session closed");
       });
 
-      observer = new ResizeObserver(scheduleFit);
-      observer.observe(host);
-      window.addEventListener("resize", scheduleFit);
+      fit.observeResize();
+      onWinResize = () => {
+        try {
+          fit.fit();
+        } catch {
+          /* ignore */
+        }
+      };
+      window.addEventListener("resize", onWinResize);
 
       await invoke("terminal_open", { id, target: target ?? null, cols: term.cols, rows: term.rows });
       if (alive) {
@@ -180,8 +175,8 @@ export const TerminalPane = forwardRef<
 
     return () => {
       alive = false;
-      observer?.disconnect();
-      window.removeEventListener("resize", scheduleFit);
+      if (onWinResize) window.removeEventListener("resize", onWinResize);
+      fitAddon?.dispose();
       void invoke("terminal_close", { id }).catch(() => {});
       void dataOff?.then((off) => off());
       void exitOff?.then((off) => off());
