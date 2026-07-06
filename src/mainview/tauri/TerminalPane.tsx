@@ -167,8 +167,8 @@ export const TerminalPane = forwardRef<
     <div className="terminal-pane">
       <header className="terminal-pane__bar">
         {onBack && (
-          <button type="button" className="terminal-pane__back" onClick={onBack} aria-label="Projects">
-            <CaretLeft size={15} />
+          <button type="button" className="back-btn terminal-pane__back" onClick={onBack} aria-label="Close">
+            <CaretLeft size={16} />
           </button>
         )}
         <span className="terminal-pane__title">{label ?? target ?? "node · devbox"}</span>
