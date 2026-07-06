@@ -168,6 +168,10 @@ export const TerminalPane = forwardRef<
       if (alive) {
         setStatus("connected");
         term.focus();
+        // The very first output can print before the column count settles (a
+        // reopened tab garbles until it does). Once it has, ask the shell to
+        // redraw the prompt cleanly — same effect as typing Ctrl-L / `clear`.
+        setTimeout(() => alive && send("\x0c"), 500);
       }
     })().catch((err) => {
       if (alive) setStatus(`failed: ${err}`);
