@@ -48,6 +48,7 @@ export type Gateway = {
   whoami(): Promise<SailResult<WhoAmI>>;
   connection(): Promise<ConnectionStatus>;
   login(): Promise<{ ok: boolean; detail?: string }>;
+  logout(): Promise<void>;
   diagnostics(): Promise<{ report: string; logPath: string }>;
   onEvent(listener: (event: SailEvent) => void): () => void;
   onConnectionStatus(listener: (status: ConnectionStatus) => void): () => void;
@@ -103,6 +104,7 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     whoami: () => api.sailWhoami(),
     connection: () => api.sailConnection(),
     login: () => api.sailLogin(),
+    logout: () => api.sailLogout(),
     diagnostics: () => api.sailDiagnostics(),
     onEvent: (listener) => onPush("sail-event", listener),
     onConnectionStatus: (listener) => onPush("connection-status", listener),
@@ -407,6 +409,8 @@ export function createDemoGateway(): DemoGateway {
     async login() {
       return { ok: true };
     },
+
+    async logout() {},
 
     async diagnostics() {
       return {

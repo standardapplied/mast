@@ -50,6 +50,7 @@ function makeDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
     sail: () => fakeSail(),
     connection: () => READY_STATUS,
     login: async () => ({ ok: true }),
+    logout: async () => {},
     onAuthError: () => {},
     diagnostics: () => ({ report: "diag", logPath: "/x/mast.log" }),
     ...overrides,

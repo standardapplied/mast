@@ -143,12 +143,20 @@ export function App({
     setView("terminal");
   };
 
+  const refreshStatus = () => void gateway.connection().then(setStatus);
+
   const login = async () => {
     setLoginBusy(true);
     setLoginError(null);
     const result = await gateway.login();
     setLoginBusy(false);
-    if (!result.ok) setLoginError(result.detail ?? "Sign-in failed.");
+    if (result.ok) refreshStatus();
+    else setLoginError(result.detail ?? "Sign-in failed.");
+  };
+
+  const logout = async () => {
+    await gateway.logout();
+    refreshStatus();
   };
 
   const pillView = status ? pill(status) : { label: "Connecting…", state: "connecting" };
@@ -197,7 +205,8 @@ export function App({
               theme={theme}
               server={status?.server}
               tokenKind={status?.tokenKind}
-              onLogin={needsLogin ? () => void login() : undefined}
+              onLogin={() => void login()}
+              onLogout={() => void logout()}
               onDiagnostics={() => setShowDiagnostics(true)}
             />
           </span>

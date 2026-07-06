@@ -109,7 +109,14 @@ export function createTauriGateway(): Gateway {
       try {
         const raw = await invoke<RawStatus>("connection_status");
         return {
-          phase: raw.phase === "ready" ? "ready" : raw.phase === "error" ? "failed" : "probing",
+          phase:
+            raw.phase === "ready"
+              ? "ready"
+              : raw.phase === "unauthenticated"
+                ? "unauthenticated"
+                : raw.phase === "error"
+                  ? "failed"
+                  : "probing",
           server: raw.server,
           loginOrigin: raw.sshHost ? `ssh://${raw.sshHost}` : raw.server,
           tokenPresent: raw.tokenPresent,
@@ -131,10 +138,17 @@ export function createTauriGateway(): Gateway {
     },
 
     async login() {
-      return {
-        ok: false,
-        detail: "Passkey login on Tauri lands with the loopback ceremony (device follow-up).",
-      };
+      try {
+        await invoke("login");
+        const status = await this.connection();
+        return { ok: status.phase === "ready" };
+      } catch (error) {
+        return { ok: false, detail: String(error) };
+      }
+    },
+
+    async logout() {
+      await invoke("logout");
     },
 
     async diagnostics() {

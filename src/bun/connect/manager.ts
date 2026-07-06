@@ -278,6 +278,13 @@ export class ConnectionManager {
     return ready ? { ok: true } : { ok: false, detail: this.status.detail };
   }
 
+  async logout(): Promise<void> {
+    this.token = null;
+    this.deps.writeToken("");
+    this.deps.onStack(this.status.server, null);
+    this.update({ phase: "unauthenticated", tokenPresent: false, tokenKind: "none" });
+  }
+
   stop(): void {
     this.stopped = true;
     this.generation++;

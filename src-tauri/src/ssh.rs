@@ -46,6 +46,8 @@ pub enum Error {
     NoTerminal(String),
     #[error("sftp: {0}")]
     Sftp(String),
+    #[error("{0}")]
+    Login(String),
     #[error(transparent)]
     Ssh(#[from] russh::Error),
     #[error(transparent)]
@@ -141,6 +143,9 @@ enum TermCmd {
 /// terminal. Held in Tauri managed state.
 pub struct Backend {
     config: SailConfig,
+    /// The API bearer token, mutable at runtime so login/logout take effect
+    /// without a restart. Mirrors `~/.sail/config.yaml`.
+    token: Mutex<Option<String>>,
     session: Mutex<Option<Session>>,
     /// One cached SSH session per project container (keyed by ssh alias), shared
     /// by that container's terminals and SFTP channels — one connection, many
@@ -237,8 +242,11 @@ fn emit_transfer(app: &AppHandle, progress: &TransferProgress) {
 
 impl Backend {
     pub fn new() -> Result<Self, Error> {
+        let config = SailConfig::load()?;
+        let token = config.token.clone();
         Ok(Backend {
-            config: SailConfig::load()?,
+            config,
+            token: Mutex::new(token),
             session: Mutex::new(None),
             containers: Mutex::new(HashMap::new()),
             terminals: Mutex::new(HashMap::new()),
@@ -247,6 +255,28 @@ impl Backend {
 
     pub fn describe(&self) -> &SailConfig {
         &self.config
+    }
+
+    pub async fn has_token(&self) -> bool {
+        self.token.lock().await.is_some()
+    }
+
+    pub async fn token_kind(&self) -> &'static str {
+        match self.token.lock().await.as_deref() {
+            Some(t) if t.starts_with("sess_") => "session",
+            Some(_) => "api",
+            None => "none",
+        }
+    }
+
+    /// Set (login) or clear (logout) the API token: persist to config, update the
+    /// in-memory value, and drop the control-plane session so the next request
+    /// re-authenticates.
+    pub async fn set_token(&self, token: Option<String>) -> Result<(), Error> {
+        write_config_token(token.as_deref())?;
+        *self.token.lock().await = token;
+        *self.session.lock().await = None;
+        Ok(())
     }
 
     /// The project containers reachable from `~/.ssh/config`: concrete `Host`
@@ -385,7 +415,7 @@ impl Backend {
         Ok(result?)
     }
 
-    async fn open_forward(&self, host: &str, port: u16) -> Result<Channel<Msg>, Error> {
+    pub(crate) async fn open_forward(&self, host: &str, port: u16) -> Result<Channel<Msg>, Error> {
         self.ensure().await?;
         let mut guard = self.session.lock().await;
         let result = guard
@@ -664,7 +694,7 @@ impl Backend {
             host = self.config.server_host,
             port = self.config.server_port,
         );
-        if let Some(token) = &self.config.token {
+        if let Some(token) = self.token.lock().await.as_deref() {
             req.push_str(&format!("Authorization: Bearer {token}\r\n"));
         }
         if let Some(etag) = &if_match {
@@ -1231,6 +1261,69 @@ async fn remove_recursive(sftp: &SftpSession, path: &str) -> Result<(), Error> {
     dirs.sort_by_key(|d| std::cmp::Reverse(d.matches('/').count()));
     for dir in dirs {
         sftp.remove_dir(&dir).await.map_err(|e| Error::Sftp(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Set (or, with `None`, remove) the `token:` field in `~/.sail/config.yaml`,
+/// preserving the other keys and the file's flow-vs-block YAML style, written
+/// 0600. Mirrors the CLI's writeConfig so Mast and `sail` stay in sync.
+pub fn write_config_token(token: Option<&str>) -> Result<(), Error> {
+    let home = dirs::home_dir().ok_or(Error::NoConfig)?;
+    let path = home.join(".sail/config.yaml");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let trimmed = existing.trim();
+
+    let quote = |v: &str| {
+        if v.chars().any(|c| ":#,{}[]".contains(c)) {
+            format!("'{v}'")
+        } else {
+            v.to_string()
+        }
+    };
+
+    let content = if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        let mut pairs: Vec<(String, String)> = split_flow(&trimmed[1..trimmed.len() - 1])
+            .into_iter()
+            .filter_map(|part| {
+                let colon = part.find(':')?;
+                if colon == 0 {
+                    return None;
+                }
+                let key = part[..colon].trim().to_string();
+                let val = part[colon + 1..].trim().trim_matches(|c| c == '"' || c == '\'').to_string();
+                Some((key, val))
+            })
+            .filter(|(k, _)| k != "token")
+            .collect();
+        if let Some(t) = token {
+            pairs.push(("token".into(), t.to_string()));
+        }
+        let body = pairs.iter().map(|(k, v)| format!("{k}: {}", quote(v))).collect::<Vec<_>>().join(", ");
+        format!("{{{body}}}\n")
+    } else {
+        let mut lines: Vec<String> = existing
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("token"))
+            .map(str::to_string)
+            .collect();
+        while lines.last().map_or(false, |l| l.trim().is_empty()) {
+            lines.pop();
+        }
+        if let Some(t) = token {
+            lines.push(format!("token: {}", quote(t)));
+        }
+        format!("{}\n", lines.join("\n"))
+    };
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }

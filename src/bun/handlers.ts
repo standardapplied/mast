@@ -47,6 +47,7 @@ export type HandlerDeps = {
   sail: () => SailPort;
   connection: () => ConnectionStatus;
   login: () => Promise<{ ok: boolean; detail?: string }>;
+  logout: () => Promise<void>;
   onAuthError: () => void;
   diagnostics: () => { report: string; logPath: string };
   /** Runs before a gated quit so the tunnel is torn down, not orphaned. */
@@ -122,6 +123,7 @@ export function createRequestHandlers(deps: HandlerDeps): BunRequestHandlers {
     sailWhoami: () => wrap(() => sail().whoami()),
     sailConnection: () => deps.connection(),
     sailLogin: () => deps.login(),
+    sailLogout: () => deps.logout(),
     sailDiagnostics: () => deps.diagnostics(),
   };
 }

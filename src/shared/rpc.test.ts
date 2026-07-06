@@ -32,6 +32,7 @@ describe("AppRPCSchema round-trip", () => {
     sail: () => ({}) as never,
     connection: () => ({}) as never,
     login: async () => ({ ok: false }),
+    logout: async () => {},
     onAuthError: () => {},
     diagnostics: () => ({ report: "", logPath: "" }),
   });

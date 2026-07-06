@@ -27,6 +27,7 @@ russh = "0.45"
 russh-sftp = "2.0"
 dirs = "5"
 thiserror = "1"
+getrandom = "0.2"
 
 [features]
 # Turned on by `tauri build --debug` and `tauri dev`.

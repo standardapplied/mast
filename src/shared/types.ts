@@ -138,6 +138,8 @@ export type AppRPCSchema = {
       sailConnection: { params: void; response: ConnectionStatus };
       /** Runs the browser passkey ceremony; resolves when signed in (or not). */
       sailLogin: { params: void; response: { ok: boolean; detail?: string } };
+      /** Clears the stored token; the next request is unauthenticated. */
+      sailLogout: { params: void; response: void };
       /** A copy-pasteable diagnostics report (env facts + the recent log tail). */
       sailDiagnostics: { params: void; response: { report: string; logPath: string } };
     };

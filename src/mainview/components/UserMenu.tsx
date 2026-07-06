@@ -21,12 +21,14 @@ export function UserMenu({
   server,
   tokenKind = "none",
   onLogin,
+  onLogout,
   onDiagnostics,
 }: {
   theme: ThemeController;
   server?: string;
   tokenKind?: "session" | "api" | "none";
   onLogin?: () => void;
+  onLogout?: () => void;
   onDiagnostics?: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -80,17 +82,32 @@ export function UserMenu({
           </div>
 
           <div className="user-menu-section">
-            <Button
-              variant="ghost"
-              className="user-menu-signin"
-              disabled={!onLogin}
-              onClick={() => {
-                setIsOpen(false);
-                onLogin?.();
-              }}
-            >
-              Sign in with passkey
-            </Button>
+            {tokenKind === "none" ? (
+              <Button
+                variant="ghost"
+                className="user-menu-signin"
+                disabled={!onLogin}
+                onClick={() => {
+                  setIsOpen(false);
+                  onLogin?.();
+                }}
+              >
+                Sign in with passkey
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                className="user-menu-signin"
+                disabled={!onLogout}
+                onClick={() => {
+                  setIsOpen(false);
+                  onLogout?.();
+                }}
+                data-testid="user-menu-signout"
+              >
+                Sign out
+              </Button>
+            )}
             <Button
               variant="ghost"
               className="user-menu-signin"

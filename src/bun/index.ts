@@ -123,6 +123,7 @@ const windows = new WindowManager({
   sail: () => sail,
   connection: () => manager.currentStatus,
   login: () => manager.login(),
+  logout: () => manager.logout(),
   onAuthError: () => manager.onAuthError(),
   diagnostics: () => {
     const status = manager.currentStatus;

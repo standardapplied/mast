@@ -3,7 +3,10 @@
 //! reaches the control plane and the container terminals. One `run()` serves
 //! desktop (main.rs) and mobile (the `mobile_entry_point`).
 
+mod login;
 mod ssh;
+
+use std::sync::Arc;
 
 use serde_json::json;
 use ssh::Backend;
@@ -13,16 +16,18 @@ use tokio::sync::OnceCell;
 
 /// Lazily-built backend. Construction reads `~/.sail/config.yaml`; if that is
 /// missing the app still renders (demo/disconnected) and the first real call
-/// surfaces a clear error instead of panicking at startup.
+/// surfaces a clear error instead of panicking at startup. Held behind an `Arc`
+/// so the passkey ceremony can hand a clone to its background port-forward task.
 struct AppState {
-    backend: OnceCell<Backend>,
+    backend: OnceCell<Arc<Backend>>,
 }
 
 impl AppState {
-    async fn backend(&self) -> Result<&Backend, String> {
+    async fn backend(&self) -> Result<Arc<Backend>, String> {
         self.backend
-            .get_or_try_init(|| async { Backend::new().map_err(String::from) })
+            .get_or_try_init(|| async { Backend::new().map(Arc::new).map_err(String::from) })
             .await
+            .cloned()
     }
 }
 
@@ -57,20 +62,23 @@ async fn connection_status(state: State<'_, AppState>) -> Result<serde_json::Val
         }
     };
 
-    let connected = backend.connect().await;
+    // `sess_` = passkey-login session; anything else is a long-lived API token.
+    // Read the *runtime* token, not the on-disk one, so a login/logout this
+    // session is reflected without a restart.
+    let has_token = backend.has_token().await;
     let cfg = backend.describe();
     let mut status = json!({
         "server": format!("{}:{}", cfg.server_host, cfg.server_port),
         "sshHost": cfg.ssh_host,
-        "tokenPresent": cfg.token.is_some(),
-        // `sess_` = passkey-login session; anything else is a long-lived API token.
-        "tokenKind": match cfg.token.as_deref() {
-            Some(t) if t.starts_with("sess_") => "session",
-            Some(_) => "api",
-            None => "none",
-        },
+        "tokenPresent": has_token,
+        "tokenKind": backend.token_kind().await,
     });
-    match connected {
+    if !has_token {
+        status["phase"] = json!("unauthenticated");
+        status["stream"] = json!("disconnected");
+        return Ok(status);
+    }
+    match backend.connect().await {
         Ok(()) => {
             status["phase"] = json!("ready");
             status["stream"] = json!("connected");
@@ -82,6 +90,21 @@ async fn connection_status(state: State<'_, AppState>) -> Result<serde_json::Val
         }
     }
     Ok(status)
+}
+
+/// Run the passkey sign-in ceremony (system browser → Touch ID → loopback
+/// callback) and persist the resulting session token.
+#[tauri::command]
+async fn login(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let backend = state.backend().await?;
+    login::run(backend, app).await.map_err(String::from)
+}
+
+/// Clear the API/session token from config and memory; the next request will be
+/// unauthenticated until the user signs in again.
+#[tauri::command]
+async fn logout(state: State<'_, AppState>) -> Result<(), String> {
+    state.backend().await?.set_token(None).await.map_err(String::from)
 }
 
 #[tauri::command]
@@ -235,6 +258,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sail_request,
             connection_status,
+            login,
+            logout,
             list_targets,
             fs_list,
             fs_read,
