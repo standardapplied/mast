@@ -229,7 +229,7 @@ describe("App cockpit", () => {
     expect(container.querySelector<HTMLButtonElement>('[data-testid="dispatch-go"]')?.disabled).toBe(true);
   });
 
-  test("dispatch dialog: dry run then dispatch moves the spec to in progress", async () => {
+  test("dispatch dialog: dispatch moves the spec to in progress", async () => {
     await render();
     const card = container.querySelector<HTMLElement>('[data-testid="card-chorus-billing-export"]');
     act(() => {

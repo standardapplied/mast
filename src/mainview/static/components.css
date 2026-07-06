@@ -1835,13 +1835,8 @@ span.checkbox {
   color: var(--foreground);
 }
 
-.user-menu-identity .badge {
-  justify-self: start;
-  margin-top: 4px;
-}
-
-.user-menu-server {
-  margin-top: 4px;
+.user-menu-role {
+  text-transform: capitalize;
 }
 
 .user-menu-detail {

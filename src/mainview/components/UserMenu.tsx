@@ -3,7 +3,7 @@ import type { WhoAmI } from "../../shared/sail-models";
 import { cx } from "./cx";
 import { Person } from "./icons";
 import { ToggleButton } from "./ToggleButton";
-import { Badge, Button } from "./ui";
+import { Button } from "./ui";
 import type { ThemeController, ThemeMode } from "../theme";
 
 const THEME_OPTIONS = [
@@ -19,7 +19,6 @@ const THEME_OPTIONS = [
  */
 export function UserMenu({
   theme,
-  server,
   tokenKind = "none",
   identity,
   onLogin,
@@ -27,7 +26,6 @@ export function UserMenu({
   onDiagnostics,
 }: {
   theme: ThemeController;
-  server?: string;
   tokenKind?: "session" | "api" | "none";
   identity?: WhoAmI | null;
   onLogin?: () => void;
@@ -75,7 +73,7 @@ export function UserMenu({
                   {identity.display_name ?? identity.fde ?? identity.name}
                 </span>
                 <span className="user-menu-detail">{identity.email ?? `@${identity.fde ?? identity.name}`}</span>
-                <Badge tone={identity.role === "admin" ? "success" : "neutral"}>{identity.role}</Badge>
+                <span className="user-menu-detail user-menu-role">{identity.role}</span>
               </>
             ) : (
               <span className="user-menu-name">
@@ -86,7 +84,6 @@ export function UserMenu({
                     : "Not signed in"}
               </span>
             )}
-            {server && <span className="user-menu-detail user-menu-server">{server}</span>}
           </div>
 
           <div className="user-menu-section">

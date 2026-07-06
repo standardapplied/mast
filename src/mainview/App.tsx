@@ -213,7 +213,6 @@ export function App({
           <span className="electrobun-webkit-app-region-no-drag">
             <UserMenu
               theme={theme}
-              server={status?.server}
               tokenKind={status?.tokenKind}
               identity={identity}
               onLogin={() => void login()}

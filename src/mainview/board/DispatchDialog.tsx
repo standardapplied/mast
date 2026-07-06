@@ -1,15 +1,15 @@
 import { useState } from "react";
-import type { DispatchResponse, GlobalSpecView } from "../../shared/sail-models";
+import type { GlobalSpecView } from "../../shared/sail-models";
 import { Dialog } from "../components/Dialog";
-import { Badge, Button } from "../components/ui";
+import { Button } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { unmetDependencies } from "./useBoard";
 
 /**
- * Dispatch confirmation: shows the agent/model/branch the launch will use, a
- * dry-run preview (plan without launching), and the real dispatch — role-gated
- * for non-admins, readiness-gated for blocked specs. Dispatch always runs the
- * agent in the background (autonomous in the container); there is no terminal here.
+ * Dispatch confirmation: shows the agent/model/branch the launch will use and
+ * the real dispatch — role-gated for non-admins, readiness-gated for blocked
+ * specs. Dispatch always runs the agent in the background (autonomous in the
+ * container); there is no terminal here.
  */
 export function DispatchDialog({
   gateway,
@@ -28,18 +28,17 @@ export function DispatchDialog({
   onClose: () => void;
   onResult: (message: string, ok: boolean) => void;
 }) {
-  const [busy, setBusy] = useState<"dry" | "go" | null>(null);
-  const [preview, setPreview] = useState<DispatchResponse | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const unmet = unmetDependencies(spec, allSpecs);
   const blocked = unmet.length > 0;
   const notPending = spec.status !== "pending";
   const runnable = !blocked && !notPending && canDispatch;
 
-  const run = async (dryRun: boolean) => {
-    setBusy(dryRun ? "dry" : "go");
-    const result = await gateway.dispatch(spec.project, { specId: spec.id, mode: "background", dryRun });
-    setBusy(null);
+  const run = async () => {
+    setBusy(true);
+    const result = await gateway.dispatch(spec.project, { specId: spec.id, mode: "background" });
+    setBusy(false);
     if (!result.ok) {
       const forbidden = result.error.status === 403;
       onResult(
@@ -48,11 +47,7 @@ export function DispatchDialog({
           : `Dispatch failed: ${result.error.message}`,
         false,
       );
-      if (!dryRun) onClose();
-      return;
-    }
-    if (dryRun) {
-      setPreview(result.value);
+      onClose();
       return;
     }
     if (result.value.dispatched) {
@@ -74,11 +69,8 @@ export function DispatchDialog({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="ghost" disabled={!runnable || busy !== null} onClick={() => void run(true)}>
-            {busy === "dry" ? "Checking…" : "Dry run"}
-          </Button>
-          <Button disabled={!runnable || busy !== null} onClick={() => void run(false)} data-testid="dispatch-go">
-            {busy === "go" ? "Dispatching…" : "Dispatch"}
+          <Button disabled={!runnable || busy} onClick={() => void run()} data-testid="dispatch-go">
+            {busy ? "Dispatching…" : "Dispatch"}
           </Button>
         </>
       }
@@ -117,34 +109,6 @@ export function DispatchDialog({
           <p className="dispatch-block" data-testid="dispatch-role">
             Dispatch requires the admin role. Your credential can’t launch agents.
           </p>
-        )}
-
-        {preview && (
-          <div className="dispatch-preview" data-testid="dispatch-preview">
-            <span className="eyebrow">Dry run</span>
-            <div className="dispatch-facts">
-              <div className="prop">
-                <span className="prop-label">Would dispatch</span>
-                <span className="prop-value">
-                  <Badge tone={preview.dispatched ? "success" : "warning"}>
-                    {preview.dispatched ? "Ready" : preview.reason || "No"}
-                  </Badge>
-                </span>
-              </div>
-              {preview.spec?.branch && (
-                <div className="prop">
-                  <span className="prop-label">Branch</span>
-                  <span className="prop-value">{preview.spec.branch}</span>
-                </div>
-              )}
-              {preview.snapshot && (
-                <div className="prop">
-                  <span className="prop-label">Snapshot</span>
-                  <span className="prop-value">{preview.snapshot}</span>
-                </div>
-              )}
-            </div>
-          </div>
         )}
       </div>
     </Dialog>
