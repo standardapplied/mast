@@ -37,15 +37,33 @@ export function TerminalSplit({
   label: string;
   onBack: () => void;
 }) {
+  // Created once for this mounted project (keyed by target upstream). Not
+  // disposed on unmount: the listeners unsubscribe themselves and the store is
+  // GC'd — and an irreversible dispose() would be re-run by React StrictMode's
+  // mount→unmount→remount, permanently killing a live store.
   const [store] = useState(() => new FileTreeStore(tauriFs(target)));
-  useEffect(() => () => store.dispose(), [store]);
 
   const { showToast } = useToast();
   const toast = (message: string, ok: boolean) => showToast(ok ? "success" : "error", message);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<TerminalHandle>(null);
+  const [treeWidth, setTreeWidth] = useState(320);
   const [drop, setDrop] = useState<DropTarget | null>(null);
+
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const onMove = (ev: PointerEvent) =>
+      setTreeWidth(Math.min(640, Math.max(200, rect.right - ev.clientX)));
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
   const [editor, setEditor] = useState<FileEntry | null>(null);
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [confirmDel, setConfirmDel] = useState<FileEntry | null>(null);
@@ -168,10 +186,11 @@ export function TerminalSplit({
   const dropDir = drop?.kind === "tree" ? drop.dir : null;
 
   return (
-    <div className="term-split" ref={rootRef}>
+    <div className="term-split" ref={rootRef} style={{ "--tree-w": `${treeWidth}px` } as React.CSSProperties}>
       <div className={`term-split__main${terminalTargeted ? " term-split__main--drop" : ""}`}>
         <TerminalPane ref={termRef} target={target} label={label} onBack={onBack} />
       </div>
+      <div className="term-split__resizer" onPointerDown={startResize} role="separator" aria-orientation="vertical" />
       <FileTree store={store} dropDir={dropDir} actions={actions} />
       <TransfersTray />
 

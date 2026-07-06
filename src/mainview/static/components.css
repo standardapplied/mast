@@ -2549,6 +2549,8 @@ span.checkbox {
 .terminal-pane {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-width: 0;
   height: 100%;
   background: var(--background-deep);
 }
@@ -2607,8 +2609,21 @@ span.checkbox {
   min-width: 0;
   display: flex;
 }
+.term-split__resizer {
+  flex-shrink: 0;
+  width: 6px;
+  margin: 0 -3px;
+  z-index: 5;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.term-split__resizer:hover,
+.term-split__resizer:active {
+  background: var(--primary);
+}
 .file-tree {
-  width: 300px;
+  width: var(--tree-w, 300px);
   flex-shrink: 0;
   min-height: 0;
   display: flex;
@@ -2871,6 +2886,9 @@ span.checkbox {
 @media (max-width: 768px) {
   .term-split {
     flex-direction: column;
+  }
+  .term-split__resizer {
+    display: none;
   }
   .file-tree {
     width: auto;

@@ -438,11 +438,18 @@ impl Backend {
     }
 
     async fn sftp(&self, target: &str) -> Result<SftpSession, Error> {
-        let channel = self.container_channel(target).await?;
-        channel.request_subsystem(true, "sftp").await?;
-        SftpSession::new(channel.into_stream())
-            .await
-            .map_err(|e| Error::Sftp(e.to_string()))
+        // Bound the whole handshake: if the container's sshd has no sftp
+        // subsystem (or it never answers), SftpSession::new would hang forever
+        // and the tree would sit on the skeleton. Surface a clear error instead.
+        tokio::time::timeout(REQUEST_TIMEOUT, async {
+            let channel = self.container_channel(target).await?;
+            channel.request_subsystem(true, "sftp").await?;
+            SftpSession::new(channel.into_stream())
+                .await
+                .map_err(|e| Error::Sftp(e.to_string()))
+        })
+        .await
+        .map_err(|_| Error::Sftp(format!("{target}: SFTP timed out (is the sftp subsystem enabled?)")))?
     }
 
     /// List a directory in a container over SFTP, resolving an empty path to the

@@ -18,6 +18,9 @@ const result = await Bun.build({
   target: "browser",
   minify: true,
   sourcemap: "linked",
+  // Ship React in production mode: no dev-only checks, and StrictMode stops
+  // double-invoking effects (which would otherwise re-run one-shot setup).
+  define: { "process.env.NODE_ENV": '"production"' },
   naming: { entry: "index.js", chunk: "[name]-[hash].js", asset: "[name]-[hash][ext]" },
 });
 
