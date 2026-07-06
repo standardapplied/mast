@@ -7,11 +7,17 @@ import { Diagnostics } from "./components/Diagnostics";
 import { Logo } from "./components/icons";
 import { LoadingMark } from "./components/Loading";
 import { ToastProvider } from "./components/Toast";
+import { ToggleButton } from "./components/ToggleButton";
 import { Button, Eyebrow } from "./components/ui";
 import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
 import { onPush } from "./push";
 import type { ThemeController } from "./theme";
+
+const NAV_OPTIONS = [
+  { value: "board", label: "Board" },
+  { value: "terminal", label: "Terminal" },
+];
 
 function pill(status: ConnectionStatus): { label: string; state: string } {
   switch (status.phase) {
@@ -169,24 +175,13 @@ export function App({
             <span className="cockpit-wordmark">Mast</span>
           </button>
           {terminal && (
-            <nav className="cockpit-nav electrobun-webkit-app-region-no-drag">
-              <button
-                type="button"
-                className="cockpit-nav-item"
-                data-active={view === "board"}
-                onClick={goBoard}
-              >
-                Board
-              </button>
-              <button
-                type="button"
-                className="cockpit-nav-item"
-                data-active={view === "terminal"}
-                onClick={goTerminal}
-              >
-                Terminal
-              </button>
-            </nav>
+            <span className="cockpit-nav electrobun-webkit-app-region-no-drag">
+              <ToggleButton
+                options={NAV_OPTIONS}
+                value={view}
+                onChange={(v) => (v === "terminal" ? goTerminal() : goBoard())}
+              />
+            </span>
           )}
           <span className="cockpit-toolbar-spacer" />
           <span className="stream-pill" data-state={pillView.state} title={status?.detail ?? "Connection"}>

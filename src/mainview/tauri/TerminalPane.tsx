@@ -19,6 +19,25 @@ export type TerminalHandle = { paste: (text: string) => void };
 let ghosttyReady: Promise<void> | null = null;
 const ensureGhostty = () => (ghosttyReady ??= init());
 
+const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+/**
+ * Resolve once the element's box has stopped changing across two consecutive
+ * frames (or a cap). A tab reopened via the picker mounts into a still-settling
+ * flex layout; opening the PTY before the size is final makes the shell's first
+ * output (which arrives instantly on a cached SSH session) print at the wrong
+ * column count — the reopen garble. Waiting for a stable size fixes it.
+ */
+async function waitStableSize(el: HTMLElement, maxFrames = 40): Promise<void> {
+  let last = -1;
+  for (let i = 0; i < maxFrames; i++) {
+    await nextFrame();
+    const size = el.clientWidth * 100000 + el.clientHeight;
+    if (el.clientWidth > 0 && size === last) return;
+    last = size;
+  }
+}
+
 function toGhosttyTheme(t: TerminalTheme): ITheme {
   const [
     black, red, green, yellow, blue, magenta, cyan, white,
@@ -114,15 +133,15 @@ export const TerminalPane = forwardRef<
         }
       };
 
-      // Wait for the browser to lay out the (possibly just-shown) pane before
-      // the first measure. A reopened tab has ghostty's WASM already loaded, so
-      // without this the first fit runs pre-layout at a stale size — the PTY
-      // opens with the wrong column count and the shell's banner prints garbled
-      // (until `clear` redraws). Measure once, at the real size, then open — and
-      // don't resize the PTY afterwards except on a genuine pane/window resize.
-      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      // Open the PTY only once the pane size is final AND ghostty has painted a
+      // frame at that size — otherwise a reopened tab (cached SSH session →
+      // instant banner) prints its first output before ghostty settles, and it
+      // renders garbled until `clear`. Size → paint → THEN open.
+      await waitStableSize(host);
       if (!alive) return;
       doFit();
+      await nextFrame();
+      if (!alive) return;
 
       term.onData(send);
       term.onResize(({ cols, rows }) =>
