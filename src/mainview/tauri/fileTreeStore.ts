@@ -64,12 +64,13 @@ export class FileTreeStore {
     for (const listener of this.listeners) listener();
   }
 
-  async loadRoot(): Promise<void> {
+  /** Load the tree root — a specific directory, or the login dir when omitted. */
+  async loadRoot(dir?: string | null): Promise<void> {
     this.rootPath = null;
     this.rootError = null;
     this.emit();
     try {
-      const listing = await this.fs.list(null);
+      const listing = await this.fs.list(dir ?? null);
       if (this.disposed) return;
       this.rootPath = listing.path;
       this.nodes.set(listing.path, { status: "ready", entries: listing.entries, stale: false });
@@ -116,6 +117,14 @@ export class FileTreeStore {
   refresh(): void {
     if (this.rootPath) this.revalidate(this.rootPath);
     else void this.loadRoot();
+  }
+
+  /** Re-root the tree at `dir` (right-click "Open as root"). */
+  setRoot(dir: string): void {
+    this.nodes.clear();
+    this.expanded.clear();
+    this.inflight.clear();
+    void this.loadRoot(dir);
   }
 
   /** Expand a directory (loading it if needed) so a just-dropped file is seen.

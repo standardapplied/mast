@@ -36,7 +36,9 @@ async function render(fs: FsApi) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  act(() => root.render(<FileTree store={new FileTreeStore(fs)} />));
+  const store = new FileTreeStore(fs);
+  void store.loadRoot(); // the workspace owns the initial load; drive it here
+  act(() => root.render(<FileTree store={store} />));
   await flush();
 }
 

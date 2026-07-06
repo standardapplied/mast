@@ -1,82 +1,88 @@
-import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
-import { CaretRight } from "../components/icons";
+import { useState } from "react";
+import { cx } from "../components/cx";
+import { ProjectPicker } from "./ProjectPicker";
+import { addTab, nextActive, tabKey, type Tab } from "./terminalTabs";
 import { TerminalPane } from "./TerminalPane";
 import { TerminalSplit } from "./TerminalSplit";
 
 /**
- * The Terminal section: first pick which project container to open (project
- * name = ssh alias), then a live shell into it over the in-process russh
- * session. Targets come from `~/.ssh/config` today; the node will serve them
- * for the iOS-portable path (see spec `api-project-connect`).
+ * The Terminal section: browser-tab UX over project workspaces. Each open
+ * project keeps its own terminal + file tree mounted (hidden when inactive), so
+ * switching is instant and never tears down / garbles a live session. "+" opens
+ * the picker for another project.
  */
-
-type Active = { target?: string; label: string };
-
 export function TerminalWorkspace() {
-  const [targets, setTargets] = useState<string[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [active, setActive] = useState<Active | null>(null);
+  const [tabs, setTabs] = useState<Tab[]>([]);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
 
-  useEffect(() => {
-    invoke<string[]>("list_targets")
-      .then(setTargets)
-      .catch((e) => setError(String(e)));
-  }, []);
+  const open = (target: string | undefined, label: string) => {
+    setTabs((prev) => addTab(prev, target, label));
+    setActiveKey(tabKey(target));
+    setAdding(false);
+  };
+  const close = (key: string) => {
+    setActiveKey((a) => nextActive(tabs, key, a));
+    setTabs((prev) => prev.filter((t) => t.key !== key));
+  };
 
-  if (active) {
-    // The node shell has no container filesystem; a project gets the split
-    // (terminal + file tree + drag-drop), keyed so it resets per project.
-    if (!active.target) {
-      return <TerminalPane key={active.label} label={active.label} onBack={() => setActive(null)} />;
-    }
-    return (
-      <TerminalSplit
-        key={active.target}
-        target={active.target}
-        label={active.label}
-        onBack={() => setActive(null)}
-      />
-    );
-  }
+  const showPicker = tabs.length === 0 || adding;
 
   return (
-    <div className="term-picker">
-      <div className="term-picker__inner">
-        <span className="eyebrow">Open a terminal</span>
-        <h1 className="term-picker__title">Pick a project</h1>
-        <p className="term-picker__hint">A shell into the container over the in-process SSH session.</p>
-
-        <ul className="term-picker__list">
-          {targets?.map((t) => (
-            <li key={t}>
-              <button className="term-picker__item" onClick={() => setActive({ target: t, label: t })}>
-                <span className="term-picker__name">{t}</span>
-                <span className="term-picker__meta">project container</span>
-                <CaretRight size={16} />
-              </button>
-            </li>
-          ))}
-          <li>
-            <button
-              className="term-picker__item term-picker__item--muted"
-              onClick={() => setActive({ label: "node · devbox" })}
+    <div className="term-workspace">
+      {tabs.length > 0 && (
+        <div className="term-tabs">
+          {tabs.map((t) => (
+            <div
+              key={t.key}
+              className={cx("term-tab", t.key === activeKey && !adding && "is-active")}
+              onClick={() => {
+                setActiveKey(t.key);
+                setAdding(false);
+              }}
             >
-              <span className="term-picker__name">node · devbox</span>
-              <span className="term-picker__meta">the control-plane host</span>
-              <CaretRight size={16} />
-            </button>
-          </li>
-        </ul>
+              <span className="term-tab__label">{t.label}</span>
+              <button
+                type="button"
+                className="term-tab__close"
+                aria-label={`Close ${t.label}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  close(t.key);
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className={cx("term-tab__add", adding && "is-active")}
+            aria-label="Open another project"
+            onClick={() => setAdding(true)}
+          >
+            ＋
+          </button>
+        </div>
+      )}
 
-        {!targets && !error && <p className="term-picker__hint">Reading ~/.ssh/config…</p>}
-        {targets && targets.length === 0 && (
-          <p className="term-picker__empty">
-            No project containers in <code>~/.ssh/config</code> yet — run{" "}
-            <code>sail connect &lt;project&gt;</code> on your Mac to add one.
-          </p>
+      <div className="term-workspace__body">
+        {tabs.map((t) => (
+          <div
+            key={t.key}
+            className="term-workspace__view"
+            style={{ display: t.key === activeKey && !showPicker ? "flex" : "none" }}
+          >
+            {t.target ? (
+              <TerminalSplit target={t.target} label={t.label} onBack={() => close(t.key)} />
+            ) : (
+              <TerminalPane label={t.label} onBack={() => close(t.key)} />
+            )}
+          </div>
+        ))}
+        {showPicker && (
+          <ProjectPicker onPick={open} onCancel={tabs.length > 0 ? () => setAdding(false) : undefined} />
         )}
-        {error && <p className="connect-error">Couldn’t read targets: {error}</p>}
       </div>
     </div>
   );

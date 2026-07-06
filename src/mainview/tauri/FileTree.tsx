@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
 import { CaretDown, CaretRight } from "../components/icons";
 import type { DirState, FileEntry, FileTreeStore } from "./fileTreeStore";
@@ -14,23 +14,29 @@ export type FileActions = {
   rename: (entry: FileEntry) => void;
   remove: (entry: FileEntry) => void;
   newFolder: (parentDir: string) => void;
+  setRoot: (entry: FileEntry) => void;
 };
 
-/** The right-click menu for an entry — files edit/open, dirs get New folder. */
+/** The right-click menu for an entry — files edit/open, dirs re-root/new folder. */
 export function fileMenuItems(entry: FileEntry, a: FileActions): MenuNode[] {
-  const common: MenuNode[] = [
+  const tail: MenuNode[] = [
+    { kind: "separator" },
     { kind: "item", label: entry.isDir ? "Download folder" : "Download", hint: "→ ~/Downloads", onSelect: () => a.download(entry) },
     { kind: "separator" },
     { kind: "item", label: "Rename…", onSelect: () => a.rename(entry) },
     { kind: "item", label: "Delete", danger: true, onSelect: () => a.remove(entry) },
   ];
   if (entry.isDir) {
-    return [{ kind: "item", label: "New folder…", onSelect: () => a.newFolder(entry.path) }, ...common];
+    return [
+      { kind: "item", label: "Open as root", hint: "start the tree here", onSelect: () => a.setRoot(entry) },
+      { kind: "item", label: "New folder…", onSelect: () => a.newFolder(entry.path) },
+      ...tail,
+    ];
   }
   return [
     { kind: "item", label: "Edit", onSelect: () => a.edit(entry) },
     { kind: "item", label: "Open", hint: "default app", onSelect: () => a.open(entry) },
-    ...common,
+    ...tail,
   ];
 }
 
@@ -52,9 +58,6 @@ export function FileTree({
     useCallback((cb) => store.subscribe(cb), [store]),
     () => store.version,
   );
-  useEffect(() => {
-    void store.loadRoot();
-  }, [store]);
 
   const [menu, setMenu] = useState<Menu | null>(null);
   const onRowMenu = actions

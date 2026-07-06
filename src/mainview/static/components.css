@@ -2580,13 +2580,13 @@ span.checkbox {
   width: 22px;
   height: 22px;
   background: none;
-  border: 1px solid var(--border);
+  border: none;
   color: var(--muted-foreground);
   cursor: pointer;
 }
 .terminal-pane__back:hover {
   color: var(--foreground);
-  border-color: var(--border-strong);
+  background: var(--surface-hover);
 }
 .terminal-pane__screen {
   flex: 1;
@@ -2598,9 +2598,87 @@ span.checkbox {
   background: var(--background-deep);
 }
 
+/* Terminal workspace: tabs + panes ------------------------------------------ */
+.term-workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.term-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.term-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  height: 34px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
+  white-space: nowrap;
+}
+.term-tab:hover {
+  color: var(--foreground);
+}
+.term-tab.is-active {
+  color: var(--foreground);
+  border-bottom-color: var(--primary);
+}
+.term-tab__close {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--subtle-foreground);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+.term-tab__close:hover {
+  color: var(--foreground);
+}
+.term-tab__add {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  padding: 0 12px;
+  font-size: 15px;
+}
+.term-tab__add:hover,
+.term-tab__add.is-active {
+  color: var(--primary);
+}
+.term-workspace__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.term-workspace__view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* Terminal + file-tree split ------------------------------------------------ */
 .term-split {
   display: flex;
+  flex: 1;
+  min-width: 0;
   height: 100%;
   min-height: 0;
 }
@@ -2911,6 +2989,11 @@ span.checkbox {
 .term-picker__inner {
   width: 100%;
   max-width: 520px;
+}
+.term-picker__cancel {
+  margin-top: 20px;
+  display: flex;
+  justify-content: center;
 }
 .term-picker__title {
   margin: 6px 0 4px;

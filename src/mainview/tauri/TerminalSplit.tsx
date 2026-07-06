@@ -41,7 +41,11 @@ export function TerminalSplit({
   // disposed on unmount: the listeners unsubscribe themselves and the store is
   // GC'd — and an irreversible dispose() would be re-run by React StrictMode's
   // mount→unmount→remount, permanently killing a live store.
+  const rootKey = `mast.fileroot.${target}`;
   const [store] = useState(() => new FileTreeStore(tauriFs(target)));
+  useEffect(() => {
+    void store.loadRoot(localStorage.getItem(rootKey));
+  }, [store, rootKey]);
 
   const { showToast } = useToast();
   const toast = (message: string, ok: boolean) => showToast(ok ? "success" : "error", message);
@@ -115,6 +119,10 @@ export function TerminalSplit({
     rename: (e) => setPrompt({ mode: "rename", entry: e }),
     remove: (e) => setConfirmDel(e),
     newFolder: (dir) => setPrompt({ mode: "mkdir", dir }),
+    setRoot: (e) => {
+      localStorage.setItem(rootKey, e.path); // remember this project's root
+      store.setRoot(e.path);
+    },
   };
 
   const doRename = async (entry: FileEntry, name: string) => {
