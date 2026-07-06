@@ -384,14 +384,19 @@ export function BoardScreen({
     setDropTarget(null);
     if (!spec || !canTransition(spec.status, to)) return;
 
-    const outcome = await move(spec.id, to);
+    const { outcome, error } = await move(spec.id, to);
     if (outcome === "conflict") {
       showToast(
         "error",
         `${spec.id} was changed by someone else — board reloaded, your move was not applied.`,
       );
     } else if (outcome === "error") {
-      showToast("error", `Could not move ${spec.id}.`);
+      showToast(
+        "error",
+        error
+          ? `Couldn’t move ${spec.id}: ${error.message}${error.action ? ` — ${error.action}` : ""}`
+          : `Couldn’t move ${spec.id}.`,
+      );
     }
   };
 

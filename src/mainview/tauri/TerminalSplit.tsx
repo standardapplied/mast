@@ -28,15 +28,7 @@ const joinRemote = (dir: string, name: string) => `${dir.replace(/\/+$/, "")}/${
 
 type Prompt = { mode: "rename"; entry: FileEntry } | { mode: "mkdir"; dir: string };
 
-export function TerminalSplit({
-  target,
-  label,
-  onBack,
-}: {
-  target: string;
-  label: string;
-  onBack: () => void;
-}) {
+export function TerminalSplit({ target, label }: { target: string; label: string }) {
   // Created once for this mounted project (keyed by target upstream). Not
   // disposed on unmount: the listeners unsubscribe themselves and the store is
   // GC'd — and an irreversible dispose() would be re-run by React StrictMode's
@@ -196,7 +188,7 @@ export function TerminalSplit({
   return (
     <div className="term-split" ref={rootRef} style={{ "--tree-w": `${treeWidth}px` } as React.CSSProperties}>
       <div className={`term-split__main${terminalTargeted ? " term-split__main--drop" : ""}`}>
-        <TerminalPane ref={termRef} target={target} label={label} onBack={onBack} />
+        <TerminalPane ref={termRef} target={target} label={label} />
       </div>
       <div className="term-split__resizer" onPointerDown={startResize} role="separator" aria-orientation="vertical" />
       <FileTree store={store} dropDir={dropDir} actions={actions} />

@@ -74,9 +74,9 @@ export function TerminalWorkspace() {
             style={{ display: t.key === activeKey && !showPicker ? "flex" : "none" }}
           >
             {t.target ? (
-              <TerminalSplit target={t.target} label={t.label} onBack={() => close(t.key)} />
+              <TerminalSplit target={t.target} label={t.label} />
             ) : (
-              <TerminalPane label={t.label} onBack={() => close(t.key)} />
+              <TerminalPane label={t.label} />
             )}
           </div>
         ))}

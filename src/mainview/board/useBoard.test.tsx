@@ -75,7 +75,7 @@ describe("useBoard", () => {
 
     const result = { outcome: undefined as MoveOutcome | undefined };
     await act(async () => {
-      result.outcome = await handle().move("chorus-billing-export", "in_progress");
+      result.outcome = (await handle().move("chorus-billing-export", "in_progress")).outcome;
     });
     expect(result.outcome).toBe("ok");
     expect(handle().data.specs.find((s) => s.id === "chorus-billing-export")?.status).toBe(
@@ -101,9 +101,25 @@ describe("useBoard", () => {
 
     const result = { outcome: undefined as MoveOutcome | undefined };
     await act(async () => {
-      result.outcome = await handle().move("chorus-billing-export", "in_progress");
+      result.outcome = (await handle().move("chorus-billing-export", "in_progress")).outcome;
     });
     expect(result.outcome).toBe("conflict");
+  });
+
+  test("a failed move surfaces the backend error so the UI can toast it", async () => {
+    const gateway = createDemoGateway();
+    gateway.updateSpec = async () => ({
+      ok: false,
+      error: { status: 422, code: "invalid_transition", message: "draft cannot go straight to done" },
+    });
+    const { handle } = await render(gateway);
+
+    let out: { outcome: MoveOutcome; error?: { message: string } } | undefined;
+    await act(async () => {
+      out = await handle().move("chorus-billing-export", "in_progress");
+    });
+    expect(out?.outcome).toBe("error");
+    expect(out?.error?.message).toBe("draft cannot go straight to done");
   });
 });
 

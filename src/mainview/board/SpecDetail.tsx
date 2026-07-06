@@ -4,6 +4,7 @@ import type {
   GlobalSpecView,
   ReviewView,
   SpecRevisionView,
+  SpecStatus,
   SpecUpdateRequest,
 } from "../../shared/sail-models";
 import type { SailWireError } from "../../shared/types";
@@ -12,13 +13,20 @@ import { CaretLeft, Info } from "../components/icons";
 import { Input } from "../components/Input";
 import { LoadingMark } from "../components/Loading";
 import { NumberStepper } from "../components/NumberStepper";
+import { Select } from "../components/Select";
 import { Tooltip } from "../components/Tooltip";
 import { useToast } from "../components/Toast";
 import { Badge, Button, Card, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
+import { DispatchDialog } from "./DispatchDialog";
 import { STATUS_LABEL } from "./lifecycle";
 import { dependentsOf, unmetDependencies } from "./useBoard";
+
+const STATUS_OPTIONS = (Object.keys(STATUS_LABEL) as SpecStatus[]).map((value) => ({
+  value,
+  label: STATUS_LABEL[value],
+}));
 
 type Loaded = {
   detail: GlobalSpecDetailResponse;
@@ -57,8 +65,24 @@ export function SpecDetail({
   const [error, setError] = useState<SailWireError | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<SpecUpdateRequest>({});
+  const [bodyDraft, setBodyDraft] = useState("");
   const [restoring, setRestoring] = useState<number | null>(null);
+  const [dispatchOpen, setDispatchOpen] = useState(false);
+  const [role, setRole] = useState<{ canDispatch: boolean; known: boolean }>({
+    canDispatch: false,
+    known: false,
+  });
   const { showToast } = useToast();
+
+  useEffect(() => {
+    void gateway.whoami().then((r) => {
+      setRole(
+        r.ok
+          ? { canDispatch: r.value.capabilities.includes("admin"), known: true }
+          : { canDispatch: true, known: false },
+      );
+    });
+  }, [gateway]);
 
   const load = useCallback(async () => {
     // Core first — just what the page needs to render — so the detail appears
@@ -154,8 +178,16 @@ export function SpecDetail({
   const unmet = unmetDependencies(spec, loaded.allSpecs);
   const dependents = dependentsOf(loaded.allSpecs, spec.id);
 
+  const startEdit = () => {
+    setBodyDraft(loaded.body);
+    setDraft({});
+    setEditing(true);
+  };
+
   const saveMeta = async () => {
-    const result = await gateway.updateSpec(spec.id, draft, loaded.etag);
+    const changes: SpecUpdateRequest = { ...draft };
+    if (bodyDraft !== loaded.body) changes.body = bodyDraft;
+    const result = await gateway.updateSpec(spec.id, changes, loaded.etag);
     if (result.ok) {
       setEditing(false);
       setDraft({});
@@ -222,6 +254,18 @@ export function SpecDetail({
       </div>
 
       <div className="prop-bar">
+        <div className="prop">
+          <span className="prop-label">Status</span>
+          {editing ? (
+            <Select
+              value={draft.status ?? spec.status}
+              options={STATUS_OPTIONS}
+              onChange={(v) => setDraft((d) => ({ ...d, status: v as SpecStatus }))}
+            />
+          ) : (
+            <span className="prop-value">{STATUS_LABEL[spec.status]}</span>
+          )}
+        </div>
         {propItem("Assignee", "assignee", spec.assignee ?? "")}
         {propItem("Agent", "agent", spec.agent ?? "")}
         {propItem("Model", "model", spec.model ?? "")}
@@ -306,9 +350,14 @@ export function SpecDetail({
               </Button>
             </>
           ) : (
-            <Button variant="ghost" onClick={() => setEditing(true)}>
-              Edit
-            </Button>
+            <>
+              <Button variant="ghost" onClick={() => setDispatchOpen(true)}>
+                Dispatch
+              </Button>
+              <Button variant="ghost" onClick={startEdit}>
+                Edit
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -328,7 +377,22 @@ export function SpecDetail({
       <div className="detail-grid">
         <div className="detail-main">
           <Card>
-            <Markdown source={loaded.body || "*No body yet.*"} />
+            {editing ? (
+              <div className="md-editor">
+                <textarea
+                  className="md-editor__input"
+                  value={bodyDraft}
+                  spellCheck={false}
+                  onChange={(e) => setBodyDraft(e.target.value)}
+                  placeholder="Markdown…"
+                />
+                <div className="md-editor__preview">
+                  <Markdown source={bodyDraft || "*No body yet.*"} />
+                </div>
+              </div>
+            ) : (
+              <Markdown source={loaded.body || "*No body yet.*"} />
+            )}
           </Card>
           {loaded.plan && (
             <Card title="Plan">
@@ -413,6 +477,21 @@ export function SpecDetail({
           history.
         </p>
       </Dialog>
+
+      {dispatchOpen && (
+        <DispatchDialog
+          gateway={gateway}
+          spec={spec}
+          allSpecs={loaded.allSpecs}
+          canDispatch={role.canDispatch}
+          roleKnown={role.known}
+          onClose={() => setDispatchOpen(false)}
+          onResult={(message, ok) => {
+            showToast(ok ? "success" : "error", message);
+            if (ok) void load();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -9,6 +9,7 @@ import type { SailWireError } from "../../shared/types";
 import type { Gateway } from "../gateway";
 
 export type MoveOutcome = "ok" | "conflict" | "blocked" | "error";
+export type MoveResult = { outcome: MoveOutcome; error?: SailWireError };
 
 export type BoardData = {
   specs: GlobalSpecView[];
@@ -101,9 +102,9 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
   }, [gateway, refresh]);
 
   const move = useCallback(
-    async (id: string, to: SpecStatus): Promise<MoveOutcome> => {
+    async (id: string, to: SpecStatus): Promise<MoveResult> => {
       const spec = data.specs.find((s) => s.id === id);
-      if (!spec) return "error";
+      if (!spec) return { outcome: "error" };
 
       const result = await gateway.updateSpec(id, { status: to }, `"${spec.updated_at}"`);
       if (result.ok) {
@@ -112,13 +113,13 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
           specs: prev.specs.map((s) => (s.id === id ? result.value.spec : s)),
         }));
         void refresh();
-        return "ok";
+        return { outcome: "ok" };
       }
       if (result.error.status === 412) {
         void refresh();
-        return "conflict";
+        return { outcome: "conflict", error: result.error };
       }
-      return "error";
+      return { outcome: "error", error: result.error };
     },
     [gateway, data.specs, refresh],
   );

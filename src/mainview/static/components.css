@@ -2402,6 +2402,44 @@ span.checkbox {
   min-width: 0;
 }
 
+.md-editor {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  min-width: 0;
+}
+.md-editor__input {
+  width: 100%;
+  min-height: 420px;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--background-deep);
+  color: var(--foreground);
+  font: 13px/1.6 var(--font-mono);
+  tab-size: 2;
+}
+.md-editor__input:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+.md-editor__preview {
+  min-width: 0;
+  overflow: auto;
+  padding: 0 4px;
+  border-left: 1px solid var(--border);
+}
+@media (max-width: 900px) {
+  .md-editor {
+    grid-template-columns: 1fr;
+  }
+  .md-editor__preview {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+}
+
 .detail-side {
   display: grid;
   gap: 20px;
@@ -2554,24 +2592,41 @@ span.checkbox {
   height: 100%;
   background: var(--background-deep);
 }
-.terminal-pane__bar {
+.terminal-pane__statusbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  font: 500 12px/1 var(--font-sans);
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--background);
+  font: 500 11px/1 var(--font-mono);
   letter-spacing: var(--tracking-eyebrow);
   text-transform: uppercase;
   color: var(--subtle-foreground);
 }
-.terminal-pane__status {
-  color: var(--muted-foreground);
+.terminal-pane__conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   text-transform: none;
   letter-spacing: 0;
+  color: var(--muted-foreground);
 }
-.terminal-pane__back {
-  margin-right: 8px;
+.terminal-pane__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted-foreground);
+}
+.terminal-pane__conn[data-state="connected"] .terminal-pane__dot {
+  background: var(--success);
+}
+.terminal-pane__conn[data-state="connecting"] .terminal-pane__dot {
+  background: var(--warning);
+}
+.terminal-pane__conn[data-state="off"] .terminal-pane__dot {
+  background: var(--error);
 }
 .terminal-pane__screen {
   flex: 1;

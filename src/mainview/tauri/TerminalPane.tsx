@@ -4,7 +4,6 @@ import { FitAddon, init, Terminal, type ITheme } from "ghostty-web";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ThemeName } from "../../shared/types";
 import { terminalTheme, type TerminalTheme } from "../ansi";
-import { CaretLeft } from "../components/icons";
 
 export type TerminalHandle = { paste: (text: string) => void };
 
@@ -42,9 +41,8 @@ export const TerminalPane = forwardRef<
     /** ssh alias of a project container; omitted = a shell on the node. */
     target?: string;
     label?: string;
-    onBack?: () => void;
   }
->(function TerminalPane({ target, label, onBack }, ref) {
+>(function TerminalPane({ target, label }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const idRef = useRef("");
@@ -163,22 +161,23 @@ export const TerminalPane = forwardRef<
     };
   }, []);
 
+  const connState =
+    status === "connected" ? "connected" : status === "connecting…" ? "connecting" : "off";
+
   return (
     <div className="terminal-pane">
-      <header className="terminal-pane__bar">
-        {onBack && (
-          <button type="button" className="back-btn terminal-pane__back" onClick={onBack} aria-label="Close">
-            <CaretLeft size={16} />
-          </button>
-        )}
-        <span className="terminal-pane__title">{label ?? target ?? "node · devbox"}</span>
-        <span className="terminal-pane__status">{status}</span>
-      </header>
       <div
         ref={hostRef}
         className="terminal-pane__screen"
         onMouseDown={() => termRef.current?.focus()}
       />
+      <footer className="terminal-pane__statusbar">
+        <span className="terminal-pane__label">{label ?? target ?? "node · devbox"}</span>
+        <span className="terminal-pane__conn" data-state={connState}>
+          <span className="terminal-pane__dot" />
+          {status}
+        </span>
+      </footer>
     </div>
   );
 });
