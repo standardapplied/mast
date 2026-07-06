@@ -67,19 +67,22 @@ export function TerminalWorkspace() {
       )}
 
       <div className="term-workspace__body">
-        {tabs.map((t) => (
-          <div
-            key={t.key}
-            className="term-workspace__view"
-            style={{ display: t.key === activeKey && !showPicker ? "flex" : "none" }}
-          >
-            {t.target ? (
-              <TerminalSplit target={t.target} label={t.label} />
-            ) : (
-              <TerminalPane label={t.label} />
-            )}
-          </div>
-        ))}
+        {tabs.map((t) => {
+          const active = t.key === activeKey && !showPicker;
+          return (
+            <div
+              key={t.key}
+              className="term-workspace__view"
+              style={{ display: active ? "flex" : "none" }}
+            >
+              {t.target ? (
+                <TerminalSplit target={t.target} label={t.label} active={active} />
+              ) : (
+                <TerminalPane label={t.label} active={active} />
+              )}
+            </div>
+          );
+        })}
         {showPicker && (
           <ProjectPicker onPick={open} onCancel={tabs.length > 0 ? () => setAdding(false) : undefined} />
         )}

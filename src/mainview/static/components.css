@@ -2934,10 +2934,30 @@ span.checkbox {
 .file-tree__row:hover {
   background: var(--surface-hover);
 }
+.file-tree__root {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted-foreground);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.file-tree__root svg {
+  flex-shrink: 0;
+}
+.file-tree__rootname {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
 .file-tree__twist {
   display: inline-flex;
-  width: 12px;
-  color: var(--subtle-foreground);
+  align-items: center;
+  width: 16px;
+  color: var(--muted-foreground);
   flex-shrink: 0;
 }
 .file-tree__name {

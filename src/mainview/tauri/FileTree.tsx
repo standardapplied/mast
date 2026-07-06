@@ -1,7 +1,9 @@
 import { useCallback, useState, useSyncExternalStore } from "react";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
-import { CaretDown, CaretRight } from "../components/icons";
+import { Folder } from "../components/icons";
 import type { DirState, FileEntry, FileTreeStore } from "./fileTreeStore";
+
+const baseName = (path: string) => path.split("/").filter(Boolean).pop() ?? "/";
 
 export type { FileEntry, FsApi, FsListing } from "./fileTreeStore";
 
@@ -75,7 +77,12 @@ export function FileTree({
       data-testid="file-tree"
     >
       <header className="file-tree__bar">
-        <span className="file-tree__title">Files</span>
+        <span className="file-tree__root" title={store.rootPath ?? undefined}>
+          <Folder size={13} />
+          <span className="file-tree__rootname">
+            {store.rootPath ? baseName(store.rootPath) : "Files"}
+          </span>
+        </span>
         <span className="file-tree__actions">
           {actions && store.rootPath && (
             <button
@@ -150,7 +157,6 @@ function TreeLevel({
           <Row
             entry={entry}
             depth={depth}
-            expanded={store.isExpanded(entry.path)}
             isDropTarget={dropDir === entry.path}
             onToggle={() => store.toggle(entry)}
             onRowMenu={onRowMenu}
@@ -167,14 +173,12 @@ function TreeLevel({
 function Row({
   entry,
   depth,
-  expanded,
   isDropTarget,
   onToggle,
   onRowMenu,
 }: {
   entry: FileEntry;
   depth: number;
-  expanded: boolean;
   isDropTarget: boolean;
   onToggle: () => void;
   onRowMenu?: (entry: FileEntry, e: React.MouseEvent) => void;
@@ -190,7 +194,7 @@ function Row({
       data-dir={entry.isDir}
     >
       <span className="file-tree__twist">
-        {entry.isDir ? expanded ? <CaretDown size={12} /> : <CaretRight size={12} /> : null}
+        {entry.isDir ? <Folder size={13} /> : null}
       </span>
       <span className="file-tree__name">{entry.name}</span>
     </button>

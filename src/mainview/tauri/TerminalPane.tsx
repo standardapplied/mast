@@ -41,12 +41,20 @@ export const TerminalPane = forwardRef<
     /** ssh alias of a project container; omitted = a shell on the node. */
     target?: string;
     label?: string;
+    /** True when this pane's tab is the visible one — focus the shell. */
+    active?: boolean;
   }
->(function TerminalPane({ target, label }, ref) {
+>(function TerminalPane({ target, label, active }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const idRef = useRef("");
   const [status, setStatus] = useState("connecting…");
+
+  // Auto-focus the emulator when this tab becomes active, so you can type
+  // immediately without clicking in. rAF lets the display flip apply first.
+  useEffect(() => {
+    if (active) requestAnimationFrame(() => termRef.current?.focus());
+  }, [active]);
 
   const write = (data: string) =>
     void invoke("terminal_write", {
