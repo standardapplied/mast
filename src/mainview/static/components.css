@@ -1420,12 +1420,17 @@ html.is-dragging-active * {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* dvh tracks the *visible* viewport as the mobile URL bar / on-screen keyboard
+     move, so the shell isn't clipped behind them; 100vh is the fallback. */
+  height: 100dvh;
 }
 
 .cockpit-toolbar {
   flex-shrink: 0;
   gap: 12px;
-  padding: 10px 16px;
+  /* Clear the notch / status bar — viewport-fit=cover lets us draw under it. */
+  padding: calc(10px + env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 10px
+    max(16px, env(safe-area-inset-left));
 }
 
 .cockpit-brand {
@@ -1931,7 +1936,17 @@ span.checkbox {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 0;
+  /* Keep content clear of the home indicator in PWA-standalone / iOS. */
+  padding: 0 0 env(safe-area-inset-bottom);
+}
+
+/* Inputs render at >=16px on phones so iOS Safari doesn't auto-zoom on focus. */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
 }
 
 .bridge-badge {
@@ -2217,6 +2232,7 @@ span.checkbox {
   padding: 0 16px 24px;
   border-top: 1px solid var(--border);
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .board-canvas .kanban-board {
@@ -2282,6 +2298,8 @@ span.checkbox {
   /* A details page must never scroll horizontally; wide children (tables, code)
      scroll inside their own box instead. This is the backstop. */
   overflow-x: hidden;
+  /* Don't rubber-band the whole app when this region reaches its scroll end. */
+  overscroll-behavior: contain;
   display: grid;
   gap: 16px;
   align-content: start;
