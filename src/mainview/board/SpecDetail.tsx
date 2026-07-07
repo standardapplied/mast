@@ -14,6 +14,7 @@ import { Input } from "../components/Input";
 import { LoadingMark } from "../components/Loading";
 import { NumberStepper } from "../components/NumberStepper";
 import { Select } from "../components/Select";
+import { ToggleButton } from "../components/ToggleButton";
 import { Tooltip } from "../components/Tooltip";
 import { useToast } from "../components/Toast";
 import { Badge, Button, Card, Eyebrow } from "../components/ui";
@@ -27,6 +28,11 @@ const STATUS_OPTIONS = (Object.keys(STATUS_LABEL) as SpecStatus[]).map((value) =
   value,
   label: STATUS_LABEL[value],
 }));
+
+const EDITOR_PANES = [
+  { value: "write", label: "Write" },
+  { value: "preview", label: "Preview" },
+];
 
 type Loaded = {
   detail: GlobalSpecDetailResponse;
@@ -66,6 +72,8 @@ export function SpecDetail({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<SpecUpdateRequest>({});
   const [bodyDraft, setBodyDraft] = useState("");
+  // Which editor pane is showing on narrow screens (side-by-side on desktop).
+  const [editorPane, setEditorPane] = useState<"write" | "preview">("write");
   const [restoring, setRestoring] = useState<number | null>(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [role, setRole] = useState<{ canDispatch: boolean; known: boolean }>({
@@ -391,7 +399,13 @@ export function SpecDetail({
         <div className="detail-main">
           <Card>
             {editing ? (
-              <div className="md-editor">
+              <div className="md-editor" data-pane={editorPane}>
+                <ToggleButton
+                  className="md-editor__tabs"
+                  options={EDITOR_PANES}
+                  value={editorPane}
+                  onChange={(v) => setEditorPane(v as "write" | "preview")}
+                />
                 <textarea
                   className="md-editor__input"
                   value={bodyDraft}

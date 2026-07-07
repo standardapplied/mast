@@ -2459,6 +2459,11 @@ span.checkbox {
   gap: 16px;
   min-width: 0;
 }
+/* Write/Preview switch is only for the stacked mobile layout; on wide screens
+   both panes show side by side, so the switch is hidden. */
+.md-editor__tabs {
+  display: none;
+}
 .md-editor__input {
   width: 100%;
   min-width: 0;
@@ -2466,7 +2471,7 @@ span.checkbox {
   resize: vertical;
   padding: 12px;
   border: 1px solid var(--border-strong);
-  background: var(--background-deep);
+  background: var(--background);
   color: var(--foreground);
   font: 13px/1.6 var(--font-mono);
   tab-size: 2;
@@ -2488,11 +2493,28 @@ span.checkbox {
 @media (max-width: 900px) {
   .md-editor {
     grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  /* Stacked layout: show the switch and only the chosen pane, so you get a full
+     clean editor OR a full preview — never a cramped textarea with the preview
+     crowding it below. */
+  .md-editor__tabs {
+    display: grid;
+  }
+  .md-editor[data-pane="write"] .md-editor__preview {
+    display: none;
+  }
+  .md-editor[data-pane="preview"] .md-editor__input {
+    display: none;
+  }
+  .md-editor__input {
+    min-height: 320px;
+    /* 16px avoids iOS Safari's auto-zoom-on-focus for form fields. */
+    font-size: 16px;
   }
   .md-editor__preview {
     border-left: none;
-    border-top: 1px solid var(--border);
-    padding-top: 12px;
+    padding: 0;
   }
 }
 
