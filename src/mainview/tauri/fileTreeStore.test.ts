@@ -106,6 +106,28 @@ describe("FileTreeStore", () => {
     expect((store.dir("/root/sub") as { entries: FileEntry[] }).entries[0]!.name).toBe("keep.txt");
   });
 
+  test("beginDelete locks a node (collapses it) until endDelete", async () => {
+    const { fs, settle, take } = controllableFs();
+    const store = new FileTreeStore(fs);
+    void store.loadRoot();
+    await settle();
+    take(null).resolve([dir("sub")]);
+    await settle();
+    take("/root/sub").resolve([file("a.txt", "/root/sub")]); // prefetch
+    await settle();
+
+    store.toggle(dir("sub"));
+    await settle();
+    expect(store.isExpanded("/root/sub")).toBe(true);
+
+    store.beginDelete("/root/sub");
+    expect(store.isDeleting("/root/sub")).toBe(true);
+    expect(store.isExpanded("/root/sub")).toBe(false); // collapsed so the subtree can't be acted on
+
+    store.endDelete("/root/sub");
+    expect(store.isDeleting("/root/sub")).toBe(false);
+  });
+
   test("prefetch is bounded to 10 child dirs", async () => {
     const { fs, settle, take, countFor } = controllableFs();
     const store = new FileTreeStore(fs);

@@ -27,6 +27,9 @@ use tokio::sync::{mpsc, Mutex};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+/// Generous bound for a recursive delete (`rm -rf`): the remote does the work in
+/// one shot, but a huge tree over a slow link can still take a while.
+const DELETE_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -668,9 +671,70 @@ impl Backend {
     }
 
     /// Delete a file, or a directory and everything under it.
-    pub async fn fs_delete(&self, target: &str, path: String) -> Result<(), Error> {
-        let sftp = self.sftp(target).await?;
-        remove_recursive(&sftp, &path).await
+    /// Delete a path with a single `rm -rf` over an exec channel — one round-trip
+    /// where the remote shell does the recursion, instead of thousands of
+    /// sequential SFTP `remove_file` calls (which froze the UI on big trees). A
+    /// `transfer` event (kind `delete`) brackets it so the UI shows a live
+    /// indicator and a clean pass/fail. The path is single-quoted and preceded
+    /// by `--`, so no path content can inject shell or be read as an option.
+    pub async fn fs_delete(
+        &self,
+        app: &AppHandle,
+        target: &str,
+        path: String,
+        transfer_id: String,
+    ) -> Result<(), Error> {
+        let trimmed = path.trim();
+        if trimmed.is_empty() || trimmed == "/" {
+            return Err(Error::Sftp("refusing to delete an empty or root path".into()));
+        }
+        let label = trimmed.rsplit('/').find(|s| !s.is_empty()).unwrap_or(trimmed).to_string();
+        let mut progress = TransferProgress::start(transfer_id, "delete", label, 0, 0);
+        emit_transfer(app, &progress);
+
+        let command = format!("rm -rf -- {}", shell_single_quote(trimmed));
+        let outcome = self.exec_capture(target, &command).await;
+        let result = match outcome {
+            Ok((0, _)) => Ok(()),
+            Ok((code, stderr)) => Err(Error::Sftp(if stderr.is_empty() {
+                format!("rm exited with status {code}")
+            } else {
+                stderr
+            })),
+            Err(e) => Err(e),
+        };
+        match &result {
+            Ok(()) => progress.status = "done",
+            Err(e) => {
+                progress.status = "error";
+                progress.detail = Some(e.to_string());
+            }
+        }
+        emit_transfer(app, &progress);
+        result
+    }
+
+    /// Run one command on a container's session to completion, returning its
+    /// exit status and captured stderr. Used for `rm -rf`; keeps the channel
+    /// bounded so a wedged remote can't hang the delete forever.
+    async fn exec_capture(&self, target: &str, command: &str) -> Result<(u32, String), Error> {
+        tokio::time::timeout(DELETE_TIMEOUT, async {
+            let mut channel = self.container_channel(target).await?;
+            channel.exec(true, command.as_bytes()).await?;
+            let mut exit = 0u32;
+            let mut stderr = Vec::new();
+            while let Some(msg) = channel.wait().await {
+                match msg {
+                    ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(&data),
+                    ChannelMsg::ExitStatus { exit_status } => exit = exit_status,
+                    ChannelMsg::Eof | ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+            Ok((exit, String::from_utf8_lossy(&stderr).trim().to_string()))
+        })
+        .await
+        .map_err(|_| Error::Sftp(format!("{target}: delete timed out")))?
     }
 
     /// Proxies one HTTP request to the control plane over a direct-tcpip
@@ -1233,36 +1297,11 @@ async fn run_download(
     Ok(())
 }
 
-/// Delete a remote path: a file directly, or a directory by removing all its
-/// contents (files first, then dirs deepest-first) before the dir itself.
-async fn remove_recursive(sftp: &SftpSession, path: &str) -> Result<(), Error> {
-    let meta = sftp.metadata(path.to_string()).await.map_err(|e| Error::Sftp(e.to_string()))?;
-    if !meta.is_dir() {
-        return sftp.remove_file(path).await.map_err(|e| Error::Sftp(e.to_string()));
-    }
-    let mut dirs = vec![path.to_string()];
-    let mut stack = vec![path.to_string()];
-    while let Some(current) = stack.pop() {
-        let read = sftp.read_dir(current.clone()).await.map_err(|e| Error::Sftp(e.to_string()))?;
-        for entry in read {
-            let name = entry.file_name();
-            if name == "." || name == ".." {
-                continue;
-            }
-            let child = join_remote(&current, &name);
-            if entry.metadata().is_dir() {
-                dirs.push(child.clone());
-                stack.push(child);
-            } else {
-                sftp.remove_file(&child).await.map_err(|e| Error::Sftp(e.to_string()))?;
-            }
-        }
-    }
-    dirs.sort_by_key(|d| std::cmp::Reverse(d.matches('/').count()));
-    for dir in dirs {
-        sftp.remove_dir(&dir).await.map_err(|e| Error::Sftp(e.to_string()))?;
-    }
-    Ok(())
+/// Single-quote a string for safe interpolation into a POSIX shell command: wrap
+/// in `'…'` and replace each embedded `'` with `'\''`. Everything else is literal
+/// inside single quotes, so no path content can break out or inject.
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Set (or, with `None`, remove) the `token:` field in `~/.sail/config.yaml`,
@@ -1535,8 +1574,18 @@ Host bastion
         assert_eq!(sftp.read(&renamed).await.expect("read renamed"), b"nested");
         sftp.rename(renamed, nested.clone()).await.ok();
 
-        // Recursive delete of the populated directory.
-        remove_recursive(&sftp, &subdir).await.expect("remove_recursive");
+        // Clean up the populated directory (delete now runs `rm -rf` over an
+        // exec channel, which needs a container session, so tidy up via SFTP).
+        sftp.remove_file(&nested).await.ok();
+        sftp.remove_dir(&subdir).await.ok();
         assert!(sftp.metadata(subdir).await.is_err(), "dir should be gone");
+    }
+
+    #[test]
+    fn shell_single_quote_neutralises_injection() {
+        assert_eq!(shell_single_quote("/a/b"), "'/a/b'");
+        // A path trying to break out of the quotes or inject a command stays
+        // entirely literal inside the requoting.
+        assert_eq!(shell_single_quote("a'; rm -rf /"), "'a'\\''; rm -rf /'");
     }
 }

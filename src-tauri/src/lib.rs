@@ -181,8 +181,14 @@ async fn fs_mkdir(state: State<'_, AppState>, target: String, path: String) -> R
 }
 
 #[tauri::command]
-async fn fs_delete(state: State<'_, AppState>, target: String, path: String) -> Result<(), String> {
-    state.backend().await?.fs_delete(&target, path).await.map_err(String::from)
+async fn fs_delete(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target: String,
+    path: String,
+    transfer_id: String,
+) -> Result<(), String> {
+    state.backend().await?.fs_delete(&app, &target, path, transfer_id).await.map_err(String::from)
 }
 
 /// Download a file to ~/Downloads and open it in the OS default app.

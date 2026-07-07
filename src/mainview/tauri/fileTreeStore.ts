@@ -33,6 +33,7 @@ export class FileTreeStore {
   private nodes = new Map<string, DirState>();
   private expanded = new Set<string>();
   private inflight = new Set<string>();
+  private deleting = new Set<string>();
   private listeners = new Set<() => void>();
   private disposed = false;
 
@@ -53,6 +54,20 @@ export class FileTreeStore {
   }
   isExpanded(path: string): boolean {
     return this.expanded.has(path);
+  }
+  isDeleting(path: string): boolean {
+    return this.deleting.has(path);
+  }
+
+  /** Lock a node while it's being deleted: collapse it (so the vanishing subtree
+   *  can't be acted on) and mark it so the row disables its own interactions. */
+  beginDelete(path: string): void {
+    this.deleting.add(path);
+    this.expanded.delete(path);
+    this.emit();
+  }
+  endDelete(path: string): void {
+    if (this.deleting.delete(path)) this.emit();
   }
   get busy(): boolean {
     return this.inflight.size > 0;

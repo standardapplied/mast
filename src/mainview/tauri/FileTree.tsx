@@ -158,6 +158,7 @@ function TreeLevel({
             entry={entry}
             depth={depth}
             isDropTarget={dropDir === entry.path}
+            deleting={store.isDeleting(entry.path)}
             onToggle={() => store.toggle(entry)}
             onRowMenu={onRowMenu}
           />
@@ -174,29 +175,38 @@ function Row({
   entry,
   depth,
   isDropTarget,
+  deleting,
   onToggle,
   onRowMenu,
 }: {
   entry: FileEntry;
   depth: number;
   isDropTarget: boolean;
+  deleting: boolean;
   onToggle: () => void;
   onRowMenu?: (entry: FileEntry, e: React.MouseEvent) => void;
 }) {
   return (
     <button
       type="button"
-      className={`file-tree__row${isDropTarget ? " file-tree__row--drop" : ""}`}
+      className={`file-tree__row${isDropTarget ? " file-tree__row--drop" : ""}${deleting ? " file-tree__row--deleting" : ""}`}
       style={{ paddingLeft: 8 + depth * 14 }}
       onClick={onToggle}
-      onContextMenu={onRowMenu ? (e) => onRowMenu(entry, e) : undefined}
+      disabled={deleting}
+      aria-busy={deleting || undefined}
+      onContextMenu={onRowMenu && !deleting ? (e) => onRowMenu(entry, e) : undefined}
       data-path={entry.path}
       data-dir={entry.isDir}
     >
       <span className="file-tree__twist">
-        {entry.isDir ? <Folder size={13} /> : null}
+        {deleting ? (
+          <span className="file-tree__spinner" aria-hidden="true" />
+        ) : entry.isDir ? (
+          <Folder size={13} />
+        ) : null}
       </span>
       <span className="file-tree__name">{entry.name}</span>
+      {deleting && <span className="file-tree__deleting">deleting…</span>}
     </button>
   );
 }

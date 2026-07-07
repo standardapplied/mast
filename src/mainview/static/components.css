@@ -2955,6 +2955,26 @@ span.checkbox {
 .transfer--error .transfer__fill {
   background: var(--error);
 }
+/* A delete has no measurable total, so the bar sweeps to signal ongoing work;
+   the primary accent draws the eye to "something is being removed". */
+.transfer--delete {
+  border-left: 2px solid var(--primary);
+}
+.transfer--delete .transfer__label {
+  color: var(--primary);
+}
+.transfer__fill--indeterminate {
+  width: 40%;
+  animation: transfer-sweep 1.1s ease-in-out infinite;
+}
+@keyframes transfer-sweep {
+  0% {
+    margin-left: -45%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
 .transfer--done .transfer__status {
   color: var(--success);
 }
@@ -3094,6 +3114,36 @@ span.checkbox {
 }
 .file-tree__row[data-dir="true"] .file-tree__name {
   font-weight: 500;
+}
+/* A node being deleted is locked: dimmed, no pointer, a spinner in place of the
+   folder icon, and a primary-tinted "deleting…" tag. */
+.file-tree__row--deleting {
+  opacity: 0.55;
+  cursor: progress;
+}
+.file-tree__row--deleting:hover {
+  background: none;
+}
+.file-tree__spinner {
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: file-tree-spin 0.7s linear infinite;
+}
+@keyframes file-tree-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.file-tree__deleting {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
+  color: var(--primary);
 }
 .file-tree__note {
   padding: 6px 12px;

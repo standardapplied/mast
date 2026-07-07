@@ -43,9 +43,12 @@ export function TransfersTray() {
 
 function TransferRow({ t }: { t: Transfer }) {
   const pct = Math.round(transferPercent(t) * 100);
-  const verb = t.kind === "upload" ? "Uploading" : "Downloading";
+  // A delete has no byte/file totals to measure against, so its bar is a moving
+  // indeterminate sweep rather than a fill.
+  const indeterminate = t.status === "active" && t.bytesTotal === 0 && t.filesTotal === 0;
+  const verb = t.kind === "upload" ? "Uploading" : t.kind === "download" ? "Downloading" : "Deleting";
   return (
-    <div className={`transfer transfer--${t.status}`} data-testid="transfer">
+    <div className={`transfer transfer--${t.status} transfer--${t.kind}`} data-testid="transfer">
       <div className="transfer__head">
         <span className="transfer__label" title={t.label}>
           {t.label}
@@ -55,20 +58,27 @@ function TransferRow({ t }: { t: Transfer }) {
             <Check size={13} />
           ) : t.status === "error" ? (
             <Cross size={13} />
-          ) : (
+          ) : indeterminate ? null : (
             `${pct}%`
           )}
         </span>
       </div>
       <div className="transfer__bar">
-        <div className="transfer__fill" style={{ width: `${pct}%` }} />
+        <div
+          className={`transfer__fill${indeterminate ? " transfer__fill--indeterminate" : ""}`}
+          style={indeterminate ? undefined : { width: `${pct}%` }}
+        />
       </div>
       <div className="transfer__meta">
         {t.status === "error"
           ? (t.detail ?? "failed")
-          : `${verb} · ${t.filesDone}/${t.filesTotal} files · ${humanBytes(t.bytesDone)}${
-              t.bytesTotal > 0 ? ` / ${humanBytes(t.bytesTotal)}` : ""
-            }`}
+          : t.kind === "delete"
+            ? t.status === "done"
+              ? "Removed"
+              : "Removing…"
+            : `${verb} · ${t.filesDone}/${t.filesTotal} files · ${humanBytes(t.bytesDone)}${
+                t.bytesTotal > 0 ? ` / ${humanBytes(t.bytesTotal)}` : ""
+              }`}
       </div>
     </div>
   );

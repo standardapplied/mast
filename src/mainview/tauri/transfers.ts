@@ -5,7 +5,7 @@
 
 export type Transfer = {
   id: string;
-  kind: "upload" | "download";
+  kind: "upload" | "download" | "delete";
   label: string;
   filesDone: number;
   filesTotal: number;
