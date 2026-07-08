@@ -690,15 +690,14 @@ impl Backend {
         path: String,
         transfer_id: String,
     ) -> Result<(), Error> {
-        let trimmed = path.trim();
-        if trimmed.is_empty() || trimmed == "/" {
+        if path.is_empty() || path == "/" {
             return Err(Error::Sftp("refusing to delete an empty or root path".into()));
         }
-        let label = trimmed.rsplit('/').find(|s| !s.is_empty()).unwrap_or(trimmed).to_string();
+        let label = path.rsplit('/').find(|s| !s.is_empty()).unwrap_or(&path).to_string();
         let mut progress = TransferProgress::start(transfer_id, "delete", label, 0, 0);
         emit_transfer(app, &progress);
 
-        let command = format!("rm -rf -- {}", shell_single_quote(trimmed));
+        let command = format!("rm -rf -- {}", shell_single_quote(&path));
         let outcome = self.exec_capture(target, &command).await;
         let result = match outcome {
             Ok((0, _)) => Ok(()),
