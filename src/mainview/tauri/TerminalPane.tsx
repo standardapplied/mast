@@ -146,6 +146,17 @@ export const TerminalPane = forwardRef<
         if (e.key === "Enter" && e.shiftKey) return send("\r"), true;
         return false;
       });
+      // Wheel scrolling. In the alternate screen (vim / a full-screen TUI) the
+      // app owns the viewport, so hand it the wheel — except Shift, which always
+      // scrolls our local scrollback. In the normal buffer (the agent's streaming
+      // conversation, even when Claude Code turns on mouse tracking) scroll our
+      // own scrollback rather than leaking wheel-as-mouse events to the app: that
+      // leak is what made the conversation unscrollable and looped the input box.
+      term.attachCustomWheelEventHandler((e) => {
+        if (term.buffer.active.type === "alternate" && !e.shiftKey) return false;
+        term.scrollLines(e.deltaY > 0 ? 3 : -3);
+        return true;
+      });
 
       dataOff = listen<number[]>(`terminal://data/${id}`, (ev) => {
         if (alive && termRef.current) termRef.current.write(new Uint8Array(ev.payload));
