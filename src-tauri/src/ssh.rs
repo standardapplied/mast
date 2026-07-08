@@ -46,6 +46,8 @@ pub enum Error {
     Timeout(String),
     #[error("malformed HTTP response from the control plane")]
     BadResponse,
+    #[error("refusing to open a stream to a non-allowlisted or malformed path")]
+    BadStreamPath,
     #[error("no terminal with id {0}")]
     NoTerminal(String),
     #[error("sftp: {0}")]
@@ -799,6 +801,9 @@ impl Backend {
     /// ({error?}) when the read ends. The webview parses the SSE framing and owns
     /// reconnect/cursor, calling back in with a fresh `since`.
     pub async fn stream_open(&self, app: AppHandle, id: String, path: String) -> Result<(), Error> {
+        // The request line is built by hand, so `path` is a trust boundary —
+        // validate before it reaches the wire (and before we even dial).
+        validate_stream_path(&path)?;
         let channel = self
             .open_forward(&self.config.server_host, self.config.server_port)
             .await?;
@@ -817,21 +822,28 @@ impl Backend {
         stream.flush().await?;
 
         // Read just the response head; the bytes past `\r\n\r\n` begin the body.
+        // Bound it: if the peer accepts the connection but stalls before the head
+        // completes, the command must fail deterministically rather than hang
+        // uncancelably (the cancel channel isn't registered until after this).
         let mut head = Vec::new();
         let mut tmp = [0u8; 4096];
-        let split = loop {
-            if let Some(pos) = head.windows(4).position(|w| w == b"\r\n\r\n") {
-                break pos;
+        let split = tokio::time::timeout(REQUEST_TIMEOUT, async {
+            loop {
+                if let Some(pos) = head.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break Ok(pos);
+                }
+                if head.len() > 64 * 1024 {
+                    break Err(Error::BadResponse);
+                }
+                let n = stream.read(&mut tmp).await?;
+                if n == 0 {
+                    break Err(Error::BadResponse);
+                }
+                head.extend_from_slice(&tmp[..n]);
             }
-            if head.len() > 64 * 1024 {
-                return Err(Error::BadResponse);
-            }
-            let n = stream.read(&mut tmp).await?;
-            if n == 0 {
-                return Err(Error::BadResponse);
-            }
-            head.extend_from_slice(&tmp[..n]);
-        };
+        })
+        .await
+        .map_err(|_| Error::Timeout(format!("{}:{}", self.config.server_host, self.config.server_port)))??;
         let leftover = head.split_off(split + 4);
         let head_text = String::from_utf8_lossy(&head);
         let status = status_line_code(&head_text).ok_or(Error::BadResponse)?;
@@ -1508,6 +1520,21 @@ fn shell_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Gate the request target for `stream_open`, which formats it straight into an
+/// HTTP request line. Requires origin form, allow-lists exactly the two SSE
+/// routes (their query strings included), and rejects any whitespace/control
+/// byte — so a CRLF-laden path can't split the request or inject headers.
+fn validate_stream_path(path: &str) -> Result<(), Error> {
+    let route_ok = path.starts_with("/v1/events/stream")
+        || (path.starts_with("/v1/projects/") && path.contains("/agent/stream"));
+    let bytes_ok = path.starts_with('/') && !path.bytes().any(|b| b <= 0x20 || b == 0x7f);
+    if route_ok && bytes_ok {
+        Ok(())
+    } else {
+        Err(Error::BadStreamPath)
+    }
+}
+
 /// Set (or, with `None`, remove) the `token:` field in `~/.sail/config.yaml`,
 /// preserving the other keys and the file's flow-vs-block YAML style, written
 /// 0600. Mirrors the CLI's writeConfig so Mast and `sail` stay in sync.
@@ -1782,7 +1809,7 @@ Host bastion
             .expect("connect");
         assert_eq!(agent_auth(&mut handle, &user).await, Some(true));
 
-        let mut channel = handle.channel_open_session().await.expect("channel");
+        let channel = handle.channel_open_session().await.expect("channel");
         channel.request_subsystem(true, "sftp").await.expect("subsystem");
         let sftp = SftpSession::new(channel.into_stream()).await.expect("sftp");
 
@@ -1835,5 +1862,19 @@ Host bastion
         // A path trying to break out of the quotes or inject a command stays
         // entirely literal inside the requoting.
         assert_eq!(shell_single_quote("a'; rm -rf /"), "'a'\\''; rm -rf /'");
+    }
+
+    #[test]
+    fn validate_stream_path_allows_the_two_routes_and_blocks_injection() {
+        assert!(validate_stream_path("/v1/events/stream").is_ok());
+        assert!(validate_stream_path("/v1/events/stream?project=demo&type=board_updated").is_ok());
+        assert!(validate_stream_path("/v1/projects/demo/agent/stream?since=5&role=review").is_ok());
+        // CRLF injection into the request target is rejected (control bytes).
+        assert!(validate_stream_path("/v1/events/stream HTTP/1.1\r\nX-Injected: 1").is_err());
+        // A bare space in the target is rejected.
+        assert!(validate_stream_path("/v1/events/stream x").is_err());
+        // Off-allowlist routes are rejected even when byte-clean.
+        assert!(validate_stream_path("/v1/specs").is_err());
+        assert!(validate_stream_path("relative/path").is_err());
     }
 }
