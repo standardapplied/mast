@@ -28,8 +28,8 @@ russh-sftp = "2.0"
 dirs = "5"
 thiserror = "1"
 getrandom = "0.2"
-tauri-plugin-updater = "2.0.0-rc.4"
-tauri-plugin-process = "2.0.0-rc.1"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [features]
 # Turned on by `tauri build --debug` and `tauri dev`.
