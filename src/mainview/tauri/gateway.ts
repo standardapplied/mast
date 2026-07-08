@@ -1,13 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
+  AgentLogResponse,
+  AgentLogRole,
+  AgentStatusResponse,
   ApiErrorBody,
   ConnectionStatus,
+  EventStreamState,
+  RecentEventsResponse,
   SailEvent,
   SpecFilter,
 } from "../../shared/sail-models";
 import type { SailResult, SailWireError } from "../../shared/types";
-import type { Gateway } from "../gateway";
+import { EventStream, type StreamResponse } from "../../shared/sse";
+import type { AgentLogHandle, Gateway } from "../gateway";
+import { AgentLogStream } from "./agentLogStream";
 
 /**
  * The Tauri seam to the control plane. Every read/write is one `sail_request`
@@ -87,7 +94,195 @@ async function read<T>(
   return { ok: true, value, etag: response.etag ?? undefined };
 }
 
+const EMPTY_CHUNKS: AsyncIterable<string> = {
+  [Symbol.asyncIterator]() {
+    return { next: () => Promise.resolve({ value: undefined as never, done: true }) };
+  },
+};
+
+function timerSchedule(fn: () => void, ms: number): () => void {
+  const timer = setTimeout(fn, ms);
+  return () => clearTimeout(timer);
+}
+
+/**
+ * Adapts the Rust `stream_open`/`stream_close` pipe to the `StreamResponse`
+ * shape the SSE consumers expect: one long-lived GET whose de-chunked body
+ * arrives as `stream://data/{id}` text and terminates on `stream://end/{id}`.
+ * The Rust core owns the token and the tunnel; the webview only ever sees text.
+ */
+async function tauriStreamConnect(path: string): Promise<StreamResponse> {
+  const id = crypto.randomUUID();
+  const queue: string[] = [];
+  let resolveNext: ((r: IteratorResult<string>) => void) | null = null;
+  let ended = false;
+  let tornDown = false;
+  let offOpen = () => {};
+  let offData = () => {};
+  let offEnd = () => {};
+
+  let resolveStatus!: (status: number) => void;
+  const statusReady = new Promise<number>((resolve) => {
+    resolveStatus = resolve;
+  });
+
+  const push = (text: string) => {
+    if (resolveNext) {
+      const resolve = resolveNext;
+      resolveNext = null;
+      resolve({ value: text, done: false });
+    } else {
+      queue.push(text);
+    }
+  };
+  // Tear down the listeners and stop the Rust pump. Runs on cancel (watchdog /
+  // stop) AND on the stream ending naturally — the SSE consumers don't cancel a
+  // stream that ends on its own, so without this each reconnect would leak.
+  const closeStream = () => {
+    if (tornDown) return;
+    tornDown = true;
+    offOpen();
+    offData();
+    offEnd();
+    void invoke("stream_close", { id }).catch(() => {});
+  };
+  const finish = () => {
+    if (!ended) {
+      ended = true;
+      if (resolveNext) {
+        const resolve = resolveNext;
+        resolveNext = null;
+        resolve({ value: undefined as never, done: true });
+      }
+    }
+    closeStream();
+  };
+
+  offOpen = await listen<{ status: number }>(`stream://open/${id}`, (e) =>
+    resolveStatus(e.payload.status),
+  );
+  offData = await listen<string>(`stream://data/${id}`, (e) => push(e.payload));
+  offEnd = await listen(`stream://end/${id}`, () => finish());
+
+  try {
+    await invoke("stream_open", { id, path });
+  } catch {
+    closeStream();
+    return { status: 0, header: () => null, chunks: EMPTY_CHUNKS, cancel: () => {} };
+  }
+
+  const status = await statusReady;
+  const chunks: AsyncIterable<string> = {
+    [Symbol.asyncIterator]() {
+      return {
+        next(): Promise<IteratorResult<string>> {
+          if (queue.length > 0) return Promise.resolve({ value: queue.shift()!, done: false });
+          if (ended) return Promise.resolve({ value: undefined as never, done: true });
+          return new Promise((resolve) => {
+            resolveNext = resolve;
+          });
+        },
+      };
+    },
+  };
+
+  return { status, header: () => null, chunks, cancel: finish };
+}
+
+function tauriAgentLog(project: string, role: AgentLogRole, since: number): AgentLogHandle {
+  const base = `/v1/projects/${encodeURIComponent(project)}/agent/stream`;
+  const stream = new AgentLogStream(
+    role,
+    {
+      connect: (r, s) => tauriStreamConnect(`${base}?role=${r}&since=${s}`),
+      schedule: timerSchedule,
+    },
+    since,
+  );
+  void stream.start();
+  return {
+    onLine: (listener) => stream.onLine(listener),
+    onState: (listener) => stream.onState(listener),
+    stop: () => stream.stop(),
+  };
+}
+
 export function createTauriGateway(): Gateway {
+  const recent = async (limit: number): Promise<RecentEventsResponse> => {
+    const result = await read<RecentEventsResponse>("GET", `/v1/events/recent?limit=${limit}`);
+    return result.ok ? result.value : { limit, returned: 0, events: [] };
+  };
+
+  // One resilient consumer for /v1/events/stream, backed by the Rust pipe: it is
+  // what makes the board update live (spec_* / board_updated), and its state
+  // drives the connection pill's stream health. The dummy origin only satisfies
+  // EventStream.url()'s URL() parse — the Rust side owns routing and the token.
+  const events = new EventStream(
+    { server: "http://ipc.localhost", token: null },
+    {
+      connect: (url) => {
+        const parsed = new URL(url);
+        return tauriStreamConnect(parsed.pathname + parsed.search);
+      },
+      recent,
+      schedule: timerSchedule,
+    },
+  );
+
+  let streamState: EventStreamState = "disconnected";
+  events.onState((state) => {
+    streamState = state;
+  });
+
+  // The events stream is the app-wide live channel. Start it lazily on the first
+  // subscriber (the board/detail mount once connected, so no pre-auth churn) and
+  // then let it run for the gateway's lifetime — EventStream.stop() is terminal,
+  // so a stop/restart across board↔detail navigation would leave a dead stream.
+  let started = false;
+  const ensureStarted = () => {
+    if (!started) {
+      started = true;
+      void events.start();
+    }
+  };
+
+  const baseConnection = async (): Promise<ConnectionStatus> => {
+    try {
+      const raw = await invoke<RawStatus>("connection_status");
+      return {
+        phase:
+          raw.phase === "ready"
+            ? "ready"
+            : raw.phase === "unauthenticated"
+              ? "unauthenticated"
+              : raw.phase === "error"
+                ? "failed"
+                : "probing",
+        server: raw.server,
+        loginOrigin: raw.sshHost ? `ssh://${raw.sshHost}` : raw.server,
+        tokenPresent: raw.tokenPresent,
+        tokenKind: raw.tokenKind ?? (raw.tokenPresent ? "api" : "none"),
+        stream: "disconnected",
+        detail: raw.detail,
+      };
+    } catch (error) {
+      return {
+        phase: "failed",
+        server: "",
+        loginOrigin: "",
+        tokenPresent: false,
+        tokenKind: "none",
+        stream: "disconnected",
+        detail: String(error),
+      };
+    }
+  };
+
+  const connection = async (): Promise<ConnectionStatus> => {
+    const base = await baseConnection();
+    return { ...base, stream: base.phase === "ready" ? streamState : "disconnected" };
+  };
+
   return {
     listSpecs: (filter = {}) => read("GET", `/v1/specs${queryString(filter)}`),
     board: (project) => read("GET", `/v1/specs/board${queryString({ project })}`),
@@ -105,42 +300,21 @@ export function createTauriGateway(): Gateway {
       read("POST", `/v1/projects/${encodeURIComponent(project)}/dispatch`, { body: request }),
     whoami: () => read("GET", "/v1/whoami"),
 
-    async connection(): Promise<ConnectionStatus> {
-      try {
-        const raw = await invoke<RawStatus>("connection_status");
-        return {
-          phase:
-            raw.phase === "ready"
-              ? "ready"
-              : raw.phase === "unauthenticated"
-                ? "unauthenticated"
-                : raw.phase === "error"
-                  ? "failed"
-                  : "probing",
-          server: raw.server,
-          loginOrigin: raw.sshHost ? `ssh://${raw.sshHost}` : raw.server,
-          tokenPresent: raw.tokenPresent,
-          tokenKind: raw.tokenKind ?? (raw.tokenPresent ? "api" : "none"),
-          stream: raw.phase === "ready" ? "connected" : "disconnected",
-          detail: raw.detail,
-        };
-      } catch (error) {
-        return {
-          phase: "failed",
-          server: "",
-          loginOrigin: "",
-          tokenPresent: false,
-          tokenKind: "none",
-          stream: "disconnected",
-          detail: String(error),
-        };
-      }
-    },
+    agentStatus: (project) =>
+      read<AgentStatusResponse>("GET", `/v1/projects/${encodeURIComponent(project)}/agent`),
+    agentLogSnapshot: (project, role, tail) =>
+      read<AgentLogResponse>(
+        "GET",
+        `/v1/projects/${encodeURIComponent(project)}/agent/log?role=${role}&tail=${tail}`,
+      ),
+    followAgentLog: (project, role, since) => tauriAgentLog(project, role, since),
+
+    connection,
 
     async login() {
       try {
         await invoke("login");
-        const status = await this.connection();
+        const status = await connection();
         return { ok: status.phase === "ready" };
       } catch (error) {
         return { ok: false, detail: String(error) };
@@ -152,7 +326,7 @@ export function createTauriGateway(): Gateway {
     },
 
     async diagnostics() {
-      const status = await this.connection();
+      const status = await connection();
       return {
         report: `=== Mast diagnostics (Tauri) ===\n${JSON.stringify(status, null, 2)}`,
         logPath: "(Tauri backend)",
@@ -160,14 +334,19 @@ export function createTauriGateway(): Gateway {
     },
 
     onEvent(listener: (event: SailEvent) => void) {
-      const unlisten = listen<SailEvent>("sail://event", (e) => listener(e.payload));
-      return () => void unlisten.then((off) => off());
+      const off = events.onEvent(listener);
+      ensureStarted();
+      return off;
     },
 
     onConnectionStatus(listener: (status: ConnectionStatus) => void) {
-      void this.connection().then(listener);
+      void connection().then(listener);
+      const offState = events.onState(() => void connection().then(listener));
       const unlisten = listen<ConnectionStatus>("connection://status", (e) => listener(e.payload));
-      return () => void unlisten.then((off) => off());
+      return () => {
+        offState();
+        void unlisten.then((off) => off());
+      };
     },
   };
 }

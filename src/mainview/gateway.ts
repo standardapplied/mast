@@ -1,4 +1,7 @@
 import type {
+  AgentLogResponse,
+  AgentLogRole,
+  AgentStatusResponse,
   ConnectionStatus,
   DispatchRequest,
   DispatchResponse,
@@ -19,6 +22,18 @@ import type {
 import type { SailResult } from "../shared/types";
 import { onPush } from "./push";
 import type { Bridge } from "./rpc";
+import type { AgentLogLine, AgentLogState } from "./tauri/agentLogStream";
+
+/**
+ * A live agent-log follow session for one project+role. The stream owns
+ * reconnect and the `since` cursor internally; callers just consume lines and
+ * stream state, and `stop()` when done. Switching role is a fresh follow.
+ */
+export type AgentLogHandle = {
+  onLine(listener: (line: AgentLogLine) => void): () => void;
+  onState(listener: (state: AgentLogState) => void): () => void;
+  stop(): void;
+};
 
 /**
  * The webview's seam to the control plane. The real app talks over the
@@ -46,6 +61,16 @@ export type Gateway = {
   specReviews(id: string): Promise<SailResult<ReviewListResponse>>;
   dispatch(project: string, request: DispatchRequest): Promise<SailResult<DispatchResponse>>;
   whoami(): Promise<SailResult<WhoAmI>>;
+  /** The live build session's status for a project (running/idle + timing). */
+  agentStatus(project: string): Promise<SailResult<AgentStatusResponse>>;
+  /** A `tail -n` snapshot of a project's agent log, for instant content on open. */
+  agentLogSnapshot(
+    project: string,
+    role: AgentLogRole,
+    tail: number,
+  ): Promise<SailResult<AgentLogResponse>>;
+  /** Begin following a project's agent log live from `since` (0 = live tail). */
+  followAgentLog(project: string, role: AgentLogRole, since: number): AgentLogHandle;
   connection(): Promise<ConnectionStatus>;
   login(): Promise<{ ok: boolean; detail?: string }>;
   logout(): Promise<void>;
@@ -87,6 +112,17 @@ async function retryRead<T>(
   }
 }
 
+function unsupportedAgentLog<T>(): Promise<SailResult<T>> {
+  return Promise.resolve({
+    ok: false,
+    error: { status: 0, code: "unsupported", message: "Live agent logs require the Tauri shell." },
+  });
+}
+
+function inertAgentLogHandle(): AgentLogHandle {
+  return { onLine: () => () => {}, onState: () => () => {}, stop: () => {} };
+}
+
 export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep): Gateway {
   const api = bridge.api;
   const read = <T>(call: () => Promise<SailResult<T>>) => retryRead(call, sleep);
@@ -102,6 +138,11 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     specReviews: (id) => read(() => api.sailSpecReviews({ id })),
     dispatch: (project, request) => api.sailDispatch({ project, request }),
     whoami: () => api.sailWhoami(),
+    // Live agent logs ride the Tauri Rust stream pipe; the retired Electrobun
+    // bridge never grew RPC for them, so they are inert on this path.
+    agentStatus: () => unsupportedAgentLog(),
+    agentLogSnapshot: () => unsupportedAgentLog(),
+    followAgentLog: () => inertAgentLogHandle(),
     connection: () => api.sailConnection(),
     login: () => api.sailLogin(),
     logout: () => api.sailLogout(),
@@ -131,6 +172,20 @@ sail spec dispatch --project chorus
 
 > Depth comes from 1px rules, never from shadows.
 `;
+
+const DEMO_BUILD_LOG = [
+  `{"type":"system","subtype":"init","model":"claude-fable-5"}`,
+  `{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the spec and the surrounding board code."}]}}`,
+  `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"bun test"}}]}}`,
+  `{"type":"user","message":{"content":[{"type":"tool_result","content":"42 pass"}]}}`,
+  `{"type":"assistant","message":{"content":[{"type":"text","text":"Tests pass — wiring the live-log panel now."}]}}`,
+];
+
+const DEMO_REVIEW_LOG = [
+  `{"type":"assistant","message":{"content":[{"type":"text","text":"Reviewing the diff for correctness and reuse."}]}}`,
+  `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/mainview/board/LiveLog.tsx"}}]}}`,
+  `{"type":"result","subtype":"success","result":"No blocking findings; two minor suggestions."}`,
+];
 
 function demoSpec(partial: Partial<DemoSpec> & Pick<DemoSpec, "id" | "project" | "title" | "status">): DemoSpec {
   return {
@@ -361,6 +416,49 @@ export function createDemoGateway(): DemoGateway {
           email: "uday@singlr.ai",
           role: "admin",
           capabilities: ["read", "write", "admin"],
+        },
+      };
+    },
+
+    async agentStatus(project) {
+      const running = specs.find((s) => s.project === project && s.status === "in_progress");
+      return ok({
+        name: project,
+        agent_running: Boolean(running),
+        pid: running ? 4242 : undefined,
+        task: running?.title,
+        started_at: running ? "2026-07-08T11:30:00Z" : undefined,
+        branch: running?.branch ?? (running ? `agent/${running.id}` : undefined),
+        log_path: "/home/dev/.sail/agent.log",
+      });
+    },
+
+    async agentLogSnapshot(project, role, tail) {
+      const lines = role === "review" ? DEMO_REVIEW_LOG : DEMO_BUILD_LOG;
+      return ok({ name: project, lines: lines.slice(-tail) });
+    },
+
+    followAgentLog(_project, role, since) {
+      const lineListeners = new Set<(line: AgentLogLine) => void>();
+      const stateListeners = new Set<(state: AgentLogState) => void>();
+      const source = role === "review" ? DEMO_REVIEW_LOG : DEMO_BUILD_LOG;
+      let stopped = false;
+      queueMicrotask(() => {
+        if (stopped) return;
+        stateListeners.forEach((l) => l("connected"));
+        source.forEach((text, i) => lineListeners.forEach((l) => l({ id: since + i + 1, text })));
+      });
+      return {
+        onLine: (l) => {
+          lineListeners.add(l);
+          return () => lineListeners.delete(l);
+        },
+        onState: (l) => {
+          stateListeners.add(l);
+          return () => stateListeners.delete(l);
+        },
+        stop: () => {
+          stopped = true;
         },
       };
     },

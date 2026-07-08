@@ -5,7 +5,7 @@ import type { AppInfo } from "../shared/types";
 import { SailClient } from "./api/client";
 import { resolveConfig, resolveSshHost, writeConfig } from "./api/config";
 import { SailApiError, SailHttp } from "./api/http";
-import { defaultEventStreamDeps, EventStream } from "./api/sse";
+import { defaultEventStreamDeps, EventStream } from "../shared/sse";
 import { configureFileSink, diag, diagnosticsReport } from "./diagnostics";
 import { defaultServeDeps, startCallbackServer } from "./connect/login-callback";
 import { ConnectionManager } from "./connect/manager";

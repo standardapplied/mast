@@ -3294,3 +3294,148 @@ span.checkbox {
 .terminal-pane__screen canvas {
   display: block;
 }
+
+/* Live agent log drawer ---------------------------------------------------------- */
+
+.spec-card-live {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font: 600 10px/1.4 var(--font-mono);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--primary);
+  cursor: pointer;
+}
+.spec-card-live:hover {
+  background: var(--surface-hover);
+}
+
+.live-log-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--background-deep) 55%, transparent);
+}
+.live-log {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 92vw);
+  height: 100%;
+  background: var(--background);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+}
+.live-log__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.live-log__title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.live-log__spec {
+  font: 600 14px/1.2 var(--font-mono);
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-log__conn {
+  margin-left: auto;
+  font: 500 11px/1 var(--font-mono);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+}
+.live-log__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.live-log__close:hover {
+  background: var(--surface-hover);
+  color: var(--foreground);
+}
+.live-log__status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.live-log__meta {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.live-log__detail {
+  color: var(--subtle-foreground);
+}
+.live-log__warn {
+  color: var(--warning);
+}
+.live-log__controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.live-log__raw {
+  display: inline-flex;
+  align-items: center;
+}
+.live-log__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 16px 16px;
+  background: var(--background-deep);
+  font: 400 12px/1.55 var(--font-mono);
+  color: var(--foreground);
+}
+.live-log__line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 1px 0;
+}
+.live-log__empty {
+  color: var(--subtle-foreground);
+  font-style: italic;
+}
+.live-log__jump {
+  position: absolute;
+  right: 28px;
+  bottom: 22px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--foreground);
+  font: 500 11px/1 var(--font-sans);
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.live-log__jump:hover {
+  background: var(--surface-hover);
+}

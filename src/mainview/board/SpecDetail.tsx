@@ -21,6 +21,7 @@ import { Badge, Button, Card, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
 import { DispatchDialog } from "./DispatchDialog";
+import { LiveLog } from "./LiveLog";
 import { STATUS_LABEL } from "./lifecycle";
 import { dependentsOf, unmetDependencies } from "./useBoard";
 
@@ -76,6 +77,7 @@ export function SpecDetail({
   const [editorPane, setEditorPane] = useState<"write" | "preview">("write");
   const [restoring, setRestoring] = useState<number | null>(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
   const [role, setRole] = useState<{ canDispatch: boolean; known: boolean }>({
     canDispatch: false,
     known: false,
@@ -267,6 +269,11 @@ export function SpecDetail({
           </div>
         </div>
         <div className="detail-header-actions">
+          {spec.status === "in_progress" && (
+            <Button variant="ghost" onClick={() => setLogOpen(true)} data-testid="follow-log">
+              Live log
+            </Button>
+          )}
           <Badge tone={spec.status === "in_progress" ? "accent" : spec.status === "review" ? "warning" : spec.status === "done" ? "success" : "neutral"}>
             {STATUS_LABEL[spec.status]}
           </Badge>
@@ -519,6 +526,15 @@ export function SpecDetail({
             showToast(ok ? "success" : "error", message);
             if (ok) void load();
           }}
+        />
+      )}
+
+      {logOpen && (
+        <LiveLog
+          gateway={gateway}
+          project={spec.project}
+          specId={spec.id}
+          onClose={() => setLogOpen(false)}
         />
       )}
     </div>

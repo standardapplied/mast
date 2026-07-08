@@ -254,6 +254,23 @@ async fn terminal_close(state: State<'_, AppState>, id: String) -> Result<(), St
     state.backend().await?.terminal_close(&id).await.map_err(String::from)
 }
 
+/// Open a long-lived SSE tail to the control plane (events or agent log) and
+/// stream its body to the webview as `stream://{open,data,end}/{id}`.
+#[tauri::command]
+async fn stream_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+) -> Result<(), String> {
+    state.backend().await?.stream_open(app, id, path).await.map_err(String::from)
+}
+
+#[tauri::command]
+async fn stream_close(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.backend().await?.stream_close(&id).await.map_err(String::from)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -280,6 +297,8 @@ pub fn run() {
             terminal_write,
             terminal_resize,
             terminal_close,
+            stream_open,
+            stream_close,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Mast");

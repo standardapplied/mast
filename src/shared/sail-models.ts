@@ -116,6 +116,27 @@ export type GlobalSpecHistoryResponse = {
   total: number;
 };
 
+/** Which log an agent-follow session tails, mirroring the CLI's `--review`. */
+export type AgentLogRole = "build" | "review";
+
+/** GET /v1/projects/{p}/agent — the live build session's snapshot status. */
+export type AgentStatusResponse = {
+  name: string;
+  agent_running: boolean;
+  pid?: number;
+  task?: string;
+  started_at?: string;
+  branch?: string;
+  log_path?: string;
+};
+
+/** GET /v1/projects/{p}/agent/log — a `tail -n` slice of raw, unrendered lines. */
+export type AgentLogResponse = {
+  name: string;
+  lines: string[];
+  error?: string | null;
+};
+
 export type AgentConfigView = {
   type: string;
   auto_snapshot: boolean;

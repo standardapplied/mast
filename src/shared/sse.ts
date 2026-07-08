@@ -1,4 +1,4 @@
-import type { EventStreamState, RecentEventsResponse, SailEvent } from "../../shared/sail-models";
+import type { EventStreamState, RecentEventsResponse, SailEvent } from "./sail-models";
 import { SSEParser } from "./sse-parser";
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { EventStreamState, RecentEventsResponse, SailEvent } from "../../shared/sail-models";
+import type { EventStreamState, RecentEventsResponse, SailEvent } from "./sail-models";
 import { EventStream, type StreamResponse } from "./sse";
 
 /**

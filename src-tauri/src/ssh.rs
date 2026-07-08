@@ -21,6 +21,7 @@ use russh::keys::load_secret_key;
 use russh::{Channel, ChannelMsg, ChannelStream};
 use russh_sftp::client::SftpSession;
 use serde::Serialize;
+use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, Mutex};
@@ -155,6 +156,10 @@ pub struct Backend {
     /// multiplexed channels. Evicted and redialed if it dies.
     containers: Mutex<HashMap<String, Arc<Session>>>,
     terminals: Mutex<HashMap<String, mpsc::Sender<TermCmd>>>,
+    /// Live long-read streams (SSE tails: events + agent log), keyed by a
+    /// client-chosen id. The sender signals the pump task to stop when the
+    /// webview closes the stream.
+    streams: Mutex<HashMap<String, mpsc::Sender<()>>>,
 }
 
 #[derive(Serialize)]
@@ -253,6 +258,7 @@ impl Backend {
             session: Mutex::new(None),
             containers: Mutex::new(HashMap::new()),
             terminals: Mutex::new(HashMap::new()),
+            streams: Mutex::new(HashMap::new()),
         })
     }
 
@@ -785,6 +791,94 @@ impl Backend {
         parse_http(&raw)
     }
 
+    /// Open a long-lived HTTP GET to the control plane and stream its body to the
+    /// webview as it arrives — the read counterpart to `sail_request`, for SSE
+    /// tails (`/v1/events/stream`, `/v1/projects/{p}/agent/stream`). The bearer
+    /// token is injected here so it never reaches the webview; the response body
+    /// is de-chunked in flight and emitted line-boundaried as `stream://data/{id}`
+    /// text, with `stream://open/{id}` (status) up front and `stream://end/{id}`
+    /// ({error?}) when the read ends. The webview parses the SSE framing and owns
+    /// reconnect/cursor, calling back in with a fresh `since`.
+    pub async fn stream_open(&self, app: AppHandle, id: String, path: String) -> Result<(), Error> {
+        let channel = self
+            .open_forward(&self.config.server_host, self.config.server_port)
+            .await?;
+        let mut stream = channel.into_stream();
+
+        let mut req = format!(
+            "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: text/event-stream\r\nCache-Control: no-cache\r\n",
+            host = self.config.server_host,
+            port = self.config.server_port,
+        );
+        if let Some(token) = self.token.lock().await.as_deref() {
+            req.push_str(&format!("Authorization: Bearer {token}\r\n"));
+        }
+        req.push_str("\r\n");
+        stream.write_all(req.as_bytes()).await?;
+        stream.flush().await?;
+
+        // Read just the response head; the bytes past `\r\n\r\n` begin the body.
+        let mut head = Vec::new();
+        let mut tmp = [0u8; 4096];
+        let split = loop {
+            if let Some(pos) = head.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos;
+            }
+            if head.len() > 64 * 1024 {
+                return Err(Error::BadResponse);
+            }
+            let n = stream.read(&mut tmp).await?;
+            if n == 0 {
+                return Err(Error::BadResponse);
+            }
+            head.extend_from_slice(&tmp[..n]);
+        };
+        let leftover = head.split_off(split + 4);
+        let head_text = String::from_utf8_lossy(&head);
+        let status = status_line_code(&head_text).ok_or(Error::BadResponse)?;
+        let chunked = header_is_chunked(&head_text);
+
+        let _ = app.emit(&format!("stream://open/{id}"), json!({ "status": status }));
+
+        let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
+        self.streams.lock().await.insert(id.clone(), cancel_tx);
+
+        let data_event = format!("stream://data/{id}");
+        let end_event = format!("stream://end/{id}");
+        tokio::spawn(async move {
+            let mut dechunker = Dechunker::new(chunked);
+            let mut pending: Vec<u8> = Vec::new();
+            emit_stream_text(&app, &data_event, &mut pending, dechunker.feed(&leftover), false);
+
+            let error = loop {
+                let mut chunk = [0u8; 8192];
+                tokio::select! {
+                    _ = cancel_rx.recv() => break None,
+                    read = stream.read(&mut chunk) => match read {
+                        Ok(0) => break None,
+                        Ok(n) => {
+                            let decoded = dechunker.feed(&chunk[..n]);
+                            emit_stream_text(&app, &data_event, &mut pending, decoded, false);
+                        }
+                        Err(e) => break Some(e.to_string()),
+                    },
+                }
+            };
+            // Flush any trailing partial line so the last frame isn't stranded.
+            emit_stream_text(&app, &data_event, &mut pending, Vec::new(), true);
+            let _ = app.emit(&end_event, json!({ "error": error }));
+        });
+        Ok(())
+    }
+
+    /// Stop a live stream: signal its pump to end. Idempotent.
+    pub async fn stream_close(&self, id: &str) -> Result<(), Error> {
+        if let Some(tx) = self.streams.lock().await.remove(id) {
+            let _ = tx.send(()).await;
+        }
+        Ok(())
+    }
+
     pub async fn terminal_open(
         &self,
         app: AppHandle,
@@ -1107,6 +1201,117 @@ fn dechunk(mut buf: &[u8]) -> Vec<u8> {
         buf = &buf[(end + 2).min(buf.len())..];
     }
     out
+}
+
+/// Status code from an HTTP response head's first line (`HTTP/1.1 200 OK`).
+fn status_line_code(head: &str) -> Option<u16> {
+    head.lines().next()?.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Whether the response head advertises chunked transfer encoding.
+fn header_is_chunked(head: &str) -> bool {
+    head.lines().skip(1).any(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.starts_with("transfer-encoding:") && lower.contains("chunked")
+    })
+}
+
+/// Append decoded body bytes, emit everything up to the last newline as one
+/// text chunk (so the webview's SSE parser only sees line-boundaried input and
+/// no UTF-8 char is split mid-emit), and keep the trailing partial line
+/// buffered. `flush` forces the remainder out when the stream ends.
+fn emit_stream_text(app: &AppHandle, event: &str, pending: &mut Vec<u8>, decoded: Vec<u8>, flush: bool) {
+    pending.extend_from_slice(&decoded);
+    let upto = if flush {
+        pending.len()
+    } else {
+        pending.iter().rposition(|&b| b == b'\n').map_or(0, |pos| pos + 1)
+    };
+    if upto == 0 {
+        return;
+    }
+    let text = String::from_utf8_lossy(&pending[..upto]).into_owned();
+    pending.drain(..upto);
+    if !text.is_empty() {
+        let _ = app.emit(event, text);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ChunkState {
+    Size,
+    Data(usize),
+    Trailer,
+    Done,
+}
+
+/// Decodes HTTP/1.1 chunked transfer framing incrementally across arbitrarily
+/// split reads (SSE bodies arrive a few bytes at a time). A passthrough when the
+/// response isn't chunked; malformed framing stops decoding, mirroring the
+/// whole-buffer `dechunk`.
+struct Dechunker {
+    chunked: bool,
+    buf: Vec<u8>,
+    state: ChunkState,
+}
+
+impl Dechunker {
+    fn new(chunked: bool) -> Self {
+        Dechunker {
+            chunked,
+            buf: Vec::new(),
+            state: if chunked { ChunkState::Size } else { ChunkState::Done },
+        }
+    }
+
+    fn feed(&mut self, input: &[u8]) -> Vec<u8> {
+        if !self.chunked {
+            return input.to_vec();
+        }
+        self.buf.extend_from_slice(input);
+        let mut out = Vec::new();
+        loop {
+            match self.state {
+                ChunkState::Size => {
+                    let Some(eol) = self.buf.windows(2).position(|w| w == b"\r\n") else {
+                        break;
+                    };
+                    let size_line = String::from_utf8_lossy(&self.buf[..eol]);
+                    let size = usize::from_str_radix(
+                        size_line.trim().split(';').next().unwrap_or("").trim(),
+                        16,
+                    );
+                    self.buf.drain(..eol + 2);
+                    self.state = match size {
+                        Ok(0) | Err(_) => ChunkState::Done,
+                        Ok(n) => ChunkState::Data(n),
+                    };
+                }
+                ChunkState::Data(remaining) => {
+                    if self.buf.is_empty() {
+                        break;
+                    }
+                    let take = remaining.min(self.buf.len());
+                    out.extend(self.buf.drain(..take));
+                    let left = remaining - take;
+                    self.state = if left == 0 {
+                        ChunkState::Trailer
+                    } else {
+                        ChunkState::Data(left)
+                    };
+                }
+                ChunkState::Trailer => {
+                    if self.buf.len() < 2 {
+                        break;
+                    }
+                    self.buf.drain(..2);
+                    self.state = ChunkState::Size;
+                }
+                ChunkState::Done => break,
+            }
+        }
+        out
+    }
 }
 
 /// Parse both YAML flow (`{host: x, server: '...'}`) and block styles — the same
@@ -1498,6 +1703,50 @@ Host bastion
     fn dechunk_decodes_framing() {
         let raw = b"4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n";
         assert_eq!(dechunk(raw), b"Wikipedia");
+    }
+
+    #[test]
+    fn dechunker_passthrough_when_not_chunked() {
+        let mut d = Dechunker::new(false);
+        assert_eq!(d.feed(b"id: 1\ndata: hello\n\n"), b"id: 1\ndata: hello\n\n");
+    }
+
+    #[test]
+    fn dechunker_decodes_a_whole_body() {
+        let mut d = Dechunker::new(true);
+        assert_eq!(d.feed(b"4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n"), b"Wikipedia");
+    }
+
+    #[test]
+    fn dechunker_decodes_across_arbitrary_splits() {
+        let mut d = Dechunker::new(true);
+        let mut out = Vec::new();
+        // The same body as above, fed one to three bytes at a time.
+        let raw = b"4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n";
+        for byte in raw {
+            out.extend(d.feed(&[*byte]));
+        }
+        assert_eq!(out, b"Wikipedia");
+    }
+
+    #[test]
+    fn dechunker_streams_each_chunk_as_it_completes() {
+        let mut d = Dechunker::new(true);
+        // A realistic SSE frame split so the size line and data arrive separately
+        // (0x18 = 24 = the byte length of the data payload below).
+        assert_eq!(d.feed(b"18\r\n"), b"");
+        assert_eq!(d.feed(b"id: 7\ndata: a log line\n\n"), b"id: 7\ndata: a log line\n\n");
+        assert_eq!(d.feed(b"\r\n0\r\n\r\n"), b"");
+    }
+
+    #[test]
+    fn head_helpers_parse_status_and_chunked() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked";
+        assert_eq!(status_line_code(head), Some(200));
+        assert!(header_is_chunked(head));
+        let plain = "HTTP/1.1 401 Unauthorized\r\nContent-Length: 12";
+        assert_eq!(status_line_code(plain), Some(401));
+        assert!(!header_is_chunked(plain));
     }
 
     #[test]

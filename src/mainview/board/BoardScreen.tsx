@@ -12,6 +12,7 @@ import { useToast } from "../components/Toast";
 import { Badge, Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { BOARD_COLUMNS, canTransition, STATUS_LABEL } from "./lifecycle";
+import { LiveLog } from "./LiveLog";
 import { unmetDependencies, useBoard } from "./useBoard";
 
 const LANES_KEY = "mast.board.lanes";
@@ -138,6 +139,7 @@ function SpecCard({
   blockedBy,
   lifted,
   onOpen,
+  onOpenLog,
   onPointerDown,
   onContextMenu,
 }: {
@@ -145,6 +147,7 @@ function SpecCard({
   blockedBy: string[];
   lifted: boolean;
   onOpen: () => void;
+  onOpenLog: () => void;
   onPointerDown: (event: React.PointerEvent) => void;
   onContextMenu: (event: React.MouseEvent) => void;
 }) {
@@ -172,6 +175,30 @@ function SpecCard({
           {spec.agent && `${spec.agent}${spec.model ? ` · ${spec.model}` : ""}`}
         </span>
         {spec.priority > 0 && <span className="spec-card-priority">P{spec.priority}</span>}
+        {spec.status === "in_progress" && (
+          // A nested <button> is invalid; a span with a button role opens the
+          // live log without triggering the card's drag or its open-on-click.
+          <span
+            role="button"
+            tabIndex={0}
+            className="spec-card-live"
+            data-testid={`card-live-${spec.id}`}
+            title="Follow the agent log"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenLog();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpenLog();
+              }
+            }}
+          >
+            Live
+          </span>
+        )}
       </span>
     </button>
   );
@@ -296,6 +323,7 @@ export function BoardScreen({
   const [view, setView] = useState<{ left: number; width: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; spec: GlobalSpecView } | null>(null);
   const [dispatchTarget, setDispatchTarget] = useState<GlobalSpecView | null>(null);
+  const [logSpec, setLogSpec] = useState<GlobalSpecView | null>(null);
   const [role, setRole] = useState<{ canDispatch: boolean; known: boolean }>({
     canDispatch: false,
     known: false,
@@ -554,6 +582,7 @@ export function BoardScreen({
                           if (draggedRef.current) return; // a drag just ended, not a click
                           onOpenSpec(spec.id);
                         }}
+                        onOpenLog={() => setLogSpec(spec)}
                         onPointerDown={beginDrag(spec)}
                         onContextMenu={(e) => {
                           e.preventDefault();
@@ -597,6 +626,14 @@ export function BoardScreen({
           <span className="kanban-card-title">{dragging.id}</span>
           <span className="spec-card-summary">{dragging.title}</span>
         </div>
+      )}
+      {logSpec && (
+        <LiveLog
+          gateway={gateway}
+          project={logSpec.project}
+          specId={logSpec.id}
+          onClose={() => setLogSpec(null)}
+        />
       )}
     </div>
   );
