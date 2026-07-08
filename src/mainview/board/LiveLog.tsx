@@ -65,14 +65,17 @@ export function LiveLog({
   gateway,
   project,
   specId,
+  initialRole = "build",
   onClose,
 }: {
   gateway: Gateway;
   project: string;
   specId: string;
+  /** Which log to open on first render — "review" for a spec in review. */
+  initialRole?: AgentLogRole;
   onClose: () => void;
 }) {
-  const view = useAgentLog(gateway, project);
+  const view = useAgentLog(gateway, project, initialRole);
   const { role, setRole, raw, setRaw, lines, state, status } = view;
 
   const bodyRef = useRef<HTMLDivElement>(null);

@@ -175,7 +175,7 @@ function SpecCard({
           {spec.agent && `${spec.agent}${spec.model ? ` · ${spec.model}` : ""}`}
         </span>
         {spec.priority > 0 && <span className="spec-card-priority">P{spec.priority}</span>}
-        {spec.status === "in_progress" && (
+        {(spec.status === "in_progress" || spec.status === "review") && (
           // A nested <button> is invalid; a span with a button role opens the
           // live log without triggering the card's drag or its open-on-click.
           <span
@@ -183,7 +183,7 @@ function SpecCard({
             tabIndex={0}
             className="spec-card-live"
             data-testid={`card-live-${spec.id}`}
-            title="Follow the agent log"
+            title={spec.status === "review" ? "Follow the review log" : "Follow the agent log"}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
@@ -478,8 +478,18 @@ export function BoardScreen({
           : unmet.length > 0
             ? "Blocked"
             : undefined;
+    const followable = spec.status === "in_progress" || spec.status === "review";
     return [
       { kind: "item", label: "View", onSelect: () => onOpenSpec(spec.id) },
+      ...(followable
+        ? [
+            {
+              kind: "item" as const,
+              label: spec.status === "review" ? "Review log" : "Live log",
+              onSelect: () => setLogSpec(spec),
+            },
+          ]
+        : []),
       { kind: "separator" },
       {
         kind: "item",
@@ -632,6 +642,7 @@ export function BoardScreen({
           gateway={gateway}
           project={logSpec.project}
           specId={logSpec.id}
+          initialRole={logSpec.status === "review" ? "review" : "build"}
           onClose={() => setLogSpec(null)}
         />
       )}

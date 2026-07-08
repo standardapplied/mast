@@ -269,9 +269,9 @@ export function SpecDetail({
           </div>
         </div>
         <div className="detail-header-actions">
-          {spec.status === "in_progress" && (
+          {(spec.status === "in_progress" || spec.status === "review") && (
             <Button variant="ghost" onClick={() => setLogOpen(true)} data-testid="follow-log">
-              Live log
+              {spec.status === "review" ? "Review log" : "Live log"}
             </Button>
           )}
           <Badge tone={spec.status === "in_progress" ? "accent" : spec.status === "review" ? "warning" : spec.status === "done" ? "success" : "neutral"}>
@@ -534,6 +534,7 @@ export function SpecDetail({
           gateway={gateway}
           project={spec.project}
           specId={spec.id}
+          initialRole={spec.status === "review" ? "review" : "build"}
           onClose={() => setLogOpen(false)}
         />
       )}

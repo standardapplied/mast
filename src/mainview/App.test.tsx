@@ -180,6 +180,28 @@ describe("App cockpit", () => {
     expect(dispatchItem()?.disabled).toBe(true);
   });
 
+  test("context menu offers a live/review log entry only for active specs", async () => {
+    await render();
+    const rightClick = (id: string) => {
+      act(() => document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+      container.querySelector<HTMLElement>(`[data-testid="card-${id}"]`)?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 100, clientY: 100 }),
+      );
+    };
+    const labels = () =>
+      [...container.querySelectorAll(".context-menu-label")].map((n) => n.textContent);
+
+    act(() => rightClick("chorus-invoice-ui")); // in_progress
+    expect(labels()).toContain("Live log");
+
+    act(() => rightClick("chorus-rate-limits")); // review
+    expect(labels()).toContain("Review log");
+
+    act(() => rightClick("chorus-billing-export")); // pending → neither
+    expect(labels()).not.toContain("Live log");
+    expect(labels()).not.toContain("Review log");
+  });
+
   test("context menu View routes to the spec detail", async () => {
     await render();
     const card = container.querySelector<HTMLElement>('[data-testid="card-chorus-auth-flow"]');

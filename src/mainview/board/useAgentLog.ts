@@ -43,8 +43,12 @@ function lifecycleDetail(event: SailEvent): string | undefined {
   return typeof status === "string" ? status : undefined;
 }
 
-export function useAgentLog(gateway: Gateway, project: string | undefined): AgentLogView {
-  const [role, setRole] = useState<AgentLogRole>("build");
+export function useAgentLog(
+  gateway: Gateway,
+  project: string | undefined,
+  initialRole: AgentLogRole = "build",
+): AgentLogView {
+  const [role, setRole] = useState<AgentLogRole>(initialRole);
   const [raw, setRaw] = useState(false);
   const [lines, setLines] = useState<LogLine[]>([]);
   const [state, setState] = useState<AgentLogState>("connecting");
