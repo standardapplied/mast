@@ -76,6 +76,10 @@ function parseError(status: number, body: string): SailWireError {
   return { status, code: "internal", message: `HTTP ${status}` };
 }
 
+// Set by createTauriGateway; invoked when a call reveals the session token is
+// dead so the app can drop to the login screen instead of a dead retry loop.
+let onAuthExpired: (() => void) | null = null;
+
 async function read<T>(
   method: string,
   path: string,
@@ -88,7 +92,12 @@ async function read<T>(
     return { ok: false, error: { status: 0, code: "bridge", message: String(error) } };
   }
   if (response.status < 200 || response.status >= 300) {
-    return { ok: false, error: parseError(response.status, response.body) };
+    const error = parseError(response.status, response.body);
+    // An expired/invalid *session* token means "you're logged out" — signal it so
+    // the shell shows the login screen. Scoped to invalid_bearer_token only, so a
+    // role 403 (e.g. non-admin dispatch) never logs anyone out.
+    if (error.code === "invalid_bearer_token") onAuthExpired?.();
+    return { ok: false, error };
   }
   const value = (response.body ? JSON.parse(response.body) : {}) as T;
   return { ok: true, value, etag: response.etag ?? undefined };
@@ -283,6 +292,22 @@ export function createTauriGateway(): Gateway {
     return { ...base, stream: base.phase === "ready" ? streamState : "disconnected" };
   };
 
+  // On a dead session: clear the token and push an unauthenticated status to
+  // every connection listener, so the shell shows the login screen. Guarded so a
+  // burst of concurrent 401s collapses into a single logout.
+  const statusListeners = new Set<(s: ConnectionStatus) => void>();
+  let expiring = false;
+  onAuthExpired = () => {
+    if (expiring) return;
+    expiring = true;
+    void (async () => {
+      await invoke("logout").catch(() => {});
+      const status = await connection();
+      statusListeners.forEach((listener) => listener(status));
+      expiring = false;
+    })();
+  };
+
   return {
     listSpecs: (filter = {}) => read("GET", `/v1/specs${queryString(filter)}`),
     board: (project) => read("GET", `/v1/specs/board${queryString({ project })}`),
@@ -340,10 +365,12 @@ export function createTauriGateway(): Gateway {
     },
 
     onConnectionStatus(listener: (status: ConnectionStatus) => void) {
+      statusListeners.add(listener);
       void connection().then(listener);
       const offState = events.onState(() => void connection().then(listener));
       const unlisten = listen<ConnectionStatus>("connection://status", (e) => listener(e.payload));
       return () => {
+        statusListeners.delete(listener);
         offState();
         void unlisten.then((off) => off());
       };
