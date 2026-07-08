@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "electrobun dev --watch",
-    "build": "electrobun build",
+    "dev": "tauri dev",
+    "build": "tauri build",
     "build:tauri-web": "bun run scripts/build-tauri-web.ts",
     "tauri": "tauri",
     "typecheck": "tsc --noEmit",
