@@ -13,6 +13,7 @@ import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
 import { onPush } from "./push";
 import type { ThemeController } from "./theme";
+import type { Updater } from "./updater";
 
 const NAV_OPTIONS = [
   { value: "board", label: "Board" },
@@ -80,11 +81,14 @@ export function App({
   gateway,
   theme,
   terminal,
+  updater,
 }: {
   gateway: Gateway;
   theme: ThemeController;
   /** The terminal section, injected by the Tauri entry (absent on Electrobun/demo). */
   terminal?: ReactNode;
+  /** Auto-updater, injected by the Tauri entry (absent on demo/tests). */
+  updater?: Updater;
 }) {
   const [bridge, setBridge] = useState<BridgeStatus>("connected");
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
@@ -212,6 +216,7 @@ export function App({
               theme={theme}
               tokenKind={status?.tokenKind}
               identity={identity}
+              updater={updater}
               onLogin={() => void login()}
               onLogout={() => void logout()}
               onDiagnostics={() => setShowDiagnostics(true)}

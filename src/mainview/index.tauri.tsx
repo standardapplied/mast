@@ -4,6 +4,7 @@ import { App } from "./App";
 import { Styleguide } from "./styleguide";
 import { createTauriGateway } from "./tauri/gateway";
 import { TerminalWorkspace } from "./tauri/TerminalWorkspace";
+import { createTauriUpdater } from "./tauri/updater";
 import { browserThemeDeps, createThemeController } from "./theme";
 
 /**
@@ -35,7 +36,12 @@ createRoot(container).render(
     {isStyleguide ? (
       <Styleguide theme={theme} />
     ) : (
-      <App gateway={gateway} theme={theme} terminal={<TerminalWorkspace />} />
+      <App
+        gateway={gateway}
+        theme={theme}
+        terminal={<TerminalWorkspace />}
+        updater={createTauriUpdater()}
+      />
     )}
   </StrictMode>,
 );

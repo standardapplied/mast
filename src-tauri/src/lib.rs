@@ -107,6 +107,12 @@ async fn logout(state: State<'_, AppState>) -> Result<(), String> {
     state.backend().await?.set_token(None).await.map_err(String::from)
 }
 
+/// Open a URL in the system browser (updater's "open the release page" fallback).
+#[tauri::command]
+async fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn list_targets(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     Ok(state.backend().await?.list_targets())
@@ -275,6 +281,16 @@ async fn stream_close(state: State<'_, AppState>, id: String) -> Result<(), Stri
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // Auto-update + relaunch are desktop-only (the app self-updates from
+            // the signed GitHub release; mobile updates ship through the store).
+            #[cfg(desktop)]
+            {
+                app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.handle().plugin(tauri_plugin_process::init())?;
+            }
+            Ok(())
+        })
         .manage(AppState {
             backend: OnceCell::new(),
         })
@@ -283,6 +299,7 @@ pub fn run() {
             connection_status,
             login,
             logout,
+            open_url,
             list_targets,
             fs_list,
             fs_read,

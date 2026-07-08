@@ -1811,6 +1811,7 @@ span.checkbox {
 
 .user-menu-trigger {
   appearance: none;
+  position: relative;
   background: none;
   display: inline-flex;
   align-items: center;
@@ -1823,9 +1824,26 @@ span.checkbox {
 }
 
 .user-menu-trigger:hover,
-.user-menu-trigger.is-open {
+.user-menu-trigger.is-open,
+.user-menu-trigger.has-update {
   color: var(--foreground);
   border-color: var(--foreground);
+}
+
+/* An available update pips the avatar in the primary accent — non-intrusive. */
+.user-menu-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 2px var(--background);
+}
+
+.user-menu-updates .eyebrow {
+  color: var(--subtle-foreground);
 }
 
 .user-menu-panel {
