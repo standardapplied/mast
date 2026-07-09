@@ -17,6 +17,7 @@ export type FileActions = {
   remove: (entry: FileEntry) => void;
   newFolder: (parentDir: string) => void;
   setRoot: (entry: FileEntry) => void;
+  climbRoot: () => void;
 };
 
 /** The right-click menu for an entry — files edit/open, dirs re-root/new folder. */
@@ -65,6 +66,7 @@ export function FileTree({
   const onRowMenu = actions
     ? (entry: FileEntry, e: React.MouseEvent) => {
         e.preventDefault();
+        store.select(entry);
         setMenu({ x: e.clientX, y: e.clientY, entry });
       }
     : undefined;
@@ -84,12 +86,24 @@ export function FileTree({
           </span>
         </span>
         <span className="file-tree__actions">
+          {actions && store.rootPath && store.rootPath !== "/" && (
+            <button
+              type="button"
+              className="file-tree__refresh"
+              onClick={() => actions.climbRoot()}
+              aria-label="Up one level"
+              title="Up one level"
+            >
+              ↑
+            </button>
+          )}
           {actions && store.rootPath && (
             <button
               type="button"
               className="file-tree__refresh"
-              onClick={() => actions.newFolder(store.rootPath!)}
+              onClick={() => actions.newFolder(store.newFolderDir() ?? store.rootPath!)}
               aria-label="New folder"
+              title="New folder in the selected folder"
             >
               ＋
             </button>
@@ -158,8 +172,12 @@ function TreeLevel({
             entry={entry}
             depth={depth}
             isDropTarget={dropDir === entry.path}
+            selected={store.isSelected(entry.path)}
             deleting={store.isDeleting(entry.path)}
-            onToggle={() => store.toggle(entry)}
+            onToggle={() => {
+              store.select(entry);
+              store.toggle(entry);
+            }}
             onRowMenu={onRowMenu}
           />
           {entry.isDir && store.isExpanded(entry.path) && (
@@ -175,6 +193,7 @@ function Row({
   entry,
   depth,
   isDropTarget,
+  selected,
   deleting,
   onToggle,
   onRowMenu,
@@ -182,6 +201,7 @@ function Row({
   entry: FileEntry;
   depth: number;
   isDropTarget: boolean;
+  selected: boolean;
   deleting: boolean;
   onToggle: () => void;
   onRowMenu?: (entry: FileEntry, e: React.MouseEvent) => void;
@@ -189,7 +209,7 @@ function Row({
   return (
     <button
       type="button"
-      className={`file-tree__row${isDropTarget ? " file-tree__row--drop" : ""}${deleting ? " file-tree__row--deleting" : ""}`}
+      className={`file-tree__row${isDropTarget ? " file-tree__row--drop" : ""}${selected ? " file-tree__row--selected" : ""}${deleting ? " file-tree__row--deleting" : ""}`}
       style={{ paddingLeft: 8 + depth * 14 }}
       onClick={onToggle}
       disabled={deleting}

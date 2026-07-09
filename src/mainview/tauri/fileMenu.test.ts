@@ -11,6 +11,7 @@ const actions: FileActions = {
   remove: noop,
   newFolder: noop,
   setRoot: noop,
+  climbRoot: noop,
 };
 
 const labels = (entry: FileEntry) =>

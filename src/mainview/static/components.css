@@ -3092,12 +3092,19 @@ span.checkbox {
   text-align: left;
   font-family: var(--font-mono);
   font-size: 12px;
+  /* Rows act as buttons — right-clicking one should select the row, never
+     start a native text selection of part of the name. */
+  user-select: none;
 }
 .file-tree__row[data-dir="true"] {
   cursor: pointer;
 }
 .file-tree__row:hover {
   background: var(--surface-hover);
+}
+.file-tree__row--selected,
+.file-tree__row--selected:hover {
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
 }
 .file-tree__root {
   display: inline-flex;

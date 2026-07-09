@@ -128,6 +128,25 @@ describe("FileTreeStore", () => {
     expect(store.isDeleting("/root/sub")).toBe(false);
   });
 
+  test("selection drives newFolderDir (folder → itself, file → parent, none → root)", async () => {
+    const { fs, settle, take } = controllableFs();
+    const store = new FileTreeStore(fs);
+    void store.loadRoot();
+    await settle();
+    take(null).resolve([dir("sub"), file("a.txt")]);
+    await settle();
+
+    expect(store.newFolderDir()).toBe("/root");
+
+    store.select(dir("sub"));
+    expect(store.isSelected("/root/sub")).toBe(true);
+    expect(store.newFolderDir()).toBe("/root/sub");
+
+    store.select(file("a.txt"));
+    expect(store.isSelected("/root/a.txt")).toBe(true);
+    expect(store.newFolderDir()).toBe("/root");
+  });
+
   test("prefetch is bounded to 10 child dirs", async () => {
     const { fs, settle, take, countFor } = controllableFs();
     const store = new FileTreeStore(fs);

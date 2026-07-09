@@ -1,3 +1,5 @@
+import { parentDir } from "./dropTarget";
+
 export type FileEntry = { name: string; path: string; isDir: boolean; size: number };
 export type FsListing = { path: string; entries: FileEntry[] };
 
@@ -34,6 +36,7 @@ export class FileTreeStore {
   private expanded = new Set<string>();
   private inflight = new Set<string>();
   private deleting = new Set<string>();
+  private selected: FileEntry | null = null;
   private listeners = new Set<() => void>();
   private disposed = false;
 
@@ -57,6 +60,20 @@ export class FileTreeStore {
   }
   isDeleting(path: string): boolean {
     return this.deleting.has(path);
+  }
+  isSelected(path: string): boolean {
+    return this.selected?.path === path;
+  }
+  /** Mark an entry as the selection (right-click and click both select). */
+  select(entry: FileEntry): void {
+    this.selected = entry;
+    this.emit();
+  }
+  /** Where a "new folder" lands: the selected folder, the selected file's parent,
+   *  or the root when nothing is selected. */
+  newFolderDir(): string | null {
+    if (!this.selected) return this.rootPath;
+    return this.selected.isDir ? this.selected.path : parentDir(this.selected.path);
   }
 
   /** Lock a node while it's being deleted: collapse it (so the vanishing subtree
@@ -139,6 +156,7 @@ export class FileTreeStore {
     this.nodes.clear();
     this.expanded.clear();
     this.inflight.clear();
+    this.selected = null;
     void this.loadRoot(dir);
   }
 

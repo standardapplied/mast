@@ -123,6 +123,13 @@ export function TerminalSplit({
       localStorage.setItem(rootKey, e.path); // remember this project's root
       store.setRoot(e.path);
     },
+    climbRoot: () => {
+      const current = store.rootPath;
+      if (!current || current === "/") return;
+      const up = parentDir(current);
+      localStorage.setItem(rootKey, up);
+      store.setRoot(up);
+    },
   };
 
   const doRename = async (entry: FileEntry, name: string) => {
