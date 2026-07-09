@@ -103,8 +103,12 @@ jobs:
           # Repoint the manifest's URLs from the private GitHub release to the public
           # bucket, then upload artifacts (per-version) + the stable manifest.
           GCS_BASE="https://storage.googleapis.com/${BUCKET}/mast/${VERSION}"
-          jq --arg base "$GCS_BASE" \
-            '.platforms |= map_values(.url |= sub("https://github.com/[^/]+/[^/]+/releases/download/[^/]+"; $base))' \
+          # The universal build produces one .app.tar.gz that every darwin key
+          # points at; tauri's manifest uses opaque api.github.com asset URLs, so
+          # rewrite them all to the bucket URL for that artifact.
+          ARTIFACT="$(basename "$(ls "$RUNNER_TEMP/rel/"*.app.tar.gz | head -1)")"
+          jq --arg url "${GCS_BASE}/${ARTIFACT}" \
+            '.platforms |= map_values(.url = $url)' \
             "$RUNNER_TEMP/rel/latest.json" > "$RUNNER_TEMP/rel/latest.gcs.json"
           gcloud storage cp "$RUNNER_TEMP/rel/"*.app.tar.gz "gs://${BUCKET}/mast/${VERSION}/"
           gcloud storage cp "$RUNNER_TEMP/rel/"*.dmg "gs://${BUCKET}/mast/${VERSION}/"
