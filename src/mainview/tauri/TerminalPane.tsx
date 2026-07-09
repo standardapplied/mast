@@ -146,15 +146,29 @@ export const TerminalPane = forwardRef<
         if (e.key === "Enter" && e.shiftKey) return send("\r"), true;
         return false;
       });
-      // Wheel scrolling. In the alternate screen (vim / a full-screen TUI) the
-      // app owns the viewport, so hand it the wheel — except Shift, which always
-      // scrolls our local scrollback. In the normal buffer (the agent's streaming
-      // conversation, even when Claude Code turns on mouse tracking) scroll our
-      // own scrollback rather than leaking wheel-as-mouse events to the app: that
-      // leak is what made the conversation unscrollable and looped the input box.
+      // Wheel scrolling. In the normal buffer (the agent's streaming conversation)
+      // scroll our own scrollback. In the alternate screen (Claude Code's full-screen
+      // TUI, vim, …) there is no local scrollback, and ghostty's default translates
+      // the wheel into ARROW keys — which Claude Code reads as input-history nav, not
+      // scroll ("Scroll wheel is sending arrow keys"). Send PgUp/PgDn instead — the
+      // keys these TUIs actually scroll with — accumulated so a trackpad's fine
+      // deltas don't fly through whole pages at once.
+      let wheelAccum = 0;
       term.attachCustomWheelEventHandler((e) => {
-        if (term.buffer.active.type === "alternate" && !e.shiftKey) return false;
-        term.scrollLines(e.deltaY > 0 ? 3 : -3);
+        if (term.buffer.active.type !== "alternate") {
+          term.scrollLines(e.deltaY > 0 ? 3 : -3);
+          return true;
+        }
+        const STEP = 100;
+        wheelAccum += e.deltaY;
+        while (wheelAccum >= STEP) {
+          send("\x1b[6~"); // Page Down
+          wheelAccum -= STEP;
+        }
+        while (wheelAccum <= -STEP) {
+          send("\x1b[5~"); // Page Up
+          wheelAccum += STEP;
+        }
         return true;
       });
 
