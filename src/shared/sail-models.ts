@@ -130,11 +130,35 @@ export type AgentStatusResponse = {
   log_path?: string;
 };
 
-/** GET /v1/projects/{p}/agent/log — a `tail -n` slice of raw, unrendered lines. */
+/** GET /v1/runs/{id}/log — a `tail -n` slice of the run's raw, unrendered lines. */
 export type AgentLogResponse = {
-  name: string;
+  run_id: string;
   lines: string[];
   error?: string | null;
+};
+
+/** One execution of an agent (RunView in ApiModels.java). */
+export type RunView = {
+  id: string;
+  project: string;
+  spec_id?: string;
+  node: string;
+  role: AgentLogRole;
+  agent: string;
+  branch?: string;
+  pid?: number;
+  status: string;
+  started_at: string;
+  completed_at?: string;
+  exit_code?: number;
+  log_path?: string;
+};
+
+/** GET /v1/runs?project=&spec= — execution history, newest first. */
+export type RunListResponse = {
+  project?: string;
+  spec?: string;
+  runs: RunView[];
 };
 
 export type AgentConfigView = {

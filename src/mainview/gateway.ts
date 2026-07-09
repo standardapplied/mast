@@ -433,9 +433,9 @@ export function createDemoGateway(): DemoGateway {
       });
     },
 
-    async agentLogSnapshot(project, role, tail) {
+    async agentLogSnapshot(_project, role, tail) {
       const lines = role === "review" ? DEMO_REVIEW_LOG : DEMO_BUILD_LOG;
-      return ok({ name: project, lines: lines.slice(-tail) });
+      return ok({ run_id: `demo-run-${role}`, lines: lines.slice(-tail) });
     },
 
     followAgentLog(_project, role, since) {

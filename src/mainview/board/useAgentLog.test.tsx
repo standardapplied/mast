@@ -34,10 +34,10 @@ function makeFake() {
         branch: "agent/chorus-invoice-ui",
       },
     }),
-    agentLogSnapshot: async (project: string, role: AgentLogRole) => ({
+    agentLogSnapshot: async (_project: string, role: AgentLogRole) => ({
       ok: true as const,
       value: {
-        name: project,
+        run_id: `run-${role}`,
         lines: [`{"type":"assistant","message":{"content":[{"type":"text","text":"snap ${role}"}]}}`],
       },
     }),

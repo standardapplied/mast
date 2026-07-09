@@ -794,7 +794,7 @@ impl Backend {
 
     /// Open a long-lived HTTP GET to the control plane and stream its body to the
     /// webview as it arrives — the read counterpart to `sail_request`, for SSE
-    /// tails (`/v1/events/stream`, `/v1/projects/{p}/agent/stream`). The bearer
+    /// tails (`/v1/events/stream`, `/v1/runs/{id}/stream`). The bearer
     /// token is injected here so it never reaches the webview; the response body
     /// is de-chunked in flight and emitted line-boundaried as `stream://data/{id}`
     /// text, with `stream://open/{id}` (status) up front and `stream://end/{id}`
@@ -1526,7 +1526,7 @@ fn shell_single_quote(s: &str) -> String {
 /// byte — so a CRLF-laden path can't split the request or inject headers.
 fn validate_stream_path(path: &str) -> Result<(), Error> {
     let route_ok = path.starts_with("/v1/events/stream")
-        || (path.starts_with("/v1/projects/") && path.contains("/agent/stream"));
+        || (path.starts_with("/v1/runs/") && path.contains("/stream"));
     let bytes_ok = path.starts_with('/') && !path.bytes().any(|b| b <= 0x20 || b == 0x7f);
     if route_ok && bytes_ok {
         Ok(())
@@ -1868,7 +1868,11 @@ Host bastion
     fn validate_stream_path_allows_the_two_routes_and_blocks_injection() {
         assert!(validate_stream_path("/v1/events/stream").is_ok());
         assert!(validate_stream_path("/v1/events/stream?project=demo&type=board_updated").is_ok());
-        assert!(validate_stream_path("/v1/projects/demo/agent/stream?since=5&role=review").is_ok());
+        assert!(
+            validate_stream_path("/v1/runs/0197a2c4-demo-run-id/stream?since=5").is_ok()
+        );
+        // The retired project-scoped agent stream is off the allowlist.
+        assert!(validate_stream_path("/v1/projects/demo/agent/stream?role=build").is_err());
         // CRLF injection into the request target is rejected (control bytes).
         assert!(validate_stream_path("/v1/events/stream HTTP/1.1\r\nX-Injected: 1").is_err());
         // A bare space in the target is rejected.
