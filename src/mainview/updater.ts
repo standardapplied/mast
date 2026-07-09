@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { logError } from "./errorLog";
 
 /**
  * The auto-update seam. `Updater` is the transport-agnostic contract (the Tauri
@@ -67,7 +68,10 @@ export function useUpdater(updater?: Updater): UpdaterView {
             setPhase("current");
           }
         })
-        .catch(() => auto || setPhase("error"));
+        .catch((e) => {
+          logError("updater", `check: ${String(e)}`);
+          if (!auto) setPhase("error");
+        });
     },
     [updater],
   );
@@ -91,7 +95,10 @@ export function useUpdater(updater?: Updater): UpdaterView {
     void upd
       .install(setProgress)
       .then(() => setPhase("ready"))
-      .catch(() => setPhase("error"));
+      .catch((e) => {
+        logError("updater", `install: ${String(e)}`);
+        setPhase("error");
+      });
   }, []);
 
   return {

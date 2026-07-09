@@ -13,6 +13,7 @@ import type {
 } from "../../shared/sail-models";
 import type { SailResult, SailWireError } from "../../shared/types";
 import { EventStream, type StreamResponse } from "../../shared/sse";
+import { formatRecentErrors, logError } from "../errorLog";
 import type { AgentLogHandle, Gateway } from "../gateway";
 import { AgentLogStream } from "./agentLogStream";
 
@@ -89,10 +90,12 @@ async function read<T>(
   try {
     response = await sailRequest(method, path, opts);
   } catch (error) {
+    logError("api", `${method} ${path} → bridge: ${String(error)}`);
     return { ok: false, error: { status: 0, code: "bridge", message: String(error) } };
   }
   if (response.status < 200 || response.status >= 300) {
     const error = parseError(response.status, response.body);
+    logError("api", `${method} ${path} → ${error.status} ${error.code}: ${error.message}`);
     // An expired/invalid *session* token means "you're logged out" — signal it so
     // the shell shows the login screen. Scoped to invalid_bearer_token only, so a
     // role 403 (e.g. non-admin dispatch) never logs anyone out.
@@ -352,10 +355,14 @@ export function createTauriGateway(): Gateway {
 
     async diagnostics() {
       const status = await connection();
-      return {
-        report: `=== Mast diagnostics (Tauri) ===\n${JSON.stringify(status, null, 2)}`,
-        logPath: "(Tauri backend)",
-      };
+      const report = [
+        "=== Mast diagnostics (Tauri) ===",
+        JSON.stringify(status, null, 2),
+        "",
+        "=== Recent errors ===",
+        formatRecentErrors(),
+      ].join("\n");
+      return { report, logPath: "(Tauri backend)" };
     },
 
     onEvent(listener: (event: SailEvent) => void) {
