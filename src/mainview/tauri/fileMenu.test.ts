@@ -12,6 +12,7 @@ const actions: FileActions = {
   newFolder: noop,
   setRoot: noop,
   climbRoot: noop,
+  copyPath: noop,
 };
 
 const labels = (entry: FileEntry) =>
@@ -25,12 +26,19 @@ const dir: FileEntry = { name: "sub", path: "/d/sub", isDir: true, size: 0 };
 describe("fileMenuItems", () => {
   test("file menu offers Edit/Open, no New folder or Open as root", () => {
     const items = labels(file);
-    expect(items).toEqual(["Edit", "Open", "Download", "Rename…", "Delete"]);
+    expect(items).toEqual(["Edit", "Open", "Copy path", "Download", "Rename…", "Delete"]);
   });
 
   test("dir menu offers Open as root + New folder, no Edit/Open", () => {
     const items = labels(dir);
-    expect(items).toEqual(["Open as root", "New folder…", "Download folder", "Rename…", "Delete"]);
+    expect(items).toEqual([
+      "Open as root",
+      "New folder…",
+      "Copy path",
+      "Download folder",
+      "Rename…",
+      "Delete",
+    ]);
   });
 
   test("Delete is marked danger", () => {

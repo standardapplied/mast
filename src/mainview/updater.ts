@@ -43,6 +43,7 @@ export type UpdaterView = {
 };
 
 const AUTO_CHECK_DELAY = 4000;
+const PERIODIC_CHECK_MS = 15 * 60 * 1000;
 
 export function useUpdater(updater?: Updater): UpdaterView {
   const [phase, setPhase] = useState<UpdaterPhase>("idle");
@@ -50,6 +51,8 @@ export function useUpdater(updater?: Updater): UpdaterView {
   const [available, setAvailable] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const pending = useRef<PendingUpdate | null>(null);
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
 
   // `auto` (the launch check) stays quiet unless there's actually an update — a
   // manual check reports "up to date" / errors so the click has visible feedback.
@@ -80,10 +83,19 @@ export function useUpdater(updater?: Updater): UpdaterView {
     if (!updater) return;
     let alive = true;
     void updater.currentVersion().then((v) => alive && setVersion(v));
-    const timer = setTimeout(() => alive && runCheck(true), AUTO_CHECK_DELAY);
+    const initial = setTimeout(() => alive && runCheck(true), AUTO_CHECK_DELAY);
+    // Keep checking while the app stays open, so an update published *after*
+    // launch is noticed without a manual click or a restart — but never interrupt
+    // an in-flight download / ready-to-restart state.
+    const periodic = setInterval(() => {
+      if (alive && phaseRef.current !== "downloading" && phaseRef.current !== "ready") {
+        runCheck(true);
+      }
+    }, PERIODIC_CHECK_MS);
     return () => {
       alive = false;
-      clearTimeout(timer);
+      clearTimeout(initial);
+      clearInterval(periodic);
     };
   }, [updater, runCheck]);
 

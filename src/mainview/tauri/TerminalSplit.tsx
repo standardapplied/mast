@@ -130,6 +130,12 @@ export function TerminalSplit({
       localStorage.setItem(rootKey, up);
       store.setRoot(up);
     },
+    copyPath: (e) => {
+      void navigator.clipboard.writeText(e.path).then(
+        () => toast("Path copied", true),
+        () => toast("Couldn’t copy path", false),
+      );
+    },
   };
 
   const doRename = async (entry: FileEntry, name: string) => {
@@ -178,9 +184,16 @@ export function TerminalSplit({
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    // Tauri's drag-drop position is physical pixels on some platforms/versions
+    // and logical (CSS) on others; elementFromPoint wants CSS pixels. Divide by
+    // the device ratio only when the value is clearly physical (past the CSS
+    // viewport) — otherwise a logical coord gets halved on a Retina display and
+    // every drop lands in the left (terminal) pane.
     const toCss = (x: number, y: number): [number, number] => {
       const ratio = window.devicePixelRatio || 1;
-      return [x / ratio, y / ratio];
+      const cx = x > window.innerWidth ? x / ratio : x;
+      const cy = y > window.innerHeight ? y / ratio : y;
+      return [cx, cy];
     };
     try {
       void getCurrentWebview()

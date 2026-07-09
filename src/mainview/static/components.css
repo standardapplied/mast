@@ -2893,6 +2893,10 @@ span.checkbox {
   flex-direction: column;
   border-left: 1px solid var(--border);
   background: var(--surface);
+  /* The whole panel is button-driven; never let a click/right-click start a
+     native text selection. The -webkit- prefix is required by the macOS webview. */
+  -webkit-user-select: none;
+  user-select: none;
 }
 .file-tree--dropping {
   outline: 2px dashed var(--primary);

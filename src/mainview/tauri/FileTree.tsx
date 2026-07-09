@@ -18,12 +18,14 @@ export type FileActions = {
   newFolder: (parentDir: string) => void;
   setRoot: (entry: FileEntry) => void;
   climbRoot: () => void;
+  copyPath: (entry: FileEntry) => void;
 };
 
 /** The right-click menu for an entry — files edit/open, dirs re-root/new folder. */
 export function fileMenuItems(entry: FileEntry, a: FileActions): MenuNode[] {
   const tail: MenuNode[] = [
     { kind: "separator" },
+    { kind: "item", label: "Copy path", onSelect: () => a.copyPath(entry) },
     { kind: "item", label: entry.isDir ? "Download folder" : "Download", hint: "→ ~/Downloads", onSelect: () => a.download(entry) },
     { kind: "separator" },
     { kind: "item", label: "Rename…", onSelect: () => a.rename(entry) },
