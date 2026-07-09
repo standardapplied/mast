@@ -76,7 +76,36 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}
           releaseBody: |
-            Download the `.dmg` below and drag Mast to Applications.
-            Signed + notarized — opens with a double-click. Auto-update reads `latest.json`.
+            Build record — public distribution is the GCS bucket.
           releaseDraft: true
           prerelease: false
+
+      # The GitHub release stays private (a build record). The signed artifacts +
+      # updater manifest are mirrored to an unlisted public GCS bucket so the Tauri
+      # updater (which fetches unauthenticated) can reach them.
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Publish to GCS
+        env:
+          GCS_SA_KEY_BASE64: ${{ secrets.GCS_SA_KEY_BASE64 }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BUCKET="mast-dist-441983c05b7f"
+          VERSION="$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")"
+          echo "$GCS_SA_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/gcs_sa.json"
+          gcloud auth activate-service-account --key-file="$RUNNER_TEMP/gcs_sa.json"
+          # Pull the signed artifacts + tauri-generated manifest from the draft release.
+          mkdir -p "$RUNNER_TEMP/rel"
+          gh release download "${{ github.ref_name }}" --dir "$RUNNER_TEMP/rel" \
+            --pattern 'latest.json' --pattern '*.app.tar.gz' --pattern '*.dmg'
+          # Repoint the manifest's URLs from the private GitHub release to the public
+          # bucket, then upload artifacts (per-version) + the stable manifest.
+          GCS_BASE="https://storage.googleapis.com/${BUCKET}/mast/${VERSION}"
+          jq --arg base "$GCS_BASE" \
+            '.platforms |= map_values(.url |= sub("https://github.com/[^/]+/[^/]+/releases/download/[^/]+"; $base))' \
+            "$RUNNER_TEMP/rel/latest.json" > "$RUNNER_TEMP/rel/latest.gcs.json"
+          gcloud storage cp "$RUNNER_TEMP/rel/"*.app.tar.gz "gs://${BUCKET}/mast/${VERSION}/"
+          gcloud storage cp "$RUNNER_TEMP/rel/"*.dmg "gs://${BUCKET}/mast/${VERSION}/"
+          gcloud storage cp "$RUNNER_TEMP/rel/latest.gcs.json" "gs://${BUCKET}/mast/latest.json"
