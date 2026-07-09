@@ -8,6 +8,7 @@ import type {
   ConnectionStatus,
   EventStreamState,
   RecentEventsResponse,
+  RunListResponse,
   SailEvent,
   SpecFilter,
 } from "../../shared/sail-models";
@@ -15,7 +16,7 @@ import type { SailResult, SailWireError } from "../../shared/types";
 import { EventStream, type StreamResponse } from "../../shared/sse";
 import { formatRecentErrors, logError } from "../errorLog";
 import type { AgentLogHandle, Gateway } from "../gateway";
-import { AgentLogStream } from "./agentLogStream";
+import { AgentLogStream, latestRunId } from "./agentLogStream";
 
 /**
  * The Tauri seam to the control plane. Every read/write is one `sail_request`
@@ -201,12 +202,27 @@ async function tauriStreamConnect(path: string): Promise<StreamResponse> {
   return { status, header: () => null, chunks, cancel: finish };
 }
 
+async function latestRun(project: string, role: AgentLogRole): Promise<string | undefined> {
+  const result = await read<RunListResponse>(
+    "GET",
+    `/v1/runs?project=${encodeURIComponent(project)}`,
+  );
+  return result.ok ? latestRunId(result.value.runs, role) : undefined;
+}
+
 function tauriAgentLog(project: string, role: AgentLogRole, since: number): AgentLogHandle {
-  const base = `/v1/projects/${encodeURIComponent(project)}/agent/stream`;
-  const stream = new AgentLogStream(
+  // Logs are run-addressed: resolve project+role to the newest run, re-resolving
+  // on every reconnect until a line arrives (a dispatch may start the run after
+  // the panel opens), then pin the run so the `since` cursor stays coherent.
+  let runId: string | undefined;
+  const stream: AgentLogStream = new AgentLogStream(
     role,
     {
-      connect: (r, s) => tauriStreamConnect(`${base}?role=${r}&since=${s}`),
+      connect: async (r, s) => {
+        if (!runId || stream.cursor === undefined) runId = await latestRun(project, r);
+        if (!runId) throw new Error(`no ${r} run for '${project}' yet`);
+        return tauriStreamConnect(`/v1/runs/${encodeURIComponent(runId)}/stream?since=${s}`);
+      },
       schedule: timerSchedule,
     },
     since,
@@ -330,11 +346,23 @@ export function createTauriGateway(): Gateway {
 
     agentStatus: (project) =>
       read<AgentStatusResponse>("GET", `/v1/projects/${encodeURIComponent(project)}/agent`),
-    agentLogSnapshot: (project, role, tail) =>
-      read<AgentLogResponse>(
+    agentLogSnapshot: async (project, role, tail) => {
+      const runId = await latestRun(project, role);
+      if (!runId) {
+        return {
+          ok: false,
+          error: {
+            status: 404,
+            code: "run_not_found",
+            message: `No ${role} run for '${project}' yet.`,
+          },
+        };
+      }
+      return read<AgentLogResponse>(
         "GET",
-        `/v1/projects/${encodeURIComponent(project)}/agent/log?role=${role}&tail=${tail}`,
-      ),
+        `/v1/runs/${encodeURIComponent(runId)}/log?tail=${tail}`,
+      );
+    },
     followAgentLog: (project, role, since) => tauriAgentLog(project, role, since),
 
     connection,

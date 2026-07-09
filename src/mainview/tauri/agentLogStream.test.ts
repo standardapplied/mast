@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentLogRole } from "../../shared/sail-models";
+import type { AgentLogRole, RunView } from "../../shared/sail-models";
 import type { StreamResponse } from "../../shared/sse";
-import { AgentLogStream, type AgentLogLine, type AgentLogState } from "./agentLogStream";
+import {
+  AgentLogStream,
+  latestRunId,
+  type AgentLogLine,
+  type AgentLogState,
+} from "./agentLogStream";
 
 /** Stream, scheduler, and connect are injected and driven synchronously. */
 function pushable() {
@@ -199,5 +204,32 @@ describe("AgentLogStream", () => {
     expect(h.streams.length).toBe(2);
     expect(h.connects[1]).toEqual({ role: "build", since: 2 });
     h.stream.stop();
+  });
+});
+
+describe("latestRunId", () => {
+  const run = (id: string, role: AgentLogRole, startedAt: string): RunView => ({
+    id,
+    project: "demo",
+    node: "main",
+    role,
+    agent: "claude-code",
+    status: "completed",
+    started_at: startedAt,
+  });
+
+  test("picks the newest run of the requested role by started_at", () => {
+    const runs = [
+      run("older-build", "build", "2026-07-08T10:00:00Z"),
+      run("newest-review", "review", "2026-07-09T12:00:00Z"),
+      run("newest-build", "build", "2026-07-09T11:00:00Z"),
+    ];
+    expect(latestRunId(runs, "build")).toBe("newest-build");
+    expect(latestRunId(runs, "review")).toBe("newest-review");
+  });
+
+  test("returns undefined when no run of the role exists", () => {
+    expect(latestRunId([], "build")).toBeUndefined();
+    expect(latestRunId([run("r", "review", "2026-07-09T11:00:00Z")], "build")).toBeUndefined();
   });
 });

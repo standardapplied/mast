@@ -1,18 +1,29 @@
-import type { AgentLogRole } from "../../shared/sail-models";
+import type { AgentLogRole, RunView } from "../../shared/sail-models";
 import type { StreamResponse } from "../../shared/sse";
 import { SSEParser } from "../../shared/sse-parser";
 
 /**
- * Resilient consumer for one role of `GET /v1/projects/{p}/agent/stream`. The
+ * Resilient consumer for one run's log via `GET /v1/runs/{id}/stream`. The
  * server emits `id: <line>\ndata: <raw log line>\n\n` frames, a `: streaming`
  * comment on connect, and `: heartbeat` comments every 15s. Each frame's `id`
  * is a monotonic line cursor: on any drop we reconnect with `since = lastId + 1`
  * so no line is lost or replayed, and we defensively drop any `id <= lastId`.
  *
+ * The injected `connect` owns resolving the project+role to a concrete run id
+ * (logs are run-addressed since sail's run aggregate landed), so this class
+ * stays a pure cursor/reconnect machine.
+ *
  * Deliberately transport-agnostic — `connect`/`schedule` are injected, so the
  * whole reconnect/cursor path is driven synchronously in tests without a shell,
  * a socket, or a sleep. The real deps back `connect` with the Rust stream pipe.
  */
+
+/** The newest run for a role, trusting `started_at` over server order. */
+export function latestRunId(runs: RunView[], role: AgentLogRole): string | undefined {
+  return runs
+    .filter((run) => run.role === role)
+    .sort((a, b) => b.started_at.localeCompare(a.started_at))[0]?.id;
+}
 
 export type AgentLogLine = { id: number; text: string };
 export type AgentLogState = "connecting" | "connected" | "reconnecting" | "disconnected";
