@@ -43,7 +43,7 @@ export type UpdaterView = {
 };
 
 const AUTO_CHECK_DELAY = 4000;
-const PERIODIC_CHECK_MS = 15 * 60 * 1000;
+const PERIODIC_CHECK_MS = 12 * 60 * 60 * 1000;
 
 export function useUpdater(updater?: Updater): UpdaterView {
   const [phase, setPhase] = useState<UpdaterPhase>("idle");
