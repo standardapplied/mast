@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { KITTY_DISAMBIGUATE, KittyKeyboardBridge } from "./kittyKeyboard";
+import { KITTY_DISAMBIGUATE, KittyKeyboardBridge, shiftEnterSequence } from "./kittyKeyboard";
 
 const bytes = (s: string) => Uint8Array.from(s, (c) => c.charCodeAt(0));
 
@@ -68,5 +68,31 @@ describe("KittyKeyboardBridge", () => {
     const bridge = new KittyKeyboardBridge();
     bridge.feed(bytes("\x1b[0;1;2;3;4;5;6;7;8;9"));
     expect(bridge.feed(bytes("m\x1b[?u"))).toBe("\x1b[?0u");
+  });
+});
+
+describe("shiftEnterSequence", () => {
+  test("kitty-active sends the protocol encoding, inactive the ESC-CR fallback", () => {
+    expect(shiftEnterSequence(1)).toBe("\x1b[13;2u");
+    expect(shiftEnterSequence(7)).toBe("\x1b[13;2u");
+    expect(shiftEnterSequence(0)).toBe("\x1b\r");
+    expect(shiftEnterSequence(8)).toBe("\x1b\r");
+  });
+
+  test("claude code's real per-frame pop/push churn leaves disambiguation on", () => {
+    const bridge = new KittyKeyboardBridge();
+    const frame =
+      "\x1b(B\x0f\x1b[<u\x1b[>1u\x1b[>4;2m\x1b[?2026h\x1b[?25l\x1b[2C\x1b[3Aa\x1b[K\x1b[?25h\x1b[?2026l";
+    for (let i = 0; i < 5; i++) bridge.feed(bytes(frame));
+    expect(shiftEnterSequence(bridge.flags)).toBe("\x1b[13;2u");
+  });
+
+  test("codex's probe-then-push lifecycle activates kitty encoding", () => {
+    const bridge = new KittyKeyboardBridge();
+    expect(bridge.feed(bytes("\x1b[?u\x1b[c"))).toBe("\x1b[?0u");
+    bridge.feed(bytes("\x1b[>7u"));
+    expect(shiftEnterSequence(bridge.flags)).toBe("\x1b[13;2u");
+    bridge.feed(bytes("\x1b[<u"));
+    expect(shiftEnterSequence(bridge.flags)).toBe("\x1b\r");
   });
 });

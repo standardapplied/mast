@@ -6,9 +6,8 @@
  *
  * The bridge observes the PTY output stream for the protocol's `CSI … u`
  * sequences: it answers the query with the active flags, tracks push/pop/set,
- * and clears on a full reset (RIS). TerminalPane consults `flags` to encode
- * Shift+Enter as `CSI 13;2u` once the app has enabled disambiguation, and as
- * a plain carriage return for legacy apps (a shell prompt).
+ * and clears on a full reset (RIS). TerminalPane consults `flags` through
+ * shiftEnterSequence to pick the encoding for Shift+Enter.
  *
  * One flag stack is kept, not the spec's two (main + alternate screen): the
  * TUIs we care about push and pop symmetrically around their lifetime, and a
@@ -21,6 +20,17 @@ const MAX_STACK = 8;
 const BYTES = new TextDecoder("latin1");
 
 export const KITTY_DISAMBIGUATE = 1;
+
+/**
+ * The bytes Shift+Enter should send. With kitty disambiguation active, the
+ * protocol's own encoding. Without it, ESC CR — Claude Code parses that as
+ * meta+return → insert newline UNCONDITIONALLY (verified against the 2.1.206
+ * binary), and bash treats it as an unbound no-op — so even a failed TERM
+ * negotiation can never make Shift+Enter submit a prompt again.
+ */
+export function shiftEnterSequence(flags: number): string {
+  return flags & KITTY_DISAMBIGUATE ? "\x1b[13;2u" : "\x1b\r";
+}
 
 export class KittyKeyboardBridge {
   private stack: number[] = [];

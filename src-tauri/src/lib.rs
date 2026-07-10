@@ -228,7 +228,7 @@ async fn terminal_open(
     target: Option<String>,
     cols: u32,
     rows: u32,
-) -> Result<(), String> {
+) -> Result<&'static str, String> {
     let backend = state.backend().await?;
     backend
         .terminal_open(app, id, target, cols, rows)
