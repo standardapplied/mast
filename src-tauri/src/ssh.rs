@@ -8,7 +8,7 @@
 //! Proven feasible in `spike/russh-proof` against a live sshd; this is the same
 //! russh 0.45 API wired behind Tauri commands.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -181,6 +181,10 @@ pub struct Backend {
     /// client-chosen id. The sender signals the pump task to stop when the
     /// webview closes the stream.
     streams: Mutex<HashMap<String, mpsc::Sender<()>>>,
+    /// Hosts (by terminal target, "" = node) where the Ghostty terminfo is
+    /// confirmed installed, so only a target's first terminal pays the
+    /// negotiation round-trip. Failures are not cached — they retry next open.
+    ghostty_hosts: Mutex<HashSet<String>>,
 }
 
 #[derive(Serialize)]
@@ -280,6 +284,7 @@ impl Backend {
             containers: Mutex::new(HashMap::new()),
             terminals: Mutex::new(HashMap::new()),
             streams: Mutex::new(HashMap::new()),
+            ghostty_hosts: Mutex::new(HashSet::new()),
         })
     }
 
@@ -922,7 +927,13 @@ impl Backend {
     /// the shell's host first (idempotent, one `test -e` after the first run);
     /// any failure — no channel, non-zero exit, timeout — degrades to
     /// xterm-256color so a shell never starts under an unresolvable TERM.
+    /// Success is cached per target so only the first terminal pays the
+    /// round-trip; a failure retries on the next open.
     async fn negotiated_term(&self, target: Option<&str>) -> &'static str {
+        let key = target.unwrap_or("").to_string();
+        if self.ghostty_hosts.lock().await.contains(&key) {
+            return "xterm-ghostty";
+        }
         let install = tokio::time::timeout(TERMINFO_TIMEOUT, async {
             let mut channel = self.shell_channel(target).await?;
             channel
@@ -940,11 +951,17 @@ impl Backend {
         })
         .await;
         match install {
-            Ok(Ok(0)) => "xterm-ghostty",
+            Ok(Ok(0)) => {
+                self.ghostty_hosts.lock().await.insert(key);
+                "xterm-ghostty"
+            }
             _ => "xterm-256color",
         }
     }
 
+    /// Returns the TERM the PTY was opened with, so the webview can surface a
+    /// degraded negotiation (xterm-256color = no kitty keys for Claude Code)
+    /// in its diagnostics instead of it failing silently.
     pub async fn terminal_open(
         &self,
         app: AppHandle,
@@ -952,7 +969,7 @@ impl Backend {
         target: Option<String>,
         cols: u32,
         rows: u32,
-    ) -> Result<(), Error> {
+    ) -> Result<&'static str, Error> {
         // A named target opens a shell in that project container (over its
         // cached session, shared with the file bridge); no target = a shell on
         // the node over the control-plane session.
@@ -997,7 +1014,7 @@ impl Backend {
             let _ = app.emit(&exit_event, ());
         });
 
-        Ok(())
+        Ok(term)
     }
 
     async fn send(&self, id: &str, cmd: TermCmd) -> Result<(), Error> {

@@ -3,8 +3,9 @@ import { listen } from "@tauri-apps/api/event";
 import { FitAddon, init, Terminal, type ITheme } from "ghostty-web";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ThemeName } from "../../shared/types";
+import { logError } from "../errorLog";
 import { terminalTheme, type TerminalTheme } from "../ansi";
-import { KITTY_DISAMBIGUATE, KittyKeyboardBridge } from "./kittyKeyboard";
+import { KITTY_DISAMBIGUATE, KittyKeyboardBridge, shiftEnterSequence } from "./kittyKeyboard";
 
 export type TerminalHandle = { paste: (text: string) => void };
 
@@ -142,14 +143,19 @@ export const TerminalPane = forwardRef<
       // preventDefault". So return false to let ghostty encode normal keys
       // (otherwise every keystroke is swallowed); return true only for the keys
       // it mishandles (Shift+Tab / Shift+Enter), which we hand-send. Shift+Enter
-      // must insert a newline in Claude Code / Codex, not submit: once the app
-      // has negotiated kitty keys (via the bridge below), send the protocol's
-      // Shift+Enter; in a plain shell it stays a carriage return.
+      // must insert a newline in Claude Code / Codex, never submit — see
+      // shiftEnterSequence for both encodings. The first fallback press is
+      // logged so diagnostics shows kitty keys never negotiated in this pane.
+      let fallbackLogged = false;
       term.attachCustomKeyEventHandler((e) => {
         if (e.type !== "keydown") return false;
         if (e.key === "Tab" && e.shiftKey) return send("\x1b[Z"), true;
         if (e.key === "Enter" && e.shiftKey) {
-          return send(kitty.flags & KITTY_DISAMBIGUATE ? "\x1b[13;2u" : "\r"), true;
+          if (!(kitty.flags & KITTY_DISAMBIGUATE) && !fallbackLogged) {
+            fallbackLogged = true;
+            logError("term", `${target ?? "node"}: shift+enter used ESC-CR fallback (kitty keys not negotiated)`);
+          }
+          return send(shiftEnterSequence(kitty.flags)), true;
         }
         return false;
       });
@@ -200,7 +206,15 @@ export const TerminalPane = forwardRef<
       };
       window.addEventListener("resize", onWinResize);
 
-      await invoke("terminal_open", { id, target: target ?? null, cols: term.cols, rows: term.rows });
+      const negotiatedTerm = await invoke<string>("terminal_open", {
+        id,
+        target: target ?? null,
+        cols: term.cols,
+        rows: term.rows,
+      });
+      if (negotiatedTerm !== "xterm-ghostty") {
+        logError("term", `${target ?? "node"}: TERM degraded to ${negotiatedTerm} (terminfo install failed)`);
+      }
       if (alive) {
         setStatus("connected");
         term.focus();
