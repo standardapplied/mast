@@ -15,6 +15,7 @@ export function DispatchDialog({
   gateway,
   spec,
   allSpecs,
+  depsKnown,
   canDispatch,
   roleKnown,
   onClose,
@@ -23,6 +24,9 @@ export function DispatchDialog({
   gateway: Gateway;
   spec: GlobalSpecView;
   allSpecs: GlobalSpecView[];
+  /** False while the spec list is still loading — readiness is unknown, so the
+   *  dialog holds a quiet checking state instead of flashing Blocked → Ready. */
+  depsKnown: boolean;
   canDispatch: boolean;
   roleKnown: boolean;
   onClose: () => void;
@@ -30,15 +34,16 @@ export function DispatchDialog({
 }) {
   const [busy, setBusy] = useState(false);
 
-  const unmet = unmetDependencies(spec, allSpecs);
-  const blocked = unmet.length > 0;
+  const unmet = depsKnown ? unmetDependencies(spec, allSpecs) : [];
+  const blocked = depsKnown && unmet.length > 0;
   const notPending = spec.status !== "pending";
-  const runnable = !blocked && !notPending && canDispatch;
+  const runnable = depsKnown && !blocked && !notPending && canDispatch;
 
+  // busy stays true through onClose — the dialog unmounts in the Dispatching…
+  // state rather than flashing back to an actionable one for a frame.
   const run = async () => {
     setBusy(true);
     const result = await gateway.dispatch(spec.project, { spec_id: spec.id, mode: "background" });
-    setBusy(false);
     if (!result.ok) {
       const forbidden = result.error.status === 403;
       onResult(
@@ -97,15 +102,20 @@ export function DispatchDialog({
           </div>
         </div>
 
+        {!depsKnown && (
+          <p className="dispatch-block" data-testid="dispatch-checking">
+            Checking dependencies…
+          </p>
+        )}
         {blocked && (
           <p className="dispatch-block" data-testid="dispatch-blocked">
             Blocked — waiting on {unmet.join(", ")}. Resolve dependencies first.
           </p>
         )}
-        {notPending && !blocked && (
+        {depsKnown && notPending && !blocked && (
           <p className="dispatch-block">Only pending specs can be dispatched (this is {spec.status}).</p>
         )}
-        {roleKnown && !canDispatch && !blocked && !notPending && (
+        {depsKnown && roleKnown && !canDispatch && !blocked && !notPending && (
           <p className="dispatch-block" data-testid="dispatch-role">
             Dispatch requires the admin role. Your credential can’t launch agents.
           </p>

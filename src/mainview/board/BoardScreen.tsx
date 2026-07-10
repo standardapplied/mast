@@ -622,6 +622,7 @@ export function BoardScreen({
           gateway={gateway}
           spec={dispatchTarget}
           allSpecs={data.specs}
+          depsKnown={!data.loading}
           canDispatch={role.canDispatch}
           roleKnown={role.known}
           onClose={() => setDispatchTarget(null)}
