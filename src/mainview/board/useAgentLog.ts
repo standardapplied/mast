@@ -34,6 +34,9 @@ export type AgentLogView = {
   state: AgentLogState;
   status: AgentStatusResponse | null;
   lifecycle: Lifecycle | null;
+  /** The snapshot's API error, so a failing log surface reads as an error, not
+   *  an eternally empty panel. Cleared the moment any line arrives. */
+  error: string | null;
 };
 
 function lifecycleDetail(event: SailEvent): string | undefined {
@@ -54,6 +57,7 @@ export function useAgentLog(
   const [state, setState] = useState<AgentLogState>("connecting");
   const [status, setStatus] = useState<AgentStatusResponse | null>(null);
   const [lifecycle, setLifecycle] = useState<Lifecycle | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const buffers = useRef<Record<AgentLogRole, RoleBuffer>>({
     build: { lines: [], cursor: undefined, loaded: false },
@@ -98,6 +102,7 @@ export function useAgentLog(
 
     setLines(buf.lines.slice());
     setState("connecting");
+    setError(null);
 
     let flushQueued = false;
     const flush = () => {
@@ -111,7 +116,11 @@ export function useAgentLog(
 
     if (!buf.loaded) {
       void gateway.agentLogSnapshot(project, role, SNAPSHOT_TAIL).then((r) => {
-        if (!alive || tookOver || !r.ok) return;
+        if (!alive || tookOver) return;
+        if (!r.ok) {
+          setError(r.error.message);
+          return;
+        }
         buf.lines = r.value.lines.map((text) => ({
           key: ++keyRef.current,
           raw: text,
@@ -128,6 +137,7 @@ export function useAgentLog(
     });
     const offLine = handle.onLine((line) => {
       if (!alive) return;
+      setError(null);
       if (!tookOver) {
         tookOver = true;
         buf.lines = [];
@@ -148,5 +158,5 @@ export function useAgentLog(
   }, [gateway, project, role]);
 
   const changeRole = useCallback((next: AgentLogRole) => setRole(next), []);
-  return { role, setRole: changeRole, raw, setRaw, lines, state, status, lifecycle };
+  return { role, setRole: changeRole, raw, setRaw, lines, state, status, lifecycle, error };
 }

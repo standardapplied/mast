@@ -160,7 +160,9 @@ export function LiveLog({
 
         <div className="live-log__body" ref={bodyRef} onScroll={onScroll} data-testid="live-log-body">
           {shown.length === 0 ? (
-            <p className="live-log__empty">Waiting for output…</p>
+            <p className="live-log__empty">
+              {view.error ? `Couldn’t load the ${role} log: ${view.error}` : "Waiting for output…"}
+            </p>
           ) : (
             shown.map((line) => (
               <div key={line.key} className="live-log__line">

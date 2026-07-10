@@ -165,20 +165,19 @@ export function TerminalSplit({
   const doDelete = async (entry: FileEntry) => {
     setConfirmDel(null);
     const dir = parentDir(entry.path);
-    // Lock the node up front; the tray (fed by the Rust `transfer` event) shows
-    // the live "Deleting…" indicator so a slow delete never looks frozen.
+    // Lock the node up front; the tray (fed by the Rust `transfer` event) owns
+    // ALL delete feedback — live "Deleting…", "Removed", and failure detail —
+    // exactly like uploads, so completion never announces itself twice.
     store.beginDelete(entry.path);
     try {
       await invoke("fs_delete", { target, path: entry.path, transferId: transfer() });
       store.endDelete(entry.path);
       store.revalidate(dir);
-      toast(`Deleted ${entry.name}`, true);
-    } catch (e) {
+    } catch {
       store.endDelete(entry.path);
       // Refresh the node itself so any partial deletion is reflected honestly.
       store.revalidate(entry.path);
       store.revalidate(dir);
-      toast(`Delete failed: ${e}`, false);
     }
   };
 

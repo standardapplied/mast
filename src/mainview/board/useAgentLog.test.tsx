@@ -20,7 +20,7 @@ type FakeHandle = {
   stop: () => void;
 };
 
-function makeFake() {
+function makeFake(opts: { snapshotError?: string } = {}) {
   const handles: FakeHandle[] = [];
   let eventListener: ((e: SailEvent) => void) | null = null;
 
@@ -34,13 +34,21 @@ function makeFake() {
         branch: "agent/chorus-invoice-ui",
       },
     }),
-    agentLogSnapshot: async (_project: string, role: AgentLogRole) => ({
-      ok: true as const,
-      value: {
-        run_id: `run-${role}`,
-        lines: [`{"type":"assistant","message":{"content":[{"type":"text","text":"snap ${role}"}]}}`],
-      },
-    }),
+    agentLogSnapshot: async (_project: string, role: AgentLogRole) =>
+      opts.snapshotError
+        ? {
+            ok: false as const,
+            error: { status: 404, code: "run_not_found", message: opts.snapshotError },
+          }
+        : {
+            ok: true as const,
+            value: {
+              run_id: `run-${role}`,
+              lines: [
+                `{"type":"assistant","message":{"content":[{"type":"text","text":"snap ${role}"}]}}`,
+              ],
+            },
+          },
     followAgentLog: (_project: string, role: AgentLogRole, since: number) => {
       const lineListeners = new Set<(l: AgentLogLine) => void>();
       const stateListeners = new Set<(s: AgentLogState) => void>();
@@ -114,6 +122,20 @@ const streamLine = (id: number, text: string): AgentLogLine => ({
 });
 
 describe("useAgentLog", () => {
+  test("a failed snapshot surfaces its API error until a line arrives", async () => {
+    const { gateway, handles } = makeFake({ snapshotError: "No build run for 'chorus' yet." });
+    const view = await render(gateway);
+
+    expect(view().error).toBe("No build run for 'chorus' yet.");
+    expect(texts(view())).toEqual([]);
+
+    await act(async () => {
+      handles[0]!.emitLine(streamLine(1, "live"));
+    });
+    expect(view().error).toBeNull();
+    expect(texts(view())).toEqual(["live"]);
+  });
+
   test("seeds from the snapshot, then the live stream takes over", async () => {
     const { gateway, handles } = makeFake();
     const view = await render(gateway);
