@@ -84,13 +84,19 @@ const server = Bun.serve({
       });
     }
     if (url.pathname === "/v1/projects/chorus/dispatch" && req.method === "POST") {
-      return envelope({
-        name: "chorus",
-        dispatched: true,
-        reason: "",
-        branch_created: true,
-        spec: { ...SPEC, repos: ["api"], reasoning_effort: "high", model: "m", agent: "claude-code", branch: "agent/x" },
-      });
+      // Faithful to the control plane: only snake_case spec_id selects a spec;
+      // anything else falls back to auto-pick, which here has nothing ready.
+      return req.json().then((body) =>
+        (body as { spec_id?: string }).spec_id === SPEC.id
+          ? envelope({
+              name: "chorus",
+              dispatched: true,
+              reason: "",
+              branch_created: true,
+              spec: { ...SPEC, repos: ["api"], reasoning_effort: "high", model: "m", agent: "claude-code", branch: "agent/x" },
+            })
+          : envelope({ name: "chorus", dispatched: false, reason: "no_pending_specs", branch_created: false }),
+      );
     }
     if (url.pathname === "/v1/rate-limited-once") {
       rateLimitHits++;
@@ -146,9 +152,9 @@ describe("SailClient against a mock control plane", () => {
     expect(error.action).toContain("fresh ETag");
   });
 
-  test("dispatches a spec", async () => {
+  test("dispatches the chosen spec via the snake_case wire key", async () => {
     const { client } = makeClient();
-    const result = await client.dispatch("chorus", { specId: SPEC.id, mode: "background" });
+    const result = await client.dispatch("chorus", { spec_id: SPEC.id, mode: "background" });
     expect(result.data.dispatched).toBe(true);
     expect(result.data.branch_created).toBe(true);
   });

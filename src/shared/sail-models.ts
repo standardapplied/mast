@@ -174,10 +174,11 @@ export type ProjectResponse = {
   agent: AgentConfigView;
 };
 
+/** POST /v1/projects/{p}/dispatch — the server reads snake_case keys only. */
 export type DispatchRequest = {
-  specId?: string;
+  spec_id?: string;
   mode?: string;
-  dryRun?: boolean;
+  dry_run?: boolean;
   repos?: string[];
 };
 

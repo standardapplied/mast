@@ -464,7 +464,7 @@ export function createDemoGateway(): DemoGateway {
     },
 
     async dispatch(_project, request) {
-      const spec = request.specId ? find(request.specId) : undefined;
+      const spec = request.spec_id ? find(request.spec_id) : undefined;
       if (!spec) return { ok: true, value: demoDispatch(false, "no_pending_specs") };
       spec.status = "in_progress";
       spec.updated_at = new Date().toISOString();

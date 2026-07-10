@@ -37,7 +37,7 @@ export function DispatchDialog({
 
   const run = async () => {
     setBusy(true);
-    const result = await gateway.dispatch(spec.project, { specId: spec.id, mode: "background" });
+    const result = await gateway.dispatch(spec.project, { spec_id: spec.id, mode: "background" });
     setBusy(false);
     if (!result.ok) {
       const forbidden = result.error.status === 403;
