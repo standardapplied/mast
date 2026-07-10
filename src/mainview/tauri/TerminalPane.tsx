@@ -4,6 +4,7 @@ import { FitAddon, init, Terminal, type ITheme } from "ghostty-web";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ThemeName } from "../../shared/types";
 import { terminalTheme, type TerminalTheme } from "../ansi";
+import { KITTY_DISAMBIGUATE, KittyKeyboardBridge } from "./kittyKeyboard";
 
 export type TerminalHandle = { paste: (text: string) => void };
 
@@ -99,6 +100,7 @@ export const TerminalPane = forwardRef<
 
     const send = (data: string) =>
       void invoke("terminal_write", { id, data: Array.from(encoder.encode(data)) }).catch(() => {});
+    const kitty = new KittyKeyboardBridge();
 
     void (async () => {
       await ensureGhostty();
@@ -139,11 +141,16 @@ export const TerminalPane = forwardRef<
       // ghostty-web 0.4 returns truthy from customKeyEventHandler = "consume +
       // preventDefault". So return false to let ghostty encode normal keys
       // (otherwise every keystroke is swallowed); return true only for the keys
-      // it mishandles (Shift+Tab / Shift+Enter), which we hand-send for Claude.
+      // it mishandles (Shift+Tab / Shift+Enter), which we hand-send. Shift+Enter
+      // must insert a newline in Claude Code / Codex, not submit: once the app
+      // has negotiated kitty keys (via the bridge below), send the protocol's
+      // Shift+Enter; in a plain shell it stays a carriage return.
       term.attachCustomKeyEventHandler((e) => {
         if (e.type !== "keydown") return false;
         if (e.key === "Tab" && e.shiftKey) return send("\x1b[Z"), true;
-        if (e.key === "Enter" && e.shiftKey) return send("\r"), true;
+        if (e.key === "Enter" && e.shiftKey) {
+          return send(kitty.flags & KITTY_DISAMBIGUATE ? "\x1b[13;2u" : "\r"), true;
+        }
         return false;
       });
       // Wheel scrolling. In the normal buffer (the agent's streaming conversation)
@@ -173,7 +180,11 @@ export const TerminalPane = forwardRef<
       });
 
       dataOff = listen<number[]>(`terminal://data/${id}`, (ev) => {
-        if (alive && termRef.current) termRef.current.write(new Uint8Array(ev.payload));
+        if (!alive || !termRef.current) return;
+        const data = new Uint8Array(ev.payload);
+        const reply = kitty.feed(data);
+        if (reply) send(reply);
+        termRef.current.write(data);
       });
       exitOff = listen(`terminal://exit/${id}`, () => {
         if (alive) setStatus("session closed");

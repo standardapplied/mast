@@ -31,6 +31,25 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Generous bound for a recursive delete (`rm -rf`): the remote does the work in
 /// one shot, but a huge tree over a slow link can still take a while.
 const DELETE_TIMEOUT: Duration = Duration::from_secs(300);
+/// Bound for the one-shot terminfo install before a terminal opens; on expiry
+/// the shell simply falls back to TERM=xterm-256color.
+const TERMINFO_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Ghostty's compiled terminfo (from the Ghostty project, MIT), base64 so it
+/// embeds as one safe shell word. The webview terminal is a real Ghostty VT,
+/// so its PTY requests TERM=xterm-ghostty — the TERM under which kitty-aware
+/// TUIs (Claude Code) enable their keyboard protocol — and this entry keeps
+/// full-screen apps working on boxes that never saw a desktop Ghostty SSH in.
+const GHOSTTY_TERMINFO_B64: &str = include_str!("../assets/xterm-ghostty.terminfo.b64");
+
+/// One idempotent shell word-list: install the terminfo entry unless present.
+/// No user input is interpolated; the base64 alphabet needs no quoting.
+fn terminfo_install_command() -> String {
+    format!(
+        "sh -c 'test -e \"$HOME/.terminfo/x/xterm-ghostty\" || {{ mkdir -p \"$HOME/.terminfo/x\" && echo {} | base64 -d > \"$HOME/.terminfo/x/xterm-ghostty\"; }}'",
+        GHOSTTY_TERMINFO_B64.trim()
+    )
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -890,6 +909,42 @@ impl Backend {
         Ok(())
     }
 
+    /// A fresh channel where a terminal's shell would run: the container's
+    /// cached session for a named target, the control-plane session otherwise.
+    async fn shell_channel(&self, target: Option<&str>) -> Result<Channel<Msg>, Error> {
+        match target {
+            Some(alias) => self.container_channel(alias).await,
+            None => self.open_session_channel().await,
+        }
+    }
+
+    /// The TERM a new terminal should request. Installs Ghostty's terminfo on
+    /// the shell's host first (idempotent, one `test -e` after the first run);
+    /// any failure — no channel, non-zero exit, timeout — degrades to
+    /// xterm-256color so a shell never starts under an unresolvable TERM.
+    async fn negotiated_term(&self, target: Option<&str>) -> &'static str {
+        let install = tokio::time::timeout(TERMINFO_TIMEOUT, async {
+            let mut channel = self.shell_channel(target).await?;
+            channel
+                .exec(true, terminfo_install_command().as_bytes())
+                .await?;
+            let mut exit = u32::MAX;
+            while let Some(msg) = channel.wait().await {
+                match msg {
+                    ChannelMsg::ExitStatus { exit_status } => exit = exit_status,
+                    ChannelMsg::Eof | ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+            Ok::<u32, Error>(exit)
+        })
+        .await;
+        match install {
+            Ok(Ok(0)) => "xterm-ghostty",
+            _ => "xterm-256color",
+        }
+    }
+
     pub async fn terminal_open(
         &self,
         app: AppHandle,
@@ -901,13 +956,10 @@ impl Backend {
         // A named target opens a shell in that project container (over its
         // cached session, shared with the file bridge); no target = a shell on
         // the node over the control-plane session.
-        let mut channel = match target.as_deref().filter(|t| !t.is_empty()) {
-            Some(alias) => self.container_channel(alias).await?,
-            None => self.open_session_channel().await?,
-        };
-        channel
-            .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
-            .await?;
+        let target = target.filter(|t| !t.is_empty());
+        let term = self.negotiated_term(target.as_deref()).await;
+        let mut channel = self.shell_channel(target.as_deref()).await?;
+        channel.request_pty(false, term, cols, rows, 0, 0, &[]).await?;
         channel.request_shell(true).await?;
 
         let (tx, mut rx) = mpsc::channel::<TermCmd>(256);
@@ -1862,6 +1914,18 @@ Host bastion
         // A path trying to break out of the quotes or inject a command stays
         // entirely literal inside the requoting.
         assert_eq!(shell_single_quote("a'; rm -rf /"), "'a'\\''; rm -rf /'");
+    }
+
+    #[test]
+    fn terminfo_install_command_is_one_clean_idempotent_shell_line() {
+        let cmd = terminfo_install_command();
+        assert!(cmd.starts_with("sh -c 'test -e"));
+        assert!(cmd.contains(".terminfo/x/xterm-ghostty"));
+        assert!(cmd.contains("base64 -d"));
+        assert!(!cmd.bytes().any(|b| b == b'\n' || b == b'\r'));
+        let payload = GHOSTTY_TERMINFO_B64.trim();
+        assert!(!payload.is_empty());
+        assert!(payload.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='));
     }
 
     #[test]
