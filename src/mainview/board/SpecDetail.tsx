@@ -43,6 +43,10 @@ type Loaded = {
   history: SpecRevisionView[];
   reviews: ReviewView[];
   allSpecs: GlobalSpecView[];
+  /** True once enrichment has landed at least once. Until then, readiness and
+   *  empty-states are unknown — render nothing rather than a wrong guess that
+   *  flips a moment later. */
+  enriched: boolean;
 };
 
 function DepChip({ id, unmet, onOpen }: { id: string; unmet: boolean; onOpen: (id: string) => void }) {
@@ -62,11 +66,14 @@ export function SpecDetail({
   specId,
   onOpenSpec,
   onBack,
+  eventDebounceMs = 300,
 }: {
   gateway: Gateway;
   specId: string;
   onOpenSpec: (id: string) => void;
   onBack: () => void;
+  /** Coalescing window for event-driven reloads; tests pass 0. */
+  eventDebounceMs?: number;
 }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<SailWireError | null>(null);
@@ -106,15 +113,19 @@ export function SpecDetail({
       return;
     }
     setError(null);
-    setLoaded({
+    // A reload keeps the previous enrichment on screen — blanking history,
+    // reviews, and the dependency graph on every SSE-triggered refresh is what
+    // made the side cards flicker between empty and filled.
+    setLoaded((prev) => ({
       detail: detail.value,
       etag: detail.etag,
       body: content.ok ? content.value.body : (detail.value.body ?? ""),
       plan: content.ok ? content.value.plan : "",
-      history: [],
-      reviews: [],
-      allSpecs: [],
-    });
+      history: prev?.history ?? [],
+      reviews: prev?.reviews ?? [],
+      allSpecs: prev?.allSpecs ?? [],
+      enriched: prev?.enriched ?? false,
+    }));
 
     // Enrichment — history, reviews, dependency graph — is non-fatal and
     // merged in as it arrives; a failure here leaves the page usable.
@@ -130,6 +141,7 @@ export function SpecDetail({
             history: history.ok ? history.value.revisions : prev.history,
             reviews: reviews.ok ? reviews.value.reviews : prev.reviews,
             allSpecs: all.ok ? all.value.specs : prev.allSpecs,
+            enriched: true,
           }
         : prev,
     );
@@ -141,13 +153,20 @@ export function SpecDetail({
     void load();
   }, [load]);
 
-  useEffect(
-    () =>
-      gateway.onEvent((event) => {
-        if (event.spec === specId) void load();
-      }),
-    [gateway, specId, load],
-  );
+  // Dispatch and agent lifecycle fire several events back-to-back; coalesce
+  // them into one reload so the page refreshes once, not in a stutter.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const off = gateway.onEvent((event) => {
+      if (event.spec !== specId) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void load(), eventDebounceMs);
+    });
+    return () => {
+      off();
+      if (timer) clearTimeout(timer);
+    };
+  }, [gateway, specId, load, eventDebounceMs]);
 
   // A lost-contact (status 0) error retries in the background, like the board.
   useEffect(() => {
@@ -390,7 +409,7 @@ export function SpecDetail({
         </div>
       </div>
 
-      {unmet.length > 0 && (
+      {loaded.enriched && unmet.length > 0 && (
         <p className="detail-blocked" data-testid="blocked-banner">
           Blocked — waiting on{" "}
           {unmet.map((id, i) => (
@@ -445,7 +464,12 @@ export function SpecDetail({
                     <span className="eyebrow">Depends on</span>
                     <div className="dep-chips">
                       {(spec.depends_on ?? []).map((id) => (
-                        <DepChip key={id} id={id} unmet={unmet.includes(id)} onOpen={onOpenSpec} />
+                        <DepChip
+                          key={id}
+                          id={id}
+                          unmet={loaded.enriched && unmet.includes(id)}
+                          onOpen={onOpenSpec}
+                        />
                       ))}
                     </div>
                   </>
@@ -465,7 +489,9 @@ export function SpecDetail({
           )}
 
           <Card title="Reviews">
-            {loaded.reviews.length === 0 && <span className="meta-value">No reviews yet.</span>}
+            {loaded.enriched && loaded.reviews.length === 0 && (
+              <span className="meta-value">No reviews yet.</span>
+            )}
             {loaded.reviews.map((review) => (
               <div key={review.id} className="review-row">
                 <span className="meta-value">
@@ -519,6 +545,7 @@ export function SpecDetail({
           gateway={gateway}
           spec={spec}
           allSpecs={loaded.allSpecs}
+          depsKnown={loaded.enriched}
           canDispatch={role.canDispatch}
           roleKnown={role.known}
           onClose={() => setDispatchOpen(false)}
