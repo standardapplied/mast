@@ -10,6 +10,10 @@ import { unmetDependencies } from "./useBoard";
  * the real dispatch — role-gated for non-admins, readiness-gated for blocked
  * specs. Dispatch always runs the agent in the background (autonomous in the
  * container); there is no terminal here.
+ *
+ * Restart mode re-dispatches a review/done spec: the server atomically resets
+ * it to pending and relaunches on its prior branch, so the pending-only gate
+ * doesn't apply — the dependency and role gates still do.
  */
 export function DispatchDialog({
   gateway,
@@ -18,6 +22,7 @@ export function DispatchDialog({
   depsKnown,
   canDispatch,
   roleKnown,
+  restart = false,
   onClose,
   onResult,
 }: {
@@ -29,6 +34,7 @@ export function DispatchDialog({
   depsKnown: boolean;
   canDispatch: boolean;
   roleKnown: boolean;
+  restart?: boolean;
   onClose: () => void;
   onResult: (message: string, ok: boolean) => void;
 }) {
@@ -36,27 +42,35 @@ export function DispatchDialog({
 
   const unmet = depsKnown ? unmetDependencies(spec, allSpecs) : [];
   const blocked = depsKnown && unmet.length > 0;
-  const notPending = spec.status !== "pending";
+  const notPending = !restart && spec.status !== "pending";
   const runnable = depsKnown && !blocked && !notPending && canDispatch;
 
   // busy stays true through onClose — the dialog unmounts in the Dispatching…
   // state rather than flashing back to an actionable one for a frame.
   const run = async () => {
     setBusy(true);
-    const result = await gateway.dispatch(spec.project, { spec_id: spec.id, mode: "background" });
+    const result = await gateway.dispatch(spec.project, {
+      spec_id: spec.id,
+      mode: "background",
+      ...(restart ? { restart: true } : {}),
+    });
     if (!result.ok) {
       const forbidden = result.error.status === 403;
+      const detail = `${result.error.message}${result.error.action ? ` — ${result.error.action}` : ""}`;
       onResult(
-        forbidden
-          ? `Dispatch needs admin role — ${result.error.message}`
-          : `Dispatch failed: ${result.error.message}`,
+        forbidden ? `Dispatch needs admin role — ${detail}` : `Dispatch failed: ${detail}`,
         false,
       );
       onClose();
       return;
     }
     if (result.value.dispatched) {
-      onResult(`Dispatched ${spec.id}${result.value.branch_created ? " · branch created" : ""}.`, true);
+      onResult(
+        result.value.restarted
+          ? `Re-dispatched ${spec.id} (was ${spec.status}).`
+          : `Dispatched ${spec.id}${result.value.branch_created ? " · branch created" : ""}.`,
+        true,
+      );
     } else {
       onResult(`Could not dispatch ${spec.id}: ${result.value.reason || "not ready"}.`, false);
     }
@@ -67,7 +81,7 @@ export function DispatchDialog({
     <Dialog
       isOpen
       onClose={onClose}
-      title={`Dispatch ${spec.id}`}
+      title={`${restart ? "Re-dispatch" : "Dispatch"} ${spec.id}`}
       size="md"
       footer={
         <>
@@ -75,7 +89,7 @@ export function DispatchDialog({
             Cancel
           </Button>
           <Button disabled={!runnable || busy} onClick={() => void run()} data-testid="dispatch-go">
-            {busy ? "Dispatching…" : "Dispatch"}
+            {busy ? "Dispatching…" : restart ? "Re-dispatch" : "Dispatch"}
           </Button>
         </>
       }
@@ -101,6 +115,12 @@ export function DispatchDialog({
             <span className="prop-value">{spec.assignee ?? "—"}</span>
           </div>
         </div>
+
+        {restart && (
+          <p className="dispatch-summary" data-testid="dispatch-restart-note">
+            Re-dispatch resets {spec.id} to pending and relaunches on its prior branch.
+          </p>
+        )}
 
         {!depsKnown && (
           <p className="dispatch-block" data-testid="dispatch-checking">

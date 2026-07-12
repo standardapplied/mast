@@ -466,8 +466,36 @@ export function createDemoGateway(): DemoGateway {
     async dispatch(_project, request) {
       const spec = request.spec_id ? find(request.spec_id) : undefined;
       if (!spec) return { ok: true, value: demoDispatch(false, "no_pending_specs") };
+      // Faithful to the control plane: a non-pending spec needs restart, which
+      // atomically resets it to pending before dispatching.
+      const restarted = request.restart === true && spec.status !== "pending";
+      if (spec.status !== "pending" && !restarted) {
+        return {
+          ok: false,
+          error: {
+            status: 409,
+            code: "SPEC_NOT_READY",
+            message: `Spec '${spec.id}' is ${spec.status}, not pending.`,
+            action: "Re-dispatch with restart to reset it to pending and relaunch.",
+          },
+        };
+      }
+      const previous = spec.status;
       spec.status = "in_progress";
       spec.updated_at = new Date().toISOString();
+      if (restarted) {
+        emit({
+          v: 1,
+          id: ++eventId,
+          ts: spec.updated_at,
+          project: spec.project,
+          spec: spec.id,
+          type: "spec_restarted",
+          agent: "mast",
+          host: "demo",
+          data: { previous_status: previous },
+        });
+      }
       emit({
         v: 1,
         id: ++eventId,
@@ -478,7 +506,7 @@ export function createDemoGateway(): DemoGateway {
         agent: "mast",
         host: "demo",
       });
-      return { ok: true, value: demoDispatch(true) };
+      return { ok: true, value: { ...demoDispatch(true), restarted } };
     },
 
     async specReviews(id) {

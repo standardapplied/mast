@@ -206,6 +206,7 @@ export function SpecDetail({
   const spec = loaded.detail.spec;
   const unmet = unmetDependencies(spec, loaded.allSpecs);
   const dependents = dependentsOf(loaded.allSpecs, spec.id);
+  const restart = spec.status === "review" || spec.status === "done";
 
   const startEdit = () => {
     setBodyDraft(loaded.body);
@@ -398,8 +399,8 @@ export function SpecDetail({
             </>
           ) : (
             <>
-              <Button variant="ghost" onClick={() => setDispatchOpen(true)}>
-                Dispatch
+              <Button variant="ghost" onClick={() => setDispatchOpen(true)} data-testid="detail-dispatch">
+                {restart ? "Re-dispatch" : "Dispatch"}
               </Button>
               <Button variant="ghost" onClick={startEdit}>
                 Edit
@@ -548,6 +549,7 @@ export function SpecDetail({
           depsKnown={loaded.enriched}
           canDispatch={role.canDispatch}
           roleKnown={role.known}
+          restart={restart}
           onClose={() => setDispatchOpen(false)}
           onResult={(message, ok) => {
             showToast(ok ? "success" : "error", message);

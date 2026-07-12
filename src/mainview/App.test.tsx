@@ -218,6 +218,63 @@ describe("App cockpit", () => {
     expect(container.querySelector(".detail-title")?.textContent).toBe("chorus-auth-flow");
   });
 
+  test("context menu offers Re-dispatch only for review and done specs", async () => {
+    await render();
+    const rightClick = (id: string) => {
+      act(() => document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+      container.querySelector<HTMLElement>(`[data-testid="card-${id}"]`)?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 100, clientY: 100 }),
+      );
+    };
+    const labels = () =>
+      [...container.querySelectorAll(".context-menu-label")].map((n) => n.textContent);
+
+    act(() => rightClick("chorus-rate-limits")); // review
+    expect(labels()).toContain("Re-dispatch…");
+
+    act(() => rightClick("chorus-onboarding")); // done
+    expect(labels()).toContain("Re-dispatch…");
+
+    act(() => rightClick("chorus-billing-export")); // pending
+    expect(labels()).not.toContain("Re-dispatch…");
+
+    act(() => rightClick("chorus-invoice-ui")); // in_progress
+    expect(labels()).not.toContain("Re-dispatch…");
+  });
+
+  test("re-dispatch relaunches a review spec into in progress", async () => {
+    await render();
+    const card = container.querySelector<HTMLElement>('[data-testid="card-chorus-rate-limits"]');
+    act(() => {
+      card?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 80 }),
+      );
+    });
+    act(() => {
+      [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")]
+        .find((b) => b.querySelector(".context-menu-label")?.textContent === "Re-dispatch…")
+        ?.click();
+    });
+    await flush();
+
+    expect(container.querySelector(".dialog-title")?.textContent).toBe(
+      "Re-dispatch chorus-rate-limits",
+    );
+    expect(container.textContent).toContain(
+      "Re-dispatch resets chorus-rate-limits to pending and relaunches on its prior branch.",
+    );
+    const go = container.querySelector<HTMLButtonElement>('[data-testid="dispatch-go"]');
+    expect(go?.disabled).toBe(false);
+
+    act(() => go?.click());
+    await flush();
+    await flush();
+    expect(container.querySelector('[data-testid="column-in_progress"]')?.textContent).toContain(
+      "chorus-rate-limits",
+    );
+    expect(container.textContent).toContain("Re-dispatched chorus-rate-limits (was review).");
+  });
+
   test("dispatch dialog role-gates a non-admin credential", async () => {
     gateway = createDemoGateway();
     gateway.whoami = () =>

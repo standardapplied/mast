@@ -180,6 +180,9 @@ export type DispatchRequest = {
   mode?: string;
   dry_run?: boolean;
   repos?: string[];
+  /** Reset a review/done spec to pending and relaunch on its prior branch.
+   *  Server-enforced: requires an explicit spec_id. */
+  restart?: boolean;
 };
 
 export type DispatchedSpecView = {
@@ -212,6 +215,7 @@ export type DispatchResponse = {
   agent?: AgentStatusView;
   snapshot?: string;
   branch_created: boolean;
+  restarted?: boolean;
 };
 
 export type AgentReportResponse = {
