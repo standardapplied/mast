@@ -21,6 +21,10 @@ const RELOAD_EVENT_TYPES = /^(spec_|board_updated)/;
  * on relevant SSE events (event-driven, not polling), and moves specs with
  * If-Match built from the updated_at captured at load — a concurrent writer
  * surfaces as a "conflict" outcome and a fresh reload, never an overwrite.
+ *
+ * The project list is the synced catalog (`GET /v1/projects`) unioned with the
+ * projects the specs reference, so a catalogued project with no specs still
+ * shows and a catalog outage degrades to the specs-derived list.
  */
 export function useBoard(gateway: Gateway, project: string | undefined, filter: SpecFilter) {
   const [data, setData] = useState<BoardData>({
@@ -36,11 +40,12 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
 
   const refresh = useCallback(async () => {
     const gen = ++generation.current;
-    let all, scoped;
+    let all, scoped, catalog;
     try {
-      [all, scoped] = await Promise.all([
+      [all, scoped, catalog] = await Promise.all([
         gateway.listSpecs({}),
         gateway.listSpecs({ ...filter, project }),
+        catalogProjects(gateway),
       ]);
     } catch (error) {
       // A rejecting RPC (bridge failure) must not leave "Loading specs" forever.
@@ -58,9 +63,8 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
       setData((prev) => ({ ...prev, loading: false, error: scoped.error }));
       return;
     }
-    const projects = all.ok
-      ? [...new Set(all.value.specs.map((s) => s.project))].sort()
-      : [];
+    const specProjects = all.ok ? all.value.specs.map((s) => s.project) : [];
+    const projects = [...new Set([...catalog, ...specProjects])].sort();
     const repos = all.ok
       ? [...new Set(all.value.specs.flatMap((s) => s.repos ?? []))].sort()
       : [];
@@ -141,6 +145,17 @@ export function unmetDependencies(spec: GlobalSpecView, all: GlobalSpecView[]): 
     const target = all.find((s) => s.id === dep);
     return !target || target.status !== "done";
   });
+}
+
+/** Catalog names, or [] on any failure — the roster must never break the board. */
+async function catalogProjects(gateway: Gateway): Promise<string[]> {
+  try {
+    const result = await gateway.listProjects();
+    if (!result.ok || !Array.isArray(result.value.projects)) return [];
+    return result.value.projects.map((p) => p.name);
+  } catch {
+    return [];
+  }
 }
 
 function message(error: unknown): string {

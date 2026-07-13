@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import type { ProjectListResponse } from "../../shared/sail-models";
+import type { SailResult } from "../../shared/types";
 import { createDemoGateway, type DemoGateway } from "../gateway";
 import { canTransition } from "./lifecycle";
 import { useBoard, type MoveOutcome } from "./useBoard";
@@ -44,11 +46,50 @@ afterEach(() => {
 });
 
 describe("useBoard", () => {
-  test("loads specs, groups by status, and derives the project list", async () => {
+  test("loads specs, groups by status, and lists catalog ∪ spec projects", async () => {
     const { handle } = await render(createDemoGateway());
     expect(handle().data.specs.length).toBe(7);
     expect(handle().byStatus.get("in_progress")?.length).toBe(1);
+    // nautilus is catalogued with no specs — the synced catalog is authoritative.
+    expect(handle().data.projects).toEqual(["chorus", "nautilus", "sail-mast"]);
+  });
+
+  test("spec-only projects survive a catalog that omits them", async () => {
+    const gateway = createDemoGateway();
+    gateway.listProjects = async () => ({
+      ok: true,
+      value: { projects: [{ name: "zulu", container_status: "running" }] },
+    });
+    const { handle } = await render(gateway);
+    expect(handle().data.projects).toEqual(["chorus", "sail-mast", "zulu"]);
+  });
+
+  test("a failed catalog call degrades to the specs-derived list", async () => {
+    const gateway = createDemoGateway();
+    gateway.listProjects = async () => ({
+      ok: false,
+      error: { status: 503, code: "unavailable", message: "down" },
+    });
+    const { handle } = await render(gateway);
     expect(handle().data.projects).toEqual(["chorus", "sail-mast"]);
+    expect(handle().data.error).toBeNull();
+  });
+
+  test("a rejecting or malformed catalog never breaks the board", async () => {
+    const rejecting = createDemoGateway();
+    rejecting.listProjects = () => Promise.reject(new Error("bridge died"));
+    const { handle } = await render(rejecting);
+    expect(handle().data.projects).toEqual(["chorus", "sail-mast"]);
+    expect(handle().data.error).toBeNull();
+
+    act(() => root.unmount());
+    container.remove();
+
+    const malformed = createDemoGateway();
+    malformed.listProjects = async () =>
+      ({ ok: true, value: {} }) as SailResult<ProjectListResponse>;
+    const { handle: h2 } = await render(malformed);
+    expect(h2().data.projects).toEqual(["chorus", "sail-mast"]);
   });
 
   test("switching project shows loading, then the new scope; SSE refetches stay silent", async () => {

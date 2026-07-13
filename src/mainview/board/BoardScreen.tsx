@@ -402,9 +402,14 @@ export function BoardScreen({
     canvas.scrollTo({ left: fraction * canvas.scrollWidth, behavior: "smooth" });
   };
 
+  // The selected project is always an option, even before the roster loads —
+  // otherwise the dropdown flashes back to "All projects" on every remount
+  // (e.g. returning from spec detail) while the restored selection still filters.
   const projectOptions = [
     { value: "", label: "All projects" },
-    ...data.projects.map((p) => ({ value: p, label: p })),
+    ...[...new Set([...(project ? [project] : []), ...data.projects])]
+      .sort()
+      .map((p) => ({ value: p, label: p })),
   ];
 
   const commitMove = async (spec: GlobalSpecView, to: SpecStatus) => {
