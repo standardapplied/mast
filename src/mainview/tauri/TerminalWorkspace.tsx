@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { cx } from "../components/cx";
 import { ProjectPicker } from "./ProjectPicker";
+import type { RosterSources } from "./projectRoster";
 import { addTab, nextActive, tabKey, type Tab } from "./terminalTabs";
 import { TerminalPane } from "./TerminalPane";
 import { TerminalSplit } from "./TerminalSplit";
@@ -11,7 +12,7 @@ import { TerminalSplit } from "./TerminalSplit";
  * switching is instant and never tears down / garbles a live session. "+" opens
  * the picker for another project.
  */
-export function TerminalWorkspace() {
+export function TerminalWorkspace({ sources }: { sources: RosterSources }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -84,7 +85,11 @@ export function TerminalWorkspace() {
           );
         })}
         {showPicker && (
-          <ProjectPicker onPick={open} onCancel={tabs.length > 0 ? () => setAdding(false) : undefined} />
+          <ProjectPicker
+            sources={sources}
+            onPick={open}
+            onCancel={tabs.length > 0 ? () => setAdding(false) : undefined}
+          />
         )}
       </div>
     </div>

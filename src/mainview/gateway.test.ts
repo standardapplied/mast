@@ -66,6 +66,28 @@ describe("RPC gateway retry (bridge blips are transient, not real network failur
   });
 });
 
+describe("project roster", () => {
+  test("the demo gateway serves the full catalog with container states", async () => {
+    const result = await createDemoGateway().listProjects();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.projects.map((p) => p.name)).toEqual(["chorus", "nautilus", "sail-mast"]);
+      expect(result.value.projects.map((p) => p.container_status)).toEqual([
+        "running",
+        "not_created",
+        "stopped",
+      ]);
+    }
+  });
+
+  test("the retired Electrobun bridge reports the roster as unsupported", async () => {
+    const gateway = createRpcGateway(bridgeWith(async () => ok), noSleep);
+    const result = await gateway.listProjects();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("unsupported");
+  });
+});
+
 describe("spec body edits go through the content resource", () => {
   test("putSpecContent updates the body and getSpecContent reflects it", async () => {
     const gateway = createDemoGateway();

@@ -11,6 +11,7 @@ import type {
   GlobalSpecHistoryResponse,
   GlobalSpecsListResponse,
   GlobalSpecView,
+  ProjectListResponse,
   ReviewListResponse,
   SailEvent,
   SpecContentRequest,
@@ -61,6 +62,8 @@ export type Gateway = {
   specReviews(id: string): Promise<SailResult<ReviewListResponse>>;
   dispatch(project: string, request: DispatchRequest): Promise<SailResult<DispatchResponse>>;
   whoami(): Promise<SailResult<WhoAmI>>;
+  /** The full synced project roster — every catalogued project with its local container state. */
+  listProjects(): Promise<SailResult<ProjectListResponse>>;
   /** The live build session's status for a project (running/idle + timing). */
   agentStatus(project: string): Promise<SailResult<AgentStatusResponse>>;
   /** A `tail -n` snapshot of a project's agent log, for instant content on open. */
@@ -112,11 +115,8 @@ async function retryRead<T>(
   }
 }
 
-function unsupportedAgentLog<T>(): Promise<SailResult<T>> {
-  return Promise.resolve({
-    ok: false,
-    error: { status: 0, code: "unsupported", message: "Live agent logs require the Tauri shell." },
-  });
+function unsupported<T>(message: string): Promise<SailResult<T>> {
+  return Promise.resolve({ ok: false, error: { status: 0, code: "unsupported", message } });
 }
 
 function inertAgentLogHandle(): AgentLogHandle {
@@ -138,10 +138,11 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     specReviews: (id) => read(() => api.sailSpecReviews({ id })),
     dispatch: (project, request) => api.sailDispatch({ project, request }),
     whoami: () => api.sailWhoami(),
-    // Live agent logs ride the Tauri Rust stream pipe; the retired Electrobun
-    // bridge never grew RPC for them, so they are inert on this path.
-    agentStatus: () => unsupportedAgentLog(),
-    agentLogSnapshot: () => unsupportedAgentLog(),
+    // Agent logs and the project roster ride the Tauri seam; the retired
+    // Electrobun bridge never grew RPC for them, so they are inert on this path.
+    listProjects: () => unsupported("The project roster requires the Tauri shell."),
+    agentStatus: () => unsupported("Live agent logs require the Tauri shell."),
+    agentLogSnapshot: () => unsupported("Live agent logs require the Tauri shell."),
     followAgentLog: () => inertAgentLogHandle(),
     connection: () => api.sailConnection(),
     login: () => api.sailLogin(),
@@ -404,6 +405,16 @@ export function createDemoGateway(): DemoGateway {
       if (!spec) return notFound(id);
       spec.updated_at = new Date().toISOString();
       return ok({ spec: view(spec) }, etagOf(spec));
+    },
+
+    async listProjects() {
+      return ok({
+        projects: [
+          { name: "chorus", container_status: "running" as const },
+          { name: "nautilus", container_status: "not_created" as const },
+          { name: "sail-mast", container_status: "stopped" as const },
+        ],
+      });
     },
 
     async whoami() {

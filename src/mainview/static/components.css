@@ -3305,6 +3305,16 @@ span.checkbox {
 .term-picker__item--muted .term-picker__name {
   color: var(--muted-foreground);
 }
+.term-picker__item--disabled {
+  cursor: default;
+}
+.term-picker__item--disabled .term-picker__name {
+  color: var(--muted-foreground);
+}
+.term-picker__item--disabled:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
 .term-picker__name {
   font-family: var(--font-mono);
   font-size: 13px;

@@ -1,8 +1,10 @@
+import { invoke } from "@tauri-apps/api/core";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { Styleguide } from "./styleguide";
 import { createTauriGateway } from "./tauri/gateway";
+import type { RosterSources } from "./tauri/projectRoster";
 import { TerminalWorkspace } from "./tauri/TerminalWorkspace";
 import { createTauriUpdater } from "./tauri/updater";
 import { browserThemeDeps, createThemeController } from "./theme";
@@ -16,6 +18,10 @@ import { browserThemeDeps, createThemeController } from "./theme";
 document.documentElement.classList.add("in-shell");
 
 const gateway = createTauriGateway();
+const rosterSources: RosterSources = {
+  listProjects: () => gateway.listProjects(),
+  listTargets: () => invoke<string[]>("list_targets"),
+};
 const theme = createThemeController(browserThemeDeps(() => {}));
 
 const container = document.getElementById("root");
@@ -39,7 +45,7 @@ createRoot(container).render(
       <App
         gateway={gateway}
         theme={theme}
-        terminal={<TerminalWorkspace />}
+        terminal={<TerminalWorkspace sources={rosterSources} />}
         updater={createTauriUpdater()}
       />
     )}

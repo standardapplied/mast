@@ -174,6 +174,22 @@ export type ProjectResponse = {
   agent: AgentConfigView;
 };
 
+export type ProjectContainerStatus = "running" | "stopped" | "not_created" | "error";
+
+/**
+ * GET /v1/projects — the synced project catalog (main's source of truth)
+ * overlaid with this box's local container states. Catalogued projects with no
+ * local container surface as `not_created`.
+ */
+export type ProjectListItem = {
+  name: string;
+  container_status: ProjectContainerStatus;
+};
+
+export type ProjectListResponse = {
+  projects: ProjectListItem[];
+};
+
 /** POST /v1/projects/{p}/dispatch — the server reads snake_case keys only. */
 export type DispatchRequest = {
   spec_id?: string;
