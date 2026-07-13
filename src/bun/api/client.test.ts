@@ -84,7 +84,8 @@ const server = Bun.serve({
       });
     }
     if (url.pathname === "/v1/projects/chorus/dispatch" && req.method === "POST") {
-      // Faithful to the control plane: only snake_case spec_id selects a spec;
+      // Faithful to the control plane: only snake_case spec_id selects a spec
+      // and only snake_case restart triggers the reset-and-relaunch path;
       // anything else falls back to auto-pick, which here has nothing ready.
       return req.json().then((body) =>
         (body as { spec_id?: string }).spec_id === SPEC.id
@@ -93,6 +94,7 @@ const server = Bun.serve({
               dispatched: true,
               reason: "",
               branch_created: true,
+              restarted: (body as { restart?: boolean }).restart === true,
               spec: { ...SPEC, repos: ["api"], reasoning_effort: "high", model: "m", agent: "claude-code", branch: "agent/x" },
             })
           : envelope({ name: "chorus", dispatched: false, reason: "no_pending_specs", branch_created: false }),
@@ -157,6 +159,18 @@ describe("SailClient against a mock control plane", () => {
     const result = await client.dispatch("chorus", { spec_id: SPEC.id, mode: "background" });
     expect(result.data.dispatched).toBe(true);
     expect(result.data.branch_created).toBe(true);
+    expect(result.data.restarted).toBe(false);
+  });
+
+  test("re-dispatch sends the snake_case restart key and reads restarted back", async () => {
+    const { client } = makeClient();
+    const result = await client.dispatch("chorus", {
+      spec_id: SPEC.id,
+      mode: "background",
+      restart: true,
+    });
+    expect(result.data.dispatched).toBe(true);
+    expect(result.data.restarted).toBe(true);
   });
 
   test("maps the error envelope to a typed error", async () => {

@@ -33,8 +33,8 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-function makeGateway() {
-  const main = spec({ id: "s1", depends_on: ["dep-a"] });
+function makeGateway(status: GlobalSpecView["status"] = "pending") {
+  const main = spec({ id: "s1", depends_on: ["dep-a"], status });
   const dep = spec({ id: "dep-a", status: "done" });
   const listeners = new Set<(e: SailEvent) => void>();
   let enrichGate: Promise<void> = Promise.resolve();
@@ -153,5 +153,25 @@ describe("SpecDetail anti-flicker", () => {
     await act(async () => gate.resolve());
     await settle();
     expect(text()).toContain("rev 2");
+  });
+
+  test("a review spec offers Re-dispatch and opens the dialog in restart mode", async () => {
+    const fake = makeGateway("review");
+    await mount(fake.gateway);
+
+    const action = container.querySelector<HTMLButtonElement>('[data-testid="detail-dispatch"]');
+    expect(action?.textContent).toBe("Re-dispatch");
+
+    act(() => action?.click());
+    await settle();
+    expect(container.querySelector(".dialog-title")?.textContent).toBe("Re-dispatch s1");
+    expect(text()).toContain("Re-dispatch resets s1 to pending and relaunches on its prior branch.");
+    expect(text()).not.toContain("Only pending specs can be dispatched");
+  });
+
+  test("a pending spec keeps the plain Dispatch action", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    expect(container.querySelector('[data-testid="detail-dispatch"]')?.textContent).toBe("Dispatch");
   });
 });

@@ -322,7 +322,10 @@ export function BoardScreen({
   const draggedRef = useRef(false);
   const [view, setView] = useState<{ left: number; width: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; spec: GlobalSpecView } | null>(null);
-  const [dispatchTarget, setDispatchTarget] = useState<GlobalSpecView | null>(null);
+  const [dispatchTarget, setDispatchTarget] = useState<{
+    spec: GlobalSpecView;
+    restart: boolean;
+  } | null>(null);
   const [logSpec, setLogSpec] = useState<GlobalSpecView | null>(null);
   const [role, setRole] = useState<{ canDispatch: boolean; known: boolean }>({
     canDispatch: false,
@@ -479,6 +482,7 @@ export function BoardScreen({
             ? "Blocked"
             : undefined;
     const followable = spec.status === "in_progress" || spec.status === "review";
+    const restartable = spec.status === "review" || spec.status === "done";
     return [
       { kind: "item", label: "View", onSelect: () => onOpenSpec(spec.id) },
       ...(followable
@@ -496,8 +500,19 @@ export function BoardScreen({
         label: "Dispatch…",
         disabled: !dispatchable,
         hint,
-        onSelect: () => setDispatchTarget(spec),
+        onSelect: () => setDispatchTarget({ spec, restart: false }),
       },
+      ...(restartable
+        ? [
+            {
+              kind: "item" as const,
+              label: "Re-dispatch…",
+              disabled: unmet.length > 0,
+              hint: unmet.length > 0 ? "Blocked" : undefined,
+              onSelect: () => setDispatchTarget({ spec, restart: true }),
+            },
+          ]
+        : []),
     ];
   };
 
@@ -620,11 +635,12 @@ export function BoardScreen({
       {dispatchTarget && (
         <DispatchDialog
           gateway={gateway}
-          spec={dispatchTarget}
+          spec={dispatchTarget.spec}
           allSpecs={data.specs}
           depsKnown={!data.loading}
           canDispatch={role.canDispatch}
           roleKnown={role.known}
+          restart={dispatchTarget.restart}
           onClose={() => setDispatchTarget(null)}
           onResult={(message, ok) => {
             showToast(ok ? "success" : "error", message);
