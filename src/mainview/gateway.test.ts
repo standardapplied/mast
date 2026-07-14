@@ -106,6 +106,30 @@ describe("FDE roster", () => {
   });
 });
 
+describe("review findings", () => {
+  test("the demo gateway serves a review's findings consistent with its counts", async () => {
+    const gateway = createDemoGateway();
+    const reviews = await gateway.specReviews("chorus-rate-limits");
+    expect(reviews.ok && reviews.value.reviews[0]?.id).toBe("rev-1");
+
+    const detail = await gateway.reviewDetail("rev-1");
+    expect(detail.ok).toBe(true);
+    if (detail.ok) {
+      const counted = reviews.ok
+        ? reviews.value.reviews[0]!.stages.reduce((n, s) => n + s.finding_count, 0)
+        : -1;
+      expect(detail.value.findings.length).toBe(counted);
+      expect(detail.value.findings.every((f) => f.severity && f.title && f.description)).toBe(true);
+    }
+  });
+
+  test("an unknown review id is a 404, not a crash", async () => {
+    const result = await createDemoGateway().reviewDetail("nope");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.status).toBe(404);
+  });
+});
+
 describe("spec body edits go through the content resource", () => {
   test("putSpecContent updates the body and getSpecContent reflects it", async () => {
     const gateway = createDemoGateway();

@@ -2611,6 +2611,64 @@ span.checkbox {
 .history-row:last-child {
   border-bottom: none;
 }
+.review-row--open {
+  appearance: none;
+  width: 100%;
+  background: none;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.review-row--open:hover .meta-value {
+  color: var(--primary);
+}
+
+/* Review findings dialog ------------------------------------------------------ */
+
+.finding-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.finding-row:last-child {
+  border-bottom: none;
+}
+.finding-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.finding-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.finding-resolution {
+  margin-left: auto;
+  color: var(--muted-foreground);
+}
+.finding-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--subtle-foreground);
+}
+.finding-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.finding-suggestion {
+  margin: 0;
+  font-size: 12px;
+  color: var(--subtle-foreground);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+}
 
 /* Markdown -------------------------------------------------------------------- */
 

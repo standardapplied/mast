@@ -13,6 +13,7 @@ import type {
   GlobalSpecsListResponse,
   GlobalSpecView,
   ProjectListResponse,
+  ReviewDetailResponse,
   ReviewListResponse,
   SailEvent,
   SpecContentRequest,
@@ -63,6 +64,8 @@ export type Gateway = {
   specHistory(id: string): Promise<SailResult<GlobalSpecHistoryResponse>>;
   restoreSpec(id: string, rev: number): Promise<SailResult<GlobalSpecDetailResponse>>;
   specReviews(id: string): Promise<SailResult<ReviewListResponse>>;
+  /** One review with its full findings (GET /v1/reviews/{id}). */
+  reviewDetail(reviewId: string): Promise<SailResult<ReviewDetailResponse>>;
   dispatch(project: string, request: DispatchRequest): Promise<SailResult<DispatchResponse>>;
   whoami(): Promise<SailResult<WhoAmI>>;
   /** The full synced project roster — every catalogued project with its local container state. */
@@ -141,6 +144,7 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     specHistory: (id) => read(() => api.sailSpecHistory({ id })),
     restoreSpec: (id, rev) => api.sailRestoreSpec({ id, rev }),
     specReviews: (id) => read(() => api.sailSpecReviews({ id })),
+    reviewDetail: (reviewId) => read(() => api.sailGetReview({ reviewId })),
     dispatch: (project, request) => api.sailDispatch({ project, request }),
     whoami: () => api.sailWhoami(),
     // Agent logs and the project roster ride the Tauri seam; the retired
@@ -561,6 +565,52 @@ export function createDemoGateway(): DemoGateway {
             ]
           : [];
       return ok({ spec_id: id, reviews });
+    },
+
+    async reviewDetail(reviewId) {
+      if (reviewId !== "rev-1") {
+        return {
+          ok: false,
+          error: { status: 404, code: "review_not_found", message: `No review '${reviewId}'` },
+        };
+      }
+      return ok({
+        review: {
+          id: "rev-1",
+          spec_id: "chorus-rate-limits",
+          iteration: 1,
+          status: "pending_decision",
+          created_at: "2026-07-01T12:00:00Z",
+          stages: [],
+        },
+        findings: [
+          {
+            id: "f-1",
+            severity: "HIGH" as const,
+            category: "correctness",
+            file: "src/api/limits.ts",
+            line_start: 42,
+            line_end: 48,
+            title: "Race in token-bucket refill",
+            description:
+              "Two concurrent refills can double-credit the bucket; clamp inside the lock.",
+            confidence: 0.9,
+            resolution: "OPEN" as const,
+          },
+          {
+            id: "f-2",
+            severity: "LOW" as const,
+            category: "simplification",
+            file: "src/api/limits.ts",
+            line_start: 80,
+            line_end: 80,
+            title: "Duplicated window math",
+            description: "The same window arithmetic appears in three branches; extract a helper.",
+            confidence: 0.7,
+            resolution: "DISMISSED" as const,
+          },
+        ],
+      });
     },
 
     async connection() {

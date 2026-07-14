@@ -80,8 +80,61 @@ function makeGateway(
     },
     specReviews: async () => {
       await enrichGate;
-      return { ok: true as const, value: { spec_id: "s1", reviews: [] } };
+      return {
+        ok: true as const,
+        value: {
+          spec_id: "s1",
+          reviews:
+            status === "review"
+              ? [
+                  {
+                    id: "rev-1",
+                    spec_id: "s1",
+                    iteration: 1,
+                    status: "pending_decision",
+                    created_at: "2026-07-14T10:00:00Z",
+                    stages: [
+                      {
+                        id: "st-1",
+                        name: "correctness",
+                        stage_type: "checker",
+                        status: "completed",
+                        finding_count: 1,
+                      },
+                    ],
+                  },
+                ]
+              : [],
+        },
+      };
     },
+    reviewDetail: async (id: string) => ({
+      ok: true as const,
+      value: {
+        review: {
+          id,
+          spec_id: "s1",
+          iteration: 1,
+          status: "pending_decision",
+          created_at: "2026-07-14T10:00:00Z",
+          stages: [],
+        },
+        findings: [
+          {
+            id: "f-1",
+            severity: "HIGH" as const,
+            category: "correctness",
+            file: "src/x.ts",
+            line_start: 3,
+            line_end: 3,
+            title: "Off-by-one in retry cap",
+            description: "The loop retries one time fewer than configured.",
+            confidence: 0.9,
+            resolution: "OPEN" as const,
+          },
+        ],
+      },
+    }),
     listSpecs: async () => {
       await enrichGate;
       return { ok: true as const, value: { specs: [main, dep], total: 2 } };
@@ -280,5 +333,21 @@ describe("SpecDetail assignee editing", () => {
     const input = container.querySelector<HTMLInputElement>(".prop-assignee input");
     expect(input).not.toBeNull();
     expect(input!.value).toBe("uday");
+  });
+});
+
+describe("SpecDetail review findings", () => {
+  test("a review row opens its findings in a dialog", async () => {
+    const fake = makeGateway("review");
+    await mount(fake.gateway);
+
+    const row = container.querySelector<HTMLButtonElement>('[data-testid="review-row-rev-1"]');
+    expect(row?.textContent).toContain("1 findings");
+    act(() => row!.click());
+    await settle();
+
+    expect(text()).toContain("Off-by-one in retry cap");
+    expect(text()).toContain("src/x.ts:3");
+    expect(text()).toContain("The loop retries one time fewer than configured.");
   });
 });

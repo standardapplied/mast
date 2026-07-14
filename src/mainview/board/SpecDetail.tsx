@@ -23,6 +23,7 @@ import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
 import { DispatchDialog } from "./DispatchDialog";
 import { LiveLog } from "./LiveLog";
+import { ReviewFindings } from "./ReviewFindings";
 import { STATUS_LABEL } from "./lifecycle";
 import { dependentsOf, logsElsewhere, unmetDependencies } from "./useBoard";
 
@@ -103,6 +104,7 @@ export function SpecDetail({
   const [restoring, setRestoring] = useState<number | null>(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [findingsReview, setFindingsReview] = useState<ReviewView | null>(null);
   const [role, setRole] = useState<{ canDispatch: boolean; known: boolean; fde?: string }>({
     canDispatch: false,
     known: false,
@@ -545,14 +547,21 @@ export function SpecDetail({
               <span className="meta-value">No reviews yet.</span>
             )}
             {loaded.reviews.map((review) => (
-              <div key={review.id} className="review-row">
+              <button
+                key={review.id}
+                type="button"
+                className="review-row review-row--open"
+                data-testid={`review-row-${review.id}`}
+                title="View the findings"
+                onClick={() => setFindingsReview(review)}
+              >
                 <span className="meta-value">
                   #{review.iteration} · {review.status}
                 </span>
                 <span className="eyebrow">
                   {review.stages.reduce((n, s) => n + s.finding_count, 0)} findings
                 </span>
-              </div>
+              </button>
             ))}
           </Card>
 
@@ -606,6 +615,14 @@ export function SpecDetail({
             showToast(ok ? "success" : "error", message);
             if (ok) void load();
           }}
+        />
+      )}
+
+      {findingsReview && (
+        <ReviewFindings
+          gateway={gateway}
+          review={findingsReview}
+          onClose={() => setFindingsReview(null)}
         />
       )}
 
