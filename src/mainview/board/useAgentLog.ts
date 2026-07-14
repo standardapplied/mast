@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentLogRole, AgentStatusResponse, SailEvent } from "../../shared/sail-models";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AgentLogRole, RunView, SailEvent } from "../../shared/sail-models";
 import { renderAgentLine } from "../agentLog";
 import type { Gateway } from "../gateway";
-import type { AgentLogState } from "../tauri/agentLogStream";
+import { latestRun, type AgentLogState } from "../tauri/agentLogStream";
 
 /**
  * Follows one spec's live agent log for the desktop panel: an instant
@@ -35,7 +35,8 @@ export type AgentLogView = {
   setRaw: (raw: boolean) => void;
   lines: LogLine[];
   state: AgentLogState;
-  status: AgentStatusResponse | null;
+  /** This spec's newest run for the active role — the panel's session header. */
+  run: RunView | null;
   lifecycle: Lifecycle | null;
   /** The snapshot's API error, so a failing log surface reads as an error, not
    *  an eternally empty panel. Cleared the moment any line arrives. */
@@ -59,7 +60,7 @@ export function useAgentLog(
   const [raw, setRaw] = useState(false);
   const [lines, setLines] = useState<LogLine[]>([]);
   const [state, setState] = useState<AgentLogState>("connecting");
-  const [status, setStatus] = useState<AgentStatusResponse | null>(null);
+  const [runs, setRuns] = useState<RunView[]>([]);
   const [lifecycle, setLifecycle] = useState<Lifecycle | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -69,12 +70,14 @@ export function useAgentLog(
   });
   const keyRef = useRef(0);
 
+  // The header is run-scoped like the log itself: this spec's runs, never the
+  // container's current session (which may belong to a sibling spec in the
+  // same project).
   useEffect(() => {
-    if (!project) return;
     let alive = true;
     const poll = () =>
-      void gateway.agentStatus(project).then((r) => {
-        if (alive && r.ok) setStatus(r.value);
+      void gateway.listRuns(specId).then((r) => {
+        if (alive && r.ok && Array.isArray(r.value.runs)) setRuns(r.value.runs);
       });
     poll();
     const timer = setInterval(poll, STATUS_POLL_MS);
@@ -82,7 +85,9 @@ export function useAgentLog(
       alive = false;
       clearInterval(timer);
     };
-  }, [gateway, project]);
+  }, [gateway, specId]);
+
+  const run = useMemo(() => latestRun(runs, role) ?? null, [runs, role]);
 
   useEffect(() => {
     if (!project) return;
@@ -166,5 +171,5 @@ export function useAgentLog(
   }, [gateway, project, specId, role]);
 
   const changeRole = useCallback((next: AgentLogRole) => setRole(next), []);
-  return { role, setRole: changeRole, raw, setRaw, lines, state, status, lifecycle, error };
+  return { role, setRole: changeRole, raw, setRaw, lines, state, run, lifecycle, error };
 }

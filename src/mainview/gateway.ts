@@ -1,7 +1,6 @@
 import type {
   AgentLogResponse,
   AgentLogRole,
-  AgentStatusResponse,
   ConnectionStatus,
   DispatchRequest,
   DispatchResponse,
@@ -15,6 +14,7 @@ import type {
   ProjectListResponse,
   ReviewDetailResponse,
   ReviewListResponse,
+  RunListResponse,
   SailEvent,
   SpecContentRequest,
   SpecFilter,
@@ -72,8 +72,8 @@ export type Gateway = {
   listProjects(): Promise<SailResult<ProjectListResponse>>;
   /** The org's FDE roster — the assignee candidates for a spec. */
   listFdes(): Promise<SailResult<FdeListResponse>>;
-  /** The live build session's status for a project (running/idle + timing). */
-  agentStatus(project: string): Promise<SailResult<AgentStatusResponse>>;
+  /** The spec's execution history (GET /v1/runs?spec=) — the log panel's header. */
+  listRuns(specId: string): Promise<SailResult<RunListResponse>>;
   /** A `tail -n` snapshot of the spec's newest run log, for instant content on open. */
   agentLogSnapshot(
     specId: string,
@@ -151,7 +151,7 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     // Electrobun bridge never grew RPC for them, so they are inert on this path.
     listProjects: () => unsupported("The project roster requires the Tauri shell."),
     listFdes: () => unsupported("The FDE roster requires the Tauri shell."),
-    agentStatus: () => unsupported("Live agent logs require the Tauri shell."),
+    listRuns: () => unsupported("Live agent logs require the Tauri shell."),
     agentLogSnapshot: () => unsupported("Live agent logs require the Tauri shell."),
     followAgentLog: () => inertAgentLogHandle(),
     connection: () => api.sailConnection(),
@@ -451,17 +451,27 @@ export function createDemoGateway(): DemoGateway {
       };
     },
 
-    async agentStatus(project) {
-      const running = specs.find((s) => s.project === project && s.status === "in_progress");
-      return ok({
-        name: project,
-        agent_running: Boolean(running),
-        pid: running ? 4242 : undefined,
-        task: running?.title,
-        started_at: running ? "2026-07-08T11:30:00Z" : undefined,
-        branch: running?.branch ?? (running ? `agent/${running.id}` : undefined),
-        log_path: "/home/dev/.sail/agent.log",
+    async listRuns(specId) {
+      const spec = find(specId);
+      const active = spec && (spec.status === "in_progress" || spec.status === "review");
+      const run = (role: "build" | "review", status: string) => ({
+        id: `demo-run-${specId}-${role}`,
+        project: spec!.project,
+        spec_id: specId,
+        node: "demo",
+        role,
+        agent: "claude-code",
+        branch: spec!.branch ?? `agent/${specId}`,
+        status,
+        started_at: role === "build" ? "2026-07-08T11:30:00Z" : "2026-07-08T12:10:00Z",
+        ...(status === "completed" ? { completed_at: "2026-07-08T12:05:00Z", exit_code: 0 } : {}),
       });
+      const runs = !active
+        ? []
+        : spec.status === "in_progress"
+          ? [run("build", "running")]
+          : [run("build", "completed"), run("review", "running")];
+      return ok({ spec: specId, runs });
     },
 
     async agentLogSnapshot(_specId, role, tail) {

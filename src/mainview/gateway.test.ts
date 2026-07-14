@@ -106,6 +106,23 @@ describe("FDE roster", () => {
   });
 });
 
+describe("spec runs", () => {
+  test("the demo gateway serves a running build run for an in-progress spec", async () => {
+    const result = await createDemoGateway().listRuns("chorus-invoice-ui");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const run = result.value.runs.find((r) => r.role === "build");
+      expect(run?.status).toBe("running");
+      expect(run?.branch).toBe("agent/chorus-invoice-ui");
+    }
+  });
+
+  test("a spec with no active work has no runs", async () => {
+    const result = await createDemoGateway().listRuns("chorus-onboarding");
+    expect(result.ok && result.value.runs).toEqual([]);
+  });
+});
+
 describe("review findings", () => {
   test("the demo gateway serves a review's findings consistent with its counts", async () => {
     const gateway = createDemoGateway();

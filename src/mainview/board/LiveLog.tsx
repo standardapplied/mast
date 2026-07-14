@@ -56,9 +56,16 @@ function session(view: AgentLogView): Session {
   if (view.lifecycle?.type === "spec_stranded") {
     return { label: "Stranded", tone: "warning", detail: view.lifecycle.detail };
   }
-  if (view.status?.agent_running) return { label: "Running", tone: "accent" };
-  if (view.status) return { label: "Idle", tone: "neutral" };
-  return { label: "—", tone: "neutral" };
+  switch (view.run?.status) {
+    case "running":
+      return { label: "Running", tone: "accent" };
+    case "completed":
+      return { label: "Completed", tone: "success" };
+    case "failed":
+      return { label: "Failed", tone: "warning" };
+    default:
+      return { label: "—", tone: "neutral" };
+  }
 }
 
 export function LiveLog({
@@ -76,7 +83,7 @@ export function LiveLog({
   onClose: () => void;
 }) {
   const view = useAgentLog(gateway, project, specId, initialRole);
-  const { role, setRole, raw, setRaw, lines, state, status } = view;
+  const { role, setRole, raw, setRaw, lines, state, run } = view;
 
   const bodyRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
@@ -114,9 +121,7 @@ export function LiveLog({
   };
 
   const sess = session(view);
-  const elapsed = status?.agent_running ? formatElapsed(status.started_at, now) : null;
-  const runningElsewhere =
-    status?.agent_running && status.branch ? !status.branch.includes(specId) : false;
+  const elapsed = run?.status === "running" ? formatElapsed(run.started_at, now) : null;
 
   return (
     <div className="live-log-scrim" onClick={onClose} data-testid="live-log">
@@ -138,13 +143,8 @@ export function LiveLog({
         <div className="live-log__status" data-testid="live-log-status">
           <Badge tone={sess.tone}>{sess.label}</Badge>
           {elapsed && <span className="live-log__meta">{elapsed}</span>}
-          {status?.branch && <span className="live-log__meta">{status.branch}</span>}
+          {run?.branch && <span className="live-log__meta">{run.branch}</span>}
           {sess.detail && <span className="live-log__detail">{sess.detail}</span>}
-          {runningElsewhere && (
-            <span className="live-log__warn" data-testid="live-log-elsewhere">
-              container is running a different spec
-            </span>
-          )}
         </div>
 
         <div className="live-log__controls">

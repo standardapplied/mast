@@ -3495,9 +3495,6 @@ span.checkbox {
 .live-log__detail {
   color: var(--subtle-foreground);
 }
-.live-log__warn {
-  color: var(--warning);
-}
 .live-log__controls {
   display: flex;
   align-items: center;

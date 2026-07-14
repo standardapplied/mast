@@ -29,13 +29,35 @@ function makeFake(opts: { snapshotError?: string } = {}) {
   let eventListener: ((e: SailEvent) => void) | null = null;
 
   const gateway = {
-    agentStatus: async (project: string) => ({
+    listRuns: async (spec: string) => ({
       ok: true as const,
       value: {
-        name: project,
-        agent_running: true,
-        started_at: "2026-07-08T11:00:00Z",
-        branch: "agent/chorus-invoice-ui",
+        spec,
+        runs: [
+          {
+            id: "run-b1",
+            project: "chorus",
+            spec_id: spec,
+            node: "demo",
+            role: "build" as const,
+            agent: "claude-code",
+            branch: "agent/chorus-invoice-ui",
+            status: "running",
+            started_at: "2026-07-08T11:00:00Z",
+          },
+          {
+            id: "run-r1",
+            project: "chorus",
+            spec_id: spec,
+            node: "demo",
+            role: "review" as const,
+            agent: "claude-code",
+            branch: "agent/chorus-invoice-ui",
+            status: "completed",
+            started_at: "2026-07-08T10:00:00Z",
+            exit_code: 0,
+          },
+        ],
       },
     }),
     agentLogSnapshot: async (specId: string, role: AgentLogRole) => {
@@ -142,6 +164,22 @@ describe("useAgentLog", () => {
 
     expect(snapshotCalls).toEqual([{ specId: "chorus-invoice-ui", role: "build" }]);
     expect(handles[0]!.specId).toBe("chorus-invoice-ui");
+  });
+
+  test("the session header follows this spec's run for the active role", async () => {
+    const { gateway } = makeFake();
+    const view = await render(gateway);
+
+    expect(view().run?.id).toBe("run-b1");
+    expect(view().run?.status).toBe("running");
+    expect(view().run?.branch).toBe("agent/chorus-invoice-ui");
+
+    await act(async () => {
+      view().setRole("review");
+    });
+    await act(async () => {});
+    expect(view().run?.id).toBe("run-r1");
+    expect(view().run?.status).toBe("completed");
   });
 
   test("a terminal stream refusal surfaces as the panel error", async () => {

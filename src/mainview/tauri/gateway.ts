@@ -3,7 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   AgentLogResponse,
   AgentLogRole,
-  AgentStatusResponse,
   ApiErrorBody,
   ConnectionStatus,
   EventStreamState,
@@ -203,8 +202,12 @@ async function tauriStreamConnect(path: string): Promise<StreamResponse> {
   return { status, header: () => null, chunks, cancel: finish };
 }
 
+function listSpecRuns(specId: string): Promise<SailResult<RunListResponse>> {
+  return read<RunListResponse>("GET", `/v1/runs?spec=${encodeURIComponent(specId)}`);
+}
+
 async function latestSpecRun(specId: string, role: AgentLogRole): Promise<RunView | undefined> {
-  const result = await read<RunListResponse>("GET", `/v1/runs?spec=${encodeURIComponent(specId)}`);
+  const result = await listSpecRuns(specId);
   return result.ok ? latestRun(result.value.runs, role) : undefined;
 }
 
@@ -362,8 +365,7 @@ export function createTauriGateway(): Gateway {
     listProjects: () => read("GET", "/v1/projects"),
     listFdes: () => read("GET", "/v1/fdes"),
 
-    agentStatus: (project) =>
-      read<AgentStatusResponse>("GET", `/v1/projects/${encodeURIComponent(project)}/agent`),
+    listRuns: (specId) => listSpecRuns(specId),
     agentLogSnapshot: async (specId, role, tail) => {
       const run = await latestSpecRun(specId, role);
       if (!run) {
