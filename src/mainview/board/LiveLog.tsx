@@ -75,7 +75,7 @@ export function LiveLog({
   initialRole?: AgentLogRole;
   onClose: () => void;
 }) {
-  const view = useAgentLog(gateway, project, initialRole);
+  const view = useAgentLog(gateway, project, specId, initialRole);
   const { role, setRole, raw, setRaw, lines, state, status } = view;
 
   const bodyRef = useRef<HTMLDivElement>(null);

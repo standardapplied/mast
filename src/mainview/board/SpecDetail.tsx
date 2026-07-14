@@ -23,7 +23,7 @@ import { Markdown } from "../markdown";
 import { DispatchDialog } from "./DispatchDialog";
 import { LiveLog } from "./LiveLog";
 import { STATUS_LABEL } from "./lifecycle";
-import { dependentsOf, unmetDependencies } from "./useBoard";
+import { dependentsOf, logsElsewhere, unmetDependencies } from "./useBoard";
 
 const STATUS_OPTIONS = (Object.keys(STATUS_LABEL) as SpecStatus[]).map((value) => ({
   value,
@@ -85,7 +85,7 @@ export function SpecDetail({
   const [restoring, setRestoring] = useState<number | null>(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
-  const [role, setRole] = useState<{ canDispatch: boolean; known: boolean }>({
+  const [role, setRole] = useState<{ canDispatch: boolean; known: boolean; fde?: string }>({
     canDispatch: false,
     known: false,
   });
@@ -95,7 +95,7 @@ export function SpecDetail({
     void gateway.whoami().then((r) => {
       setRole(
         r.ok
-          ? { canDispatch: r.value.capabilities.includes("admin"), known: true }
+          ? { canDispatch: r.value.capabilities.includes("admin"), known: true, fde: r.value.fde }
           : { canDispatch: true, known: false },
       );
     });
@@ -206,6 +206,7 @@ export function SpecDetail({
   const spec = loaded.detail.spec;
   const unmet = unmetDependencies(spec, loaded.allSpecs);
   const dependents = dependentsOf(loaded.allSpecs, spec.id);
+  const logsOwner = logsElsewhere(spec, role.fde);
   const restart = spec.status === "review" || spec.status === "done";
 
   const startEdit = () => {
@@ -290,7 +291,13 @@ export function SpecDetail({
         </div>
         <div className="detail-header-actions">
           {(spec.status === "in_progress" || spec.status === "review") && (
-            <Button variant="ghost" onClick={() => setLogOpen(true)} data-testid="follow-log">
+            <Button
+              variant="ghost"
+              disabled={!!logsOwner}
+              title={logsOwner ? `Assigned to ${logsOwner} — logs live on their box.` : undefined}
+              onClick={() => setLogOpen(true)}
+              data-testid="follow-log"
+            >
               {spec.status === "review" ? "Review log" : "Live log"}
             </Button>
           )}

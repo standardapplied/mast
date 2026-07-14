@@ -3,7 +3,8 @@ import type { AgentLogRole, RunView } from "../../shared/sail-models";
 import type { StreamResponse } from "../../shared/sse";
 import {
   AgentLogStream,
-  latestRunId,
+  latestRun,
+  TerminalLogError,
   type AgentLogLine,
   type AgentLogState,
 } from "./agentLogStream";
@@ -69,7 +70,7 @@ function fakeScheduler() {
 function harness(role: AgentLogRole = "build", initialSince = 0) {
   const scheduler = fakeScheduler();
   const streams: Array<ReturnType<typeof pushable> & { cancelled: boolean }> = [];
-  const scripted: Array<{ status: number }> = [];
+  const scripted: Array<{ status: number } | { throw: Error }> = [];
   const connects: Array<{ role: AgentLogRole; since: number }> = [];
 
   const stream = new AgentLogStream(
@@ -78,6 +79,7 @@ function harness(role: AgentLogRole = "build", initialSince = 0) {
       connect: async (r, since) => {
         connects.push({ role: r, since });
         const script = scripted.shift() ?? { status: 200 };
+        if ("throw" in script) throw script.throw;
         const source = Object.assign(pushable(), { cancelled: false });
         streams.push(source);
         const response: StreamResponse = {
@@ -98,10 +100,12 @@ function harness(role: AgentLogRole = "build", initialSince = 0) {
 
   const lines: AgentLogLine[] = [];
   const states: AgentLogState[] = [];
+  const errors: string[] = [];
   stream.onLine((l) => lines.push(l));
   stream.onState((s) => states.push(s));
+  stream.onError((e) => errors.push(e));
 
-  return { stream, scheduler, streams, scripted, connects, lines, states };
+  return { stream, scheduler, streams, scripted, connects, lines, states, errors };
 }
 
 const flush = async () => {
@@ -186,6 +190,41 @@ describe("AgentLogStream", () => {
     h.stream.stop();
   });
 
+  test("a terminal refusal reports the reason and stops retrying", async () => {
+    const h = harness();
+    h.scripted.push({
+      throw: new TerminalLogError("Run r1 executed on sumesh-box; its logs live there, not on this box."),
+    });
+    void h.stream.start();
+    await flush();
+
+    expect(h.errors).toEqual([
+      "Run r1 executed on sumesh-box; its logs live there, not on this box.",
+    ]);
+    expect(h.stream.currentState).toBe("disconnected");
+    expect(h.connects.length).toBe(1);
+
+    h.scheduler.firePending();
+    await flush();
+    expect(h.connects.length).toBe(1);
+  });
+
+  test("an ordinary connect failure still backs off and retries", async () => {
+    const h = harness();
+    h.scripted.push({ throw: new Error("resolving the run blipped") }, { status: 200 });
+    void h.stream.start();
+    await flush();
+
+    expect(h.errors).toEqual([]);
+    h.scheduler.firePending();
+    await flush();
+
+    h.streams[0]!.push(frame(1, "recovered"));
+    await flush();
+    expect(h.lines.map((l) => l.text)).toEqual(["recovered"]);
+    h.stream.stop();
+  });
+
   test("a silent stream trips the heartbeat watchdog and reconnects", async () => {
     const h = harness();
     void h.stream.start();
@@ -207,7 +246,7 @@ describe("AgentLogStream", () => {
   });
 });
 
-describe("latestRunId", () => {
+describe("latestRun", () => {
   const run = (id: string, role: AgentLogRole, startedAt: string): RunView => ({
     id,
     project: "demo",
@@ -224,12 +263,13 @@ describe("latestRunId", () => {
       run("newest-review", "review", "2026-07-09T12:00:00Z"),
       run("newest-build", "build", "2026-07-09T11:00:00Z"),
     ];
-    expect(latestRunId(runs, "build")).toBe("newest-build");
-    expect(latestRunId(runs, "review")).toBe("newest-review");
+    expect(latestRun(runs, "build")?.id).toBe("newest-build");
+    expect(latestRun(runs, "review")?.id).toBe("newest-review");
+    expect(latestRun(runs, "build")?.node).toBe("main");
   });
 
   test("returns undefined when no run of the role exists", () => {
-    expect(latestRunId([], "build")).toBeUndefined();
-    expect(latestRunId([run("r", "review", "2026-07-09T11:00:00Z")], "build")).toBeUndefined();
+    expect(latestRun([], "build")).toBeUndefined();
+    expect(latestRun([run("r", "review", "2026-07-09T11:00:00Z")], "build")).toBeUndefined();
   });
 });

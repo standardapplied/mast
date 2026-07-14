@@ -33,8 +33,8 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-function makeGateway(status: GlobalSpecView["status"] = "pending") {
-  const main = spec({ id: "s1", depends_on: ["dep-a"], status });
+function makeGateway(status: GlobalSpecView["status"] = "pending", assignee?: string) {
+  const main = spec({ id: "s1", depends_on: ["dep-a"], status, assignee });
   const dep = spec({ id: "dep-a", status: "done" });
   const listeners = new Set<(e: SailEvent) => void>();
   let enrichGate: Promise<void> = Promise.resolve();
@@ -43,7 +43,7 @@ function makeGateway(status: GlobalSpecView["status"] = "pending") {
   const gateway = {
     whoami: async () => ({
       ok: true as const,
-      value: { name: "uday", role: "admin" as const, capabilities: ["admin"] },
+      value: { name: "uday", fde: "uday", role: "admin" as const, capabilities: ["admin"] },
     }),
     getSpec: async () => ({ ok: true as const, value: { spec: main }, etag: '"e1"' }),
     getSpecContent: async () => ({
@@ -173,5 +173,20 @@ describe("SpecDetail anti-flicker", () => {
     const fake = makeGateway();
     await mount(fake.gateway);
     expect(container.querySelector('[data-testid="detail-dispatch"]')?.textContent).toBe("Dispatch");
+  });
+
+  test("own in-progress spec: the log button is enabled", async () => {
+    const fake = makeGateway("in_progress", "uday");
+    await mount(fake.gateway);
+    const follow = container.querySelector<HTMLButtonElement>('[data-testid="follow-log"]');
+    expect(follow?.disabled).toBe(false);
+  });
+
+  test("foreign spec: the log button is disabled and says whose box has the logs", async () => {
+    const fake = makeGateway("in_progress", "sumesh");
+    await mount(fake.gateway);
+    const follow = container.querySelector<HTMLButtonElement>('[data-testid="follow-log"]');
+    expect(follow?.disabled).toBe(true);
+    expect(follow?.title).toContain("sumesh");
   });
 });

@@ -139,6 +139,20 @@ export function dependentsOf(specs: GlobalSpecView[], id: string): GlobalSpecVie
   return specs.filter((s) => s.depends_on?.includes(id));
 }
 
+/**
+ * The foreign assignee whose box holds this spec's run logs, or undefined when
+ * they are followable from here. Runs execute on the assignee's box, so a spec
+ * assigned to someone else has no local logs — the server refuses the stream
+ * with run_on_other_node. Unknown identity or an unassigned spec stays
+ * followable: the server remains the authority and its refusal is surfaced.
+ */
+export function logsElsewhere(
+  spec: { assignee?: string },
+  fde: string | undefined,
+): string | undefined {
+  return fde && spec.assignee && spec.assignee !== fde ? spec.assignee : undefined;
+}
+
 /** Unmet = a dependency that is not done (mirrors the server's readiness rule). */
 export function unmetDependencies(spec: GlobalSpecView, all: GlobalSpecView[]): string[] {
   return (spec.depends_on ?? []).filter((dep) => {

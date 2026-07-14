@@ -68,3 +68,32 @@ describe("BoardScreen project dropdown", () => {
     expect(projectTrigger().textContent).toContain("All projects");
   });
 });
+
+describe("BoardScreen live-log gating", () => {
+  const liveControl = (id: string) =>
+    container.querySelector<HTMLElement>(`[data-testid="card-live-${id}"]`)!;
+
+  test("own spec: the Live control opens the log drawer", async () => {
+    await render(createDemoGateway());
+    const live = liveControl("chorus-invoice-ui");
+    expect(live.getAttribute("aria-disabled")).not.toBe("true");
+    await act(async () => live.click());
+    expect(container.querySelector('[data-testid="live-log"]')).not.toBeNull();
+  });
+
+  test("foreign spec: the Live control is disabled with an explanation and never opens", async () => {
+    const gateway = createDemoGateway();
+    const whoami = gateway.whoami.bind(gateway);
+    gateway.whoami = async () => {
+      const result = await whoami();
+      return result.ok ? { ...result, value: { ...result.value, fde: "sumesh" } } : result;
+    };
+    await render(gateway);
+
+    const live = liveControl("chorus-invoice-ui");
+    expect(live.getAttribute("aria-disabled")).toBe("true");
+    expect(live.title).toContain("uday");
+    await act(async () => live.click());
+    expect(container.querySelector('[data-testid="live-log"]')).toBeNull();
+  });
+});

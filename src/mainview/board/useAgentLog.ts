@@ -5,13 +5,16 @@ import type { Gateway } from "../gateway";
 import type { AgentLogState } from "../tauri/agentLogStream";
 
 /**
- * Follows one project's live agent log for the desktop panel: an instant
+ * Follows one spec's live agent log for the desktop panel: an instant
  * `tail -n` snapshot for content while the SSH stream warms up, then the live
  * tail from line 1 (physical line ids, so a drop resumes with `since = lastId+1`
- * and no gaps or dupes — that resume lives in AgentLogStream). Each role
- * (build/review) keeps its own buffer and cursor, so toggling and toggling back
- * resumes where it left off. Terminal lifecycle (agent_failed / spec_stranded)
- * rides the SSE bus and surfaces as an informational badge.
+ * and no gaps or dupes — that resume lives in AgentLogStream). The log is
+ * resolved by the clicked spec's newest run, never latest-run-in-project, so it
+ * can't show a neighbouring spec's output. Each role (build/review) keeps its
+ * own buffer and cursor, so toggling and toggling back resumes where it left
+ * off. Terminal lifecycle (agent_failed / spec_stranded) rides the SSE bus and
+ * surfaces as an informational badge; a terminal stream refusal (run on another
+ * FDE's box) lands in `error` instead of an endless reconnect.
  */
 
 const MAX_LINES = 3000;
@@ -49,6 +52,7 @@ function lifecycleDetail(event: SailEvent): string | undefined {
 export function useAgentLog(
   gateway: Gateway,
   project: string | undefined,
+  specId: string,
   initialRole: AgentLogRole = "build",
 ): AgentLogView {
   const [role, setRole] = useState<AgentLogRole>(initialRole);
@@ -115,7 +119,7 @@ export function useAgentLog(
     };
 
     if (!buf.loaded) {
-      void gateway.agentLogSnapshot(project, role, SNAPSHOT_TAIL).then((r) => {
+      void gateway.agentLogSnapshot(specId, role, SNAPSHOT_TAIL).then((r) => {
         if (!alive || tookOver) return;
         if (!r.ok) {
           setError(r.error.message);
@@ -131,9 +135,12 @@ export function useAgentLog(
     }
 
     const since = buf.cursor !== undefined ? buf.cursor + 1 : 1;
-    const handle = gateway.followAgentLog(project, role, since);
+    const handle = gateway.followAgentLog(specId, role, since);
     const offState = handle.onState((s) => {
       if (alive) setState(s);
+    });
+    const offError = handle.onError((message) => {
+      if (alive) setError(message);
     });
     const offLine = handle.onLine((line) => {
       if (!alive) return;
@@ -152,10 +159,11 @@ export function useAgentLog(
     return () => {
       alive = false;
       offState();
+      offError();
       offLine();
       handle.stop();
     };
-  }, [gateway, project, role]);
+  }, [gateway, project, specId, role]);
 
   const changeRole = useCallback((next: AgentLogRole) => setRole(next), []);
   return { role, setRole: changeRole, raw, setRaw, lines, state, status, lifecycle, error };

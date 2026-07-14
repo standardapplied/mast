@@ -9,6 +9,7 @@ import type {
   EventStreamState,
   RecentEventsResponse,
   RunListResponse,
+  RunView,
   SailEvent,
   SpecFilter,
 } from "../../shared/sail-models";
@@ -16,7 +17,7 @@ import type { SailResult, SailWireError } from "../../shared/types";
 import { EventStream, type StreamResponse } from "../../shared/sse";
 import { formatRecentErrors, logError } from "../errorLog";
 import type { AgentLogHandle, Gateway } from "../gateway";
-import { AgentLogStream, latestRunId } from "./agentLogStream";
+import { AgentLogStream, latestRun, TerminalLogError } from "./agentLogStream";
 
 /**
  * The Tauri seam to the control plane. Every read/write is one `sail_request`
@@ -202,26 +203,39 @@ async function tauriStreamConnect(path: string): Promise<StreamResponse> {
   return { status, header: () => null, chunks, cancel: finish };
 }
 
-async function latestRun(project: string, role: AgentLogRole): Promise<string | undefined> {
-  const result = await read<RunListResponse>(
-    "GET",
-    `/v1/runs?project=${encodeURIComponent(project)}`,
-  );
-  return result.ok ? latestRunId(result.value.runs, role) : undefined;
+async function latestSpecRun(specId: string, role: AgentLogRole): Promise<RunView | undefined> {
+  const result = await read<RunListResponse>("GET", `/v1/runs?spec=${encodeURIComponent(specId)}`);
+  return result.ok ? latestRun(result.value.runs, role) : undefined;
 }
 
-function tauriAgentLog(project: string, role: AgentLogRole, since: number): AgentLogHandle {
-  // Logs are run-addressed: resolve project+role to the newest run, re-resolving
-  // on every reconnect until a line arrives (a dispatch may start the run after
-  // the panel opens), then pin the run so the `since` cursor stays coherent.
-  let runId: string | undefined;
+/** Mirrors the server's run_on_other_node (409) / forbidden_not_assignee (403). */
+function refusalMessage(status: number, run: RunView): string {
+  return status === 409
+    ? `Run ${run.id} executed on ${run.node || "another node"}; its logs live there, not on this box.`
+    : `You're not allowed to read the log for run ${run.id}.`;
+}
+
+function tauriAgentLog(specId: string, role: AgentLogRole, since: number): AgentLogHandle {
+  // Logs are run-addressed: resolve the clicked spec+role to its newest run,
+  // re-resolving on every reconnect until a line arrives (a dispatch may start
+  // the run after the panel opens), then pin the run so the `since` cursor
+  // stays coherent. A 403/409 is the server refusing this run outright —
+  // terminal, not retryable.
+  let run: RunView | undefined;
   const stream: AgentLogStream = new AgentLogStream(
     role,
     {
       connect: async (r, s) => {
-        if (!runId || stream.cursor === undefined) runId = await latestRun(project, r);
-        if (!runId) throw new Error(`no ${r} run for '${project}' yet`);
-        return tauriStreamConnect(`/v1/runs/${encodeURIComponent(runId)}/stream?since=${s}`);
+        if (!run || stream.cursor === undefined) run = await latestSpecRun(specId, r);
+        if (!run) throw new Error(`no ${r} run for '${specId}' yet`);
+        const response = await tauriStreamConnect(
+          `/v1/runs/${encodeURIComponent(run.id)}/stream?since=${s}`,
+        );
+        if (response.status === 403 || response.status === 409) {
+          response.cancel();
+          throw new TerminalLogError(refusalMessage(response.status, run));
+        }
+        return response;
       },
       schedule: timerSchedule,
     },
@@ -231,6 +245,7 @@ function tauriAgentLog(project: string, role: AgentLogRole, since: number): Agen
   return {
     onLine: (listener) => stream.onLine(listener),
     onState: (listener) => stream.onState(listener),
+    onError: (listener) => stream.onError(listener),
     stop: () => stream.stop(),
   };
 }
@@ -347,24 +362,24 @@ export function createTauriGateway(): Gateway {
 
     agentStatus: (project) =>
       read<AgentStatusResponse>("GET", `/v1/projects/${encodeURIComponent(project)}/agent`),
-    agentLogSnapshot: async (project, role, tail) => {
-      const runId = await latestRun(project, role);
-      if (!runId) {
+    agentLogSnapshot: async (specId, role, tail) => {
+      const run = await latestSpecRun(specId, role);
+      if (!run) {
         return {
           ok: false,
           error: {
             status: 404,
             code: "run_not_found",
-            message: `No ${role} run for '${project}' yet.`,
+            message: `No ${role} run for '${specId}' yet.`,
           },
         };
       }
       return read<AgentLogResponse>(
         "GET",
-        `/v1/runs/${encodeURIComponent(runId)}/log?tail=${tail}`,
+        `/v1/runs/${encodeURIComponent(run.id)}/log?tail=${tail}`,
       );
     },
-    followAgentLog: (project, role, since) => tauriAgentLog(project, role, since),
+    followAgentLog: (specId, role, since) => tauriAgentLog(specId, role, since),
 
     connection,
 

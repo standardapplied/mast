@@ -9,9 +9,10 @@ import { SSEParser } from "../../shared/sse-parser";
  * is a monotonic line cursor: on any drop we reconnect with `since = lastId + 1`
  * so no line is lost or replayed, and we defensively drop any `id <= lastId`.
  *
- * The injected `connect` owns resolving the project+role to a concrete run id
+ * The injected `connect` owns resolving the spec+role to a concrete run id
  * (logs are run-addressed since sail's run aggregate landed), so this class
- * stays a pure cursor/reconnect machine.
+ * stays a pure cursor/reconnect machine. A `TerminalLogError` thrown by
+ * `connect` ends the stream with a reported reason instead of a retry.
  *
  * Deliberately transport-agnostic — `connect`/`schedule` are injected, so the
  * whole reconnect/cursor path is driven synchronously in tests without a shell,
@@ -19,11 +20,18 @@ import { SSEParser } from "../../shared/sse-parser";
  */
 
 /** The newest run for a role, trusting `started_at` over server order. */
-export function latestRunId(runs: RunView[], role: AgentLogRole): string | undefined {
+export function latestRun(runs: RunView[], role: AgentLogRole): RunView | undefined {
   return runs
     .filter((run) => run.role === role)
-    .sort((a, b) => b.started_at.localeCompare(a.started_at))[0]?.id;
+    .sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
 }
+
+/**
+ * A refusal that no amount of reconnecting will fix — the server said no
+ * (run on another FDE's box, not allowed), not "not yet". `connect` throws it
+ * to stop the retry loop and surface the reason instead of spinning forever.
+ */
+export class TerminalLogError extends Error {}
 
 export type AgentLogLine = { id: number; text: string };
 export type AgentLogState = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -46,6 +54,7 @@ export class AgentLogStream {
   private active: StreamResponse | null = null;
   private readonly lineListeners = new Set<(line: AgentLogLine) => void>();
   private readonly stateListeners = new Set<(state: AgentLogState) => void>();
+  private readonly errorListeners = new Set<(message: string) => void>();
 
   constructor(
     private readonly role: AgentLogRole,
@@ -61,6 +70,12 @@ export class AgentLogStream {
   onState(listener: (state: AgentLogState) => void): () => void {
     this.stateListeners.add(listener);
     return () => this.stateListeners.delete(listener);
+  }
+
+  /** Fired once when the stream dies terminally (no further reconnects). */
+  onError(listener: (message: string) => void): () => void {
+    this.errorListeners.add(listener);
+    return () => this.errorListeners.delete(listener);
   }
 
   get currentState(): AgentLogState {
@@ -113,7 +128,11 @@ export class AgentLogStream {
       let response: StreamResponse;
       try {
         response = await this.deps.connect(this.role, this.nextSince());
-      } catch {
+      } catch (error) {
+        if (error instanceof TerminalLogError) {
+          this.errorListeners.forEach((l) => l(error.message));
+          break;
+        }
         this.failures++;
         await this.wait(this.backoffMs());
         continue;

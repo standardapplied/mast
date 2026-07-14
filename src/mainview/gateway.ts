@@ -26,13 +26,15 @@ import type { Bridge } from "./rpc";
 import type { AgentLogLine, AgentLogState } from "./tauri/agentLogStream";
 
 /**
- * A live agent-log follow session for one project+role. The stream owns
- * reconnect and the `since` cursor internally; callers just consume lines and
- * stream state, and `stop()` when done. Switching role is a fresh follow.
+ * A live agent-log follow session for one spec+role. The stream owns reconnect
+ * and the `since` cursor internally; callers just consume lines, stream state,
+ * and terminal errors (a server refusal that reconnecting cannot fix), and
+ * `stop()` when done. Switching role is a fresh follow.
  */
 export type AgentLogHandle = {
   onLine(listener: (line: AgentLogLine) => void): () => void;
   onState(listener: (state: AgentLogState) => void): () => void;
+  onError(listener: (message: string) => void): () => void;
   stop(): void;
 };
 
@@ -66,14 +68,14 @@ export type Gateway = {
   listProjects(): Promise<SailResult<ProjectListResponse>>;
   /** The live build session's status for a project (running/idle + timing). */
   agentStatus(project: string): Promise<SailResult<AgentStatusResponse>>;
-  /** A `tail -n` snapshot of a project's agent log, for instant content on open. */
+  /** A `tail -n` snapshot of the spec's newest run log, for instant content on open. */
   agentLogSnapshot(
-    project: string,
+    specId: string,
     role: AgentLogRole,
     tail: number,
   ): Promise<SailResult<AgentLogResponse>>;
-  /** Begin following a project's agent log live from `since` (0 = live tail). */
-  followAgentLog(project: string, role: AgentLogRole, since: number): AgentLogHandle;
+  /** Begin following the spec's newest run log live from `since` (0 = live tail). */
+  followAgentLog(specId: string, role: AgentLogRole, since: number): AgentLogHandle;
   connection(): Promise<ConnectionStatus>;
   login(): Promise<{ ok: boolean; detail?: string }>;
   logout(): Promise<void>;
@@ -120,7 +122,7 @@ function unsupported<T>(message: string): Promise<SailResult<T>> {
 }
 
 function inertAgentLogHandle(): AgentLogHandle {
-  return { onLine: () => () => {}, onState: () => () => {}, stop: () => {} };
+  return { onLine: () => () => {}, onState: () => () => {}, onError: () => () => {}, stop: () => {} };
 }
 
 export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep): Gateway {
@@ -444,12 +446,12 @@ export function createDemoGateway(): DemoGateway {
       });
     },
 
-    async agentLogSnapshot(_project, role, tail) {
+    async agentLogSnapshot(_specId, role, tail) {
       const lines = role === "review" ? DEMO_REVIEW_LOG : DEMO_BUILD_LOG;
       return ok({ run_id: `demo-run-${role}`, lines: lines.slice(-tail) });
     },
 
-    followAgentLog(_project, role, since) {
+    followAgentLog(_specId, role, since) {
       const lineListeners = new Set<(line: AgentLogLine) => void>();
       const stateListeners = new Set<(state: AgentLogState) => void>();
       const source = role === "review" ? DEMO_REVIEW_LOG : DEMO_BUILD_LOG;
@@ -468,6 +470,7 @@ export function createDemoGateway(): DemoGateway {
           stateListeners.add(l);
           return () => stateListeners.delete(l);
         },
+        onError: () => () => {},
         stop: () => {
           stopped = true;
         },

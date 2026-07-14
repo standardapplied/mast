@@ -5,7 +5,7 @@ import type { ProjectListResponse } from "../../shared/sail-models";
 import type { SailResult } from "../../shared/types";
 import { createDemoGateway, type DemoGateway } from "../gateway";
 import { canTransition } from "./lifecycle";
-import { useBoard, type MoveOutcome } from "./useBoard";
+import { logsElsewhere, useBoard, type MoveOutcome } from "./useBoard";
 
 let root: Root;
 let container: HTMLElement;
@@ -161,6 +161,18 @@ describe("useBoard", () => {
     });
     expect(out?.outcome).toBe("error");
     expect(out?.error?.message).toBe("draft cannot go straight to done");
+  });
+});
+
+describe("logsElsewhere", () => {
+  test("a spec assigned to another FDE names whose box holds the logs", () => {
+    expect(logsElsewhere({ assignee: "sumesh" }, "uday")).toBe("sumesh");
+  });
+
+  test("own, unassigned, or unknown-identity specs are followable here", () => {
+    expect(logsElsewhere({ assignee: "uday" }, "uday")).toBeUndefined();
+    expect(logsElsewhere({}, "uday")).toBeUndefined();
+    expect(logsElsewhere({ assignee: "sumesh" }, undefined)).toBeUndefined();
   });
 });
 

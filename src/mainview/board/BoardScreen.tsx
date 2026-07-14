@@ -13,7 +13,7 @@ import { Badge, Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { BOARD_COLUMNS, canTransition, STATUS_LABEL } from "./lifecycle";
 import { LiveLog } from "./LiveLog";
-import { unmetDependencies, useBoard } from "./useBoard";
+import { logsElsewhere, unmetDependencies, useBoard } from "./useBoard";
 
 const LANES_KEY = "mast.board.lanes";
 
@@ -138,6 +138,7 @@ function SpecCard({
   spec,
   blockedBy,
   lifted,
+  logsOwner,
   onOpen,
   onOpenLog,
   onPointerDown,
@@ -146,6 +147,8 @@ function SpecCard({
   spec: GlobalSpecView;
   blockedBy: string[];
   lifted: boolean;
+  /** Set when the spec's run logs live on another FDE's box — disables Live. */
+  logsOwner?: string;
   onOpen: () => void;
   onOpenLog: () => void;
   onPointerDown: (event: React.PointerEvent) => void;
@@ -178,19 +181,29 @@ function SpecCard({
         {(spec.status === "in_progress" || spec.status === "review") && (
           // A nested <button> is invalid; a span with a button role opens the
           // live log without triggering the card's drag or its open-on-click.
+          // A foreign assignee means the run executes on their box — the logs
+          // aren't here, so the control is disabled rather than showing the
+          // wrong run or a server refusal.
           <span
             role="button"
-            tabIndex={0}
-            className="spec-card-live"
+            tabIndex={logsOwner ? -1 : 0}
+            aria-disabled={logsOwner ? "true" : undefined}
+            className={logsOwner ? "spec-card-live is-disabled" : "spec-card-live"}
             data-testid={`card-live-${spec.id}`}
-            title={spec.status === "review" ? "Follow the review log" : "Follow the agent log"}
+            title={
+              logsOwner
+                ? `Assigned to ${logsOwner} — logs live on their box.`
+                : spec.status === "review"
+                  ? "Follow the review log"
+                  : "Follow the agent log"
+            }
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
-              onOpenLog();
+              if (!logsOwner) onOpenLog();
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
+              if (!logsOwner && (e.key === "Enter" || e.key === " ")) {
                 e.preventDefault();
                 onOpenLog();
               }
@@ -327,7 +340,7 @@ export function BoardScreen({
     restart: boolean;
   } | null>(null);
   const [logSpec, setLogSpec] = useState<GlobalSpecView | null>(null);
-  const [role, setRole] = useState<{ canDispatch: boolean; known: boolean }>({
+  const [role, setRole] = useState<{ canDispatch: boolean; known: boolean; fde?: string }>({
     canDispatch: false,
     known: false,
   });
@@ -336,11 +349,16 @@ export function BoardScreen({
 
   // Fetch identity once so dispatch can be role-gated up front; if the server
   // has no whoami endpoint yet (404), role stays unknown and dispatch is
-  // attempted, with the server's 403 handled cleanly.
+  // attempted, with the server's 403 handled cleanly. The FDE handle gates the
+  // live-log controls: a foreign spec's run logs live on its assignee's box.
   useEffect(() => {
     void gateway.whoami().then((result) => {
       if (result.ok) {
-        setRole({ canDispatch: result.value.capabilities.includes("admin"), known: true });
+        setRole({
+          canDispatch: result.value.capabilities.includes("admin"),
+          known: true,
+          fde: result.value.fde,
+        });
       } else {
         setRole({ canDispatch: true, known: false });
       }
@@ -487,6 +505,7 @@ export function BoardScreen({
             ? "Blocked"
             : undefined;
     const followable = spec.status === "in_progress" || spec.status === "review";
+    const logsOwner = logsElsewhere(spec, role.fde);
     const restartable = spec.status === "review" || spec.status === "done";
     return [
       { kind: "item", label: "View", onSelect: () => onOpenSpec(spec.id) },
@@ -495,6 +514,8 @@ export function BoardScreen({
             {
               kind: "item" as const,
               label: spec.status === "review" ? "Review log" : "Live log",
+              disabled: !!logsOwner,
+              hint: logsOwner ? `On ${logsOwner}’s box` : undefined,
               onSelect: () => setLogSpec(spec),
             },
           ]
@@ -608,6 +629,7 @@ export function BoardScreen({
                         spec={spec}
                         blockedBy={unmetDependencies(spec, data.specs)}
                         lifted={dragging?.id === spec.id}
+                        logsOwner={logsElsewhere(spec, role.fde)}
                         onOpen={() => {
                           if (draggedRef.current) return; // a drag just ended, not a click
                           onOpenSpec(spec.id);

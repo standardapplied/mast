@@ -10,18 +10,22 @@ let root: Root;
 let container: HTMLElement;
 
 type FakeHandle = {
+  specId: string;
   role: AgentLogRole;
   since: number;
   stopped: boolean;
   emitLine: (line: AgentLogLine) => void;
   emitState: (state: AgentLogState) => void;
+  emitError: (message: string) => void;
   onLine: (l: (line: AgentLogLine) => void) => () => void;
   onState: (l: (state: AgentLogState) => void) => () => void;
+  onError: (l: (message: string) => void) => () => void;
   stop: () => void;
 };
 
 function makeFake(opts: { snapshotError?: string } = {}) {
   const handles: FakeHandle[] = [];
+  const snapshotCalls: Array<{ specId: string; role: AgentLogRole }> = [];
   let eventListener: ((e: SailEvent) => void) | null = null;
 
   const gateway = {
@@ -34,8 +38,9 @@ function makeFake(opts: { snapshotError?: string } = {}) {
         branch: "agent/chorus-invoice-ui",
       },
     }),
-    agentLogSnapshot: async (_project: string, role: AgentLogRole) =>
-      opts.snapshotError
+    agentLogSnapshot: async (specId: string, role: AgentLogRole) => {
+      snapshotCalls.push({ specId, role });
+      return opts.snapshotError
         ? {
             ok: false as const,
             error: { status: 404, code: "run_not_found", message: opts.snapshotError },
@@ -48,16 +53,20 @@ function makeFake(opts: { snapshotError?: string } = {}) {
                 `{"type":"assistant","message":{"content":[{"type":"text","text":"snap ${role}"}]}}`,
               ],
             },
-          },
-    followAgentLog: (_project: string, role: AgentLogRole, since: number) => {
+          };
+    },
+    followAgentLog: (specId: string, role: AgentLogRole, since: number) => {
       const lineListeners = new Set<(l: AgentLogLine) => void>();
       const stateListeners = new Set<(s: AgentLogState) => void>();
+      const errorListeners = new Set<(m: string) => void>();
       const handle: FakeHandle = {
+        specId,
         role,
         since,
         stopped: false,
         emitLine: (line) => lineListeners.forEach((l) => l(line)),
         emitState: (s) => stateListeners.forEach((l) => l(s)),
+        emitError: (m) => errorListeners.forEach((l) => l(m)),
         onLine: (l) => {
           lineListeners.add(l);
           return () => lineListeners.delete(l);
@@ -65,6 +74,10 @@ function makeFake(opts: { snapshotError?: string } = {}) {
         onState: (l) => {
           stateListeners.add(l);
           return () => stateListeners.delete(l);
+        },
+        onError: (l) => {
+          errorListeners.add(l);
+          return () => errorListeners.delete(l);
         },
         stop: () => {
           handle.stopped = true;
@@ -84,6 +97,7 @@ function makeFake(opts: { snapshotError?: string } = {}) {
   return {
     gateway: gateway as unknown as Gateway,
     handles,
+    snapshotCalls,
     emitEvent: (e: SailEvent) => eventListener?.(e),
   };
 }
@@ -95,7 +109,7 @@ function Harness({
   gateway: Gateway;
   capture: (v: AgentLogView) => void;
 }) {
-  capture(useAgentLog(gateway, "chorus"));
+  capture(useAgentLog(gateway, "chorus", "chorus-invoice-ui"));
   return null;
 }
 
@@ -122,6 +136,28 @@ const streamLine = (id: number, text: string): AgentLogLine => ({
 });
 
 describe("useAgentLog", () => {
+  test("resolves snapshot and follow by the clicked spec, not the project", async () => {
+    const { gateway, handles, snapshotCalls } = makeFake();
+    await render(gateway);
+
+    expect(snapshotCalls).toEqual([{ specId: "chorus-invoice-ui", role: "build" }]);
+    expect(handles[0]!.specId).toBe("chorus-invoice-ui");
+  });
+
+  test("a terminal stream refusal surfaces as the panel error", async () => {
+    const { gateway, handles } = makeFake({ snapshotError: "logs elsewhere" });
+    const view = await render(gateway);
+
+    await act(async () => {
+      handles[0]!.emitError("Run r1 executed on sumesh-box; its logs live there, not on this box.");
+      handles[0]!.emitState("disconnected");
+    });
+    expect(view().error).toBe(
+      "Run r1 executed on sumesh-box; its logs live there, not on this box.",
+    );
+    expect(view().state).toBe("disconnected");
+  });
+
   test("a failed snapshot surfaces its API error until a line arrives", async () => {
     const { gateway, handles } = makeFake({ snapshotError: "No build run for 'chorus' yet." });
     const view = await render(gateway);

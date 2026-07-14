@@ -3350,6 +3350,14 @@ span.checkbox {
 .spec-card-live:hover {
   background: var(--surface-hover);
 }
+.spec-card-live.is-disabled {
+  color: var(--muted-foreground);
+  border-color: var(--border);
+  cursor: default;
+}
+.spec-card-live.is-disabled:hover {
+  background: transparent;
+}
 
 .live-log-scrim {
   position: fixed;
