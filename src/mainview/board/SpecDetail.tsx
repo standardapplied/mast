@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
+  FdeView,
   GlobalSpecDetailResponse,
   GlobalSpecView,
   ReviewView,
@@ -13,7 +14,7 @@ import { CaretLeft, Info } from "../components/icons";
 import { Input } from "../components/Input";
 import { LoadingMark } from "../components/Loading";
 import { NumberStepper } from "../components/NumberStepper";
-import { Select } from "../components/Select";
+import { Select, type SelectOption } from "../components/Select";
 import { ToggleButton } from "../components/ToggleButton";
 import { Tooltip } from "../components/Tooltip";
 import { useToast } from "../components/Toast";
@@ -29,6 +30,23 @@ const STATUS_OPTIONS = (Object.keys(STATUS_LABEL) as SpecStatus[]).map((value) =
   value,
   label: STATUS_LABEL[value],
 }));
+
+/**
+ * The assignee choices: Unassigned, then the roster by handle. A current
+ * assignee missing from the roster (departed FDE, stale spec) stays selectable
+ * so the Select shows the truth instead of a placeholder.
+ */
+function assigneeOptions(fdes: FdeView[], current: string | undefined): SelectOption[] {
+  const options: SelectOption[] = fdes.map((fde) => ({
+    value: fde.handle,
+    label: fde.handle,
+    description: fde.display_name !== fde.handle ? fde.display_name : undefined,
+  }));
+  if (current && !fdes.some((fde) => fde.handle === current)) {
+    options.unshift({ value: current, label: current, description: "not in the FDE roster" });
+  }
+  return [{ value: "", label: "Unassigned" }, ...options];
+}
 
 const EDITOR_PANES = [
   { value: "write", label: "Write" },
@@ -89,6 +107,9 @@ export function SpecDetail({
     canDispatch: false,
     known: false,
   });
+  // The FDE roster backs the assignee select; null (endpoint missing, older
+  // server, error) falls back to the free-form input so editing never blocks.
+  const [fdes, setFdes] = useState<FdeView[] | null>(null);
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -98,6 +119,9 @@ export function SpecDetail({
           ? { canDispatch: r.value.capabilities.includes("admin"), known: true, fde: r.value.fde }
           : { canDispatch: true, known: false },
       );
+    });
+    void gateway.listFdes().then((r) => {
+      if (r.ok && Array.isArray(r.value.fdes) && r.value.fdes.length > 0) setFdes(r.value.fdes);
     });
   }, [gateway]);
 
@@ -321,7 +345,27 @@ export function SpecDetail({
             <span className="prop-value">{STATUS_LABEL[spec.status]}</span>
           )}
         </div>
-        {propItem("Assignee", "assignee", spec.assignee ?? "")}
+        <div className="prop prop-assignee">
+          <span className="prop-label">Assignee</span>
+          {editing ? (
+            fdes ? (
+              <Select
+                className="prop-status-select"
+                value={draft.assignee ?? spec.assignee ?? ""}
+                options={assigneeOptions(fdes, spec.assignee)}
+                onChange={(assignee) => setDraft((d) => ({ ...d, assignee }))}
+              />
+            ) : (
+              <Input
+                className="prop-input"
+                defaultValue={spec.assignee ?? ""}
+                onChange={(e) => setDraft((d) => ({ ...d, assignee: e.target.value }))}
+              />
+            )
+          ) : (
+            <span className="prop-value">{spec.assignee || "—"}</span>
+          )}
+        </div>
         {propItem("Agent", "agent", spec.agent ?? "")}
         {propItem("Model", "model", spec.model ?? "")}
         <div className="prop">

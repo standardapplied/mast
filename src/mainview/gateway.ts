@@ -5,6 +5,7 @@ import type {
   ConnectionStatus,
   DispatchRequest,
   DispatchResponse,
+  FdeListResponse,
   GlobalBoardResponse,
   GlobalSpecContentResponse,
   GlobalSpecDetailResponse,
@@ -66,6 +67,8 @@ export type Gateway = {
   whoami(): Promise<SailResult<WhoAmI>>;
   /** The full synced project roster — every catalogued project with its local container state. */
   listProjects(): Promise<SailResult<ProjectListResponse>>;
+  /** The org's FDE roster — the assignee candidates for a spec. */
+  listFdes(): Promise<SailResult<FdeListResponse>>;
   /** The live build session's status for a project (running/idle + timing). */
   agentStatus(project: string): Promise<SailResult<AgentStatusResponse>>;
   /** A `tail -n` snapshot of the spec's newest run log, for instant content on open. */
@@ -143,6 +146,7 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     // Agent logs and the project roster ride the Tauri seam; the retired
     // Electrobun bridge never grew RPC for them, so they are inert on this path.
     listProjects: () => unsupported("The project roster requires the Tauri shell."),
+    listFdes: () => unsupported("The FDE roster requires the Tauri shell."),
     agentStatus: () => unsupported("Live agent logs require the Tauri shell."),
     agentLogSnapshot: () => unsupported("Live agent logs require the Tauri shell."),
     followAgentLog: () => inertAgentLogHandle(),
@@ -415,6 +419,16 @@ export function createDemoGateway(): DemoGateway {
           { name: "chorus", container_status: "running" as const },
           { name: "nautilus", container_status: "not_created" as const },
           { name: "sail-mast", container_status: "stopped" as const },
+        ],
+      });
+    },
+
+    async listFdes() {
+      return ok({
+        fdes: [
+          { handle: "ravi", display_name: "Ravi N", role: "member" },
+          { handle: "sumesh", display_name: "Sumesh P", role: "member" },
+          { handle: "uday", display_name: "Uday K", role: "admin" },
         ],
       });
     },

@@ -359,6 +359,7 @@ export function createTauriGateway(): Gateway {
       read("POST", `/v1/projects/${encodeURIComponent(project)}/dispatch`, { body: request }),
     whoami: () => read("GET", "/v1/whoami"),
     listProjects: () => read("GET", "/v1/projects"),
+    listFdes: () => read("GET", "/v1/fdes"),
 
     agentStatus: (project) =>
       read<AgentStatusResponse>("GET", `/v1/projects/${encodeURIComponent(project)}/agent`),

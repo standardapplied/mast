@@ -88,6 +88,24 @@ describe("project roster", () => {
   });
 });
 
+describe("FDE roster", () => {
+  test("the demo gateway serves the org's FDEs with handles and display names", async () => {
+    const result = await createDemoGateway().listFdes();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.fdes.map((f) => f.handle)).toEqual(["ravi", "sumesh", "uday"]);
+      expect(result.value.fdes.every((f) => f.role)).toBe(true);
+    }
+  });
+
+  test("the retired Electrobun bridge reports the FDE roster as unsupported", async () => {
+    const gateway = createRpcGateway(bridgeWith(async () => ok), noSleep);
+    const result = await gateway.listFdes();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("unsupported");
+  });
+});
+
 describe("spec body edits go through the content resource", () => {
   test("putSpecContent updates the body and getSpecContent reflects it", async () => {
     const gateway = createDemoGateway();

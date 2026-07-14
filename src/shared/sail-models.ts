@@ -372,6 +372,21 @@ export type ConnectionStatus = {
   detail?: string;
 };
 
+/**
+ * GET /v1/fdes — the org's synced FDE roster (FdeStore), the assignee
+ * candidates for a spec.
+ */
+export type FdeView = {
+  handle: string;
+  display_name?: string;
+  email?: string;
+  role: string;
+};
+
+export type FdeListResponse = {
+  fdes: FdeView[];
+};
+
 export type WhoAmI = {
   fde?: string;
   name: string;

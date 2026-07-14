@@ -33,10 +33,15 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-function makeGateway(status: GlobalSpecView["status"] = "pending", assignee?: string) {
+function makeGateway(
+  status: GlobalSpecView["status"] = "pending",
+  assignee?: string,
+  opts: { noFdeRoster?: boolean } = {},
+) {
   const main = spec({ id: "s1", depends_on: ["dep-a"], status, assignee });
   const dep = spec({ id: "dep-a", status: "done" });
   const listeners = new Set<(e: SailEvent) => void>();
+  const updates: unknown[] = [];
   let enrichGate: Promise<void> = Promise.resolve();
   let revisions = [{ rev: 1, recorded_at: "2026-07-09T00:00:00Z", origin: "create", deleted: false }];
 
@@ -45,6 +50,25 @@ function makeGateway(status: GlobalSpecView["status"] = "pending", assignee?: st
       ok: true as const,
       value: { name: "uday", fde: "uday", role: "admin" as const, capabilities: ["admin"] },
     }),
+    listFdes: async () =>
+      opts.noFdeRoster
+        ? {
+            ok: false as const,
+            error: { status: 404, code: "not_found", message: "no such endpoint" },
+          }
+        : {
+            ok: true as const,
+            value: {
+              fdes: [
+                { handle: "sumesh", display_name: "Sumesh P", role: "member" },
+                { handle: "uday", display_name: "Uday K", role: "admin" },
+              ],
+            },
+          },
+    updateSpec: async (_id: string, request: unknown) => {
+      updates.push(request);
+      return { ok: true as const, value: { spec: main }, etag: '"e2"' };
+    },
     getSpec: async () => ({ ok: true as const, value: { spec: main }, etag: '"e1"' }),
     getSpecContent: async () => ({
       ok: true as const,
@@ -70,6 +94,7 @@ function makeGateway(status: GlobalSpecView["status"] = "pending", assignee?: st
   };
   return {
     gateway: gateway as unknown as Gateway,
+    updates,
     setEnrichGate: (gate: Promise<void>) => (enrichGate = gate),
     setRevisions: (r: typeof revisions) => (revisions = r),
     emit: (e: Partial<SailEvent>) =>
@@ -188,5 +213,72 @@ describe("SpecDetail anti-flicker", () => {
     const follow = container.querySelector<HTMLButtonElement>('[data-testid="follow-log"]');
     expect(follow?.disabled).toBe(true);
     expect(follow?.title).toContain("sumesh");
+  });
+});
+
+describe("SpecDetail assignee editing", () => {
+  const buttonByText = (label: string) =>
+    [...container.querySelectorAll("button")].find((b) => b.textContent === label)!;
+  const assigneeTrigger = () =>
+    container.querySelector<HTMLButtonElement>(".prop-assignee .select-trigger");
+
+  const startEditing = async () => {
+    act(() => buttonByText("Edit").click());
+    await settle();
+  };
+
+  test("the assignee edits as a select of FDE handles and saves the pick", async () => {
+    const fake = makeGateway("pending", "uday");
+    await mount(fake.gateway);
+    await startEditing();
+
+    expect(assigneeTrigger()?.textContent).toContain("uday");
+    act(() => assigneeTrigger()!.click());
+    await settle();
+    expect(container.querySelector('[data-testid="option-uday"]')).not.toBeNull();
+
+    act(() =>
+      container.querySelector<HTMLButtonElement>('[data-testid="option-sumesh"]')!.click(),
+    );
+    await settle();
+    act(() => buttonByText("Save").click());
+    await settle();
+    expect(fake.updates).toEqual([{ assignee: "sumesh" }]);
+  });
+
+  test("an assignee outside the roster stays visible and selectable", async () => {
+    const fake = makeGateway("pending", "ghost");
+    await mount(fake.gateway);
+    await startEditing();
+
+    expect(assigneeTrigger()?.textContent).toContain("ghost");
+    act(() => assigneeTrigger()!.click());
+    await settle();
+    expect(container.querySelector('[data-testid="option-ghost"]')).not.toBeNull();
+  });
+
+  test("a spec can be unassigned via the roster select", async () => {
+    const fake = makeGateway("pending", "uday");
+    await mount(fake.gateway);
+    await startEditing();
+
+    act(() => assigneeTrigger()!.click());
+    await settle();
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="option-"]')!.click());
+    await settle();
+    act(() => buttonByText("Save").click());
+    await settle();
+    expect(fake.updates).toEqual([{ assignee: "" }]);
+  });
+
+  test("no roster endpoint: assignee falls back to the free-form input", async () => {
+    const fake = makeGateway("pending", "uday", { noFdeRoster: true });
+    await mount(fake.gateway);
+    await startEditing();
+
+    expect(assigneeTrigger()).toBeNull();
+    const input = container.querySelector<HTMLInputElement>(".prop-assignee input");
+    expect(input).not.toBeNull();
+    expect(input!.value).toBe("uday");
   });
 });
