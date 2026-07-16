@@ -127,9 +127,47 @@ async fn fs_list(
     state.backend().await?.fs_list(&target, path).await.map_err(String::from)
 }
 
+/// One invoke for a bounded subtree (defaults: depth 3, 2000 entries), so a
+/// first-time tree expand doesn't pay one round-trip per directory.
 #[tauri::command]
-async fn fs_read(state: State<'_, AppState>, target: String, path: String) -> Result<Vec<u8>, String> {
-    state.backend().await?.fs_read(&target, path).await.map_err(String::from)
+async fn fs_list_deep(
+    state: State<'_, AppState>,
+    target: String,
+    path: Option<String>,
+    depth: Option<u32>,
+    max_entries: Option<usize>,
+) -> Result<ssh::DeepListing, String> {
+    state
+        .backend()
+        .await?
+        .fs_list_deep(
+            &target,
+            path,
+            depth.unwrap_or(ssh::DEEP_LIST_DEPTH),
+            max_entries.unwrap_or(ssh::DEEP_LIST_MAX_ENTRIES),
+        )
+        .await
+        .map_err(String::from)
+}
+
+#[tauri::command]
+async fn fs_stat(state: State<'_, AppState>, target: String, path: String) -> Result<ssh::FsStat, String> {
+    state.backend().await?.fs_stat(&target, path).await.map_err(String::from)
+}
+
+#[tauri::command]
+async fn fs_read(
+    state: State<'_, AppState>,
+    target: String,
+    path: String,
+    max_bytes: Option<u64>,
+) -> Result<Vec<u8>, String> {
+    state
+        .backend()
+        .await?
+        .fs_read(&target, path, max_bytes.unwrap_or(ssh::DEFAULT_READ_CAP))
+        .await
+        .map_err(String::from)
 }
 
 #[tauri::command]
@@ -302,6 +340,8 @@ pub fn run() {
             open_url,
             list_targets,
             fs_list,
+            fs_list_deep,
+            fs_stat,
             fs_read,
             fs_upload,
             fs_download,
