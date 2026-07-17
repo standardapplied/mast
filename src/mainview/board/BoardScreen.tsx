@@ -11,21 +11,11 @@ import { Select } from "../components/Select";
 import { useToast } from "../components/Toast";
 import { Badge, Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
-import { BOARD_COLUMNS, canTransition, STATUS_LABEL } from "./lifecycle";
+import { BOARD_COLUMNS, canTransition, STATUS_LABEL, STATUS_TONE } from "./lifecycle";
 import { LiveLog } from "./LiveLog";
 import { logsElsewhere, unmetDependencies, useBoard } from "./useBoard";
 
 const LANES_KEY = "mast.board.lanes";
-
-const STATUS_TONE: Record<SpecStatus, "accent" | "warning" | "success" | "info" | "neutral"> = {
-  draft: "neutral",
-  pending: "neutral",
-  in_progress: "accent",
-  review: "warning",
-  awaiting_merge: "info",
-  done: "success",
-  archived: "neutral",
-};
 
 function loadLanes(): Set<SpecStatus> {
   try {
@@ -506,7 +496,8 @@ export function BoardScreen({
             : undefined;
     const followable = spec.status === "in_progress" || spec.status === "review";
     const logsOwner = logsElsewhere(spec, role.fde);
-    const restartable = spec.status === "review" || spec.status === "done";
+    const restartable =
+      spec.status === "review" || spec.status === "done" || spec.status === "cancelled";
     return [
       { kind: "item", label: "View", onSelect: () => onOpenSpec(spec.id) },
       ...(followable

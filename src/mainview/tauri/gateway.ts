@@ -366,6 +366,7 @@ export function createTauriGateway(): Gateway {
     listFdes: () => read("GET", "/v1/fdes"),
 
     listRuns: (specId) => listSpecRuns(specId),
+    stopRun: (runId) => read("POST", `/v1/runs/${encodeURIComponent(runId)}/stop`),
     agentLogSnapshot: async (specId, role, tail) => {
       const run = await latestSpecRun(specId, role);
       if (!run) {

@@ -4,6 +4,7 @@ import type {
   GlobalSpecDetailResponse,
   GlobalSpecView,
   ReviewView,
+  RunView,
   SpecRevisionView,
   SpecStatus,
   SpecUpdateRequest,
@@ -24,7 +25,8 @@ import { Markdown } from "../markdown";
 import { DispatchDialog } from "./DispatchDialog";
 import { LiveLog } from "./LiveLog";
 import { ReviewFindings } from "./ReviewFindings";
-import { STATUS_LABEL } from "./lifecycle";
+import { STATUS_LABEL, statusLabel, statusTone } from "./lifecycle";
+import { mapStopOutcome, noRunningRunMessage, runningBuildRun } from "./stopRun";
 import { dependentsOf, logsElsewhere, unmetDependencies } from "./useBoard";
 
 const STATUS_OPTIONS = (Object.keys(STATUS_LABEL) as SpecStatus[]).map((value) => ({
@@ -102,6 +104,7 @@ export function SpecDetail({
   // Which editor pane is showing on narrow screens (side-by-side on desktop).
   const [editorPane, setEditorPane] = useState<"write" | "preview">("write");
   const [restoring, setRestoring] = useState<number | null>(null);
+  const [stopTarget, setStopTarget] = useState<RunView | null>(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [findingsReview, setFindingsReview] = useState<ReviewView | null>(null);
@@ -233,7 +236,26 @@ export function SpecDetail({
   const unmet = unmetDependencies(spec, loaded.allSpecs);
   const dependents = dependentsOf(loaded.allSpecs, spec.id);
   const logsOwner = logsElsewhere(spec, role.fde);
-  const restart = spec.status === "review" || spec.status === "done";
+  const restart =
+    spec.status === "review" || spec.status === "done" || spec.status === "cancelled";
+
+  // Stop is run-addressed like log-follow: resolve this spec's newest running
+  // build run first, and never fire a blind stop when none is visible here —
+  // the run may live on another FDE's box.
+  const beginStop = async () => {
+    const runs = await gateway.listRuns(spec.id);
+    if (!runs.ok) return showToast("error", runs.error.message);
+    const run = runningBuildRun(runs.value.runs);
+    if (!run) return showToast("error", noRunningRunMessage(spec.id));
+    setStopTarget(run);
+  };
+
+  const confirmStop = async (run: RunView) => {
+    setStopTarget(null);
+    const outcome = mapStopOutcome(await gateway.stopRun(run.id), run);
+    showToast(outcome.type, outcome.message);
+    if (outcome.refresh) void load();
+  };
 
   const startEdit = () => {
     setBodyDraft(loaded.body);
@@ -327,9 +349,7 @@ export function SpecDetail({
               {spec.status === "review" ? "Review log" : "Live log"}
             </Button>
           )}
-          <Badge tone={spec.status === "in_progress" ? "accent" : spec.status === "review" ? "warning" : spec.status === "done" ? "success" : "neutral"}>
-            {STATUS_LABEL[spec.status]}
-          </Badge>
+          <Badge tone={statusTone(spec.status)}>{statusLabel(spec.status)}</Badge>
         </div>
       </div>
 
@@ -344,7 +364,7 @@ export function SpecDetail({
               onChange={(v) => setDraft((d) => ({ ...d, status: v as SpecStatus }))}
             />
           ) : (
-            <span className="prop-value">{STATUS_LABEL[spec.status]}</span>
+            <span className="prop-value">{statusLabel(spec.status)}</span>
           )}
         </div>
         <div className="prop prop-assignee">
@@ -452,6 +472,15 @@ export function SpecDetail({
             </>
           ) : (
             <>
+              {spec.status === "in_progress" && (
+                <Button
+                  className="btn-danger"
+                  onClick={() => void beginStop()}
+                  data-testid="detail-stop"
+                >
+                  Stop
+                </Button>
+              )}
               <Button variant="ghost" onClick={() => setDispatchOpen(true)} data-testid="detail-dispatch">
                 {restart ? "Re-dispatch" : "Dispatch"}
               </Button>
@@ -598,6 +627,32 @@ export function SpecDetail({
         <p className="meta-value">
           The spec body and metadata return to revision {restoring}. The current state stays in
           history.
+        </p>
+      </Dialog>
+
+      <Dialog
+        isOpen={stopTarget !== null}
+        onClose={() => setStopTarget(null)}
+        title={`Stop ${spec.id}?`}
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setStopTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              className="btn-danger"
+              onClick={() => stopTarget && void confirmStop(stopTarget)}
+              data-testid="confirm-stop"
+            >
+              Stop run
+            </Button>
+          </>
+        }
+      >
+        <p className="meta-value">
+          Stop run {stopTarget?.id}? The agent is killed and the spec becomes cancelled — it will
+          not be dispatched again until you re-dispatch.
         </p>
       </Dialog>
 
