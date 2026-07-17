@@ -886,19 +886,25 @@ impl Backend {
         // free variant of its basename ("x", "x (1)", …) — checked against
         // both the disk and this request's other roots (case-insensitively,
         // for the default macOS filesystem) — so a download never lands on top
-        // of something already there. The reservation itself is `create_new`
-        // in run_download: even a race with a concurrent download fails loudly
-        // instead of truncating.
+        // of something already there. Reservations are atomic, never
+        // check-then-use: a top-level file is `create_new` in run_download,
+        // and a top-level directory is claimed here with `create_dir`, so two
+        // concurrent downloads of the same folder land side by side instead of
+        // merging into one.
+        let sftp = self.transfer_sftp(target).await?;
+        tokio::fs::create_dir_all(&base).await?;
         let mut taken = HashSet::new();
         let mut roots: Vec<(String, PathBuf)> = Vec::new();
         for remote in &remote_paths {
-            let local = pick_free_local(&base, base_name(remote), &mut taken).await?;
+            let meta =
+                sftp.metadata(remote.clone()).await.map_err(|e| Error::Sftp(e.to_string()))?;
+            let local =
+                pick_free_local(&base, base_name(remote), &mut taken, meta.is_dir()).await?;
             roots.push((remote.clone(), local));
         }
         let landed: Vec<String> =
             roots.iter().map(|(_, local)| local.to_string_lossy().into_owned()).collect();
 
-        let sftp = self.transfer_sftp(target).await?;
         let plan = plan_download(&sftp, &roots).await?;
 
         let mut progress = TransferProgress::start(
@@ -954,9 +960,14 @@ impl Backend {
     /// and swap for an agent's edit to slip into. A writer that bypasses the
     /// lock (an agent using plain tools) can still race the sub-millisecond
     /// on-host window — no client-side scheme can close that without every
-    /// writer going through one versioned channel. Exit codes: 0 saved,
-    /// 3 conflict (baseline mismatch, or the file was deleted), else error;
-    /// every non-saved outcome removes the temp file.
+    /// writer going through one versioned channel. The path is canonicalized
+    /// first so a save through a symlink lands the temp file beside the link's
+    /// *target* and the rename updates that target — a rename over the link's
+    /// own pathname would replace the link with an unrelated regular file.
+    /// Exit codes: 0 saved, 3 conflict (baseline mismatch, or the file was
+    /// deleted), else error; every non-saved outcome removes the temp file —
+    /// the shell does it on-host, and a transport failure that prevents the
+    /// command from reporting back triggers a best-effort SFTP removal here.
     pub async fn fs_write_checked(
         &self,
         target: &str,
@@ -964,6 +975,12 @@ impl Backend {
         expected: Vec<u8>,
         contents: Vec<u8>,
     ) -> Result<WriteOutcome, Error> {
+        let path = self
+            .with_sftp(target, |sftp| {
+                let path = path.clone();
+                async move { sftp.canonicalize(path).await }
+            })
+            .await?;
         let tmp = save_tmp_path(&path);
         {
             let tmp = tmp.clone();
@@ -984,7 +1001,17 @@ impl Backend {
             p = shell_single_quote(&path),
             t = shell_single_quote(&tmp),
         );
-        match self.exec_capture_with_input(target, &command, &expected).await? {
+        let status = match self.exec_capture_with_input(target, &command, &expected).await {
+            Ok(status) => status,
+            Err(e) => {
+                let tmp = tmp.clone();
+                let _ = self
+                    .mutate_sftp(target, |sftp| async move { sftp.remove_file(tmp).await })
+                    .await;
+                return Err(e);
+            }
+        };
+        match status {
             (0, _) => Ok(WriteOutcome::Saved),
             (3, _) => Ok(WriteOutcome::Conflict),
             (code, stderr) => Err(Error::Sftp(if stderr.is_empty() {
@@ -1967,12 +1994,17 @@ fn walk_upload(dir: &Path, remote_base: &str, plan: &mut UploadPlan) -> std::io:
 
 /// First free name for a download landing in `base`: the basename itself, then
 /// "name (1)", "name (2)", … before the final extension — probed against the
-/// filesystem and against `taken` (lowercased: this request's earlier picks,
-/// which don't exist on disk yet).
+/// filesystem and against `taken` (lowercased: this request's earlier picks).
+/// With `reserve_dir` the winning name is claimed on the spot with an atomic
+/// `create_dir` — a concurrent download racing for the same folder loses the
+/// create and moves on to the next candidate, so two requests can never merge
+/// into one directory. Files skip the reservation; `create_new` in
+/// run_download is their atomic claim.
 async fn pick_free_local(
     base: &Path,
     name: &str,
     taken: &mut HashSet<String>,
+    reserve_dir: bool,
 ) -> Result<PathBuf, Error> {
     for n in 0..1000 {
         let candidate = if n == 0 { name.to_string() } else { numbered_name(name, n) };
@@ -1980,7 +2012,13 @@ async fn pick_free_local(
             continue;
         }
         let path = base.join(&candidate);
-        if tokio::fs::try_exists(&path).await? {
+        if reserve_dir {
+            match tokio::fs::create_dir(&path).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.into()),
+            }
+        } else if tokio::fs::try_exists(&path).await? {
             continue;
         }
         taken.insert(candidate.to_lowercase());
@@ -2264,6 +2302,28 @@ Host bastion
         let remotes: Vec<_> = plan.files.iter().map(|f| f.remote.clone()).collect();
         assert!(remotes.contains(&format!("/remote/{name}/top.txt")));
         assert!(remotes.contains(&format!("/remote/{name}/nested/deep.txt")));
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[tokio::test]
+    async fn pick_free_local_reserves_directories_atomically() {
+        let base = std::env::temp_dir().join(format!("mast_pick_{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+
+        let mut taken = HashSet::new();
+        let first = pick_free_local(&base, "proj", &mut taken, true).await.unwrap();
+        assert!(first.is_dir(), "dir root is claimed on disk at pick time");
+
+        // A concurrent request shares no in-memory state — only the on-disk
+        // reservation keeps it from landing in the same folder.
+        let mut other = HashSet::new();
+        let second = pick_free_local(&base, "proj", &mut other, true).await.unwrap();
+        assert_eq!(second.file_name().unwrap().to_str().unwrap(), "proj (1)");
+        assert!(second.is_dir());
+
+        let file = pick_free_local(&base, "notes.txt", &mut other, false).await.unwrap();
+        assert!(!file.exists(), "files are claimed later by create_new");
 
         std::fs::remove_dir_all(&base).ok();
     }

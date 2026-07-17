@@ -93,6 +93,15 @@ export class ViewerStore {
     return this.state.phase === "text" && this.state.dirty;
   }
 
+  /** True when the open file is `path` itself or lives under it. Renaming or
+   *  moving such a path would leave the viewer saving to a stale name —
+   *  callers block the operation instead. */
+  viewsPath(path: string): boolean {
+    if (this.state.phase === "closed") return false;
+    const open = this.state.entry.path;
+    return open === path || open.startsWith(`${path.replace(/\/+$/, "")}/`);
+  }
+
   /** The line a caller asked to open at — read once by the editor mount. */
   takeRevealLine(): number | null {
     const line = this.revealLine;
@@ -163,7 +172,15 @@ export class ViewerStore {
           if (sniffBinary(bytes)) {
             return this.set({ phase: "fallback", entry, reason: "binary", size: stat.size });
           }
-          const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+          // Fatal decode: bytes that can't round-trip through UTF-8 must never
+          // become editable text — saving would silently rewrite every invalid
+          // byte as U+FFFD.
+          let text: string;
+          try {
+            text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+          } catch {
+            return this.set({ phase: "fallback", entry, reason: "binary", size: stat.size });
+          }
           const language = route.kind === "code" ? route.language : null;
           return this.set({
             phase: "text",

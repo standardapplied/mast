@@ -75,6 +75,12 @@ describe("ViewerStore.open", () => {
     expect(store.state).toMatchObject({ phase: "fallback", reason: "binary" });
   });
 
+  test("invalid UTF-8 without a NUL falls back — saving must never rewrite bytes as U+FFFD", async () => {
+    const { store } = makeStore({ "/p/latin1.txt": { bytes: new Uint8Array([104, 105, 0xff, 0xfe]) } });
+    await store.open(entry("latin1.txt"));
+    expect(store.state).toMatchObject({ phase: "fallback", reason: "binary" });
+  });
+
   test("images load bytes and carry their mime", async () => {
     const { store } = makeStore({ "/p/shot.png": { bytes: new Uint8Array([137, 80]) } });
     await store.open(entry("shot.png"));
@@ -228,5 +234,20 @@ describe("ViewerStore.save", () => {
     store.close();
     expect(store.state).toEqual({ phase: "closed" });
     expect(store.isOpen).toBe(false);
+  });
+});
+
+describe("ViewerStore.viewsPath", () => {
+  test("matches the open file itself and any ancestor directory, not siblings", async () => {
+    const { store } = makeStore({ "/p/dir/a.ts": { text: "x" } });
+    await store.open({ name: "a.ts", path: "/p/dir/a.ts", isDir: false, size: 1 });
+    expect(store.viewsPath("/p/dir/a.ts")).toBe(true);
+    expect(store.viewsPath("/p/dir")).toBe(true);
+    expect(store.viewsPath("/p/dir/")).toBe(true);
+    expect(store.viewsPath("/p")).toBe(true);
+    expect(store.viewsPath("/p/dir/b.ts")).toBe(false);
+    expect(store.viewsPath("/p/di")).toBe(false);
+    store.close();
+    expect(store.viewsPath("/p/dir/a.ts")).toBe(false);
   });
 });

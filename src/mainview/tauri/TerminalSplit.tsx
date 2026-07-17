@@ -228,6 +228,12 @@ export function TerminalSplit({
 
   const doRename = async (entry: FileEntry, name: string) => {
     setPrompt(null);
+    // A rename under the viewer's open file would leave its saves targeting
+    // the old path — and the conflict-dialog Overwrite would recreate it.
+    if (viewer.viewsPath(entry.path)) {
+      toast(`Close the open file in the viewer before renaming ${entry.name}`, false);
+      return;
+    }
     const dir = parentDir(entry.path);
     try {
       await invoke("fs_rename", { target, from: entry.path, to: joinRemote(dir, name) });
