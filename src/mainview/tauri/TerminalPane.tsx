@@ -7,7 +7,13 @@ import { logError } from "../errorLog";
 import { terminalTheme, type TerminalTheme } from "../ansi";
 import { KITTY_DISAMBIGUATE, KittyKeyboardBridge, shiftEnterSequence } from "./kittyKeyboard";
 
-export type TerminalHandle = { paste: (text: string) => void };
+export type TerminalHandle = {
+  paste: (text: string) => void;
+  /** Refit the VT to the pane's *settled* size — a splitter drag resizes the
+   *  host without a window resize, and fitting at a stale mid-drag size
+   *  garbles the PTY geometry. */
+  refit: () => void;
+};
 
 /**
  * The terminal pillar: a real Ghostty VT (WASM) rendering a live PTY on the
@@ -68,6 +74,7 @@ export const TerminalPane = forwardRef<
 >(function TerminalPane({ target, label, active }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
   const idRef = useRef("");
   const [status, setStatus] = useState("connecting…");
 
@@ -83,8 +90,26 @@ export const TerminalPane = forwardRef<
       data: Array.from(new TextEncoder().encode(data)),
     }).catch(() => {});
 
-  // Lets the drop coordinator inject an uploaded file's path into the shell.
-  useImperativeHandle(ref, () => ({ paste: (text) => idRef.current && write(text) }), []);
+  // Lets the drop coordinator inject an uploaded file's path into the shell,
+  // and the workbench splitters refit the VT after a pane resize settles.
+  useImperativeHandle(
+    ref,
+    () => ({
+      paste: (text) => idRef.current && write(text),
+      refit: () => {
+        const host = hostRef.current;
+        if (!host || !fitRef.current) return;
+        void waitStableSize(host).then(() => {
+          try {
+            fitRef.current?.fit();
+          } catch {
+            /* metrics not ready */
+          }
+        });
+      },
+    }),
+    [],
+  );
 
   useEffect(() => {
     const host = hostRef.current;
@@ -118,6 +143,7 @@ export const TerminalPane = forwardRef<
       termRef.current = term;
       const fit = new FitAddon();
       fitAddon = fit;
+      fitRef.current = fit;
       term.loadAddon(fit);
       term.open(host);
 
@@ -230,6 +256,7 @@ export const TerminalPane = forwardRef<
     return () => {
       alive = false;
       if (onWinResize) window.removeEventListener("resize", onWinResize);
+      fitRef.current = null;
       fitAddon?.dispose();
       void invoke("terminal_close", { id }).catch(() => {});
       void dataOff?.then((off) => off());

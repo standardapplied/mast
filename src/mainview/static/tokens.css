@@ -98,6 +98,11 @@
   --success: #86b89a;
   --info: #7fbfca;
 
+  /* Code syntax accents (editor pane) — ochre + dusty steel from the terminal
+     palette; keyword/string/comment reuse warning/success/subtle. */
+  --syntax-number: #d2a24c;
+  --syntax-type: #93b3d7;
+
   --font-display: "Newsreader", Georgia, serif;
   --font-sans: "Switzer", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
@@ -130,6 +135,9 @@
   --warning: #9d4260;
   --success: #256e4a;
   --info: #17646f;
+
+  --syntax-number: #8a5800;
+  --syntax-type: #31608f;
 
   color-scheme: light;
 }

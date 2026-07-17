@@ -18,6 +18,9 @@ const result = await Bun.build({
   target: "browser",
   minify: true,
   sourcemap: "linked",
+  // The editor (CodeMirror) is behind a dynamic import; split it into its own
+  // chunk so app startup never pays for it.
+  splitting: true,
   // Ship React in production mode: no dev-only checks, and StrictMode stops
   // double-invoking effects (which would otherwise re-run one-shot setup).
   define: { "process.env.NODE_ENV": '"production"' },

@@ -9,6 +9,7 @@ import { Info } from "./components/icons";
 import { NumberStepper } from "./components/NumberStepper";
 import { Select } from "./components/Select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/Tabs";
+import { Splitter } from "./components/Splitter";
 import { ToggleButton } from "./components/ToggleButton";
 import { Tooltip } from "./components/Tooltip";
 import { Textarea } from "./components/Textarea";
@@ -33,6 +34,8 @@ const COLOR_TOKENS = [
   "warning",
   "success",
   "info",
+  "syntax-number",
+  "syntax-type",
 ] as const;
 
 const THEME_MODES: readonly ThemeMode[] = ["light", "dark", "system"];
@@ -85,6 +88,25 @@ function AnsiStrip({ theme, label }: { theme: TerminalTheme; label: string }) {
           <div key={i} className="ansi-chip" style={{ background: color }} title={`ansi ${i}`} />
         ))}
       </div>
+    </div>
+  );
+}
+
+function SplitterDemo() {
+  const [width, setWidth] = useState(220);
+  const pane = {
+    display: "grid",
+    placeItems: "center",
+    background: "var(--lane-bg)",
+    border: "1px solid var(--border)",
+    font: "12px var(--font-mono)",
+    color: "var(--muted-foreground)",
+  } as const;
+  return (
+    <div style={{ display: "flex", height: 120 }}>
+      <div style={{ ...pane, flex: 1 }}>flex</div>
+      <Splitter value={width} min={120} max={360} onChange={setWidth} ariaLabel="Demo splitter" />
+      <div style={{ ...pane, width, flexShrink: 0 }}>{width}px</div>
     </div>
   );
 }
@@ -436,7 +458,13 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
           </KanbanBoard>
         </Section>
 
-        <Section index="11" title="Terminal palettes">
+        <Section index="11" title="Splitter">
+          <Card>
+            <SplitterDemo />
+          </Card>
+        </Section>
+
+        <Section index="12" title="Terminal palettes">
           <Card>
             <div style={{ display: "grid", gap: 20 }}>
               <AnsiStrip theme={DARK_TERMINAL_THEME} label="Ink — ghostty dark" />

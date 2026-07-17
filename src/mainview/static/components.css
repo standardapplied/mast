@@ -2917,12 +2917,25 @@ span.checkbox {
   min-height: 0;
 }
 
-/* Terminal + file-tree split ------------------------------------------------ */
+/* Workbench: terminal | viewer/editor | explorer ----------------------------- */
 .term-split {
   display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
   height: 100%;
+  min-height: 0;
+}
+/* The segmented single-pane flip only exists on narrow viewports. */
+.term-split__flip {
+  display: none;
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.term-split__panes {
+  display: flex;
+  flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 .term-split__main {
@@ -2930,7 +2943,7 @@ span.checkbox {
   min-width: 0;
   display: flex;
 }
-.term-split__resizer {
+.splitter {
   flex-shrink: 0;
   width: 6px;
   margin: 0 -3px;
@@ -2938,9 +2951,13 @@ span.checkbox {
   cursor: col-resize;
   background: transparent;
   transition: background 120ms ease;
+  /* A drag must never start a native text selection mid-resize. */
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
 }
-.term-split__resizer:hover,
-.term-split__resizer:active {
+.splitter:hover,
+.splitter:active {
   background: var(--primary);
 }
 .file-tree {
@@ -2955,6 +2972,259 @@ span.checkbox {
      native text selection. The -webkit- prefix is required by the macOS webview. */
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* Viewer / editor pane ------------------------------------------------------- */
+.viewer {
+  width: var(--viewer-w, 560px);
+  flex-shrink: 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--background);
+}
+.viewer__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border);
+  min-height: 36px;
+  box-sizing: border-box;
+}
+.viewer__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+}
+.viewer__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--foreground);
+}
+.viewer__dirty {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+  flex-shrink: 0;
+}
+.viewer__mdtabs {
+  width: 150px;
+  flex-shrink: 0;
+}
+.viewer__close {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 4px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  line-height: 0;
+  flex-shrink: 0;
+}
+.viewer__close:hover {
+  color: var(--foreground);
+}
+.viewer__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+.viewer__note {
+  margin: 0;
+  padding: 12px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.viewer__editor {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.viewer__preview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px;
+}
+.viewer__media {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow: hidden;
+}
+.viewer__image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.viewer__pdf {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: none;
+}
+.viewer__card {
+  margin: auto;
+  max-width: 320px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  text-align: center;
+}
+.viewer__card-name {
+  margin: 0 0 6px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.viewer__card-meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.viewer__card-detail {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--subtle-foreground);
+  overflow-wrap: anywhere;
+}
+.viewer__card-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* CodeMirror, themed entirely off tokens so light/dark flip live. ------------ */
+.viewer__editor .cm-editor {
+  height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+}
+.viewer__editor .cm-editor.cm-focused {
+  outline: none;
+}
+.viewer__editor .cm-scroller {
+  font-family: var(--font-mono);
+  line-height: 1.55;
+}
+.viewer__editor .cm-gutters {
+  background: var(--background);
+  color: var(--subtle-foreground);
+  border-right: 1px solid var(--border);
+}
+.viewer__editor .cm-activeLine {
+  background: var(--surface-hover);
+}
+.viewer__editor .cm-activeLineGutter {
+  background: var(--surface-hover);
+  color: var(--muted-foreground);
+}
+.viewer__editor .cm-cursor {
+  border-left-color: var(--primary);
+}
+.viewer__editor .cm-selectionBackground,
+.viewer__editor .cm-content ::selection {
+  background: color-mix(in srgb, var(--primary) 28%, transparent) !important;
+}
+.viewer__editor .cm-matchingBracket {
+  background: color-mix(in srgb, var(--info) 25%, transparent);
+  outline: 1px solid var(--info);
+}
+.viewer__editor .cm-searchMatch {
+  background: color-mix(in srgb, var(--warning) 30%, transparent);
+}
+.viewer__editor .cm-searchMatch-selected {
+  background: color-mix(in srgb, var(--primary) 40%, transparent);
+}
+.viewer__editor .cm-selectionMatch {
+  background: color-mix(in srgb, var(--info) 18%, transparent);
+}
+.viewer__editor .cm-panels {
+  background: var(--surface);
+  color: var(--foreground);
+  border-bottom: 1px solid var(--border);
+}
+.viewer__editor .cm-panels input,
+.viewer__editor .cm-panels button {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border-strong);
+}
+.viewer__editor .cm-panels label {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+/* classHighlighter token classes → palette accents. */
+.viewer__editor .tok-keyword,
+.viewer__editor .tok-modifier,
+.viewer__editor .tok-operatorKeyword {
+  color: var(--warning);
+}
+.viewer__editor .tok-string,
+.viewer__editor .tok-string2,
+.viewer__editor .tok-docString,
+.viewer__editor .tok-character {
+  color: var(--success);
+}
+.viewer__editor .tok-number,
+.viewer__editor .tok-bool,
+.viewer__editor .tok-atom,
+.viewer__editor .tok-literal,
+.viewer__editor .tok-unit,
+.viewer__editor .tok-null,
+.viewer__editor .tok-self {
+  color: var(--syntax-number);
+}
+.viewer__editor .tok-typeName,
+.viewer__editor .tok-className,
+.viewer__editor .tok-namespace,
+.viewer__editor .tok-macroName {
+  color: var(--syntax-type);
+}
+.viewer__editor .tok-propertyName,
+.viewer__editor .tok-function {
+  color: var(--info);
+}
+.viewer__editor .tok-comment,
+.viewer__editor .tok-meta,
+.viewer__editor .tok-punctuation {
+  color: var(--subtle-foreground);
+}
+.viewer__editor .tok-heading {
+  font-weight: 600;
+}
+.viewer__editor .tok-emphasis {
+  font-style: italic;
+}
+.viewer__editor .tok-strong {
+  font-weight: 600;
+}
+.viewer__editor .tok-link,
+.viewer__editor .tok-url {
+  color: var(--info);
+  text-decoration: underline;
+}
+.viewer__editor .tok-invalid {
+  color: var(--error);
 }
 .file-tree--dropping {
   outline: 2px dashed var(--primary);
@@ -3135,18 +3405,17 @@ span.checkbox {
   overflow: auto;
   padding: 4px 0;
 }
-.file-tree__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
 .file-tree__row {
   appearance: none;
   width: 100%;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 8px;
+  /* Every row is exactly 24px — the windowed (virtualized) body computes
+     offsets from this height; keep it in sync with ROW_HEIGHT in FileTree. */
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 8px;
   background: none;
   border: none;
   color: var(--foreground);
@@ -3157,6 +3426,38 @@ span.checkbox {
   /* Rows act as buttons — right-clicking one should select the row, never
      start a native text selection of part of the name. */
   user-select: none;
+}
+.file-tree__row--focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.file-tree__row--root .file-tree__name {
+  font-weight: 600;
+}
+.file-tree__rootpath {
+  margin-left: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--subtle-foreground);
+}
+.file-tree__rowskel {
+  height: 24px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+}
+.file-tree__note--row {
+  height: 24px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.file-tree__more {
+  color: var(--subtle-foreground);
+  font-size: 11px;
 }
 .file-tree__row[data-dir="true"] {
   cursor: pointer;
@@ -3179,13 +3480,6 @@ span.checkbox {
 }
 .file-tree__root svg {
   flex-shrink: 0;
-}
-.file-tree__rootname {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: 12px;
 }
 .file-tree__twist {
   display: inline-flex;
@@ -3285,18 +3579,38 @@ span.checkbox {
     opacity: 0.6;
   }
 }
-@media (max-width: 768px) {
-  .term-split {
-    flex-direction: column;
+/* ≤900px: one pane at a time behind the segmented flip — a cramped 3-column
+   layout helps nobody on a narrow window. Panes stay mounted (the terminal
+   must never tear down), only display flips. */
+@media (max-width: 900px) {
+  .term-split__flip {
+    display: block;
   }
-  .term-split__resizer {
+  .splitter {
     display: none;
   }
+  .term-split__main,
+  .viewer,
   .file-tree {
+    display: none;
     width: auto;
-    height: 42%;
+    flex: 1;
     border-left: none;
-    border-top: 1px solid var(--border);
+  }
+  .term-split[data-mobile="terminal"] .term-split__main {
+    display: flex;
+  }
+  .term-split[data-mobile="editor"] .viewer {
+    display: flex;
+  }
+  .term-split[data-mobile="files"] .file-tree {
+    display: flex;
+  }
+  /* Touch-friendly hit targets. */
+  .file-tree__row,
+  .file-tree__rowskel,
+  .file-tree__note--row {
+    height: 32px;
   }
 }
 

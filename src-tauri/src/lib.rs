@@ -128,7 +128,9 @@ async fn fs_list(
 }
 
 /// One invoke for a bounded subtree (defaults: depth 3, 2000 entries), so a
-/// first-time tree expand doesn't pay one round-trip per directory.
+/// first-time tree expand doesn't pay one round-trip per directory. `after`
+/// resumes a paged root listing where the previous response's `nextCursor`
+/// left off.
 #[tauri::command]
 async fn fs_list_deep(
     state: State<'_, AppState>,
@@ -136,6 +138,7 @@ async fn fs_list_deep(
     path: Option<String>,
     depth: Option<u32>,
     max_entries: Option<usize>,
+    after: Option<ssh::PageCursor>,
 ) -> Result<ssh::DeepListing, String> {
     state
         .backend()
@@ -145,6 +148,7 @@ async fn fs_list_deep(
             path,
             depth.unwrap_or(ssh::DEEP_LIST_DEPTH),
             max_entries.unwrap_or(ssh::DEEP_LIST_MAX_ENTRIES),
+            after,
         )
         .await
         .map_err(String::from)
@@ -204,6 +208,17 @@ async fn fs_download(
         .map_err(String::from)
 }
 
+/// Create an empty file atomically (CREATE|EXCLUDE) — fails on an existing
+/// path instead of truncating it.
+#[tauri::command]
+async fn fs_create_file(
+    state: State<'_, AppState>,
+    target: String,
+    path: String,
+) -> Result<(), String> {
+    state.backend().await?.fs_create_file(&target, path).await.map_err(String::from)
+}
+
 #[tauri::command]
 async fn fs_write(
     state: State<'_, AppState>,
@@ -212,6 +227,24 @@ async fn fs_write(
     contents: Vec<u8>,
 ) -> Result<(), String> {
     state.backend().await?.fs_write(&target, path, contents).await.map_err(String::from)
+}
+
+/// Editor save with the conflict guard server-side: overwrite only while the
+/// file still holds `expected`, in one backend operation.
+#[tauri::command]
+async fn fs_write_checked(
+    state: State<'_, AppState>,
+    target: String,
+    path: String,
+    expected: Vec<u8>,
+    contents: Vec<u8>,
+) -> Result<ssh::WriteOutcome, String> {
+    state
+        .backend()
+        .await?
+        .fs_write_checked(&target, path, expected, contents)
+        .await
+        .map_err(String::from)
 }
 
 #[tauri::command]
@@ -345,7 +378,9 @@ pub fn run() {
             fs_read,
             fs_upload,
             fs_download,
+            fs_create_file,
             fs_write,
+            fs_write_checked,
             fs_rename,
             fs_mkdir,
             fs_delete,

@@ -15,6 +15,19 @@ export type Transfer = {
   detail?: string;
 };
 
+/** Bulk downloads land every item at ~/Downloads/<name>: two selected items
+ *  sharing a name (case-insensitively — macOS' default filesystem is) would
+ *  silently clobber each other. Returns the first colliding name, or null. */
+export function duplicateDownloadName(names: string[]): string | null {
+  const seen = new Set<string>();
+  for (const name of names) {
+    const key = name.toLocaleLowerCase();
+    if (seen.has(key)) return name;
+    seen.add(key);
+  }
+  return null;
+}
+
 /** Replace the entry with the same id, or append — preserving order. */
 export function upsertTransfer(list: Transfer[], t: Transfer): Transfer[] {
   const index = list.findIndex((x) => x.id === t.id);

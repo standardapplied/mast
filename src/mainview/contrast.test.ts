@@ -59,7 +59,16 @@ const modes = {
   light: parseBlock(css, '\\[data-theme="light"\\]'),
 };
 
-const TEXT_TOKENS = ["foreground", "muted-foreground", "error", "warning", "success", "info"];
+const TEXT_TOKENS = [
+  "foreground",
+  "muted-foreground",
+  "error",
+  "warning",
+  "success",
+  "info",
+  "syntax-number",
+  "syntax-type",
+];
 const SUBTLE_TOKENS = ["subtle-foreground"];
 
 for (const [mode, vars] of Object.entries(modes)) {
