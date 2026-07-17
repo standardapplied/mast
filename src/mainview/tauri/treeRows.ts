@@ -18,7 +18,7 @@ export type TreeRow =
   | { kind: "skeleton"; depth: number; key: string }
   | { kind: "error"; message: string; depth: number; key: string }
   | { kind: "empty"; depth: number; key: string }
-  | { kind: "truncated"; depth: number; key: string };
+  | { kind: "truncated"; depth: number; key: string; more: boolean };
 
 const baseName = (path: string) => path.split("/").filter(Boolean).pop() ?? "/";
 
@@ -47,5 +47,5 @@ function pushDir(src: TreeSource, path: string, depth: number, rows: TreeRow[]):
     rows.push({ kind: "entry", entry, depth });
     if (entry.isDir && src.isExpanded(entry.path)) pushDir(src, entry.path, depth + 1, rows);
   }
-  if (node.truncated) rows.push({ kind: "truncated", depth, key: path });
+  if (node.truncated) rows.push({ kind: "truncated", depth, key: path, more: node.nextOffset !== undefined });
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { humanBytes, transferPercent, upsertTransfer, type Transfer } from "./transfers";
+import { duplicateDownloadName, humanBytes, transferPercent, upsertTransfer, type Transfer } from "./transfers";
 
 const t = (over: Partial<Transfer>): Transfer => ({
   id: "1",
@@ -35,6 +35,19 @@ describe("transferPercent", () => {
   test("done is always 1; clamps over-count", () => {
     expect(transferPercent(t({ status: "done", bytesDone: 0, bytesTotal: 10 }))).toBe(1);
     expect(transferPercent(t({ bytesDone: 30, bytesTotal: 10 }))).toBe(1);
+  });
+});
+
+describe("duplicateDownloadName", () => {
+  test("distinct names pass", () => {
+    expect(duplicateDownloadName(["a.txt", "b.txt"])).toBeNull();
+    expect(duplicateDownloadName([])).toBeNull();
+  });
+  test("same basename from different directories collides", () => {
+    expect(duplicateDownloadName(["config.json", "config.json"])).toBe("config.json");
+  });
+  test("case-insensitive — the default macOS filesystem is", () => {
+    expect(duplicateDownloadName(["README.md", "readme.md"])).toBe("readme.md");
   });
 });
 

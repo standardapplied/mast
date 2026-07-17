@@ -11,6 +11,7 @@ import { FileTree, type FileActions } from "./FileTree";
 import { FileTreeStore, type FileEntry, type FsApi } from "./fileTreeStore";
 import { PromptDialog } from "./PromptDialog";
 import { TerminalPane, type TerminalHandle } from "./TerminalPane";
+import { duplicateDownloadName } from "./transfers";
 import { TransfersTray } from "./TransfersTray";
 import { ViewerPane } from "./ViewerPane";
 import { ViewerStore, type ViewerFs } from "./viewerStore";
@@ -25,7 +26,7 @@ import { loadWidths, PANE_LIMITS, saveWidths, type PaneWidths } from "./workbenc
  */
 
 function tauriFs(target: string): FsApi {
-  return { listDeep: (path) => invoke("fs_list_deep", { target, path }) };
+  return { listDeep: (path, offset) => invoke("fs_list_deep", { target, path, offset }) };
 }
 
 function tauriViewerFs(target: string): ViewerFs {
@@ -33,6 +34,13 @@ function tauriViewerFs(target: string): ViewerFs {
     stat: (path) => invoke("fs_stat", { target, path }),
     read: async (path) => new Uint8Array(await invoke<number[]>("fs_read", { target, path })),
     write: (path, bytes) => invoke("fs_write", { target, path, contents: Array.from(bytes) }),
+    compareAndWrite: (path, expected, bytes) =>
+      invoke("fs_write_checked", {
+        target,
+        path,
+        expected: Array.from(expected),
+        contents: Array.from(bytes),
+      }),
   };
 }
 
@@ -176,13 +184,19 @@ export function TerminalSplit({
     [store, uploadInto],
   );
 
-  const download = (entries: FileEntry[]) =>
+  const download = (entries: FileEntry[]) => {
+    const dupe = duplicateDownloadName(entries.map((e) => e.name));
+    if (dupe) {
+      toast(`Two selected items are named "${dupe}" — download them separately`, false);
+      return;
+    }
     void invoke("fs_download", {
       target,
       remotePaths: entries.map((e) => e.path),
       localDir: null,
       transferId: transfer(),
     }).catch(() => {});
+  };
 
   const actions: FileActions = {
     open: openInViewer,
@@ -258,22 +272,28 @@ export function TerminalSplit({
     // Lock the nodes up front; the tray (fed by the Rust `transfer` event) owns
     // ALL delete feedback — live "Deleting…", "Removed", and failure detail —
     // exactly like uploads, so completion never announces itself twice.
-    await Promise.all(
-      entries.map(async (entry) => {
-        store.beginDelete(entry.path);
-        try {
-          await invoke("fs_delete", { target, path: entry.path, transferId: transfer() });
-        } catch {
-          // Refresh the node itself so any partial deletion is reflected honestly.
-          store.revalidate(entry.path);
-        } finally {
-          store.endDelete(entry.path);
-        }
-      }),
-    );
+    const deleted = (
+      await Promise.all(
+        entries.map(async (entry) => {
+          store.beginDelete(entry.path);
+          try {
+            await invoke("fs_delete", { target, path: entry.path, transferId: transfer() });
+            return entry;
+          } catch {
+            // Refresh the node itself so any partial deletion is reflected honestly.
+            store.revalidate(entry.path);
+            return null;
+          } finally {
+            store.endDelete(entry.path);
+          }
+        }),
+      )
+    ).filter((entry): entry is FileEntry => entry !== null);
     for (const dir of dirs) store.revalidate(dir);
+    // Close the editor only over files actually removed — a failed delete of a
+    // dirty file must keep its unsaved buffer alive for retry.
     const open = viewer.state.phase !== "closed" ? viewer.state.entry.path : null;
-    if (open && entries.some((e) => open === e.path || open.startsWith(`${e.path}/`))) {
+    if (open && deleted.some((e) => open === e.path || open.startsWith(`${e.path}/`))) {
       closeViewer();
     }
   };

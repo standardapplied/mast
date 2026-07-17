@@ -28,6 +28,16 @@ function fakeFs(files: Files) {
       calls.write.push({ path, text: new TextDecoder().decode(data) });
       f.text = new TextDecoder().decode(data);
     },
+    compareAndWrite: async (path, expected, data) => {
+      const f = get(path);
+      const current = bytes(path);
+      if (current.length !== expected.length || current.some((v, i) => v !== expected[i])) {
+        return "conflict";
+      }
+      calls.write.push({ path, text: new TextDecoder().decode(data) });
+      f.text = new TextDecoder().decode(data);
+      return "saved";
+    },
   };
   return { fs, calls, files };
 }
@@ -133,6 +143,7 @@ describe("ViewerStore.open", () => {
         return new TextEncoder().encode(path);
       },
       write: async () => {},
+      compareAndWrite: async () => "saved",
     };
     const store = new ViewerStore(slow, () => {});
     const first = store.open(entry("slow.ts"));
@@ -160,6 +171,7 @@ describe("ViewerStore.save", () => {
     const result = await store.save("new text");
     expect(result).toBe("saved");
     expect(calls.write).toEqual([{ path: "/p/a.ts", text: "new text" }]);
+    expect(calls.read).toEqual(["/p/a.ts"]); // the open only — no separate guard read before the write
     expect(store.state).toMatchObject({ phase: "text", dirty: false, saving: false });
   });
 
@@ -200,7 +212,7 @@ describe("ViewerStore.save", () => {
   test("a failed write reports failed and keeps the pane editable", async () => {
     const files: Files = { "/p/a.ts": { text: "old" } };
     const { fs } = fakeFs(files);
-    fs.write = async () => {
+    fs.compareAndWrite = async () => {
       throw new Error("sftp down");
     };
     const store = new ViewerStore(fs, () => {});

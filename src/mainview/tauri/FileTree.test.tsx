@@ -13,12 +13,25 @@ const flush = async () => {
   });
 };
 
-function fakeFs(listings: Record<string, FsListing>, opts?: { truncated?: string[] }): FsApi {
+function fakeFs(
+  listings: Record<string, FsListing>,
+  opts?: { truncated?: string[]; pageSize?: number },
+): FsApi {
   return {
-    listDeep: async (path) => {
+    listDeep: async (path, offset = 0) => {
       const key = path ?? "/home/dev";
       const listing = listings[key];
       if (!listing) return { listings: [{ path: key, entries: [] }], truncated: false };
+      if (opts?.pageSize) {
+        const page = listing.entries.slice(offset, offset + opts.pageSize);
+        const next = offset + page.length;
+        const more = next < listing.entries.length;
+        return {
+          listings: [{ path: listing.path, entries: page }],
+          truncated: more,
+          nextOffset: more ? next : null,
+        };
+      }
       return { listings: [listing], truncated: opts?.truncated?.includes(key) ?? false };
     },
   };
@@ -210,6 +223,20 @@ describe("FileTree", () => {
     await render(fakeFs(defaultListings, { truncated: ["/home/dev"] }));
     const more = container.querySelector('[data-testid="truncated-row"]');
     expect(more?.textContent).toContain("more — open to load");
+  });
+
+  test("a paged root's more-row is a button that loads the next page", async () => {
+    await render(fakeFs(defaultListings, { pageSize: 2 }));
+    expect(rows()).toHaveLength(3); // pinned root + the first page of two
+    expect(rowNamed("notes.txt")).toBeUndefined();
+    const more = container.querySelector<HTMLButtonElement>('button[data-testid="truncated-row"]')!;
+    expect(more.textContent).toContain("show more");
+
+    await act(async () => more.click());
+    await flush();
+    expect(rows()).toHaveLength(4); // notes.txt arrived
+    expect(rowNamed("notes.txt")).toBeDefined();
+    expect(container.querySelector('[data-testid="truncated-row"]')).toBeNull(); // fully listed
   });
 
   test("5,000 entries render a bounded DOM row count", async () => {

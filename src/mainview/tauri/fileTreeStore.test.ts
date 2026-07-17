@@ -6,6 +6,7 @@ const file = (name: string, base = "/root"): FileEntry => ({ name, path: `${base
 
 type Pending = {
   path: string | null;
+  offset: number | undefined;
   done: boolean;
   resolve: (deep: DeepListing) => void;
   reject: (e: unknown) => void;
@@ -14,10 +15,11 @@ type Pending = {
 function controllableFs() {
   const pending: Pending[] = [];
   const fs: FsApi = {
-    listDeep: (path) =>
+    listDeep: (path, offset) =>
       new Promise((res, rej) => {
         const p: Pending = {
           path,
+          offset,
           done: false,
           resolve: (deep) => {
             p.done = true;
@@ -152,6 +154,73 @@ describe("FileTreeStore", () => {
       status: "ready",
       entries: [file("inner.txt", "/root/sub")],
       stale: false,
+    });
+  });
+
+  test("a paged root records its continuation, and loadMore appends the next page deduped", async () => {
+    const { fs, settle, take } = controllableFs();
+    const store = new FileTreeStore(fs);
+    void store.loadRoot();
+    await settle();
+    take(null).resolve({
+      listings: [{ path: "/root", entries: [file("a.txt")] }],
+      truncated: true,
+      nextOffset: 1,
+    });
+    await settle();
+    expect(store.dir("/root")).toMatchObject({ truncated: true, nextOffset: 1 });
+
+    store.loadMore("/root");
+    await settle();
+    const page = take("/root");
+    expect(page.offset).toBe(1); // resumes where the backend stopped
+    page.resolve({
+      // A dir that shifted between pages can resend an entry — it must not double.
+      listings: [{ path: "/root", entries: [file("a.txt"), file("b.txt")] }],
+      truncated: false,
+      nextOffset: null,
+    });
+    await settle();
+    expect(store.dir("/root")).toEqual({
+      status: "ready",
+      entries: [file("a.txt"), file("b.txt")],
+      stale: false,
+    });
+  });
+
+  test("a middle page keeps the continuation; a failed page keeps the partial cache", async () => {
+    const { fs, settle, take } = controllableFs();
+    const store = new FileTreeStore(fs);
+    void store.loadRoot();
+    await settle();
+    take(null).resolve({
+      listings: [{ path: "/root", entries: [file("a.txt")] }],
+      truncated: true,
+      nextOffset: 1,
+    });
+    await settle();
+
+    store.loadMore("/root");
+    await settle();
+    take("/root").resolve({
+      listings: [{ path: "/root", entries: [file("b.txt")] }],
+      truncated: true,
+      nextOffset: 2,
+    });
+    await settle();
+    expect(store.dir("/root")).toMatchObject({
+      entries: [file("a.txt"), file("b.txt")],
+      truncated: true,
+      nextOffset: 2,
+    });
+
+    store.loadMore("/root");
+    await settle();
+    take("/root").reject(new Error("network blip"));
+    await settle();
+    expect(store.dir("/root")).toMatchObject({
+      entries: [file("a.txt"), file("b.txt")],
+      nextOffset: 2, // still resumable
     });
   });
 

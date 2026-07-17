@@ -1,16 +1,17 @@
 export type FileEntry = { name: string; path: string; isDir: boolean; size: number };
 export type FsListing = { path: string; entries: FileEntry[] };
-export type DeepListing = { listings: FsListing[]; truncated: boolean };
+export type DeepListing = { listings: FsListing[]; truncated: boolean; nextOffset?: number | null };
 
 export type FsApi = {
   /** Bounded subtree listing (`fs_list_deep`): the requested dir plus
-   *  descendants down to the backend's depth/entry budget. */
-  listDeep: (path: string | null) => Promise<DeepListing>;
+   *  descendants down to the backend's depth/entry budget. `offset` resumes a
+   *  paged root listing where the previous response's `nextOffset` stopped. */
+  listDeep: (path: string | null, offset?: number) => Promise<DeepListing>;
 };
 
 export type DirState =
   | { status: "loading" }
-  | { status: "ready"; entries: FileEntry[]; stale: boolean; truncated?: boolean }
+  | { status: "ready"; entries: FileEntry[]; stale: boolean; truncated?: boolean; nextOffset?: number }
   | { status: "error"; error: string };
 
 /**
@@ -80,15 +81,17 @@ export class FileTreeStore {
   }
 
   /** Cache every directory a deep listing returned. The requested dir carries
-   *  the truncated flag; deeper seeds are plain fresh cache entries. */
+   *  the truncated flag (and, when its own listing was paged, the offset to
+   *  resume from); deeper seeds are plain fresh cache entries. */
   private seed(deep: DeepListing, requested: string): void {
     for (const listing of deep.listings) {
-      const truncated = listing.path === requested && deep.truncated ? true : undefined;
+      const isRequested = listing.path === requested;
       this.nodes.set(listing.path, {
         status: "ready",
         entries: listing.entries,
         stale: false,
-        ...(truncated !== undefined && { truncated }),
+        ...(isRequested && deep.truncated && { truncated: true }),
+        ...(isRequested && deep.nextOffset != null && { nextOffset: deep.nextOffset }),
       });
     }
   }
@@ -168,6 +171,44 @@ export class FileTreeStore {
       void this.fetch(path, false);
     }
     this.emit();
+  }
+
+  /** Fetch the next page of a paged directory and append it — the way past a
+   *  listing the backend capped. Deduped by path so a directory that changed
+   *  between pages never shows an entry twice. */
+  loadMore(path: string): void {
+    const cached = this.nodes.get(path);
+    if (cached?.status !== "ready" || cached.nextOffset === undefined) return;
+    if (this.inflight.has(path)) return;
+    void this.fetchMore(path, cached.nextOffset);
+  }
+
+  private async fetchMore(path: string, offset: number): Promise<void> {
+    this.inflight.add(path);
+    this.emit();
+    try {
+      const deep = await this.fs.listDeep(path, offset);
+      if (this.disposed) return;
+      const cached = this.nodes.get(path);
+      const page = deep.listings.find((l) => l.path === path);
+      if (cached?.status !== "ready" || !page) return;
+      const seen = new Set(cached.entries.map((e) => e.path));
+      this.nodes.set(path, {
+        status: "ready",
+        entries: [...cached.entries, ...page.entries.filter((e) => !seen.has(e.path))],
+        stale: false,
+        ...(deep.nextOffset != null && { truncated: true, nextOffset: deep.nextOffset }),
+      });
+      for (const listing of deep.listings) {
+        if (listing.path === path) continue;
+        this.nodes.set(listing.path, { status: "ready", entries: listing.entries, stale: false });
+      }
+    } catch {
+      // A failed page load keeps the good partial cache; the more-row stays.
+    } finally {
+      this.inflight.delete(path);
+      this.emit();
+    }
   }
 
   private async fetch(path: string, background: boolean): Promise<void> {

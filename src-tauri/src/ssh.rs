@@ -253,12 +253,23 @@ pub struct FsListing {
 
 /// A bounded subtree from `fs_list_deep`: one complete `FsListing` per walked
 /// directory (parents before children), plus whether the walk stopped at the
-/// entry budget before covering the requested depth.
+/// entry budget before covering the requested depth. When the requested
+/// directory itself overflowed the budget, `next_offset` is where its next
+/// page starts — so no entry is ever unreachable, just paged.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeepListing {
     pub listings: Vec<FsListing>,
     pub truncated: bool,
+    pub next_offset: Option<usize>,
+}
+
+/// What a checked write did: applied, or refused because the file changed.
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum WriteOutcome {
+    Saved,
+    Conflict,
 }
 
 /// What the viewer/save path needs to know about one remote path.
@@ -675,16 +686,19 @@ impl Backend {
     /// reachable directory down to `depth` levels, stopping (with `truncated`
     /// set — never silently) once including another directory would cross the
     /// `max_entries` budget. The budget also caps the root itself, so no
-    /// single directory can balloon the response. Heavy dependency/build directories
-    /// (`PRUNED_DIRS`) are listed as entries but never descended into; an
-    /// unreadable subdirectory is skipped rather than sinking the whole walk,
-    /// while an unreadable root still fails loud.
+    /// single directory can balloon the response — but a capped root pages:
+    /// `offset` skips already-delivered root entries and `next_offset` says
+    /// where to resume, so every entry stays reachable. Heavy dependency/build
+    /// directories (`PRUNED_DIRS`) are listed as entries but never descended
+    /// into; an unreadable subdirectory is skipped rather than sinking the
+    /// whole walk, while an unreadable root still fails loud.
     pub async fn fs_list_deep(
         &self,
         target: &str,
         path: Option<String>,
         depth: u32,
         max_entries: usize,
+        offset: usize,
     ) -> Result<DeepListing, Error> {
         if depth == 0 || max_entries == 0 {
             return Err(Error::Sftp("fs_list_deep needs depth >= 1 and max_entries >= 1".into()));
@@ -694,6 +708,7 @@ impl Backend {
             async move {
                 let root = resolve_dir(&sftp, path).await?;
                 let mut budget = WalkBudget::new(max_entries);
+                let mut next_offset = None;
                 let mut listings: Vec<FsListing> = Vec::new();
                 let mut queue = VecDeque::from([(root, 1u32)]);
                 while let Some((dir, level)) = queue.pop_front() {
@@ -702,7 +717,9 @@ impl Backend {
                         Err(SftpError::Status(_)) if level > 1 => continue,
                         Err(e) => return Err(e),
                     };
-                    if !budget.admit(listings.is_empty(), &mut listing.entries) {
+                    if listings.is_empty() {
+                        next_offset = budget.admit_root(offset, &mut listing.entries);
+                    } else if !budget.admit(&listing.entries) {
                         break;
                     }
                     if level < depth {
@@ -715,6 +732,7 @@ impl Backend {
                 Ok(DeepListing {
                     listings,
                     truncated: budget.truncated,
+                    next_offset,
                 })
             }
         })
@@ -843,6 +861,18 @@ impl Backend {
         local_dir: Option<String>,
         transfer_id: String,
     ) -> Result<Vec<String>, Error> {
+        // Every top-level path lands at base/<basename>: two roots sharing a
+        // basename would race File::create and silently clobber each other
+        // (case-insensitively on the default macOS filesystem).
+        let mut seen = HashSet::new();
+        for path in &remote_paths {
+            if !seen.insert(base_name(path).to_lowercase()) {
+                return Err(Error::Sftp(format!(
+                    "two selected items would both land as \"{}\" — download them separately",
+                    base_name(path)
+                )));
+            }
+        }
         let base = local_dir
             .filter(|d| !d.is_empty())
             .map(PathBuf::from)
@@ -895,6 +925,32 @@ impl Backend {
             file.write_all(&contents).await?;
             file.flush().await?;
             Ok(())
+        })
+        .await
+    }
+
+    /// Editor save with the conflict guard server-side: compare the file's
+    /// current bytes against `expected` and overwrite only on a match, as one
+    /// backend operation on one SFTP session — the check and the write are
+    /// never separated by webview round-trips, so a concurrent agent edit in
+    /// that gap is caught instead of silently overwritten. The compare reads
+    /// at most `expected.len() + 1` bytes: a longer file already differs.
+    pub async fn fs_write_checked(
+        &self,
+        target: &str,
+        path: String,
+        expected: Vec<u8>,
+        contents: Vec<u8>,
+    ) -> Result<WriteOutcome, Error> {
+        self.mutate_sftp(target, |sftp| async move {
+            let current = read_capped(&sftp, path.clone(), expected.len() as u64).await?;
+            if current != expected {
+                return Ok(WriteOutcome::Conflict);
+            }
+            let mut file = sftp.create(&path).await?;
+            file.write_all(&contents).await?;
+            file.flush().await?;
+            Ok(WriteOutcome::Saved)
         })
         .await
     }
@@ -1725,8 +1781,9 @@ async fn read_capped(sftp: &SftpSession, path: String, max_bytes: u64) -> Result
 /// or not at all (a partial listing would poison the webview's cache as if
 /// complete), and every cut marks the result truncated. The walk root is
 /// special-cased the other way: the directory the user actually opened always
-/// returns, but capped at the budget and flagged truncated — one huge (or
-/// hostile) directory must not push an unbounded listing into the webview.
+/// returns, but paged at the budget — one huge (or hostile) directory must not
+/// push an unbounded listing into the webview, yet every entry stays reachable
+/// through the returned continuation offset.
 struct WalkBudget {
     remaining: usize,
     truncated: bool,
@@ -1737,16 +1794,27 @@ impl WalkBudget {
         WalkBudget { remaining: max_entries, truncated: false }
     }
 
-    fn admit(&mut self, is_root: bool, entries: &mut Vec<FileEntry>) -> bool {
-        if entries.len() > self.remaining {
-            if !is_root {
-                self.truncated = true;
-                return false;
-            }
-            entries.truncate(self.remaining);
-            self.remaining = 0;
+    /// Page the root listing: skip `offset` already-delivered entries, keep at
+    /// most the budget, and return where the next page starts (None = done).
+    fn admit_root(&mut self, offset: usize, entries: &mut Vec<FileEntry>) -> Option<usize> {
+        let total = entries.len();
+        let page: Vec<FileEntry> =
+            std::mem::take(entries).into_iter().skip(offset).take(self.remaining).collect();
+        self.remaining -= page.len();
+        let next = offset + page.len();
+        *entries = page;
+        if next < total {
             self.truncated = true;
-            return true;
+            Some(next)
+        } else {
+            None
+        }
+    }
+
+    fn admit(&mut self, entries: &[FileEntry]) -> bool {
+        if entries.len() > self.remaining {
+            self.truncated = true;
+            return false;
         }
         self.remaining -= entries.len();
         true
@@ -2260,27 +2328,49 @@ Host bastion
     #[test]
     fn walk_budget_admits_whole_listings_until_the_cap() {
         let mut budget = WalkBudget::new(10);
-        assert!(budget.admit(true, &mut fixture_entries(4)));
-        assert!(budget.admit(false, &mut fixture_entries(6)));
+        assert_eq!(budget.admit_root(0, &mut fixture_entries(4)), None);
+        assert!(budget.admit(&fixture_entries(6)));
         assert!(!budget.truncated);
-        assert!(!budget.admit(false, &mut fixture_entries(1)), "an exhausted budget rejects");
+        assert!(!budget.admit(&fixture_entries(1)), "an exhausted budget rejects");
         assert!(budget.truncated);
 
         let mut budget = WalkBudget::new(10);
-        let mut over = fixture_entries(11);
-        assert!(!budget.admit(false, &mut over), "a descendant bigger than the budget is rejected whole");
+        let over = fixture_entries(11);
+        assert!(!budget.admit(&over), "a descendant bigger than the budget is rejected whole");
         assert_eq!(over.len(), 11, "and never partially consumed");
         assert!(budget.truncated);
     }
 
     #[test]
-    fn walk_budget_caps_an_oversized_root_listing() {
+    fn walk_budget_pages_an_oversized_root_listing() {
         let mut budget = WalkBudget::new(10);
         let mut root = fixture_entries(5000);
-        assert!(budget.admit(true, &mut root), "the opened directory still lists");
+        assert_eq!(budget.admit_root(0, &mut root), Some(10), "the opened directory still lists, with a continuation");
         assert_eq!(root.len(), 10, "but bounded by the budget");
         assert!(budget.truncated, "and the cut is never silent");
-        assert!(!budget.admit(false, &mut fixture_entries(1)), "the budget is spent for descendants");
+        assert!(!budget.admit(&fixture_entries(1)), "the budget is spent for descendants");
+    }
+
+    #[test]
+    fn walk_budget_root_pages_resume_where_the_last_one_stopped() {
+        let mut budget = WalkBudget::new(10);
+        let mut middle = fixture_entries(25);
+        assert_eq!(budget.admit_root(10, &mut middle), Some(20));
+        assert_eq!(middle.first().map(|e| e.name.as_str()), Some("f10"));
+        assert_eq!(middle.len(), 10);
+        assert!(budget.truncated);
+
+        let mut budget = WalkBudget::new(10);
+        let mut last = fixture_entries(25);
+        assert_eq!(budget.admit_root(20, &mut last), None, "the final page completes");
+        assert_eq!(last.len(), 5);
+        assert!(!budget.truncated);
+
+        let mut budget = WalkBudget::new(10);
+        let mut shrunk = fixture_entries(3);
+        assert_eq!(budget.admit_root(20, &mut shrunk), None, "a dir that shrank between pages ends cleanly");
+        assert!(shrunk.is_empty());
+        assert!(!budget.truncated);
     }
 
     #[test]
@@ -2406,7 +2496,7 @@ Host bastion
             .unwrap();
 
         let deep = backend
-            .fs_list_deep(LOCAL, Some(root.clone()), 3, 2000)
+            .fs_list_deep(LOCAL, Some(root.clone()), 3, 2000, 0)
             .await
             .expect("deep list");
         assert!(!deep.truncated);
@@ -2434,7 +2524,7 @@ Host bastion
 
         // Expanding a pruned dir directly lists it normally.
         let direct = backend
-            .fs_list_deep(LOCAL, Some(join_remote(&root, "node_modules")), 1, 2000)
+            .fs_list_deep(LOCAL, Some(join_remote(&root, "node_modules")), 1, 2000, 0)
             .await
             .expect("direct deep list of pruned dir");
         assert_eq!(direct.listings.len(), 1);
@@ -2442,7 +2532,7 @@ Host bastion
 
         // Depth bounding: depth 1 returns only the root listing.
         let shallow = backend
-            .fs_list_deep(LOCAL, Some(root.clone()), 1, 2000)
+            .fs_list_deep(LOCAL, Some(root.clone()), 1, 2000, 0)
             .await
             .expect("depth-1 deep list");
         assert_eq!(shallow.listings.len(), 1);
@@ -2451,12 +2541,36 @@ Host bastion
         // Truncation: a budget that only fits the root listing stops there and
         // says so.
         let cut = backend
-            .fs_list_deep(LOCAL, Some(root.clone()), 3, deep_root.entries.len())
+            .fs_list_deep(LOCAL, Some(root.clone()), 3, deep_root.entries.len(), 0)
             .await
             .expect("capped deep list");
         assert!(cut.truncated);
         assert_eq!(cut.listings.len(), 1);
         assert_eq!(cut.listings[0].path, root);
+
+        // Root paging: a budget smaller than the root pages it, and following
+        // next_offset eventually surfaces every entry.
+        let page1 = backend
+            .fs_list_deep(LOCAL, Some(root.clone()), 1, 2, 0)
+            .await
+            .expect("first root page");
+        assert!(page1.truncated);
+        assert_eq!(page1.next_offset, Some(2));
+        let page2 = backend
+            .fs_list_deep(LOCAL, Some(root.clone()), 1, 2, 2)
+            .await
+            .expect("second root page");
+        assert_eq!(page2.next_offset, None);
+        let mut paged: Vec<String> = page1.listings[0]
+            .entries
+            .iter()
+            .chain(page2.listings[0].entries.iter())
+            .map(|e| e.name.clone())
+            .collect();
+        let mut all: Vec<String> = deep_root.entries.iter().map(|e| e.name.clone()).collect();
+        paged.sort();
+        all.sort();
+        assert_eq!(paged, all, "paging loses nothing and duplicates nothing");
 
         cleanup(&backend, &root).await;
     }
@@ -2508,6 +2622,39 @@ Host bastion
         assert!(backend.fs_create_file(LOCAL, path.clone()).await.is_err(), "an existing path refuses");
         assert_eq!(backend.fs_read(LOCAL, path.clone(), 64).await.expect("read back"), b"precious");
         assert_eq!(backend.sftp_opens.load(Ordering::Relaxed), 1, "a Status refusal does not evict");
+
+        cleanup(&backend, &path).await;
+    }
+
+    /// Live: fs_write_checked applies a save only while the file still holds
+    /// the expected bytes — a concurrent rewrite (even to a longer file) is a
+    /// conflict that leaves the disk content untouched.
+    #[tokio::test]
+    #[ignore]
+    async fn fs_write_checked_refuses_a_stale_baseline() {
+        let backend = test_backend();
+        let home = backend.fs_list(LOCAL, None).await.expect("home").path;
+        let path = join_remote(&home, "mast_write_checked_test.txt");
+        backend.fs_write(LOCAL, path.clone(), b"old".to_vec()).await.expect("seed");
+
+        let saved = backend
+            .fs_write_checked(LOCAL, path.clone(), b"old".to_vec(), b"mine".to_vec())
+            .await
+            .expect("matching baseline saves");
+        assert_eq!(saved, WriteOutcome::Saved);
+        assert_eq!(backend.fs_read(LOCAL, path.clone(), 64).await.expect("read"), b"mine");
+
+        backend.fs_write(LOCAL, path.clone(), b"agent version".to_vec()).await.expect("agent");
+        let conflict = backend
+            .fs_write_checked(LOCAL, path.clone(), b"mine".to_vec(), b"clobber".to_vec())
+            .await
+            .expect("stale baseline conflicts");
+        assert_eq!(conflict, WriteOutcome::Conflict);
+        assert_eq!(
+            backend.fs_read(LOCAL, path.clone(), 64).await.expect("read back"),
+            b"agent version",
+            "a conflict never touches the file"
+        );
 
         cleanup(&backend, &path).await;
     }

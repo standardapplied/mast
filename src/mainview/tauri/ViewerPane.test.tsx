@@ -37,14 +37,23 @@ function fakeEditorFactory() {
 }
 
 function makeFs(files: Record<string, { text?: string; bytes?: Uint8Array }>): ViewerFs {
+  const bytes = (path: string) => files[path]!.bytes ?? new TextEncoder().encode(files[path]!.text ?? "");
   return {
     stat: async (path) => {
       if (!files[path]) throw new Error(`missing ${path}`);
       return { isDir: false, size: 5 };
     },
-    read: async (path) => files[path]!.bytes ?? new TextEncoder().encode(files[path]!.text ?? ""),
+    read: async (path) => bytes(path),
     write: async (path, data) => {
       files[path]!.text = new TextDecoder().decode(data);
+    },
+    compareAndWrite: async (path, expected, data) => {
+      const current = bytes(path);
+      if (current.length !== expected.length || current.some((v, i) => v !== expected[i])) {
+        return "conflict";
+      }
+      files[path]!.text = new TextDecoder().decode(data);
+      return "saved";
     },
   };
 }
@@ -125,10 +134,10 @@ describe("ViewerPane", () => {
     const fs = makeFs(files);
     let releaseWrite!: () => void;
     const gate = new Promise<void>((r) => (releaseWrite = r));
-    const write = fs.write;
-    fs.write = async (path, data) => {
+    const write = fs.compareAndWrite;
+    fs.compareAndWrite = async (path, expected, data) => {
       await gate;
-      return write(path, data);
+      return write(path, expected, data);
     };
     const store = new ViewerStore(fs, () => {});
     const { factory, instances } = fakeEditorFactory();

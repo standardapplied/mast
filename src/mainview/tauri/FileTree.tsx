@@ -321,7 +321,18 @@ export function FileTree({
           </p>
         );
       case "truncated":
-        return (
+        return row.more ? (
+          <button
+            key={`t:${row.key}`}
+            type="button"
+            className="file-tree__note file-tree__note--row file-tree__more"
+            style={{ paddingLeft: 8 + row.depth * 14 }}
+            data-testid="truncated-row"
+            onClick={() => store.loadMore(row.key)}
+          >
+            … show more
+          </button>
+        ) : (
           <p key={`t:${row.key}`} className="file-tree__note file-tree__note--row file-tree__more" style={{ paddingLeft: 8 + row.depth * 14 }} data-testid="truncated-row">
             … more — open to load
           </p>

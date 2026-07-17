@@ -8,13 +8,18 @@ import type { FileEntry } from "./fileTreeStore";
  * look at them) — if the bytes on disk no longer match what was loaded, the
  * save reports a conflict instead of silently overwriting. Content is the
  * guard, not mtime: SFTP mtime is whole seconds, and agents easily rewrite a
- * file within the same second it was opened.
+ * file within the same second it was opened. The compare and the write happen
+ * as one backend operation (`compareAndWrite`), never as a read here followed
+ * by a separate write — that gap is exactly where an agent edit would vanish.
  */
 
 export type ViewerFs = {
   stat: (path: string) => Promise<{ isDir: boolean; size: number }>;
   read: (path: string) => Promise<Uint8Array>;
   write: (path: string, bytes: Uint8Array) => Promise<void>;
+  /** Overwrite only while the file still holds `expected`, atomically on the
+   *  backend; "conflict" means the file changed and nothing was written. */
+  compareAndWrite: (path: string, expected: Uint8Array, bytes: Uint8Array) => Promise<"saved" | "conflict">;
 };
 
 const GOOGLE_POINTER_HOSTS = new Set(["docs.google.com", "drive.google.com"]);
@@ -30,9 +35,6 @@ function googlePointerUrl(value: unknown): string {
   }
   return url.href;
 }
-
-const equalBytes = (a: Uint8Array, b: Uint8Array): boolean =>
-  a.length === b.length && a.every((v, i) => v === b[i]);
 
 export type ViewerState =
   | { phase: "closed" }
@@ -195,13 +197,13 @@ export class ViewerStore {
       return result;
     };
     try {
-      if (!opts?.force) {
-        const current = await this.fs.read(path);
-        if (!fresh()) return "failed";
-        if (!equalBytes(current, loadedBytes)) return done("conflict");
-      }
       const encoded = new TextEncoder().encode(text);
-      await this.fs.write(path, encoded);
+      if (opts?.force) {
+        await this.fs.write(path, encoded);
+      } else {
+        const result = await this.fs.compareAndWrite(path, loadedBytes, encoded);
+        if (result === "conflict") return done("conflict");
+      }
       if (!fresh()) return "failed";
       return done("saved", {
         text,

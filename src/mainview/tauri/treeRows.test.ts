@@ -11,7 +11,10 @@ const entry = (path: string, isDir = false): FileEntry => ({
 
 function source(spec: {
   root?: string | null;
-  dirs?: Record<string, { entries: FileEntry[]; truncated?: boolean } | "loading" | { error: string }>;
+  dirs?: Record<
+    string,
+    { entries: FileEntry[]; truncated?: boolean; nextOffset?: number } | "loading" | { error: string }
+  >;
   expanded?: string[];
 }): TreeSource {
   const dirs = spec.dirs ?? {};
@@ -23,7 +26,7 @@ function source(spec: {
       if (!d) return undefined;
       if (d === "loading") return { status: "loading" };
       if ("error" in d) return { status: "error", error: d.error };
-      return { status: "ready", entries: d.entries, stale: false, truncated: d.truncated };
+      return { status: "ready", entries: d.entries, stale: false, truncated: d.truncated, nextOffset: d.nextOffset };
     },
     isExpanded: (path) => expanded.has(path),
   };
@@ -114,7 +117,16 @@ describe("visibleRows", () => {
         dirs: { "/r": { entries: [entry("/r/a", true)], truncated: true } },
       }),
     );
-    expect(rows.at(-1)).toEqual({ kind: "truncated", depth: 1, key: "/r" });
+    expect(rows.at(-1)).toEqual({ kind: "truncated", depth: 1, key: "/r", more: false });
+  });
+
+  test("a paged listing's more row is actionable", () => {
+    const rows = visibleRows(
+      source({
+        dirs: { "/r": { entries: [entry("/r/a", true)], truncated: true, nextOffset: 1 } },
+      }),
+    );
+    expect(rows.at(-1)).toEqual({ kind: "truncated", depth: 1, key: "/r", more: true });
   });
 
   test("a root error shows only the error row under the root row", () => {
