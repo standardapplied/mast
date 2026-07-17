@@ -128,8 +128,8 @@ async fn fs_list(
 }
 
 /// One invoke for a bounded subtree (defaults: depth 3, 2000 entries), so a
-/// first-time tree expand doesn't pay one round-trip per directory. `offset`
-/// resumes a paged root listing where the previous response's `nextOffset`
+/// first-time tree expand doesn't pay one round-trip per directory. `after`
+/// resumes a paged root listing where the previous response's `nextCursor`
 /// left off.
 #[tauri::command]
 async fn fs_list_deep(
@@ -138,7 +138,7 @@ async fn fs_list_deep(
     path: Option<String>,
     depth: Option<u32>,
     max_entries: Option<usize>,
-    offset: Option<usize>,
+    after: Option<ssh::PageCursor>,
 ) -> Result<ssh::DeepListing, String> {
     state
         .backend()
@@ -148,7 +148,7 @@ async fn fs_list_deep(
             path,
             depth.unwrap_or(ssh::DEEP_LIST_DEPTH),
             max_entries.unwrap_or(ssh::DEEP_LIST_MAX_ENTRIES),
-            offset.unwrap_or(0),
+            after,
         )
         .await
         .map_err(String::from)

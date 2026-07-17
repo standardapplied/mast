@@ -23,7 +23,7 @@ use russh::{Channel, ChannelMsg, ChannelStream};
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -33,7 +33,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Generous bound for a recursive delete (`rm -rf`): the remote does the work in
 /// one shot, but a huge tree over a slow link can still take a while.
-const DELETE_TIMEOUT: Duration = Duration::from_secs(300);
+const EXEC_TIMEOUT: Duration = Duration::from_secs(300);
 /// Bound for the one-shot terminfo install before a terminal opens; on expiry
 /// the shell simply falls back to TERM=xterm-256color.
 const TERMINFO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -254,14 +254,26 @@ pub struct FsListing {
 /// A bounded subtree from `fs_list_deep`: one complete `FsListing` per walked
 /// directory (parents before children), plus whether the walk stopped at the
 /// entry budget before covering the requested depth. When the requested
-/// directory itself overflowed the budget, `next_offset` is where its next
-/// page starts — so no entry is ever unreachable, just paged.
+/// directory itself overflowed the budget, `next_cursor` resumes its next
+/// page — so no entry is ever unreachable, just paged.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeepListing {
     pub listings: Vec<FsListing>,
     pub truncated: bool,
-    pub next_offset: Option<usize>,
+    pub next_cursor: Option<PageCursor>,
+}
+
+/// Continuation for a paged root listing: the sort key of the last delivered
+/// entry. The next page is "everything ordered after this", so entries
+/// inserted or deleted earlier in the directory between requests shift
+/// nothing — a numeric offset would silently skip whatever slid into the
+/// already-delivered range.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PageCursor {
+    pub is_dir: bool,
+    pub name: String,
 }
 
 /// What a checked write did: applied, or refused because the file changed.
@@ -687,8 +699,10 @@ impl Backend {
     /// set — never silently) once including another directory would cross the
     /// `max_entries` budget. The budget also caps the root itself, so no
     /// single directory can balloon the response — but a capped root pages:
-    /// `offset` skips already-delivered root entries and `next_offset` says
-    /// where to resume, so every entry stays reachable. Heavy dependency/build
+    /// `after` resumes past the last delivered root entry (by sort key, so a
+    /// directory that changed between pages never skips survivors) and
+    /// `next_cursor` says where the page after this one starts, so every
+    /// entry stays reachable. Heavy dependency/build
     /// directories (`PRUNED_DIRS`) are listed as entries but never descended
     /// into; an unreadable subdirectory is skipped rather than sinking the
     /// whole walk, while an unreadable root still fails loud.
@@ -698,17 +712,18 @@ impl Backend {
         path: Option<String>,
         depth: u32,
         max_entries: usize,
-        offset: usize,
+        after: Option<PageCursor>,
     ) -> Result<DeepListing, Error> {
         if depth == 0 || max_entries == 0 {
             return Err(Error::Sftp("fs_list_deep needs depth >= 1 and max_entries >= 1".into()));
         }
         self.with_sftp(target, |sftp| {
             let path = path.clone();
+            let after = after.clone();
             async move {
                 let root = resolve_dir(&sftp, path).await?;
                 let mut budget = WalkBudget::new(max_entries);
-                let mut next_offset = None;
+                let mut next_cursor = None;
                 let mut listings: Vec<FsListing> = Vec::new();
                 let mut queue = VecDeque::from([(root, 1u32)]);
                 while let Some((dir, level)) = queue.pop_front() {
@@ -718,7 +733,7 @@ impl Backend {
                         Err(e) => return Err(e),
                     };
                     if listings.is_empty() {
-                        next_offset = budget.admit_root(offset, &mut listing.entries);
+                        next_cursor = budget.admit_root(after.as_ref(), &mut listing.entries);
                     } else if !budget.admit(&listing.entries) {
                         break;
                     }
@@ -732,7 +747,7 @@ impl Backend {
                 Ok(DeepListing {
                     listings,
                     truncated: budget.truncated,
-                    next_offset,
+                    next_cursor,
                 })
             }
         })
@@ -861,31 +876,30 @@ impl Backend {
         local_dir: Option<String>,
         transfer_id: String,
     ) -> Result<Vec<String>, Error> {
-        // Every top-level path lands at base/<basename>: two roots sharing a
-        // basename would race File::create and silently clobber each other
-        // (case-insensitively on the default macOS filesystem).
-        let mut seen = HashSet::new();
-        for path in &remote_paths {
-            if !seen.insert(base_name(path).to_lowercase()) {
-                return Err(Error::Sftp(format!(
-                    "two selected items would both land as \"{}\" — download them separately",
-                    base_name(path)
-                )));
-            }
-        }
         let base = local_dir
             .filter(|d| !d.is_empty())
             .map(PathBuf::from)
             .or_else(dirs::download_dir)
             .or_else(dirs::home_dir)
             .ok_or_else(|| Error::Sftp("no local download directory".into()))?;
-        let landed: Vec<String> = remote_paths
-            .iter()
-            .map(|r| base.join(base_name(r)).to_string_lossy().into_owned())
-            .collect();
+        // Every top-level path lands at base/<name>, where <name> is the first
+        // free variant of its basename ("x", "x (1)", …) — checked against
+        // both the disk and this request's other roots (case-insensitively,
+        // for the default macOS filesystem) — so a download never lands on top
+        // of something already there. The reservation itself is `create_new`
+        // in run_download: even a race with a concurrent download fails loudly
+        // instead of truncating.
+        let mut taken = HashSet::new();
+        let mut roots: Vec<(String, PathBuf)> = Vec::new();
+        for remote in &remote_paths {
+            let local = pick_free_local(&base, base_name(remote), &mut taken).await?;
+            roots.push((remote.clone(), local));
+        }
+        let landed: Vec<String> =
+            roots.iter().map(|(_, local)| local.to_string_lossy().into_owned()).collect();
 
         let sftp = self.transfer_sftp(target).await?;
-        let plan = plan_download(&sftp, &remote_paths, &base).await?;
+        let plan = plan_download(&sftp, &roots).await?;
 
         let mut progress = TransferProgress::start(
             transfer_id,
@@ -929,12 +943,20 @@ impl Backend {
         .await
     }
 
-    /// Editor save with the conflict guard server-side: compare the file's
-    /// current bytes against `expected` and overwrite only on a match, as one
-    /// backend operation on one SFTP session — the check and the write are
-    /// never separated by webview round-trips, so a concurrent agent edit in
-    /// that gap is caught instead of silently overwritten. The compare reads
-    /// at most `expected.len() + 1` bytes: a longer file already differs.
+    /// Editor save with the conflict guard as a remote compare-and-swap: the
+    /// new bytes land in a sibling temp file over SFTP, then one shell
+    /// invocation on the target host — holding an exclusive `flock` on the
+    /// file — byte-compares it against the `expected` baseline (streamed on
+    /// stdin to `cmp`) and, only on a match, renames the temp over it. The
+    /// rename is the single linearization point: readers never see a torn
+    /// write, checked saves serialize on the lock so exactly one of two
+    /// concurrent saves wins, and there is no client round-trip between check
+    /// and swap for an agent's edit to slip into. A writer that bypasses the
+    /// lock (an agent using plain tools) can still race the sub-millisecond
+    /// on-host window — no client-side scheme can close that without every
+    /// writer going through one versioned channel. Exit codes: 0 saved,
+    /// 3 conflict (baseline mismatch, or the file was deleted), else error;
+    /// every non-saved outcome removes the temp file.
     pub async fn fs_write_checked(
         &self,
         target: &str,
@@ -942,17 +964,35 @@ impl Backend {
         expected: Vec<u8>,
         contents: Vec<u8>,
     ) -> Result<WriteOutcome, Error> {
-        self.mutate_sftp(target, |sftp| async move {
-            let current = read_capped(&sftp, path.clone(), expected.len() as u64).await?;
-            if current != expected {
-                return Ok(WriteOutcome::Conflict);
-            }
-            let mut file = sftp.create(&path).await?;
-            file.write_all(&contents).await?;
-            file.flush().await?;
-            Ok(WriteOutcome::Saved)
-        })
-        .await
+        let tmp = save_tmp_path(&path);
+        {
+            let tmp = tmp.clone();
+            self.mutate_sftp(target, |sftp| async move {
+                let mut file = sftp
+                    .open_with_flags(tmp, OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE)
+                    .await?;
+                file.write_all(&contents).await?;
+                file.flush().await?;
+                Ok(())
+            })
+            .await?;
+        }
+        let command = format!(
+            "( [ -e {p} ] || exit 3; exec 9<{p} && flock -x 9 || exit 4; \
+             if cmp -s -- {p} -; then chmod --reference={p} {t} 2>/dev/null; mv -f -- {t} {p}; \
+             else exit 3; fi ); s=$?; [ \"$s\" -eq 0 ] || rm -f -- {t}; exit \"$s\"",
+            p = shell_single_quote(&path),
+            t = shell_single_quote(&tmp),
+        );
+        match self.exec_capture_with_input(target, &command, &expected).await? {
+            (0, _) => Ok(WriteOutcome::Saved),
+            (3, _) => Ok(WriteOutcome::Conflict),
+            (code, stderr) => Err(Error::Sftp(if stderr.is_empty() {
+                format!("checked save exited with status {code}")
+            } else {
+                stderr
+            })),
+        }
     }
 
     pub async fn fs_rename(&self, target: &str, from: String, to: String) -> Result<(), Error> {
@@ -1010,23 +1050,45 @@ impl Backend {
     /// exit status and captured stderr. Used for `rm -rf`; keeps the channel
     /// bounded so a wedged remote can't hang the delete forever.
     async fn exec_capture(&self, target: &str, command: &str) -> Result<(u32, String), Error> {
-        tokio::time::timeout(DELETE_TIMEOUT, async {
+        self.exec_capture_with_input(target, command, &[]).await
+    }
+
+    /// `exec_capture` with bytes streamed to the command's stdin. The send is
+    /// best-effort — a command that decides early (cmp on a first-byte
+    /// mismatch) may close stdin before it's fully written — so the exit
+    /// status is the only verdict: a channel that closes without reporting one
+    /// is an error, never a default success.
+    async fn exec_capture_with_input(
+        &self,
+        target: &str,
+        command: &str,
+        input: &[u8],
+    ) -> Result<(u32, String), Error> {
+        tokio::time::timeout(EXEC_TIMEOUT, async {
             let mut channel = self.container_channel(target).await?;
             channel.exec(true, command.as_bytes()).await?;
-            let mut exit = 0u32;
+            if !input.is_empty() {
+                let _ = channel.data(input).await;
+            }
+            let _ = channel.eof().await;
+            let mut exit = None;
             let mut stderr = Vec::new();
             while let Some(msg) = channel.wait().await {
                 match msg {
                     ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(&data),
-                    ChannelMsg::ExitStatus { exit_status } => exit = exit_status,
-                    ChannelMsg::Eof | ChannelMsg::Close => break,
+                    ChannelMsg::ExitStatus { exit_status } => exit = Some(exit_status),
+                    ChannelMsg::Close => break,
                     _ => {}
                 }
             }
-            Ok((exit, String::from_utf8_lossy(&stderr).trim().to_string()))
+            let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
+            let exit = exit.ok_or_else(|| {
+                Error::Sftp(format!("remote command closed without an exit status: {stderr}"))
+            })?;
+            Ok((exit, stderr))
         })
         .await
-        .map_err(|_| Error::Sftp(format!("{target}: delete timed out")))?
+        .map_err(|_| Error::Sftp(format!("{target}: remote command timed out")))?
     }
 
     /// Proxies one HTTP request to the control plane over a direct-tcpip
@@ -1753,12 +1815,16 @@ async fn read_listing(sftp: &SftpSession, dir: &str) -> Result<FsListing, SftpEr
     Ok(FsListing { path: dir.to_string(), entries })
 }
 
+/// The listing order — dirs first, case-insensitive by name, exact name as the
+/// tiebreak so the order is total — doubling as the page-cursor comparison key:
+/// `PageCursor` carries (is_dir, name) and "ordered after the cursor" is
+/// exactly "sorts after the last delivered entry".
+fn entry_sort_key(is_dir: bool, name: &str) -> (bool, String, String) {
+    (!is_dir, name.to_lowercase(), name.to_string())
+}
+
 fn sort_entries(entries: &mut [FileEntry]) {
-    entries.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
+    entries.sort_by_cached_key(|e| entry_sort_key(e.is_dir, &e.name));
 }
 
 /// Exact-name match against the deep walker's prune list.
@@ -1783,7 +1849,7 @@ async fn read_capped(sftp: &SftpSession, path: String, max_bytes: u64) -> Result
 /// special-cased the other way: the directory the user actually opened always
 /// returns, but paged at the budget — one huge (or hostile) directory must not
 /// push an unbounded listing into the webview, yet every entry stays reachable
-/// through the returned continuation offset.
+/// through the returned continuation cursor.
 struct WalkBudget {
     remaining: usize,
     truncated: bool,
@@ -1794,21 +1860,31 @@ impl WalkBudget {
         WalkBudget { remaining: max_entries, truncated: false }
     }
 
-    /// Page the root listing: skip `offset` already-delivered entries, keep at
-    /// most the budget, and return where the next page starts (None = done).
-    fn admit_root(&mut self, offset: usize, entries: &mut Vec<FileEntry>) -> Option<usize> {
-        let total = entries.len();
-        let page: Vec<FileEntry> =
-            std::mem::take(entries).into_iter().skip(offset).take(self.remaining).collect();
+    /// Page the root listing (already in `sort_entries` order): keep the first
+    /// budget-worth of entries ordered after `after`, and return the cursor
+    /// the next page resumes from (None = done). Cursoring by sort key rather
+    /// than a count means entries inserted or deleted before the cut between
+    /// requests shift nothing — nothing already delivered repeats, nothing
+    /// undelivered is skipped (short of being renamed behind the cursor).
+    fn admit_root(&mut self, after: Option<&PageCursor>, entries: &mut Vec<FileEntry>) -> Option<PageCursor> {
+        let mut page: Vec<FileEntry> = std::mem::take(entries)
+            .into_iter()
+            .filter(|e| {
+                after.is_none_or(|c| entry_sort_key(e.is_dir, &e.name) > entry_sort_key(c.is_dir, &c.name))
+            })
+            .collect();
+        let has_more = page.len() > self.remaining;
+        page.truncate(self.remaining);
         self.remaining -= page.len();
-        let next = offset + page.len();
+        let next = has_more.then(|| {
+            let last = page.last().expect("the root budget is at least 1, so a cut page is non-empty");
+            PageCursor { is_dir: last.is_dir, name: last.name.clone() }
+        });
         *entries = page;
-        if next < total {
+        if next.is_some() {
             self.truncated = true;
-            Some(next)
-        } else {
-            None
         }
+        next
     }
 
     fn admit(&mut self, entries: &[FileEntry]) -> bool {
@@ -1823,6 +1899,19 @@ impl WalkBudget {
 
 fn base_name(path: &str) -> &str {
     path.trim_end_matches('/').rsplit('/').next().unwrap_or(path)
+}
+
+/// A dotted sibling temp path for a checked save — same directory, so the
+/// final rename is same-filesystem and atomic. The pid+nanos suffix keeps
+/// concurrent saves (and leftovers from a crashed one) from colliding on the
+/// exclusive create.
+fn save_tmp_path(path: &str) -> String {
+    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("{dir}/.{name}.mast-save-{}-{nanos}", std::process::id())
 }
 
 /// "readme.md" for one item, "readme.md +2" for several.
@@ -1876,18 +1965,46 @@ fn walk_upload(dir: &Path, remote_base: &str, plan: &mut UploadPlan) -> std::io:
     Ok(())
 }
 
-/// Walk the remote paths over SFTP into a flat download plan (local dirs are
-/// made on the fly by `run_download`). Iterative to avoid boxed async recursion.
+/// First free name for a download landing in `base`: the basename itself, then
+/// "name (1)", "name (2)", … before the final extension — probed against the
+/// filesystem and against `taken` (lowercased: this request's earlier picks,
+/// which don't exist on disk yet).
+async fn pick_free_local(
+    base: &Path,
+    name: &str,
+    taken: &mut HashSet<String>,
+) -> Result<PathBuf, Error> {
+    for n in 0..1000 {
+        let candidate = if n == 0 { name.to_string() } else { numbered_name(name, n) };
+        if taken.contains(&candidate.to_lowercase()) {
+            continue;
+        }
+        let path = base.join(&candidate);
+        if tokio::fs::try_exists(&path).await? {
+            continue;
+        }
+        taken.insert(candidate.to_lowercase());
+        return Ok(path);
+    }
+    Err(Error::Sftp(format!("no free local name for \"{name}\"")))
+}
+
+fn numbered_name(name: &str, n: usize) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => format!("{stem} ({n}).{ext}"),
+        _ => format!("{name} ({n})"),
+    }
+}
+
+/// Walk the remote roots (already mapped to their local landing paths) over
+/// SFTP into a flat download plan (local dirs are made on the fly by
+/// `run_download`). Iterative to avoid boxed async recursion.
 async fn plan_download(
     sftp: &SftpSession,
-    remote_paths: &[String],
-    base: &Path,
+    roots: &[(String, PathBuf)],
 ) -> Result<DownloadPlan, Error> {
     let mut plan = DownloadPlan::default();
-    let mut stack: Vec<(String, PathBuf)> = remote_paths
-        .iter()
-        .map(|r| (r.clone(), base.join(base_name(r))))
-        .collect();
+    let mut stack: Vec<(String, PathBuf)> = roots.to_vec();
     while let Some((remote, local)) = stack.pop() {
         let meta = sftp.metadata(remote.clone()).await.map_err(|e| Error::Sftp(e.to_string()))?;
         if meta.is_dir() {
@@ -1919,7 +2036,12 @@ async fn run_download(
             tokio::fs::create_dir_all(parent).await?;
         }
         let mut src = sftp.open(item.remote.clone()).await.map_err(|e| Error::Sftp(e.to_string()))?;
-        let mut dst = tokio::fs::File::create(&item.local).await?;
+        let mut dst = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&item.local)
+            .await
+            .map_err(|e| Error::Sftp(format!("{}: {e}", item.local.display())))?;
         let mut buf = vec![0u8; CHUNK];
         loop {
             let n = src.read(&mut buf).await?;
@@ -2314,21 +2436,27 @@ Host bastion
         assert!(!is_pruned("src"));
     }
 
+    /// Entries in `sort_entries` order (zero-padded names), as `admit_root`
+    /// receives them from `read_listing`.
     fn fixture_entries(n: usize) -> Vec<FileEntry> {
         (0..n)
             .map(|i| FileEntry {
-                name: format!("f{i}"),
-                path: format!("/x/f{i}"),
+                name: format!("f{i:04}"),
+                path: format!("/x/f{i:04}"),
                 is_dir: false,
                 size: 0,
             })
             .collect()
     }
 
+    fn cursor(name: &str) -> Option<PageCursor> {
+        Some(PageCursor { is_dir: false, name: name.into() })
+    }
+
     #[test]
     fn walk_budget_admits_whole_listings_until_the_cap() {
         let mut budget = WalkBudget::new(10);
-        assert_eq!(budget.admit_root(0, &mut fixture_entries(4)), None);
+        assert_eq!(budget.admit_root(None, &mut fixture_entries(4)), None);
         assert!(budget.admit(&fixture_entries(6)));
         assert!(!budget.truncated);
         assert!(!budget.admit(&fixture_entries(1)), "an exhausted budget rejects");
@@ -2345,7 +2473,8 @@ Host bastion
     fn walk_budget_pages_an_oversized_root_listing() {
         let mut budget = WalkBudget::new(10);
         let mut root = fixture_entries(5000);
-        assert_eq!(budget.admit_root(0, &mut root), Some(10), "the opened directory still lists, with a continuation");
+        let next = budget.admit_root(None, &mut root);
+        assert_eq!(next, cursor("f0009"), "the opened directory still lists, with a continuation");
         assert_eq!(root.len(), 10, "but bounded by the budget");
         assert!(budget.truncated, "and the cut is never silent");
         assert!(!budget.admit(&fixture_entries(1)), "the budget is spent for descendants");
@@ -2355,22 +2484,79 @@ Host bastion
     fn walk_budget_root_pages_resume_where_the_last_one_stopped() {
         let mut budget = WalkBudget::new(10);
         let mut middle = fixture_entries(25);
-        assert_eq!(budget.admit_root(10, &mut middle), Some(20));
-        assert_eq!(middle.first().map(|e| e.name.as_str()), Some("f10"));
+        assert_eq!(budget.admit_root(cursor("f0009").as_ref(), &mut middle), cursor("f0019"));
+        assert_eq!(middle.first().map(|e| e.name.as_str()), Some("f0010"));
         assert_eq!(middle.len(), 10);
         assert!(budget.truncated);
 
         let mut budget = WalkBudget::new(10);
         let mut last = fixture_entries(25);
-        assert_eq!(budget.admit_root(20, &mut last), None, "the final page completes");
+        assert_eq!(budget.admit_root(cursor("f0019").as_ref(), &mut last), None, "the final page completes");
         assert_eq!(last.len(), 5);
         assert!(!budget.truncated);
 
         let mut budget = WalkBudget::new(10);
         let mut shrunk = fixture_entries(3);
-        assert_eq!(budget.admit_root(20, &mut shrunk), None, "a dir that shrank between pages ends cleanly");
+        assert_eq!(
+            budget.admit_root(cursor("f0019").as_ref(), &mut shrunk),
+            None,
+            "a dir that shrank between pages ends cleanly"
+        );
         assert!(shrunk.is_empty());
         assert!(!budget.truncated);
+    }
+
+    /// The review's interleaving: [a,b,c,d] pages as [a,b]; `a` is deleted
+    /// before the next request. An offset would skip `c` forever — the cursor
+    /// delivers every survivor that sorted after the last page.
+    #[test]
+    fn walk_budget_cursor_never_skips_entries_when_the_directory_shifts() {
+        let entry = |name: &str| FileEntry { name: name.into(), path: format!("/x/{name}"), is_dir: false, size: 0 };
+
+        let mut budget = WalkBudget::new(2);
+        let mut page1 = vec![entry("a"), entry("b"), entry("c"), entry("d")];
+        let next = budget.admit_root(None, &mut page1);
+        assert_eq!(next, cursor("b"));
+
+        let mut budget = WalkBudget::new(2);
+        let mut page2 = vec![entry("b"), entry("c"), entry("d")];
+        assert_eq!(budget.admit_root(next.as_ref(), &mut page2), None);
+        let names: Vec<&str> = page2.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["c", "d"], "the survivor after the deletion is still delivered");
+
+        let mut budget = WalkBudget::new(2);
+        let mut grown = vec![entry("0new"), entry("a"), entry("b"), entry("c"), entry("d")];
+        assert_eq!(budget.admit_root(next.as_ref(), &mut grown), None);
+        let names: Vec<&str> = grown.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["c", "d"], "an insertion before the cursor repeats nothing");
+    }
+
+    /// Dirs sort before files and the cursor key honors that: resuming after
+    /// the last directory starts at the files, never re-listing a dir.
+    #[test]
+    fn walk_budget_cursor_orders_dirs_before_files() {
+        let entry = |name: &str, is_dir: bool| FileEntry {
+            name: name.into(),
+            path: format!("/x/{name}"),
+            is_dir,
+            size: 0,
+        };
+        let listing = || {
+            let mut all = vec![entry("zeta", true), entry("alpha.txt", false), entry("Beta", true)];
+            sort_entries(&mut all);
+            all
+        };
+
+        let mut budget = WalkBudget::new(2);
+        let mut page1 = listing();
+        let next = budget.admit_root(None, &mut page1);
+        assert_eq!(next, Some(PageCursor { is_dir: true, name: "zeta".into() }));
+
+        let mut budget = WalkBudget::new(2);
+        let mut page2 = listing();
+        assert_eq!(budget.admit_root(next.as_ref(), &mut page2), None);
+        let names: Vec<&str> = page2.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["alpha.txt"]);
     }
 
     #[test]
@@ -2496,7 +2682,7 @@ Host bastion
             .unwrap();
 
         let deep = backend
-            .fs_list_deep(LOCAL, Some(root.clone()), 3, 2000, 0)
+            .fs_list_deep(LOCAL, Some(root.clone()), 3, 2000, None)
             .await
             .expect("deep list");
         assert!(!deep.truncated);
@@ -2524,7 +2710,7 @@ Host bastion
 
         // Expanding a pruned dir directly lists it normally.
         let direct = backend
-            .fs_list_deep(LOCAL, Some(join_remote(&root, "node_modules")), 1, 2000, 0)
+            .fs_list_deep(LOCAL, Some(join_remote(&root, "node_modules")), 1, 2000, None)
             .await
             .expect("direct deep list of pruned dir");
         assert_eq!(direct.listings.len(), 1);
@@ -2532,7 +2718,7 @@ Host bastion
 
         // Depth bounding: depth 1 returns only the root listing.
         let shallow = backend
-            .fs_list_deep(LOCAL, Some(root.clone()), 1, 2000, 0)
+            .fs_list_deep(LOCAL, Some(root.clone()), 1, 2000, None)
             .await
             .expect("depth-1 deep list");
         assert_eq!(shallow.listings.len(), 1);
@@ -2541,7 +2727,7 @@ Host bastion
         // Truncation: a budget that only fits the root listing stops there and
         // says so.
         let cut = backend
-            .fs_list_deep(LOCAL, Some(root.clone()), 3, deep_root.entries.len(), 0)
+            .fs_list_deep(LOCAL, Some(root.clone()), 3, deep_root.entries.len(), None)
             .await
             .expect("capped deep list");
         assert!(cut.truncated);
@@ -2549,18 +2735,18 @@ Host bastion
         assert_eq!(cut.listings[0].path, root);
 
         // Root paging: a budget smaller than the root pages it, and following
-        // next_offset eventually surfaces every entry.
+        // next_cursor eventually surfaces every entry.
         let page1 = backend
-            .fs_list_deep(LOCAL, Some(root.clone()), 1, 2, 0)
+            .fs_list_deep(LOCAL, Some(root.clone()), 1, 2, None)
             .await
             .expect("first root page");
         assert!(page1.truncated);
-        assert_eq!(page1.next_offset, Some(2));
+        assert!(page1.next_cursor.is_some());
         let page2 = backend
-            .fs_list_deep(LOCAL, Some(root.clone()), 1, 2, 2)
+            .fs_list_deep(LOCAL, Some(root.clone()), 1, 2, page1.next_cursor.clone())
             .await
             .expect("second root page");
-        assert_eq!(page2.next_offset, None);
+        assert_eq!(page2.next_cursor, None);
         let mut paged: Vec<String> = page1.listings[0]
             .entries
             .iter()
@@ -2655,6 +2841,44 @@ Host bastion
             b"agent version",
             "a conflict never touches the file"
         );
+
+        cleanup(&backend, &path).await;
+    }
+
+    /// Live: two checked saves racing from the same baseline serialize on the
+    /// remote lock — exactly one lands, the other reports a conflict, and the
+    /// file holds the winner's bytes with no temp droppings left behind.
+    #[tokio::test]
+    #[ignore]
+    async fn concurrent_checked_saves_admit_exactly_one_winner() {
+        let backend = test_backend();
+        let home = backend.fs_list(LOCAL, None).await.expect("home").path;
+        let path = join_remote(&home, "mast_write_checked_race_test.txt");
+        backend.fs_write(LOCAL, path.clone(), b"base".to_vec()).await.expect("seed");
+
+        let (a, b) = tokio::join!(
+            backend.fs_write_checked(LOCAL, path.clone(), b"base".to_vec(), b"aaa".to_vec()),
+            backend.fs_write_checked(LOCAL, path.clone(), b"base".to_vec(), b"bbb".to_vec()),
+        );
+        let outcomes = [a.expect("save a"), b.expect("save b")];
+        assert_eq!(
+            outcomes.iter().filter(|o| **o == WriteOutcome::Saved).count(),
+            1,
+            "exactly one racing save wins: {outcomes:?}"
+        );
+
+        let disk = backend.fs_read(LOCAL, path.clone(), 64).await.expect("read back");
+        let winner = if outcomes[0] == WriteOutcome::Saved { b"aaa" } else { b"bbb" };
+        assert_eq!(disk, winner, "the file holds the winner's bytes, untorn");
+
+        let (code, _) = backend
+            .exec_capture(
+                LOCAL,
+                &format!("ls {}/.mast_write_checked_race_test.txt.mast-save-* 2>/dev/null", shell_single_quote(&home)),
+            )
+            .await
+            .expect("ls temps");
+        assert_ne!(code, 0, "no save temp files survive the race");
 
         cleanup(&backend, &path).await;
     }

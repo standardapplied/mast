@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { FileTreeStore, type DeepListing, type FileEntry, type FsApi } from "./fileTreeStore";
+import { FileTreeStore, type DeepListing, type FileEntry, type FsApi, type PageCursor } from "./fileTreeStore";
 
 const dir = (name: string, base = "/root"): FileEntry => ({ name, path: `${base}/${name}`, isDir: true, size: 0 });
 const file = (name: string, base = "/root"): FileEntry => ({ name, path: `${base}/${name}`, isDir: false, size: 1 });
 
 type Pending = {
   path: string | null;
-  offset: number | undefined;
+  after: PageCursor | undefined;
   done: boolean;
   resolve: (deep: DeepListing) => void;
   reject: (e: unknown) => void;
@@ -15,11 +15,11 @@ type Pending = {
 function controllableFs() {
   const pending: Pending[] = [];
   const fs: FsApi = {
-    listDeep: (path, offset) =>
+    listDeep: (path, after) =>
       new Promise((res, rej) => {
         const p: Pending = {
           path,
-          offset,
+          after,
           done: false,
           resolve: (deep) => {
             p.done = true;
@@ -165,20 +165,20 @@ describe("FileTreeStore", () => {
     take(null).resolve({
       listings: [{ path: "/root", entries: [file("a.txt")] }],
       truncated: true,
-      nextOffset: 1,
+      nextCursor: { isDir: false, name: "a.txt" },
     });
     await settle();
-    expect(store.dir("/root")).toMatchObject({ truncated: true, nextOffset: 1 });
+    expect(store.dir("/root")).toMatchObject({ truncated: true, nextCursor: { isDir: false, name: "a.txt" } });
 
     store.loadMore("/root");
     await settle();
     const page = take("/root");
-    expect(page.offset).toBe(1); // resumes where the backend stopped
+    expect(page.after).toEqual({ isDir: false, name: "a.txt" }); // resumes where the backend stopped
     page.resolve({
       // A dir that shifted between pages can resend an entry — it must not double.
       listings: [{ path: "/root", entries: [file("a.txt"), file("b.txt")] }],
       truncated: false,
-      nextOffset: null,
+      nextCursor: null,
     });
     await settle();
     expect(store.dir("/root")).toEqual({
@@ -196,7 +196,7 @@ describe("FileTreeStore", () => {
     take(null).resolve({
       listings: [{ path: "/root", entries: [file("a.txt")] }],
       truncated: true,
-      nextOffset: 1,
+      nextCursor: { isDir: false, name: "a.txt" },
     });
     await settle();
 
@@ -205,13 +205,13 @@ describe("FileTreeStore", () => {
     take("/root").resolve({
       listings: [{ path: "/root", entries: [file("b.txt")] }],
       truncated: true,
-      nextOffset: 2,
+      nextCursor: { isDir: false, name: "b.txt" },
     });
     await settle();
     expect(store.dir("/root")).toMatchObject({
       entries: [file("a.txt"), file("b.txt")],
       truncated: true,
-      nextOffset: 2,
+      nextCursor: { isDir: false, name: "b.txt" },
     });
 
     store.loadMore("/root");
@@ -220,7 +220,7 @@ describe("FileTreeStore", () => {
     await settle();
     expect(store.dir("/root")).toMatchObject({
       entries: [file("a.txt"), file("b.txt")],
-      nextOffset: 2, // still resumable
+      nextCursor: { isDir: false, name: "b.txt" }, // still resumable
     });
   });
 

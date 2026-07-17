@@ -26,7 +26,7 @@ import { loadWidths, PANE_LIMITS, saveWidths, type PaneWidths } from "./workbenc
  */
 
 function tauriFs(target: string): FsApi {
-  return { listDeep: (path, offset) => invoke("fs_list_deep", { target, path, offset }) };
+  return { listDeep: (path, after) => invoke("fs_list_deep", { target, path, after }) };
 }
 
 function tauriViewerFs(target: string): ViewerFs {

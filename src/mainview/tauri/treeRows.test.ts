@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { FileEntry } from "./fileTreeStore";
+import type { FileEntry, PageCursor } from "./fileTreeStore";
 import { visibleRows, type TreeSource } from "./treeRows";
 
 const entry = (path: string, isDir = false): FileEntry => ({
@@ -13,7 +13,7 @@ function source(spec: {
   root?: string | null;
   dirs?: Record<
     string,
-    { entries: FileEntry[]; truncated?: boolean; nextOffset?: number } | "loading" | { error: string }
+    { entries: FileEntry[]; truncated?: boolean; nextCursor?: PageCursor } | "loading" | { error: string }
   >;
   expanded?: string[];
 }): TreeSource {
@@ -26,7 +26,7 @@ function source(spec: {
       if (!d) return undefined;
       if (d === "loading") return { status: "loading" };
       if ("error" in d) return { status: "error", error: d.error };
-      return { status: "ready", entries: d.entries, stale: false, truncated: d.truncated, nextOffset: d.nextOffset };
+      return { status: "ready", entries: d.entries, stale: false, truncated: d.truncated, nextCursor: d.nextCursor };
     },
     isExpanded: (path) => expanded.has(path),
   };
@@ -123,7 +123,7 @@ describe("visibleRows", () => {
   test("a paged listing's more row is actionable", () => {
     const rows = visibleRows(
       source({
-        dirs: { "/r": { entries: [entry("/r/a", true)], truncated: true, nextOffset: 1 } },
+        dirs: { "/r": { entries: [entry("/r/a", true)], truncated: true, nextCursor: { isDir: true, name: "a" } } },
       }),
     );
     expect(rows.at(-1)).toEqual({ kind: "truncated", depth: 1, key: "/r", more: true });

@@ -18,18 +18,19 @@ function fakeFs(
   opts?: { truncated?: string[]; pageSize?: number },
 ): FsApi {
   return {
-    listDeep: async (path, offset = 0) => {
+    listDeep: async (path, after) => {
       const key = path ?? "/home/dev";
       const listing = listings[key];
       if (!listing) return { listings: [{ path: key, entries: [] }], truncated: false };
       if (opts?.pageSize) {
-        const page = listing.entries.slice(offset, offset + opts.pageSize);
-        const next = offset + page.length;
-        const more = next < listing.entries.length;
+        const start = after ? listing.entries.findIndex((e) => e.name === after.name) + 1 : 0;
+        const page = listing.entries.slice(start, start + opts.pageSize);
+        const more = start + page.length < listing.entries.length;
+        const last = page[page.length - 1];
         return {
           listings: [{ path: listing.path, entries: page }],
           truncated: more,
-          nextOffset: more ? next : null,
+          nextCursor: more && last ? { isDir: last.isDir, name: last.name } : null,
         };
       }
       return { listings: [listing], truncated: opts?.truncated?.includes(key) ?? false };
