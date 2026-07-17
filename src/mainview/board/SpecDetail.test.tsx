@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { GlobalSpecView, SailEvent } from "../../shared/sail-models";
+import type { GlobalSpecView, RunView, SailEvent, StopRunResponse } from "../../shared/sail-models";
+import type { SailResult } from "../../shared/types";
 import { ToastProvider } from "../components/Toast";
 import type { Gateway } from "../gateway";
 import { SpecDetail } from "./SpecDetail";
@@ -42,8 +43,15 @@ function makeGateway(
   const dep = spec({ id: "dep-a", status: "done" });
   const listeners = new Set<(e: SailEvent) => void>();
   const updates: unknown[] = [];
+  const stopCalls: string[] = [];
+  const getSpecCalls = { count: 0 };
   let enrichGate: Promise<void> = Promise.resolve();
   let revisions = [{ rev: 1, recorded_at: "2026-07-09T00:00:00Z", origin: "create", deleted: false }];
+  let runs: RunView[] = [];
+  let stopResult: SailResult<StopRunResponse> = {
+    ok: true,
+    value: { run_id: "run-b1", stopped: true, spec_cancelled: true },
+  };
 
   const gateway = {
     whoami: async () => ({
@@ -69,7 +77,15 @@ function makeGateway(
       updates.push(request);
       return { ok: true as const, value: { spec: main }, etag: '"e2"' };
     },
-    getSpec: async () => ({ ok: true as const, value: { spec: main }, etag: '"e1"' }),
+    getSpec: async () => {
+      getSpecCalls.count++;
+      return { ok: true as const, value: { spec: main }, etag: '"e1"' };
+    },
+    listRuns: async () => ({ ok: true as const, value: { spec: "s1", runs } }),
+    stopRun: async (runId: string) => {
+      stopCalls.push(runId);
+      return stopResult;
+    },
     getSpecContent: async () => ({
       ok: true as const,
       value: { spec_id: "s1", body: "# body", plan: "" },
@@ -148,6 +164,10 @@ function makeGateway(
   return {
     gateway: gateway as unknown as Gateway,
     updates,
+    stopCalls,
+    getSpecCalls,
+    setRuns: (r: RunView[]) => (runs = r),
+    setStopResult: (r: SailResult<StopRunResponse>) => (stopResult = r),
     setEnrichGate: (gate: Promise<void>) => (enrichGate = gate),
     setRevisions: (r: typeof revisions) => (revisions = r),
     emit: (e: Partial<SailEvent>) =>
@@ -333,6 +353,121 @@ describe("SpecDetail assignee editing", () => {
     const input = container.querySelector<HTMLInputElement>(".prop-assignee input");
     expect(input).not.toBeNull();
     expect(input!.value).toBe("uday");
+  });
+});
+
+describe("SpecDetail stop action", () => {
+  const buildRun = (partial: Partial<RunView> & Pick<RunView, "id">): RunView => ({
+    project: "chorus",
+    spec_id: "s1",
+    node: "this-box",
+    role: "build",
+    agent: "claude-code",
+    status: "running",
+    started_at: "2026-07-15T10:00:00Z",
+    ...partial,
+  });
+  const stopButton = () =>
+    container.querySelector<HTMLButtonElement>('[data-testid="detail-stop"]');
+  const confirmButton = () =>
+    container.querySelector<HTMLButtonElement>('[data-testid="confirm-stop"]');
+
+  test("only an in_progress spec offers Stop", async () => {
+    for (const status of ["pending", "review", "done", "cancelled"] as const) {
+      const fake = makeGateway(status);
+      await mount(fake.gateway);
+      expect(stopButton()).toBeNull();
+      act(() => root.unmount());
+      container.remove();
+    }
+    const fake = makeGateway("in_progress", "uday");
+    await mount(fake.gateway);
+    expect(stopButton()).not.toBeNull();
+  });
+
+  test("confirm stops the resolved running build run and refreshes the detail", async () => {
+    const fake = makeGateway("in_progress", "uday");
+    fake.setRuns([
+      buildRun({ id: "run-old", started_at: "2026-07-14T10:00:00Z" }),
+      buildRun({ id: "run-b1" }),
+      buildRun({ id: "run-review", role: "review", started_at: "2026-07-16T10:00:00Z" }),
+    ]);
+    await mount(fake.gateway);
+
+    act(() => stopButton()!.click());
+    await settle();
+    expect(text()).toContain("Stop s1?");
+    expect(text()).toContain("run-b1");
+    expect(fake.stopCalls).toEqual([]);
+
+    const loadsBefore = fake.getSpecCalls.count;
+    act(() => confirmButton()!.click());
+    await settle();
+
+    expect(fake.stopCalls).toEqual(["run-b1"]);
+    expect(text()).toContain("Stopped — spec cancelled.");
+    expect(fake.getSpecCalls.count).toBeGreaterThan(loadsBefore);
+  });
+
+  test("cancelling the dialog stops nothing", async () => {
+    const fake = makeGateway("in_progress", "uday");
+    fake.setRuns([buildRun({ id: "run-b1" })]);
+    await mount(fake.gateway);
+
+    act(() => stopButton()!.click());
+    await settle();
+    const cancel = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent === "Cancel",
+    )!;
+    act(() => cancel.click());
+    await settle();
+    expect(fake.stopCalls).toEqual([]);
+  });
+
+  test("no running run on this server: an honest toast, no blind stop", async () => {
+    const fake = makeGateway("in_progress", "uday");
+    fake.setRuns([buildRun({ id: "run-b1", status: "completed" })]);
+    await mount(fake.gateway);
+
+    act(() => stopButton()!.click());
+    await settle();
+    expect(fake.stopCalls).toEqual([]);
+    expect(container.querySelector('[data-testid="confirm-stop"]')).toBeNull();
+    expect(text()).toContain("No running build run for s1");
+    expect(text()).toContain("another FDE");
+  });
+
+  test("a refusal surfaces its mapped toast instead of a raw error", async () => {
+    const fake = makeGateway("in_progress", "uday");
+    fake.setRuns([buildRun({ id: "run-b1", node: "ravi-box" })]);
+    fake.setStopResult({
+      ok: false,
+      error: { status: 409, code: "run_on_other_node", message: "run on other node" },
+    });
+    await mount(fake.gateway);
+
+    act(() => stopButton()!.click());
+    await settle();
+    act(() => confirmButton()!.click());
+    await settle();
+    expect(text()).toContain("ravi-box");
+    expect(text()).toContain("stop it from that box");
+  });
+
+  test("a cancelled spec renders its badge and offers Re-dispatch", async () => {
+    const fake = makeGateway("cancelled");
+    await mount(fake.gateway);
+    expect(text()).toContain("Cancelled");
+    expect(container.querySelector('[data-testid="detail-dispatch"]')?.textContent).toBe(
+      "Re-dispatch",
+    );
+  });
+
+  test("an unknown status string from a newer sail still renders", async () => {
+    const fake = makeGateway("paused" as GlobalSpecView["status"]);
+    await mount(fake.gateway);
+    expect(text()).toContain("paused");
+    expect(stopButton()).toBeNull();
   });
 });
 

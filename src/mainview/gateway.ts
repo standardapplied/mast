@@ -20,6 +20,7 @@ import type {
   SpecFilter,
   SpecStatus,
   SpecUpdateRequest,
+  StopRunResponse,
   WhoAmI,
 } from "../shared/sail-models";
 import type { SailResult } from "../shared/types";
@@ -74,6 +75,8 @@ export type Gateway = {
   listFdes(): Promise<SailResult<FdeListResponse>>;
   /** The spec's execution history (GET /v1/runs?spec=) — the log panel's header. */
   listRuns(specId: string): Promise<SailResult<RunListResponse>>;
+  /** Clean-stop a running run (POST /v1/runs/{id}/stop) — sail ≥ v0.13.172. */
+  stopRun(runId: string): Promise<SailResult<StopRunResponse>>;
   /** A `tail -n` snapshot of the spec's newest run log, for instant content on open. */
   agentLogSnapshot(
     specId: string,
@@ -152,6 +155,7 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     listProjects: () => unsupported("The project roster requires the Tauri shell."),
     listFdes: () => unsupported("The FDE roster requires the Tauri shell."),
     listRuns: () => unsupported("Live agent logs require the Tauri shell."),
+    stopRun: () => unsupported("Stopping a run requires the Tauri shell."),
     agentLogSnapshot: () => unsupported("Live agent logs require the Tauri shell."),
     followAgentLog: () => inertAgentLogHandle(),
     connection: () => api.sailConnection(),
@@ -328,6 +332,7 @@ export function createDemoGateway(): DemoGateway {
         review: count("review"),
         awaiting_merge: count("awaiting_merge"),
         done: count("done"),
+        cancelled: count("cancelled"),
         archived: count("archived"),
         next_ready_id: scoped.find((s) => s.status === "pending" && !s.depends_on?.length)?.id,
         done_open_findings: 0,
@@ -472,6 +477,42 @@ export function createDemoGateway(): DemoGateway {
           ? [run("build", "running")]
           : [run("build", "completed"), run("review", "running")];
       return ok({ spec: specId, runs });
+    },
+
+    async stopRun(runId) {
+      const spec = specs.find((s) => runId === `demo-run-${s.id}-build`);
+      if (!spec || spec.status !== "in_progress") {
+        return {
+          ok: false,
+          error: { status: 404, code: "run_not_found", message: `No running run '${runId}'` },
+        };
+      }
+      const previous = spec.status;
+      spec.status = "cancelled";
+      spec.updated_at = new Date().toISOString();
+      emit({
+        v: 1,
+        id: ++eventId,
+        ts: spec.updated_at,
+        project: spec.project,
+        spec: spec.id,
+        type: "agent_cancelled",
+        agent: "mast",
+        host: "demo",
+        data: { run: runId },
+      });
+      emit({
+        v: 1,
+        id: ++eventId,
+        ts: spec.updated_at,
+        project: spec.project,
+        spec: spec.id,
+        type: "spec_status_changed",
+        agent: "mast",
+        host: "demo",
+        data: { from: previous, to: "cancelled" },
+      });
+      return ok({ run_id: runId, stopped: true, spec_cancelled: true });
     },
 
     async agentLogSnapshot(_specId, role, tail) {

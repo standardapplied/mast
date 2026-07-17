@@ -12,6 +12,7 @@ export type SpecStatus =
   | "review"
   | "awaiting_merge"
   | "done"
+  | "cancelled"
   | "archived";
 
 export type GlobalSpecView = {
@@ -67,6 +68,8 @@ export type GlobalBoardResponse = {
   review: number;
   awaiting_merge: number;
   done: number;
+  /** Absent on sail < v0.13.172, which predates the clean-stop lane. */
+  cancelled?: number;
   archived: number;
   next_ready_id?: string;
   done_open_findings: number;
@@ -152,6 +155,19 @@ export type RunView = {
   completed_at?: string;
   exit_code?: number;
   log_path?: string;
+};
+
+/**
+ * POST /v1/runs/{id}/stop — the clean-stop lane (sail ≥ v0.13.172). `stopped:
+ * false` carries a `reason` (no_agent_running, run_not_running, run_not_active);
+ * `spec_cancelled` says whether the spec still reached its terminal status.
+ */
+export type StopRunResponse = {
+  run_id: string;
+  stopped: boolean;
+  reason?: string;
+  pid?: number;
+  spec_cancelled: boolean;
 };
 
 /** GET /v1/runs?project=&spec= — execution history, newest first. */

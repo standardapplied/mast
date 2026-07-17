@@ -191,4 +191,17 @@ describe("lifecycle transitions", () => {
     expect(canTransition("archived", "draft")).toBe(true);
     expect(canTransition("archived", "done")).toBe(false);
   });
+
+  test("cancelled is sail's terminal lane: no drag in or out, archive aside", () => {
+    expect(canTransition("in_progress", "cancelled")).toBe(false);
+    expect(canTransition("cancelled", "pending")).toBe(false);
+    expect(canTransition("done", "cancelled")).toBe(false);
+    expect(canTransition("cancelled", "archived")).toBe(true);
+  });
+
+  test("an unknown status from a newer sail never legalises a drag", () => {
+    const unknown = "paused" as Parameters<typeof canTransition>[0];
+    expect(canTransition(unknown, "draft")).toBe(false);
+    expect(canTransition("draft", unknown)).toBe(false);
+  });
 });

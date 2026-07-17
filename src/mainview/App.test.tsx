@@ -38,7 +38,7 @@ describe("App cockpit", () => {
   test("renders the board with lifecycle columns and real cards", async () => {
     await render();
     expect(container.querySelector(".cockpit-brand")?.textContent).toBe("Mast");
-    expect(container.querySelectorAll(".kanban-column").length).toBe(6);
+    expect(container.querySelectorAll(".kanban-column").length).toBe(7);
     expect(container.querySelector('[data-testid="card-mast-kanban-board"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="column-done"]')?.textContent).toContain(
       "mast-api-client",
@@ -348,7 +348,7 @@ describe("App cockpit", () => {
 
   test("the filter menu hides lanes via the multi-select, persists, guards the last lane", async () => {
     await render();
-    expect(container.querySelectorAll(".kanban-column").length).toBe(6);
+    expect(container.querySelectorAll(".kanban-column").length).toBe(7);
 
     act(() => {
       container.querySelector<HTMLButtonElement>('[data-testid="filter-trigger"]')?.click();
@@ -365,12 +365,12 @@ describe("App cockpit", () => {
     expect(laneOption("done")?.querySelector(".checkbox.is-checked")).not.toBeNull();
 
     act(() => laneOption("done")?.click());
-    expect(container.querySelectorAll(".kanban-column").length).toBe(5);
+    expect(container.querySelectorAll(".kanban-column").length).toBe(6);
     expect(container.querySelector('[data-testid="column-done"]')).toBeNull();
     expect(JSON.parse(localStorage.getItem("mast.board.lanes")!)).not.toContain("done");
     expect(container.querySelector('[data-testid="filter-panel"]')).not.toBeNull();
 
-    for (const lane of ["draft", "pending", "review", "awaiting_merge"]) {
+    for (const lane of ["draft", "pending", "review", "awaiting_merge", "cancelled"]) {
       act(() => laneOption(lane)?.click());
     }
     expect(container.querySelectorAll(".kanban-column").length).toBe(1);

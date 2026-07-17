@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { GlobalSpecsListResponse } from "../../shared/sail-models";
+import type { GlobalSpecsListResponse, GlobalSpecView } from "../../shared/sail-models";
 import type { SailResult } from "../../shared/types";
 import { ToastProvider } from "../components/Toast";
 import { createDemoGateway, type DemoGateway } from "../gateway";
@@ -66,6 +66,52 @@ describe("BoardScreen project dropdown", () => {
   test("with no stored selection the dropdown shows All projects", async () => {
     await render(createDemoGateway());
     expect(projectTrigger().textContent).toContain("All projects");
+  });
+});
+
+describe("BoardScreen cancelled lane", () => {
+  test("a cancelled spec renders in its own lane with the lane count badge", async () => {
+    const gateway = createDemoGateway();
+    await gateway.updateSpec("chorus-invoice-ui", { status: "cancelled" });
+    await render(gateway);
+
+    const lane = container.querySelector('[data-testid="column-cancelled"]');
+    expect(lane).not.toBeNull();
+    expect(lane!.textContent).toContain("Cancelled");
+    expect(lane!.querySelector(".badge")!.textContent).toBe("1");
+    expect(lane!.querySelector('[data-testid="card-chorus-invoice-ui"]')).not.toBeNull();
+  });
+
+  test("a status this client doesn't know never crashes the board", async () => {
+    const gateway = createDemoGateway();
+    await gateway.updateSpec("chorus-invoice-ui", {
+      status: "paused" as GlobalSpecView["status"],
+    });
+    await render(gateway);
+
+    expect(container.querySelector('[data-testid="column-pending"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="card-chorus-billing-export"]')).not.toBeNull();
+  });
+
+  test("the demo stop flow moves the spec to the cancelled lane live", async () => {
+    const gateway = createDemoGateway();
+    await render(gateway);
+    expect(
+      container
+        .querySelector('[data-testid="column-in_progress"]')!
+        .querySelector('[data-testid="card-chorus-invoice-ui"]'),
+    ).not.toBeNull();
+
+    await act(async () => {
+      await gateway.stopRun("demo-run-chorus-invoice-ui-build");
+    });
+    await flush();
+
+    expect(
+      container
+        .querySelector('[data-testid="column-cancelled"]')!
+        .querySelector('[data-testid="card-chorus-invoice-ui"]'),
+    ).not.toBeNull();
   });
 });
 
