@@ -45,6 +45,9 @@ type Prompt =
 
 type MobilePane = "terminal" | "editor" | "files";
 
+/** A destructive viewer transition awaiting the discard confirmation. */
+type PendingViewerAction = { kind: "open"; entry: FileEntry } | { kind: "close" };
+
 export function TerminalSplit({
   target,
   label,
@@ -84,7 +87,7 @@ export function TerminalSplit({
   const [drop, setDrop] = useState<DropTarget | null>(null);
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [confirmDel, setConfirmDel] = useState<FileEntry[] | null>(null);
-  const [pendingOpen, setPendingOpen] = useState<FileEntry | null>(null);
+  const [pendingViewer, setPendingViewer] = useState<PendingViewerAction | null>(null);
 
   // A splitter drag resizes the terminal without a window resize; refit the VT
   // once the drag settles so the PTY geometry never sticks at a stale size.
@@ -113,8 +116,14 @@ export function TerminalSplit({
   const openInViewer = useCallback(
     (entry: FileEntry) => {
       const current = viewer.state;
-      if (viewer.isDirty && current.phase === "text" && current.entry.path !== entry.path) {
-        setPendingOpen(entry);
+      // Re-clicking the open file must never reload it from disk — that would
+      // silently drop unsaved edits.
+      if (current.phase === "text" && current.entry.path === entry.path) {
+        setMobilePane("editor");
+        return;
+      }
+      if (viewer.isDirty) {
+        setPendingViewer({ kind: "open", entry });
         return;
       }
       setMobilePane("editor");
@@ -126,6 +135,14 @@ export function TerminalSplit({
   const closeViewer = () => {
     viewer.close();
     setMobilePane((p) => (p === "editor" ? "terminal" : p));
+  };
+
+  const requestCloseViewer = () => {
+    if (viewer.isDirty) {
+      setPendingViewer({ kind: "close" });
+      return;
+    }
+    closeViewer();
   };
 
   const uploadInto = useCallback(
@@ -223,16 +240,9 @@ export function TerminalSplit({
     setPrompt(null);
     const path = joinRemote(dir, name);
     try {
-      // fs_write truncates silently — refuse to "create" over an existing file.
-      const exists = await invoke("fs_stat", { target, path }).then(
-        () => true,
-        () => false,
-      );
-      if (exists) {
-        toast(`${name} already exists`, false);
-        return;
-      }
-      await invoke("fs_write", { target, path, contents: [] });
+      // Atomic create-if-absent (CREATE|EXCLUDE): an existing file fails the
+      // call instead of being truncated, with no stat-then-write race.
+      await invoke("fs_create_file", { target, path });
       store.reveal(dir);
       store.revalidate(dir);
       toast(`Created ${name}`, true);
@@ -351,7 +361,7 @@ export function TerminalSplit({
             />
             <ViewerPane
               store={viewer}
-              onClose={closeViewer}
+              onClose={requestCloseViewer}
               onOpenDefault={actions.openDefault}
               onDownload={(e) => download([e])}
               onToast={toast}
@@ -427,24 +437,28 @@ export function TerminalSplit({
           </p>
         </Dialog>
       )}
-      {pendingOpen && (
+      {pendingViewer && (
         <Dialog
           isOpen
-          onClose={() => setPendingOpen(null)}
+          onClose={() => setPendingViewer(null)}
           title="Discard unsaved changes?"
           size="sm"
           footer={
             <>
-              <Button variant="ghost" onClick={() => setPendingOpen(null)}>
+              <Button variant="ghost" onClick={() => setPendingViewer(null)}>
                 Cancel
               </Button>
               <Button
                 className="btn-danger"
                 onClick={() => {
-                  const next = pendingOpen;
-                  setPendingOpen(null);
-                  viewer.close();
-                  if (next) openInViewer(next);
+                  const action = pendingViewer;
+                  setPendingViewer(null);
+                  if (action.kind === "close") {
+                    closeViewer();
+                    return;
+                  }
+                  setMobilePane("editor");
+                  void viewer.open(action.entry);
                 }}
               >
                 Discard
@@ -452,7 +466,10 @@ export function TerminalSplit({
             </>
           }
         >
-          <p>The open file has unsaved changes. Discard them and open {pendingOpen.name}?</p>
+          <p>
+            The open file has unsaved changes. Discard them
+            {pendingViewer.kind === "open" ? ` and open ${pendingViewer.entry.name}?` : " and close the editor?"}
+          </p>
         </Dialog>
       )}
     </div>

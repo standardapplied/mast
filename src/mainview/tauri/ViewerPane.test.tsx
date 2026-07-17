@@ -36,12 +36,11 @@ function fakeEditorFactory() {
   return { factory, instances };
 }
 
-function makeFs(files: Record<string, { text?: string; bytes?: Uint8Array; mtime?: number }>): ViewerFs {
+function makeFs(files: Record<string, { text?: string; bytes?: Uint8Array }>): ViewerFs {
   return {
     stat: async (path) => {
-      const f = files[path];
-      if (!f) throw new Error(`missing ${path}`);
-      return { isDir: false, size: 5, modified: f.mtime ?? 1 };
+      if (!files[path]) throw new Error(`missing ${path}`);
+      return { isDir: false, size: 5 };
     },
     read: async (path) => files[path]!.bytes ?? new TextEncoder().encode(files[path]!.text ?? ""),
     write: async (path, data) => {
@@ -103,7 +102,7 @@ describe("ViewerPane", () => {
   });
 
   test("dirty indicator follows the store; save clears it and toasts", async () => {
-    const store = new ViewerStore(makeFs({ "/p/a.ts": { text: "old", mtime: 3 } }), () => {});
+    const store = new ViewerStore(makeFs({ "/p/a.ts": { text: "old" } }), () => {});
     const { factory, instances } = fakeEditorFactory();
     render(store, factory);
     await act(async () => store.open(entry("a.ts")));
@@ -121,21 +120,51 @@ describe("ViewerPane", () => {
     expect(container.querySelector('[data-testid="viewer-dirty"]')).toBeNull();
   });
 
+  test("keystrokes during an in-flight save stay dirty", async () => {
+    const files = { "/p/a.ts": { text: "old" } };
+    const fs = makeFs(files);
+    let releaseWrite!: () => void;
+    const gate = new Promise<void>((r) => (releaseWrite = r));
+    const write = fs.write;
+    fs.write = async (path, data) => {
+      await gate;
+      return write(path, data);
+    };
+    const store = new ViewerStore(fs, () => {});
+    const { factory, instances } = fakeEditorFactory();
+    render(store, factory);
+    await act(async () => store.open(entry("a.ts")));
+    await flush();
+
+    act(() => instances[0]!.config.onDirtyChange(true));
+    instances[0]!.text = "captured";
+    await act(async () => {
+      instances[0]!.config.onSave();
+    });
+    instances[0]!.text = "captured plus later typing"; // arrives mid-write
+    await act(async () => releaseWrite());
+    await flush();
+
+    expect(files["/p/a.ts"]!.text).toBe("captured");
+    expect(toasts).toEqual([{ message: "Saved a.ts", ok: true }]);
+    expect(container.querySelector('[data-testid="viewer-dirty"]')).not.toBeNull();
+  });
+
   test("a conflicting save opens the overwrite dialog instead of writing", async () => {
-    const files = { "/p/a.ts": { text: "old", mtime: 3 } };
+    const files = { "/p/a.ts": { text: "old" } };
     const store = new ViewerStore(makeFs(files), () => {});
     const { factory, instances } = fakeEditorFactory();
     render(store, factory);
     await act(async () => store.open(entry("a.ts")));
     await flush();
 
-    files["/p/a.ts"]!.mtime = 9; // changed on disk since load
+    files["/p/a.ts"]!.text = "agent version"; // changed on disk since load
     instances[0]!.text = "mine";
     await act(async () => {
       instances[0]!.config.onSave();
     });
     await flush();
-    expect(files["/p/a.ts"]!.text).toBe("old"); // not written
+    expect(files["/p/a.ts"]!.text).toBe("agent version"); // not written
     expect(document.body.textContent).toContain("File changed on disk");
 
     const overwrite = [...document.querySelectorAll("button")].find((b) => b.textContent === "Overwrite")!;

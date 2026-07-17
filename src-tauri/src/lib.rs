@@ -204,6 +204,17 @@ async fn fs_download(
         .map_err(String::from)
 }
 
+/// Create an empty file atomically (CREATE|EXCLUDE) — fails on an existing
+/// path instead of truncating it.
+#[tauri::command]
+async fn fs_create_file(
+    state: State<'_, AppState>,
+    target: String,
+    path: String,
+) -> Result<(), String> {
+    state.backend().await?.fs_create_file(&target, path).await.map_err(String::from)
+}
+
 #[tauri::command]
 async fn fs_write(
     state: State<'_, AppState>,
@@ -345,6 +356,7 @@ pub fn run() {
             fs_read,
             fs_upload,
             fs_download,
+            fs_create_file,
             fs_write,
             fs_rename,
             fs_mkdir,

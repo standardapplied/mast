@@ -22,6 +22,7 @@ use russh::keys::load_secret_key;
 use russh::{Channel, ChannelMsg, ChannelStream};
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::OpenFlags;
 use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
@@ -670,10 +671,11 @@ impl Backend {
         .await
     }
 
-    /// Walk a bounded subtree in one invoke: complete listings for the root and
-    /// every reachable directory down to `depth` levels, stopping (with
-    /// `truncated` set — never silently) once including another directory would
-    /// cross the `max_entries` budget. Heavy dependency/build directories
+    /// Walk a bounded subtree in one invoke: listings for the root and every
+    /// reachable directory down to `depth` levels, stopping (with `truncated`
+    /// set — never silently) once including another directory would cross the
+    /// `max_entries` budget. The budget also caps the root itself, so no
+    /// single directory can balloon the response. Heavy dependency/build directories
     /// (`PRUNED_DIRS`) are listed as entries but never descended into; an
     /// unreadable subdirectory is skipped rather than sinking the whole walk,
     /// while an unreadable root still fails loud.
@@ -695,12 +697,12 @@ impl Backend {
                 let mut listings: Vec<FsListing> = Vec::new();
                 let mut queue = VecDeque::from([(root, 1u32)]);
                 while let Some((dir, level)) = queue.pop_front() {
-                    let listing = match read_listing(&sftp, &dir).await {
+                    let mut listing = match read_listing(&sftp, &dir).await {
                         Ok(listing) => listing,
                         Err(SftpError::Status(_)) if level > 1 => continue,
                         Err(e) => return Err(e),
                     };
-                    if !budget.admit(listings.is_empty(), listing.entries.len()) {
+                    if !budget.admit(listings.is_empty(), &mut listing.entries) {
                         break;
                     }
                     if level < depth {
@@ -719,8 +721,8 @@ impl Backend {
         .await
     }
 
-    /// Metadata for one remote path: viewer routing (dir vs file), read-cap
-    /// gating, and a cheap modified-since-load save guard.
+    /// Metadata for one remote path: viewer routing (dir vs file) and read-cap
+    /// gating.
     pub async fn fs_stat(&self, target: &str, path: String) -> Result<FsStat, Error> {
         self.with_sftp(target, |sftp| {
             let path = path.clone();
@@ -871,6 +873,19 @@ impl Backend {
         }
         emit_transfer(app, &progress);
         outcome.map(|_| landed)
+    }
+
+    /// Create a new empty file, failing if the path already exists. One atomic
+    /// CREATE|EXCLUDE open — unlike stat-then-write, "new file" can never
+    /// truncate something that appeared (or was misdiagnosed as absent by a
+    /// transient stat error) in between.
+    pub async fn fs_create_file(&self, target: &str, path: String) -> Result<(), Error> {
+        self.mutate_sftp(target, |sftp| async move {
+            sftp.open_with_flags(path, OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE)
+                .await
+                .map(drop)
+        })
+        .await
     }
 
     /// Overwrite a remote file with `contents` (editor save).
@@ -1706,11 +1721,12 @@ async fn read_capped(sftp: &SftpSession, path: String, max_bytes: u64) -> Result
     Ok(data)
 }
 
-/// The deep walker's total-entry budget: a listing is admitted whole or not at
-/// all (a partial listing would poison the webview's cache as if complete), and
-/// the first rejection marks the result truncated. The walk root is exempt —
-/// the directory the user actually opened must list completely even when it
-/// alone exceeds the budget (it just spends the rest of it).
+/// The deep walker's total-entry budget: a descendant listing is admitted whole
+/// or not at all (a partial listing would poison the webview's cache as if
+/// complete), and every cut marks the result truncated. The walk root is
+/// special-cased the other way: the directory the user actually opened always
+/// returns, but capped at the budget and flagged truncated — one huge (or
+/// hostile) directory must not push an unbounded listing into the webview.
 struct WalkBudget {
     remaining: usize,
     truncated: bool,
@@ -1721,16 +1737,18 @@ impl WalkBudget {
         WalkBudget { remaining: max_entries, truncated: false }
     }
 
-    fn admit(&mut self, is_root: bool, entries: usize) -> bool {
-        if entries > self.remaining {
+    fn admit(&mut self, is_root: bool, entries: &mut Vec<FileEntry>) -> bool {
+        if entries.len() > self.remaining {
             if !is_root {
                 self.truncated = true;
                 return false;
             }
+            entries.truncate(self.remaining);
             self.remaining = 0;
+            self.truncated = true;
             return true;
         }
-        self.remaining -= entries;
+        self.remaining -= entries.len();
         true
     }
 }
@@ -2228,27 +2246,41 @@ Host bastion
         assert!(!is_pruned("src"));
     }
 
+    fn fixture_entries(n: usize) -> Vec<FileEntry> {
+        (0..n)
+            .map(|i| FileEntry {
+                name: format!("f{i}"),
+                path: format!("/x/f{i}"),
+                is_dir: false,
+                size: 0,
+            })
+            .collect()
+    }
+
     #[test]
     fn walk_budget_admits_whole_listings_until_the_cap() {
         let mut budget = WalkBudget::new(10);
-        assert!(budget.admit(true, 4));
-        assert!(budget.admit(false, 6));
+        assert!(budget.admit(true, &mut fixture_entries(4)));
+        assert!(budget.admit(false, &mut fixture_entries(6)));
         assert!(!budget.truncated);
-        assert!(!budget.admit(false, 1), "an exhausted budget rejects");
+        assert!(!budget.admit(false, &mut fixture_entries(1)), "an exhausted budget rejects");
         assert!(budget.truncated);
 
         let mut budget = WalkBudget::new(10);
-        assert!(!budget.admit(false, 11), "a listing bigger than the budget is rejected whole");
+        let mut over = fixture_entries(11);
+        assert!(!budget.admit(false, &mut over), "a descendant bigger than the budget is rejected whole");
+        assert_eq!(over.len(), 11, "and never partially consumed");
         assert!(budget.truncated);
     }
 
     #[test]
-    fn walk_budget_always_admits_the_root_listing() {
+    fn walk_budget_caps_an_oversized_root_listing() {
         let mut budget = WalkBudget::new(10);
-        assert!(budget.admit(true, 5000), "the opened directory lists completely");
-        assert!(!budget.truncated, "nothing was omitted yet");
-        assert!(!budget.admit(false, 1), "but the budget is spent for descendants");
-        assert!(budget.truncated);
+        let mut root = fixture_entries(5000);
+        assert!(budget.admit(true, &mut root), "the opened directory still lists");
+        assert_eq!(root.len(), 10, "but bounded by the budget");
+        assert!(budget.truncated, "and the cut is never silent");
+        assert!(!budget.admit(false, &mut fixture_entries(1)), "the budget is spent for descendants");
     }
 
     #[test]
@@ -2455,6 +2487,27 @@ Host bastion
         let sftp = backend.transfer_sftp(LOCAL).await.expect("session");
         let bounded = read_capped(&sftp, path.clone(), 16).await.expect("capped read");
         assert_eq!(bounded.len(), 17, "streaming stops at the cap, never buffering the rest");
+
+        cleanup(&backend, &path).await;
+    }
+
+    /// Live: fs_create_file is atomic create-if-absent — a fresh path lands as
+    /// an empty file, an existing path fails without touching its contents.
+    #[tokio::test]
+    #[ignore]
+    async fn fs_create_file_never_truncates_existing_content() {
+        let backend = test_backend();
+        let home = backend.fs_list(LOCAL, None).await.expect("home").path;
+        let path = join_remote(&home, "mast_create_excl_test.txt");
+        cleanup(&backend, &path).await;
+
+        backend.fs_create_file(LOCAL, path.clone()).await.expect("create new");
+        assert_eq!(backend.fs_read(LOCAL, path.clone(), 64).await.expect("read"), Vec::<u8>::new());
+
+        backend.fs_write(LOCAL, path.clone(), b"precious".to_vec()).await.expect("write");
+        assert!(backend.fs_create_file(LOCAL, path.clone()).await.is_err(), "an existing path refuses");
+        assert_eq!(backend.fs_read(LOCAL, path.clone(), 64).await.expect("read back"), b"precious");
+        assert_eq!(backend.sftp_opens.load(Ordering::Relaxed), 1, "a Status refusal does not evict");
 
         cleanup(&backend, &path).await;
     }

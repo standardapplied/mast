@@ -13,7 +13,7 @@ import type { ViewerStore } from "./viewerStore";
  * The middle workbench pane: a thin view over ViewerStore. Text mounts the
  * editor seam (CodeMirror, lazily); markdown adds Write/Preview; images and
  * PDFs render from blob URLs; everything else gets the metadata card with
- * open/download escapes. Saves flow back through the store's mtime guard.
+ * open/download escapes. Saves flow back through the store's content guard.
  */
 
 const MD_PANES = [
@@ -73,13 +73,19 @@ export function ViewerPane({
     async (handle: EditorHandle, force: boolean) => {
       if (store.state.phase !== "text") return;
       const name = store.state.entry.name;
-      const text = handle.getText();
-      const result = await store.save(text, { force });
+      const savedText = handle.getText();
+      const result = await store.save(savedText, { force });
       if (result === "saved") {
-        handle.markSaved();
+        // Keystrokes that landed while the write was in flight were NOT
+        // persisted — only reset the dirty baseline if nothing moved.
+        if (handle.getText() === savedText) {
+          handle.markSaved();
+        } else {
+          store.setDirty(true);
+        }
         onToast(`Saved ${name}`, true);
       } else if (result === "conflict") {
-        setConflictText(text);
+        setConflictText(savedText);
       } else {
         onToast(`Save failed: ${name}`, false);
       }

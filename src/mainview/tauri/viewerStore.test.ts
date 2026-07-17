@@ -4,7 +4,7 @@ import { ViewerStore, type ViewerFs } from "./viewerStore";
 
 const entry = (name: string, size = 10): FileEntry => ({ name, path: `/p/${name}`, isDir: false, size });
 
-type Files = Record<string, { bytes?: Uint8Array; text?: string; size?: number; mtime?: number | null }>;
+type Files = Record<string, { bytes?: Uint8Array; text?: string; size?: number }>;
 
 function fakeFs(files: Files) {
   const calls = { read: [] as string[], write: [] as { path: string; text: string }[] };
@@ -17,7 +17,7 @@ function fakeFs(files: Files) {
   const fs: ViewerFs = {
     stat: async (path) => {
       const f = get(path);
-      return { isDir: false, size: f.size ?? bytes(path).length, modified: f.mtime === undefined ? 1000 : f.mtime };
+      return { isDir: false, size: f.size ?? bytes(path).length };
     },
     read: async (path) => {
       calls.read.push(path);
@@ -27,7 +27,6 @@ function fakeFs(files: Files) {
       const f = get(path);
       calls.write.push({ path, text: new TextDecoder().decode(data) });
       f.text = new TextDecoder().decode(data);
-      f.mtime = (f.mtime ?? 0) + 1;
     },
   };
   return { fs, calls, files };
@@ -41,8 +40,8 @@ function makeStore(files: Files) {
 }
 
 describe("ViewerStore.open", () => {
-  test("a .ts file loads as editable text with its language and mtime", async () => {
-    const { store } = makeStore({ "/p/a.ts": { text: "const x = 1;", mtime: 42 } });
+  test("a .ts file loads as editable text with its language and byte baseline", async () => {
+    const { store } = makeStore({ "/p/a.ts": { text: "const x = 1;" } });
     await store.open(entry("a.ts"));
     expect(store.state).toMatchObject({
       phase: "text",
@@ -50,7 +49,7 @@ describe("ViewerStore.open", () => {
       language: "typescript",
       markdown: false,
       dirty: false,
-      loadedMtime: 42,
+      loadedBytes: new TextEncoder().encode("const x = 1;"),
     });
   });
 
@@ -101,6 +100,23 @@ describe("ViewerStore.open", () => {
     expect(store.state).toMatchObject({ phase: "fallback", reason: "gpointer" });
   });
 
+  test("a pointer url off Google's https hosts never reaches the OS opener", async () => {
+    const hostile = [
+      "file:///etc/passwd",
+      "smb://attacker/share",
+      "http://docs.google.com/x",
+      "https://evil.example.com/phish",
+      "https://user:pass@docs.google.com/x",
+      42,
+    ];
+    for (const url of hostile) {
+      const { store, opened } = makeStore({ "/p/plan.gdoc": { text: JSON.stringify({ url }) } });
+      await store.open(entry("plan.gdoc"));
+      expect(opened).toEqual([]);
+      expect(store.state).toMatchObject({ phase: "fallback", reason: "error" });
+    }
+  });
+
   test("a stat/read failure lands on the error card, never a broken render", async () => {
     const { store } = makeStore({});
     await store.open(entry("gone.ts"));
@@ -111,7 +127,7 @@ describe("ViewerStore.open", () => {
     let releaseFirst!: () => void;
     const gate = new Promise<void>((r) => (releaseFirst = r));
     const slow: ViewerFs = {
-      stat: async () => ({ isDir: false, size: 5, modified: 1 }),
+      stat: async () => ({ isDir: false, size: 5 }),
       read: async (path) => {
         if (path === "/p/slow.ts") await gate;
         return new TextEncoder().encode(path);
@@ -135,8 +151,8 @@ describe("ViewerStore.open", () => {
 });
 
 describe("ViewerStore.save", () => {
-  test("saves when the mtime is unchanged and clears dirty", async () => {
-    const { store, calls } = makeStore({ "/p/a.ts": { text: "old", mtime: 5 } });
+  test("saves when the file is unchanged on disk and clears dirty", async () => {
+    const { store, calls } = makeStore({ "/p/a.ts": { text: "old" } });
     await store.open(entry("a.ts"));
     store.setDirty(true);
     expect(store.isDirty).toBe(true);
@@ -144,15 +160,17 @@ describe("ViewerStore.save", () => {
     const result = await store.save("new text");
     expect(result).toBe("saved");
     expect(calls.write).toEqual([{ path: "/p/a.ts", text: "new text" }]);
-    expect(store.state).toMatchObject({ phase: "text", dirty: false, saving: false, loadedMtime: 6 });
+    expect(store.state).toMatchObject({ phase: "text", dirty: false, saving: false });
   });
 
-  test("reports a conflict (and does not write) when the file changed since load", async () => {
-    const files: Files = { "/p/a.ts": { text: "old", mtime: 5 } };
+  test("reports a conflict (and does not write) when the content changed since load", async () => {
+    // Content, not mtime, is the guard: an agent rewriting the file within the
+    // same SFTP second must still be caught.
+    const files: Files = { "/p/a.ts": { text: "old" } };
     const { fs, calls } = fakeFs(files);
     const store = new ViewerStore(fs, () => {});
     await store.open(entry("a.ts"));
-    files["/p/a.ts"]!.mtime = 9; // an agent wrote it while we looked
+    files["/p/a.ts"]!.text = "agent version"; // an agent wrote it while we looked
 
     const result = await store.save("mine");
     expect(result).toBe("conflict");
@@ -161,18 +179,26 @@ describe("ViewerStore.save", () => {
   });
 
   test("force overwrites past a conflict", async () => {
-    const files: Files = { "/p/a.ts": { text: "old", mtime: 5 } };
+    const files: Files = { "/p/a.ts": { text: "old" } };
     const { fs, calls } = fakeFs(files);
     const store = new ViewerStore(fs, () => {});
     await store.open(entry("a.ts"));
-    files["/p/a.ts"]!.mtime = 9;
+    files["/p/a.ts"]!.text = "agent version";
 
     expect(await store.save("mine", { force: true })).toBe("saved");
     expect(calls.write).toHaveLength(1);
   });
 
+  test("a successful save becomes the next conflict baseline", async () => {
+    const { store, calls } = makeStore({ "/p/a.ts": { text: "old" } });
+    await store.open(entry("a.ts"));
+    expect(await store.save("first")).toBe("saved");
+    expect(await store.save("second")).toBe("saved");
+    expect(calls.write.map((w) => w.text)).toEqual(["first", "second"]);
+  });
+
   test("a failed write reports failed and keeps the pane editable", async () => {
-    const files: Files = { "/p/a.ts": { text: "old", mtime: 5 } };
+    const files: Files = { "/p/a.ts": { text: "old" } };
     const { fs } = fakeFs(files);
     fs.write = async () => {
       throw new Error("sftp down");
