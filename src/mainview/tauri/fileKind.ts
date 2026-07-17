@@ -1,8 +1,8 @@
 /**
  * Viewer routing, pure: file name + size → how to render, before any bytes
- * move. `sniff` means "fetch and NUL-check, then text or fallback" — the same
- * discipline the old EditorDialog used, generalized. Never a broken render:
- * anything unrecognized lands on the metadata card, not a garbled pane.
+ * move. `sniff` means "fetch and NUL-check, then text or fallback". Never a
+ * broken render: anything unrecognized lands on the metadata card, not a
+ * garbled pane.
  */
 
 export const MAX_TEXT_BYTES = 2 * 1024 * 1024;
