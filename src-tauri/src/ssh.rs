@@ -634,6 +634,29 @@ impl Backend {
         .await
     }
 
+    /// Run one *mutating* SFTP operation. The read-only probe in
+    /// `transfer_sftp` heals a dead pooled session first, but the mutation
+    /// itself is never replayed: a transport failure mid-request doesn't prove
+    /// the server didn't apply it, so a blind retry could report a false error
+    /// (rename/mkdir already applied) or re-truncate a file the first attempt
+    /// saved. A failed session is still evicted so the next call redials.
+    async fn mutate_sftp<T, F, Fut>(&self, target: &str, op: F) -> Result<T, Error>
+    where
+        F: FnOnce(Arc<SftpSession>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, SftpError>>,
+    {
+        let sftp = self.transfer_sftp(target).await?;
+        match op(sftp.clone()).await {
+            Ok(value) => Ok(value),
+            Err(e) => {
+                if !matches!(e, SftpError::Status(_)) {
+                    self.evict_sftp(target, &sftp).await;
+                }
+                Err(Error::Sftp(e.to_string()))
+            }
+        }
+    }
+
     /// List a directory in a container over SFTP, resolving an empty path to the
     /// login directory. Dirs first, then case-insensitive by name.
     pub async fn fs_list(&self, target: &str, path: Option<String>) -> Result<FsListing, Error> {
@@ -715,7 +738,9 @@ impl Backend {
 
     /// Download a file's bytes from a container (pull / open), refusing —
     /// loudly, never by truncating — anything over `max_bytes`, so a stray
-    /// click on a huge file fails fast instead of buffering it whole.
+    /// click on a huge file fails fast instead of buffering it whole. The stat
+    /// is only a fast preflight: the read itself stops at the cap, so a file
+    /// that grows (or a server that understates its size) can't balloon memory.
     pub async fn fs_read(&self, target: &str, path: String, max_bytes: u64) -> Result<Vec<u8>, Error> {
         let stat = self.fs_stat(target, path.clone()).await?;
         if stat.size > max_bytes {
@@ -724,12 +749,11 @@ impl Backend {
         let data = self
             .with_sftp(target, |sftp| {
                 let path = path.clone();
-                async move { sftp.read(path).await }
+                async move { read_capped(&sftp, path, max_bytes).await }
             })
             .await?;
-        // The file can grow between stat and read; the cap is a promise.
         if data.len() as u64 > max_bytes {
-            return Err(Error::TooLarge { path, size: data.len() as u64, max: max_bytes });
+            return Err(Error::TooLarge { path, size: stat.size.max(data.len() as u64), max: max_bytes });
         }
         Ok(data)
     }
@@ -851,33 +875,21 @@ impl Backend {
 
     /// Overwrite a remote file with `contents` (editor save).
     pub async fn fs_write(&self, target: &str, path: String, contents: Vec<u8>) -> Result<(), Error> {
-        self.with_sftp(target, |sftp| {
-            let path = path.clone();
-            let contents = contents.clone();
-            async move {
-                let mut file = sftp.create(&path).await?;
-                file.write_all(&contents).await?;
-                file.flush().await?;
-                Ok(())
-            }
+        self.mutate_sftp(target, |sftp| async move {
+            let mut file = sftp.create(&path).await?;
+            file.write_all(&contents).await?;
+            file.flush().await?;
+            Ok(())
         })
         .await
     }
 
     pub async fn fs_rename(&self, target: &str, from: String, to: String) -> Result<(), Error> {
-        self.with_sftp(target, |sftp| {
-            let (from, to) = (from.clone(), to.clone());
-            async move { sftp.rename(from, to).await }
-        })
-        .await
+        self.mutate_sftp(target, |sftp| async move { sftp.rename(from, to).await }).await
     }
 
     pub async fn fs_mkdir(&self, target: &str, path: String) -> Result<(), Error> {
-        self.with_sftp(target, |sftp| {
-            let path = path.clone();
-            async move { sftp.create_dir(path).await }
-        })
-        .await
+        self.mutate_sftp(target, |sftp| async move { sftp.create_dir(path).await }).await
     }
 
     /// Delete a file, or a directory and everything under it.
@@ -1683,6 +1695,17 @@ fn is_pruned(name: &str) -> bool {
     PRUNED_DIRS.contains(&name)
 }
 
+/// Read at most `max_bytes` + 1 detection byte, streaming through `take` so an
+/// oversized (or concurrently growing) file is never buffered whole. A result
+/// longer than `max_bytes` means "over the cap" — the caller turns it into the
+/// typed `TooLarge` error.
+async fn read_capped(sftp: &SftpSession, path: String, max_bytes: u64) -> Result<Vec<u8>, SftpError> {
+    let file = sftp.open(&path).await?;
+    let mut data = Vec::new();
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut data).await?;
+    Ok(data)
+}
+
 /// The deep walker's total-entry budget: a listing is admitted whole or not at
 /// all (a partial listing would poison the webview's cache as if complete), and
 /// the first rejection marks the result truncated.
@@ -2412,7 +2435,66 @@ Host bastion
         assert!(err.to_string().starts_with("too large:"), "matchable prefix: {err}");
         assert_eq!(backend.fs_read(LOCAL, path.clone(), 64).await.expect("under the cap"), vec![7u8; 64]);
 
+        // The read itself is bounded, not just preflighted: even when the stat
+        // gate is bypassed, at most cap + 1 detection byte come off the wire.
+        let sftp = backend.transfer_sftp(LOCAL).await.expect("session");
+        let bounded = read_capped(&sftp, path.clone(), 16).await.expect("capped read");
+        assert_eq!(bounded.len(), 17, "streaming stops at the cap, never buffering the rest");
+
         cleanup(&backend, &path).await;
+    }
+
+    /// Live: a dead pooled session under a mutation is healed by the read-only
+    /// probe (evict + redial), so the save still lands — without ever running
+    /// the mutation twice.
+    #[tokio::test]
+    #[ignore]
+    async fn dropped_session_heals_before_a_mutation() {
+        let backend = test_backend();
+        let home = backend.fs_list(LOCAL, None).await.expect("home").path;
+        let session = backend.containers.lock().await.get(LOCAL).cloned().expect("pooled session");
+        session
+            .handle
+            .disconnect(russh::Disconnect::ByApplication, "test kill", "")
+            .await
+            .ok();
+        let path = join_remote(&home, "mast_mutation_heal_test.txt");
+        backend.fs_write(LOCAL, path.clone(), b"healed".to_vec()).await.expect("write after kill");
+        assert_eq!(backend.fs_read(LOCAL, path.clone(), 1024).await.expect("read back"), b"healed");
+        assert_eq!(backend.sftp_opens.load(Ordering::Relaxed), 2);
+        cleanup(&backend, &path).await;
+    }
+
+    /// Live: a mutation's op runs exactly once — a transport-shaped failure is
+    /// never replayed (the server may already have applied it) — and burns the
+    /// pooled session so the next call redials. A Status failure (mkdir on an
+    /// existing path) is the server answering and does not evict.
+    #[tokio::test]
+    #[ignore]
+    async fn mutations_never_replay_and_evict_on_transport_failure() {
+        let backend = test_backend();
+        let home = backend.fs_list(LOCAL, None).await.expect("home").path;
+
+        assert!(backend.fs_mkdir(LOCAL, home).await.is_err(), "mkdir on an existing path fails");
+        assert_eq!(backend.sftp_opens.load(Ordering::Relaxed), 1, "a Status error does not evict");
+
+        let calls = AtomicU64::new(0);
+        let outcome = backend
+            .mutate_sftp(LOCAL, |_| async {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Err::<(), SftpError>(
+                    std::io::Error::new(std::io::ErrorKind::ConnectionReset, "mid-request drop").into(),
+                )
+            })
+            .await;
+        assert!(outcome.is_err());
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "mutations are never replayed");
+        assert!(
+            backend.sftp_pool.lock().await.get(LOCAL).is_none(),
+            "a transport failure evicts the session"
+        );
+        backend.fs_list(LOCAL, None).await.expect("next call redials");
+        assert_eq!(backend.sftp_opens.load(Ordering::Relaxed), 2);
     }
 
     #[test]
