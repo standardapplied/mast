@@ -700,7 +700,7 @@ impl Backend {
                         Err(SftpError::Status(_)) if level > 1 => continue,
                         Err(e) => return Err(e),
                     };
-                    if !budget.admit(listing.entries.len()) {
+                    if !budget.admit(listings.is_empty(), listing.entries.len()) {
                         break;
                     }
                     if level < depth {
@@ -1708,7 +1708,9 @@ async fn read_capped(sftp: &SftpSession, path: String, max_bytes: u64) -> Result
 
 /// The deep walker's total-entry budget: a listing is admitted whole or not at
 /// all (a partial listing would poison the webview's cache as if complete), and
-/// the first rejection marks the result truncated.
+/// the first rejection marks the result truncated. The walk root is exempt —
+/// the directory the user actually opened must list completely even when it
+/// alone exceeds the budget (it just spends the rest of it).
 struct WalkBudget {
     remaining: usize,
     truncated: bool,
@@ -1719,10 +1721,14 @@ impl WalkBudget {
         WalkBudget { remaining: max_entries, truncated: false }
     }
 
-    fn admit(&mut self, entries: usize) -> bool {
+    fn admit(&mut self, is_root: bool, entries: usize) -> bool {
         if entries > self.remaining {
-            self.truncated = true;
-            return false;
+            if !is_root {
+                self.truncated = true;
+                return false;
+            }
+            self.remaining = 0;
+            return true;
         }
         self.remaining -= entries;
         true
@@ -2225,14 +2231,23 @@ Host bastion
     #[test]
     fn walk_budget_admits_whole_listings_until_the_cap() {
         let mut budget = WalkBudget::new(10);
-        assert!(budget.admit(4));
-        assert!(budget.admit(6));
+        assert!(budget.admit(true, 4));
+        assert!(budget.admit(false, 6));
         assert!(!budget.truncated);
-        assert!(!budget.admit(1), "an exhausted budget rejects");
+        assert!(!budget.admit(false, 1), "an exhausted budget rejects");
         assert!(budget.truncated);
 
         let mut budget = WalkBudget::new(10);
-        assert!(!budget.admit(11), "a listing bigger than the budget is rejected whole");
+        assert!(!budget.admit(false, 11), "a listing bigger than the budget is rejected whole");
+        assert!(budget.truncated);
+    }
+
+    #[test]
+    fn walk_budget_always_admits_the_root_listing() {
+        let mut budget = WalkBudget::new(10);
+        assert!(budget.admit(true, 5000), "the opened directory lists completely");
+        assert!(!budget.truncated, "nothing was omitted yet");
+        assert!(!budget.admit(false, 1), "but the budget is spent for descendants");
         assert!(budget.truncated);
     }
 

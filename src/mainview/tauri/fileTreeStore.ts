@@ -1,19 +1,17 @@
-import { parentDir } from "./dropTarget";
-
 export type FileEntry = { name: string; path: string; isDir: boolean; size: number };
 export type FsListing = { path: string; entries: FileEntry[] };
+export type DeepListing = { listings: FsListing[]; truncated: boolean };
 
 export type FsApi = {
-  list: (path: string | null) => Promise<FsListing>;
+  /** Bounded subtree listing (`fs_list_deep`): the requested dir plus
+   *  descendants down to the backend's depth/entry budget. */
+  listDeep: (path: string | null) => Promise<DeepListing>;
 };
 
 export type DirState =
   | { status: "loading" }
-  | { status: "ready"; entries: FileEntry[]; stale: boolean }
+  | { status: "ready"; entries: FileEntry[]; stale: boolean; truncated?: boolean }
   | { status: "error"; error: string };
-
-/** How many child directories to prefetch per expansion (bounded, best-effort). */
-const PREFETCH_LIMIT = 10;
 
 /**
  * The file tree's data layer, deliberately framework-free so its concurrency
@@ -21,8 +19,8 @@ const PREFETCH_LIMIT = 10;
  *  - **dedupe:** one in-flight fetch per path, ever.
  *  - **stale-while-revalidate:** re-expanding a cached dir shows it instantly
  *    and refreshes in the background; a failed refresh keeps the good cache.
- *  - **prefetch:** expanding a dir prefetches its child dirs (capped) so the
- *    next expansion is instant.
+ *  - **deep seeding:** every fetch is a deep listing; all returned descendant
+ *    directories are cached, so the next expansion renders with no fetch.
  *  - **safe teardown:** responses arriving after `dispose()` are dropped, so a
  *    unmounted / retargeted tree never mutates.
  */
@@ -36,7 +34,6 @@ export class FileTreeStore {
   private expanded = new Set<string>();
   private inflight = new Set<string>();
   private deleting = new Set<string>();
-  private selected: FileEntry | null = null;
   private listeners = new Set<() => void>();
   private disposed = false;
 
@@ -61,20 +58,6 @@ export class FileTreeStore {
   isDeleting(path: string): boolean {
     return this.deleting.has(path);
   }
-  isSelected(path: string): boolean {
-    return this.selected?.path === path;
-  }
-  /** Mark an entry as the selection (right-click and click both select). */
-  select(entry: FileEntry): void {
-    this.selected = entry;
-    this.emit();
-  }
-  /** Where a "new folder" lands: the selected folder, the selected file's parent,
-   *  or the root when nothing is selected. */
-  newFolderDir(): string | null {
-    if (!this.selected) return this.rootPath;
-    return this.selected.isDir ? this.selected.path : parentDir(this.selected.path);
-  }
 
   /** Lock a node while it's being deleted: collapse it (so the vanishing subtree
    *  can't be acted on) and mark it so the row disables its own interactions. */
@@ -96,18 +79,33 @@ export class FileTreeStore {
     for (const listener of this.listeners) listener();
   }
 
+  /** Cache every directory a deep listing returned. The requested dir carries
+   *  the truncated flag; deeper seeds are plain fresh cache entries. */
+  private seed(deep: DeepListing, requested: string): void {
+    for (const listing of deep.listings) {
+      const truncated = listing.path === requested && deep.truncated ? true : undefined;
+      this.nodes.set(listing.path, {
+        status: "ready",
+        entries: listing.entries,
+        stale: false,
+        ...(truncated !== undefined && { truncated }),
+      });
+    }
+  }
+
   /** Load the tree root — a specific directory, or the login dir when omitted. */
   async loadRoot(dir?: string | null): Promise<void> {
     this.rootPath = null;
     this.rootError = null;
     this.emit();
     try {
-      const listing = await this.fs.list(dir ?? null);
+      const deep = await this.fs.listDeep(dir ?? null);
       if (this.disposed) return;
-      this.rootPath = listing.path;
-      this.nodes.set(listing.path, { status: "ready", entries: listing.entries, stale: false });
+      const root = deep.listings[0];
+      if (!root) throw new Error("empty deep listing");
+      this.rootPath = root.path;
+      this.seed(deep, root.path);
       this.emit();
-      this.prefetchChildren(listing.entries);
     } catch (e) {
       if (this.disposed) return;
       this.rootError = String(e);
@@ -156,7 +154,6 @@ export class FileTreeStore {
     this.nodes.clear();
     this.expanded.clear();
     this.inflight.clear();
-    this.selected = null;
     void this.loadRoot(dir);
   }
 
@@ -178,43 +175,16 @@ export class FileTreeStore {
     this.inflight.add(path);
     this.emit();
     try {
-      const listing = await this.fs.list(path);
+      const deep = await this.fs.listDeep(path);
       if (this.disposed) return;
-      this.nodes.set(path, { status: "ready", entries: listing.entries, stale: false });
+      if (deep.listings.length === 0) throw new Error("empty deep listing");
+      this.seed(deep, path);
       this.emit();
-      this.prefetchChildren(listing.entries);
     } catch (e) {
       if (this.disposed) return;
       // A failed background refresh keeps the (good) cached listing.
       if (!background) this.nodes.set(path, { status: "error", error: String(e) });
       this.emit();
-    } finally {
-      this.inflight.delete(path);
-      this.emit();
-    }
-  }
-
-  private prefetchChildren(entries: FileEntry[]): void {
-    let budget = PREFETCH_LIMIT;
-    for (const entry of entries) {
-      if (budget <= 0) break;
-      if (!entry.isDir || this.nodes.has(entry.path) || this.inflight.has(entry.path)) continue;
-      budget -= 1;
-      void this.prefetch(entry.path);
-    }
-  }
-
-  private async prefetch(path: string): Promise<void> {
-    if (this.inflight.has(path) || this.nodes.has(path)) return;
-    this.inflight.add(path);
-    this.emit();
-    try {
-      const listing = await this.fs.list(path);
-      if (this.disposed) return;
-      this.nodes.set(path, { status: "ready", entries: listing.entries, stale: false });
-      this.emit();
-    } catch {
-      // best-effort; on-demand fetch will surface a real error if the user opens it
     } finally {
       this.inflight.delete(path);
       this.emit();

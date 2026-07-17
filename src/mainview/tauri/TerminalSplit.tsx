@@ -1,32 +1,49 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Dialog } from "../components/Dialog";
+import { Splitter } from "../components/Splitter";
 import { useToast } from "../components/Toast";
+import { ToggleButton } from "../components/ToggleButton";
 import { Button } from "../components/ui";
 import { classifyDrop, parentDir, shellQuote, type DropTarget } from "./dropTarget";
-import { EditorDialog } from "./EditorDialog";
 import { FileTree, type FileActions } from "./FileTree";
 import { FileTreeStore, type FileEntry, type FsApi } from "./fileTreeStore";
 import { PromptDialog } from "./PromptDialog";
 import { TerminalPane, type TerminalHandle } from "./TerminalPane";
 import { TransfersTray } from "./TransfersTray";
+import { ViewerPane } from "./ViewerPane";
+import { ViewerStore, type ViewerFs } from "./viewerStore";
+import { loadWidths, PANE_LIMITS, saveWidths, type PaneWidths } from "./workbenchLayout";
 
 /**
- * A project's workspace: terminal + file tree + the ONE drag-drop coordinator,
- * plus the file operations (edit, open, download, rename, new folder, delete).
- * Drops route by cursor position; transfers stream to the tray; mutations
- * revalidate the affected directory so the tree stays truthful.
+ * A project's workbench: terminal | file viewer/editor | explorer, one
+ * drag-drop coordinator, and the file operations (open, save, download,
+ * rename, create, delete). Drops route by cursor position; transfers stream
+ * to the tray; mutations revalidate the affected directories so the tree
+ * stays truthful. ≤900px collapses to a single pane behind a segmented flip.
  */
 
 function tauriFs(target: string): FsApi {
-  return { list: (path) => invoke("fs_list", { target, path }) };
+  return { listDeep: (path) => invoke("fs_list_deep", { target, path }) };
 }
 
-const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+function tauriViewerFs(target: string): ViewerFs {
+  return {
+    stat: (path) => invoke("fs_stat", { target, path }),
+    read: async (path) => new Uint8Array(await invoke<number[]>("fs_read", { target, path })),
+    write: (path, bytes) => invoke("fs_write", { target, path, contents: Array.from(bytes) }),
+  };
+}
+
 const joinRemote = (dir: string, name: string) => `${dir.replace(/\/+$/, "")}/${name}`;
 
-type Prompt = { mode: "rename"; entry: FileEntry } | { mode: "mkdir"; dir: string };
+type Prompt =
+  | { mode: "rename"; entry: FileEntry }
+  | { mode: "mkdir"; dir: string }
+  | { mode: "newfile"; dir: string };
+
+type MobilePane = "terminal" | "editor" | "files";
 
 export function TerminalSplit({
   target,
@@ -43,36 +60,73 @@ export function TerminalSplit({
   // mount→unmount→remount, permanently killing a live store.
   const rootKey = `mast.fileroot.${target}`;
   const [store] = useState(() => new FileTreeStore(tauriFs(target)));
+  const [viewer] = useState(
+    () =>
+      new ViewerStore(tauriViewerFs(target), (url) => {
+        void invoke("open_url", { url }).catch(() => {});
+      }),
+  );
   useEffect(() => {
     void store.loadRoot(localStorage.getItem(rootKey));
   }, [store, rootKey]);
+  useSyncExternalStore(
+    useCallback((cb) => viewer.subscribe(cb), [viewer]),
+    () => viewer.version,
+  );
 
   const { showToast } = useToast();
   const toast = (message: string, ok: boolean) => showToast(ok ? "success" : "error", message);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<TerminalHandle>(null);
-  const [treeWidth, setTreeWidth] = useState(320);
+  const [widths, setWidths] = useState<PaneWidths>(() => loadWidths(localStorage, target));
+  const [mobilePane, setMobilePane] = useState<MobilePane>("terminal");
   const [drop, setDrop] = useState<DropTarget | null>(null);
-
-  const startResize = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const rect = rootRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const onMove = (ev: PointerEvent) =>
-      setTreeWidth(Math.min(640, Math.max(200, rect.right - ev.clientX)));
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  };
-  const [editor, setEditor] = useState<FileEntry | null>(null);
   const [prompt, setPrompt] = useState<Prompt | null>(null);
-  const [confirmDel, setConfirmDel] = useState<FileEntry | null>(null);
+  const [confirmDel, setConfirmDel] = useState<FileEntry[] | null>(null);
+  const [pendingOpen, setPendingOpen] = useState<FileEntry | null>(null);
+
+  // A splitter drag resizes the terminal without a window resize; refit the VT
+  // once the drag settles so the PTY geometry never sticks at a stale size.
+  const refitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const scheduleRefit = () => {
+    clearTimeout(refitTimer.current);
+    refitTimer.current = setTimeout(() => termRef.current?.refit(), 120);
+  };
+  useEffect(() => () => clearTimeout(refitTimer.current), []);
+
+  const setPane = (pane: keyof PaneWidths) => (width: number) => {
+    setWidths((w) => ({ ...w, [pane]: width }));
+    scheduleRefit();
+  };
+  const commitPane = (pane: keyof PaneWidths) => (width: number) => {
+    setWidths((w) => {
+      const next = { ...w, [pane]: width };
+      saveWidths(localStorage, target, next);
+      return next;
+    });
+    scheduleRefit();
+  };
 
   const transfer = () => crypto.randomUUID();
+
+  const openInViewer = useCallback(
+    (entry: FileEntry) => {
+      const current = viewer.state;
+      if (viewer.isDirty && current.phase === "text" && current.entry.path !== entry.path) {
+        setPendingOpen(entry);
+        return;
+      }
+      setMobilePane("editor");
+      void viewer.open(entry);
+    },
+    [viewer],
+  );
+
+  const closeViewer = () => {
+    viewer.close();
+    setMobilePane((p) => (p === "editor" ? "terminal" : p));
+  };
 
   const uploadInto = useCallback(
     async (dir: string, paths: string[]): Promise<string[] | null> => {
@@ -105,20 +159,23 @@ export function TerminalSplit({
     [store, uploadInto],
   );
 
+  const download = (entries: FileEntry[]) =>
+    void invoke("fs_download", {
+      target,
+      remotePaths: entries.map((e) => e.path),
+      localDir: null,
+      transferId: transfer(),
+    }).catch(() => {});
+
   const actions: FileActions = {
-    edit: (e) => setEditor(e),
-    open: (e) =>
+    open: openInViewer,
+    openDefault: (e) =>
       void invoke("fs_open", { target, remotePath: e.path, transferId: transfer() }).catch(() => {}),
-    download: (e) =>
-      void invoke("fs_download", {
-        target,
-        remotePaths: [e.path],
-        localDir: null,
-        transferId: transfer(),
-      }).catch(() => {}),
+    download,
+    remove: (entries) => setConfirmDel(entries),
     rename: (e) => setPrompt({ mode: "rename", entry: e }),
-    remove: (e) => setConfirmDel(e),
     newFolder: (dir) => setPrompt({ mode: "mkdir", dir }),
+    newFile: (dir) => setPrompt({ mode: "newfile", dir }),
     setRoot: (e) => {
       localStorage.setItem(rootKey, e.path); // remember this project's root
       store.setRoot(e.path);
@@ -130,9 +187,9 @@ export function TerminalSplit({
       localStorage.setItem(rootKey, up);
       store.setRoot(up);
     },
-    copyPath: (e) => {
-      void navigator.clipboard.writeText(e.path).then(
-        () => toast("Path copied", true),
+    copyPaths: (paths) => {
+      void navigator.clipboard.writeText(paths.join("\n")).then(
+        () => toast(paths.length > 1 ? `${paths.length} paths copied` : "Path copied", true),
         () => toast("Couldn’t copy path", false),
       );
     },
@@ -162,22 +219,52 @@ export function TerminalSplit({
     }
   };
 
-  const doDelete = async (entry: FileEntry) => {
+  const doNewFile = async (dir: string, name: string) => {
+    setPrompt(null);
+    const path = joinRemote(dir, name);
+    try {
+      // fs_write truncates silently — refuse to "create" over an existing file.
+      const exists = await invoke("fs_stat", { target, path }).then(
+        () => true,
+        () => false,
+      );
+      if (exists) {
+        toast(`${name} already exists`, false);
+        return;
+      }
+      await invoke("fs_write", { target, path, contents: [] });
+      store.reveal(dir);
+      store.revalidate(dir);
+      toast(`Created ${name}`, true);
+      openInViewer({ name, path, isDir: false, size: 0 });
+    } catch (e) {
+      toast(`New file failed: ${e}`, false);
+    }
+  };
+
+  const doDelete = async (entries: FileEntry[]) => {
     setConfirmDel(null);
-    const dir = parentDir(entry.path);
-    // Lock the node up front; the tray (fed by the Rust `transfer` event) owns
+    const dirs = new Set(entries.map((e) => parentDir(e.path)));
+    // Lock the nodes up front; the tray (fed by the Rust `transfer` event) owns
     // ALL delete feedback — live "Deleting…", "Removed", and failure detail —
     // exactly like uploads, so completion never announces itself twice.
-    store.beginDelete(entry.path);
-    try {
-      await invoke("fs_delete", { target, path: entry.path, transferId: transfer() });
-      store.endDelete(entry.path);
-      store.revalidate(dir);
-    } catch {
-      store.endDelete(entry.path);
-      // Refresh the node itself so any partial deletion is reflected honestly.
-      store.revalidate(entry.path);
-      store.revalidate(dir);
+    await Promise.all(
+      entries.map(async (entry) => {
+        store.beginDelete(entry.path);
+        try {
+          await invoke("fs_delete", { target, path: entry.path, transferId: transfer() });
+        } catch {
+          // Refresh the node itself so any partial deletion is reflected honestly.
+          store.revalidate(entry.path);
+        } finally {
+          store.endDelete(entry.path);
+        }
+      }),
+    );
+    for (const dir of dirs) store.revalidate(dir);
+    const open = viewer.state.phase !== "closed" ? viewer.state.entry.path : null;
+    if (open && entries.some((e) => open === e.path || open.startsWith(`${e.path}/`))) {
+      closeViewer();
     }
   };
 
@@ -220,19 +307,70 @@ export function TerminalSplit({
 
   const terminalTargeted = drop?.kind === "terminal";
   const dropDir = drop?.kind === "tree" ? drop.dir : null;
+  const viewerOpen = viewer.isOpen;
+
+  const flipOptions = [
+    { value: "terminal", label: "Terminal" },
+    ...(viewerOpen ? [{ value: "editor", label: "Editor" }] : []),
+    { value: "files", label: "Files" },
+  ];
 
   return (
-    <div className="term-split" ref={rootRef} style={{ "--tree-w": `${treeWidth}px` } as React.CSSProperties}>
-      <div className={`term-split__main${terminalTargeted ? " term-split__main--drop" : ""}`}>
-        <TerminalPane ref={termRef} target={target} label={label} active={active} />
+    <div
+      className="term-split"
+      ref={rootRef}
+      data-mobile={mobilePane}
+      style={
+        {
+          "--tree-w": `${widths.tree}px`,
+          "--viewer-w": `${widths.viewer}px`,
+        } as React.CSSProperties
+      }
+    >
+      <div className="term-split__flip">
+        <ToggleButton
+          options={flipOptions}
+          value={viewerOpen || mobilePane !== "editor" ? mobilePane : "terminal"}
+          onChange={(v) => setMobilePane(v as MobilePane)}
+        />
       </div>
-      <div className="term-split__resizer" onPointerDown={startResize} role="separator" aria-orientation="vertical" />
-      <FileTree store={store} dropDir={dropDir} actions={actions} />
+      <div className="term-split__panes">
+        <div className={`term-split__main${terminalTargeted ? " term-split__main--drop" : ""}`}>
+          <TerminalPane ref={termRef} target={target} label={label} active={active} />
+        </div>
+        {viewerOpen && (
+          <>
+            <Splitter
+              value={widths.viewer}
+              min={PANE_LIMITS.viewer.min}
+              max={PANE_LIMITS.viewer.max}
+              controls="after"
+              onChange={setPane("viewer")}
+              onDragEnd={commitPane("viewer")}
+              ariaLabel="Resize viewer"
+            />
+            <ViewerPane
+              store={viewer}
+              onClose={closeViewer}
+              onOpenDefault={actions.openDefault}
+              onDownload={(e) => download([e])}
+              onToast={toast}
+            />
+          </>
+        )}
+        <Splitter
+          value={widths.tree}
+          min={PANE_LIMITS.tree.min}
+          max={PANE_LIMITS.tree.max}
+          controls="after"
+          onChange={setPane("tree")}
+          onDragEnd={commitPane("tree")}
+          ariaLabel="Resize file tree"
+        />
+        <FileTree store={store} dropDir={dropDir} actions={actions} />
+      </div>
       <TransfersTray />
 
-      {editor && (
-        <EditorDialog target={target} entry={editor} onClose={() => setEditor(null)} onToast={toast} />
-      )}
       {prompt?.mode === "rename" && (
         <PromptDialog
           title="Rename"
@@ -252,11 +390,22 @@ export function TerminalSplit({
           onClose={() => setPrompt(null)}
         />
       )}
+      {prompt?.mode === "newfile" && (
+        <PromptDialog
+          title="New file"
+          label="File name"
+          confirmLabel="Create"
+          onConfirm={(v) => void doNewFile(prompt.dir, v)}
+          onClose={() => setPrompt(null)}
+        />
+      )}
       {confirmDel && (
         <Dialog
           isOpen
           onClose={() => setConfirmDel(null)}
-          title={`Delete ${confirmDel.name}?`}
+          title={
+            confirmDel.length === 1 ? `Delete ${confirmDel[0]!.name}?` : `Delete ${confirmDel.length} items?`
+          }
           size="sm"
           footer={
             <>
@@ -270,10 +419,40 @@ export function TerminalSplit({
           }
         >
           <p>
-            {confirmDel.isDir
-              ? "This folder and everything in it will be permanently deleted."
-              : "This file will be permanently deleted."}
+            {confirmDel.length === 1
+              ? confirmDel[0]!.isDir
+                ? "This folder and everything in it will be permanently deleted."
+                : "This file will be permanently deleted."
+              : `${confirmDel.length} items — including everything inside any folders — will be permanently deleted.`}
           </p>
+        </Dialog>
+      )}
+      {pendingOpen && (
+        <Dialog
+          isOpen
+          onClose={() => setPendingOpen(null)}
+          title="Discard unsaved changes?"
+          size="sm"
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setPendingOpen(null)}>
+                Cancel
+              </Button>
+              <Button
+                className="btn-danger"
+                onClick={() => {
+                  const next = pendingOpen;
+                  setPendingOpen(null);
+                  viewer.close();
+                  if (next) openInViewer(next);
+                }}
+              >
+                Discard
+              </Button>
+            </>
+          }
+        >
+          <p>The open file has unsaved changes. Discard them and open {pendingOpen.name}?</p>
         </Dialog>
       )}
     </div>
