@@ -8,8 +8,9 @@
 //! Proven feasible in `spike/russh-proof` against a live sshd; this is the same
 //! russh 0.45 API wired behind Tauri commands.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ use russh::keys::agent::client::AgentClient;
 use russh::keys::key;
 use russh::keys::load_secret_key;
 use russh::{Channel, ChannelMsg, ChannelStream};
+use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::SftpSession;
 use serde::Serialize;
 use serde_json::json;
@@ -34,6 +36,30 @@ const DELETE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Bound for the one-shot terminfo install before a terminal opens; on expiry
 /// the shell simply falls back to TERM=xterm-256color.
 const TERMINFO_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Default byte cap for `fs_read` when the webview doesn't pass one: generous
+/// for anything an in-app editor/viewer opens, small enough that a stray click
+/// on a core dump can't balloon the process.
+pub const DEFAULT_READ_CAP: u64 = 10 * 1024 * 1024;
+/// Defaults for `fs_list_deep`: how many levels below the requested directory
+/// to walk, and the total-entry budget across all returned listings.
+pub const DEEP_LIST_DEPTH: u32 = 3;
+pub const DEEP_LIST_MAX_ENTRIES: usize = 2000;
+
+/// Directories the deep walker never descends into (dependency/build trees that
+/// dwarf the source they belong to). They still appear as entries in their
+/// parent's listing, and listing one *directly* works normally — the requested
+/// root is never pruned.
+const PRUNED_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "__pycache__",
+    ".venv",
+    "venv",
+];
 
 /// Ghostty's compiled terminfo (from the Ghostty project, MIT), base64 so it
 /// embeds as one safe shell word. The webview terminal is a real Ghostty VT,
@@ -71,6 +97,8 @@ pub enum Error {
     NoTerminal(String),
     #[error("sftp: {0}")]
     Sftp(String),
+    #[error("too large: {path} is {size} bytes (limit {max} bytes) — download it instead")]
+    TooLarge { path: String, size: u64, max: u64 },
     #[error("{0}")]
     Login(String),
     #[error(transparent)]
@@ -176,6 +204,15 @@ pub struct Backend {
     /// by that container's terminals and SFTP channels — one connection, many
     /// multiplexed channels. Evicted and redialed if it dies.
     containers: Mutex<HashMap<String, Arc<Session>>>,
+    /// One cached SFTP subsystem per target, riding that target's pooled SSH
+    /// session, so only a target's first `fs_*` call pays channel-open +
+    /// subsystem + protocol handshake. russh-sftp multiplexes request ids, so
+    /// concurrent calls share one session safely. `with_sftp` evicts and
+    /// reopens once on transport errors.
+    sftp_pool: Mutex<HashMap<String, Arc<SftpSession>>>,
+    /// SFTP subsystem opens since launch — lets tests observe session reuse
+    /// instead of asserting it by vibes.
+    sftp_opens: AtomicU64,
     terminals: Mutex<HashMap<String, mpsc::Sender<TermCmd>>>,
     /// Live long-read streams (SSE tails: events + agent log), keyed by a
     /// client-chosen id. The sender signals the pump task to stop when the
@@ -211,6 +248,26 @@ pub struct FileEntry {
 pub struct FsListing {
     pub path: String,
     pub entries: Vec<FileEntry>,
+}
+
+/// A bounded subtree from `fs_list_deep`: one complete `FsListing` per walked
+/// directory (parents before children), plus whether the walk stopped at the
+/// entry budget before covering the requested depth.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeepListing {
+    pub listings: Vec<FsListing>,
+    pub truncated: bool,
+}
+
+/// What the viewer/save path needs to know about one remote path.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsStat {
+    pub is_dir: bool,
+    pub size: u64,
+    /// Modification time as Unix seconds, when the server reports one.
+    pub modified: Option<u64>,
 }
 
 /// Live progress for a file transfer, emitted on the `transfer` event so the UI
@@ -282,6 +339,8 @@ impl Backend {
             token: Mutex::new(token),
             session: Mutex::new(None),
             containers: Mutex::new(HashMap::new()),
+            sftp_pool: Mutex::new(HashMap::new()),
+            sftp_opens: AtomicU64::new(0),
             terminals: Mutex::new(HashMap::new()),
             streams: Mutex::new(HashMap::new()),
             ghostty_hosts: Mutex::new(HashSet::new()),
@@ -502,64 +561,201 @@ impl Backend {
         Err(last.map(Error::from).unwrap_or(Error::Sftp("channel".into())))
     }
 
-    async fn sftp(&self, target: &str) -> Result<SftpSession, Error> {
+    async fn open_sftp(&self, target: &str) -> Result<SftpSession, Error> {
         // Bound the whole handshake: if the container's sshd has no sftp
         // subsystem (or it never answers), SftpSession::new would hang forever
         // and the tree would sit on the skeleton. Surface a clear error instead.
         tokio::time::timeout(REQUEST_TIMEOUT, async {
             let channel = self.container_channel(target).await?;
             channel.request_subsystem(true, "sftp").await?;
-            SftpSession::new(channel.into_stream())
+            let sftp = SftpSession::new(channel.into_stream())
                 .await
-                .map_err(|e| Error::Sftp(e.to_string()))
+                .map_err(|e| Error::Sftp(e.to_string()))?;
+            self.sftp_opens.fetch_add(1, Ordering::Relaxed);
+            Ok(sftp)
         })
         .await
         .map_err(|_| Error::Sftp(format!("{target}: SFTP timed out (is the sftp subsystem enabled?)")))?
     }
 
+    /// The pooled SFTP session for a target, opening (and caching) it on first
+    /// use. Mirrors `container_session`: a concurrent first-call race just
+    /// dials twice and keeps the last insert.
+    async fn sftp_session(&self, target: &str) -> Result<Arc<SftpSession>, Error> {
+        if let Some(sftp) = self.sftp_pool.lock().await.get(target).cloned() {
+            return Ok(sftp);
+        }
+        let sftp = Arc::new(self.open_sftp(target).await?);
+        self.sftp_pool.lock().await.insert(target.to_string(), sftp.clone());
+        Ok(sftp)
+    }
+
+    /// Drop a stale session from the pool — but only if the pool still holds
+    /// *this* session, so a concurrent caller's fresh redial isn't evicted.
+    async fn evict_sftp(&self, target: &str, stale: &Arc<SftpSession>) {
+        let mut pool = self.sftp_pool.lock().await;
+        if pool.get(target).is_some_and(|current| Arc::ptr_eq(current, stale)) {
+            pool.remove(target);
+        }
+    }
+
+    /// Run one SFTP operation on the pooled session, evicting and redialing
+    /// once if the transport has died (container restart / idle drop) — the
+    /// `container_channel` retry pattern. A `Status` error is the server
+    /// answering (no such file, permission denied): the session is healthy, so
+    /// it is returned as-is without burning the pool.
+    async fn with_sftp<T, F, Fut>(&self, target: &str, op: F) -> Result<T, Error>
+    where
+        F: Fn(Arc<SftpSession>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, SftpError>>,
+    {
+        let mut last: Option<SftpError> = None;
+        for _ in 0..2 {
+            let sftp = self.sftp_session(target).await?;
+            match op(sftp.clone()).await {
+                Ok(value) => return Ok(value),
+                Err(e @ SftpError::Status(_)) => return Err(Error::Sftp(e.to_string())),
+                Err(e) => {
+                    self.evict_sftp(target, &sftp).await;
+                    last = Some(e);
+                }
+            }
+        }
+        Err(Error::Sftp(last.expect("two attempts ran").to_string()))
+    }
+
+    /// A healthy pooled SFTP session for a long transfer: one cheap probe heals
+    /// a dead cache entry via the usual evict-and-redial before any bytes move.
+    async fn transfer_sftp(&self, target: &str) -> Result<Arc<SftpSession>, Error> {
+        self.with_sftp(target, |sftp| async move {
+            sftp.canonicalize(".").await?;
+            Ok(sftp)
+        })
+        .await
+    }
+
+    /// Run one *mutating* SFTP operation. The read-only probe in
+    /// `transfer_sftp` heals a dead pooled session first, but the mutation
+    /// itself is never replayed: a transport failure mid-request doesn't prove
+    /// the server didn't apply it, so a blind retry could report a false error
+    /// (rename/mkdir already applied) or re-truncate a file the first attempt
+    /// saved. A failed session is still evicted so the next call redials.
+    async fn mutate_sftp<T, F, Fut>(&self, target: &str, op: F) -> Result<T, Error>
+    where
+        F: FnOnce(Arc<SftpSession>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, SftpError>>,
+    {
+        let sftp = self.transfer_sftp(target).await?;
+        match op(sftp.clone()).await {
+            Ok(value) => Ok(value),
+            Err(e) => {
+                if !matches!(e, SftpError::Status(_)) {
+                    self.evict_sftp(target, &sftp).await;
+                }
+                Err(Error::Sftp(e.to_string()))
+            }
+        }
+    }
+
     /// List a directory in a container over SFTP, resolving an empty path to the
     /// login directory. Dirs first, then case-insensitive by name.
     pub async fn fs_list(&self, target: &str, path: Option<String>) -> Result<FsListing, Error> {
-        let sftp = self.sftp(target).await?;
-        let dir = match path {
-            Some(p) if !p.is_empty() => p,
-            _ => sftp
-                .canonicalize(".")
-                .await
-                .map_err(|e| Error::Sftp(e.to_string()))?,
-        };
-        let read = sftp
-            .read_dir(dir.clone())
-            .await
-            .map_err(|e| Error::Sftp(e.to_string()))?;
-        let mut entries: Vec<FileEntry> = read
-            .filter(|e| e.file_name() != "." && e.file_name() != "..")
-            .map(|e| {
-                let meta = e.metadata();
-                let name = e.file_name();
-                FileEntry {
-                    path: join_remote(&dir, &name),
-                    name,
-                    is_dir: meta.is_dir(),
-                    size: meta.len(),
-                }
-            })
-            .collect();
-        entries.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
-        Ok(FsListing { path: dir, entries })
+        self.with_sftp(target, |sftp| {
+            let path = path.clone();
+            async move {
+                let dir = resolve_dir(&sftp, path).await?;
+                read_listing(&sftp, &dir).await
+            }
+        })
+        .await
     }
 
-    /// Download a file's bytes from a container (pull / open).
-    pub async fn fs_read(&self, target: &str, path: String) -> Result<Vec<u8>, Error> {
-        self.sftp(target)
-            .await?
-            .read(path)
-            .await
-            .map_err(|e| Error::Sftp(e.to_string()))
+    /// Walk a bounded subtree in one invoke: complete listings for the root and
+    /// every reachable directory down to `depth` levels, stopping (with
+    /// `truncated` set — never silently) once including another directory would
+    /// cross the `max_entries` budget. Heavy dependency/build directories
+    /// (`PRUNED_DIRS`) are listed as entries but never descended into; an
+    /// unreadable subdirectory is skipped rather than sinking the whole walk,
+    /// while an unreadable root still fails loud.
+    pub async fn fs_list_deep(
+        &self,
+        target: &str,
+        path: Option<String>,
+        depth: u32,
+        max_entries: usize,
+    ) -> Result<DeepListing, Error> {
+        if depth == 0 || max_entries == 0 {
+            return Err(Error::Sftp("fs_list_deep needs depth >= 1 and max_entries >= 1".into()));
+        }
+        self.with_sftp(target, |sftp| {
+            let path = path.clone();
+            async move {
+                let root = resolve_dir(&sftp, path).await?;
+                let mut budget = WalkBudget::new(max_entries);
+                let mut listings: Vec<FsListing> = Vec::new();
+                let mut queue = VecDeque::from([(root, 1u32)]);
+                while let Some((dir, level)) = queue.pop_front() {
+                    let listing = match read_listing(&sftp, &dir).await {
+                        Ok(listing) => listing,
+                        Err(SftpError::Status(_)) if level > 1 => continue,
+                        Err(e) => return Err(e),
+                    };
+                    if !budget.admit(listing.entries.len()) {
+                        break;
+                    }
+                    if level < depth {
+                        for entry in listing.entries.iter().filter(|e| e.is_dir && !is_pruned(&e.name)) {
+                            queue.push_back((entry.path.clone(), level + 1));
+                        }
+                    }
+                    listings.push(listing);
+                }
+                Ok(DeepListing {
+                    listings,
+                    truncated: budget.truncated,
+                })
+            }
+        })
+        .await
+    }
+
+    /// Metadata for one remote path: viewer routing (dir vs file), read-cap
+    /// gating, and a cheap modified-since-load save guard.
+    pub async fn fs_stat(&self, target: &str, path: String) -> Result<FsStat, Error> {
+        self.with_sftp(target, |sftp| {
+            let path = path.clone();
+            async move {
+                let meta = sftp.metadata(path).await?;
+                Ok(FsStat {
+                    is_dir: meta.is_dir(),
+                    size: meta.len(),
+                    modified: meta.mtime.map(u64::from),
+                })
+            }
+        })
+        .await
+    }
+
+    /// Download a file's bytes from a container (pull / open), refusing —
+    /// loudly, never by truncating — anything over `max_bytes`, so a stray
+    /// click on a huge file fails fast instead of buffering it whole. The stat
+    /// is only a fast preflight: the read itself stops at the cap, so a file
+    /// that grows (or a server that understates its size) can't balloon memory.
+    pub async fn fs_read(&self, target: &str, path: String, max_bytes: u64) -> Result<Vec<u8>, Error> {
+        let stat = self.fs_stat(target, path.clone()).await?;
+        if stat.size > max_bytes {
+            return Err(Error::TooLarge { path, size: stat.size, max: max_bytes });
+        }
+        let data = self
+            .with_sftp(target, |sftp| {
+                let path = path.clone();
+                async move { read_capped(&sftp, path, max_bytes).await }
+            })
+            .await?;
+        if data.len() as u64 > max_bytes {
+            return Err(Error::TooLarge { path, size: stat.size.max(data.len() as u64), max: max_bytes });
+        }
+        Ok(data)
     }
 
     /// Upload files and/or folders into a container directory (drag-and-drop),
@@ -607,7 +803,7 @@ impl Backend {
         plan: &UploadPlan,
         progress: &mut TransferProgress,
     ) -> Result<(), Error> {
-        let sftp = self.sftp(target).await?;
+        let sftp = self.transfer_sftp(target).await?;
         for dir in &plan.dirs {
             let _ = sftp.create_dir(dir).await; // ignore "already exists"
         }
@@ -656,7 +852,7 @@ impl Backend {
             .map(|r| base.join(base_name(r)).to_string_lossy().into_owned())
             .collect();
 
-        let sftp = self.sftp(target).await?;
+        let sftp = self.transfer_sftp(target).await?;
         let plan = plan_download(&sftp, &remote_paths, &base).await?;
 
         let mut progress = TransferProgress::start(
@@ -679,27 +875,21 @@ impl Backend {
 
     /// Overwrite a remote file with `contents` (editor save).
     pub async fn fs_write(&self, target: &str, path: String, contents: Vec<u8>) -> Result<(), Error> {
-        let sftp = self.sftp(target).await?;
-        let mut file = sftp.create(&path).await.map_err(|e| Error::Sftp(e.to_string()))?;
-        file.write_all(&contents).await?;
-        file.flush().await?;
-        Ok(())
+        self.mutate_sftp(target, |sftp| async move {
+            let mut file = sftp.create(&path).await?;
+            file.write_all(&contents).await?;
+            file.flush().await?;
+            Ok(())
+        })
+        .await
     }
 
     pub async fn fs_rename(&self, target: &str, from: String, to: String) -> Result<(), Error> {
-        self.sftp(target)
-            .await?
-            .rename(from, to)
-            .await
-            .map_err(|e| Error::Sftp(e.to_string()))
+        self.mutate_sftp(target, |sftp| async move { sftp.rename(from, to).await }).await
     }
 
     pub async fn fs_mkdir(&self, target: &str, path: String) -> Result<(), Error> {
-        self.sftp(target)
-            .await?
-            .create_dir(path)
-            .await
-            .map_err(|e| Error::Sftp(e.to_string()))
+        self.mutate_sftp(target, |sftp| async move { sftp.create_dir(path).await }).await
     }
 
     /// Delete a file, or a directory and everything under it.
@@ -1463,6 +1653,82 @@ fn join_remote(dir: &str, name: &str) -> String {
     format!("{}/{}", dir.trim_end_matches('/'), name)
 }
 
+/// An empty/absent path means the login directory.
+async fn resolve_dir(sftp: &SftpSession, path: Option<String>) -> Result<String, SftpError> {
+    match path {
+        Some(p) if !p.is_empty() => Ok(p),
+        _ => sftp.canonicalize(".").await,
+    }
+}
+
+/// One directory's entries in the shape every listing shares: no dot entries,
+/// dirs first, then case-insensitive by name.
+async fn read_listing(sftp: &SftpSession, dir: &str) -> Result<FsListing, SftpError> {
+    let read = sftp.read_dir(dir.to_string()).await?;
+    let mut entries: Vec<FileEntry> = read
+        .filter(|e| e.file_name() != "." && e.file_name() != "..")
+        .map(|e| {
+            let meta = e.metadata();
+            let name = e.file_name();
+            FileEntry {
+                path: join_remote(dir, &name),
+                name,
+                is_dir: meta.is_dir(),
+                size: meta.len(),
+            }
+        })
+        .collect();
+    sort_entries(&mut entries);
+    Ok(FsListing { path: dir.to_string(), entries })
+}
+
+fn sort_entries(entries: &mut [FileEntry]) {
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+}
+
+/// Exact-name match against the deep walker's prune list.
+fn is_pruned(name: &str) -> bool {
+    PRUNED_DIRS.contains(&name)
+}
+
+/// Read at most `max_bytes` + 1 detection byte, streaming through `take` so an
+/// oversized (or concurrently growing) file is never buffered whole. A result
+/// longer than `max_bytes` means "over the cap" — the caller turns it into the
+/// typed `TooLarge` error.
+async fn read_capped(sftp: &SftpSession, path: String, max_bytes: u64) -> Result<Vec<u8>, SftpError> {
+    let file = sftp.open(&path).await?;
+    let mut data = Vec::new();
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut data).await?;
+    Ok(data)
+}
+
+/// The deep walker's total-entry budget: a listing is admitted whole or not at
+/// all (a partial listing would poison the webview's cache as if complete), and
+/// the first rejection marks the result truncated.
+struct WalkBudget {
+    remaining: usize,
+    truncated: bool,
+}
+
+impl WalkBudget {
+    fn new(max_entries: usize) -> Self {
+        WalkBudget { remaining: max_entries, truncated: false }
+    }
+
+    fn admit(&mut self, entries: usize) -> bool {
+        if entries > self.remaining {
+            self.truncated = true;
+            return false;
+        }
+        self.remaining -= entries;
+        true
+    }
+}
+
 fn base_name(path: &str) -> &str {
     path.trim_end_matches('/').rsplit('/').next().unwrap_or(path)
 }
@@ -1943,6 +2209,292 @@ Host bastion
         let payload = GHOSTTY_TERMINFO_B64.trim();
         assert!(!payload.is_empty());
         assert!(payload.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='));
+    }
+
+    #[test]
+    fn pruned_dirs_match_whole_names_only() {
+        for name in PRUNED_DIRS {
+            assert!(is_pruned(name), "{name} should be pruned");
+        }
+        assert!(!is_pruned("gitignore"));
+        assert!(!is_pruned("my.git"));
+        assert!(!is_pruned("node_modules_backup"));
+        assert!(!is_pruned("src"));
+    }
+
+    #[test]
+    fn walk_budget_admits_whole_listings_until_the_cap() {
+        let mut budget = WalkBudget::new(10);
+        assert!(budget.admit(4));
+        assert!(budget.admit(6));
+        assert!(!budget.truncated);
+        assert!(!budget.admit(1), "an exhausted budget rejects");
+        assert!(budget.truncated);
+
+        let mut budget = WalkBudget::new(10);
+        assert!(!budget.admit(11), "a listing bigger than the budget is rejected whole");
+        assert!(budget.truncated);
+    }
+
+    #[test]
+    fn sort_entries_puts_dirs_first_then_case_insensitive_names() {
+        let entry = |name: &str, is_dir: bool| FileEntry {
+            name: name.into(),
+            path: format!("/x/{name}"),
+            is_dir,
+            size: 0,
+        };
+        let mut entries = vec![
+            entry("zeta.txt", false),
+            entry("Beta", true),
+            entry("alpha.txt", false),
+            entry("gamma", true),
+        ];
+        sort_entries(&mut entries);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["Beta", "gamma", "alpha.txt", "zeta.txt"]);
+    }
+
+    /// A Backend aimed at 127.0.0.1 for the live tests below — no
+    /// ~/.sail/config.yaml needed.
+    fn test_backend() -> Backend {
+        Backend {
+            config: SailConfig {
+                ssh_host: "127.0.0.1".into(),
+                fallback_user: None,
+                server_host: "127.0.0.1".into(),
+                server_port: 7070,
+                token: None,
+                key_path: None,
+            },
+            token: Mutex::new(None),
+            session: Mutex::new(None),
+            containers: Mutex::new(HashMap::new()),
+            sftp_pool: Mutex::new(HashMap::new()),
+            sftp_opens: AtomicU64::new(0),
+            terminals: Mutex::new(HashMap::new()),
+            streams: Mutex::new(HashMap::new()),
+            ghostty_hosts: Mutex::new(HashSet::new()),
+        }
+    }
+
+    const LOCAL: &str = "127.0.0.1";
+
+    /// rm -rf a test fixture over an exec channel (same path fs_delete uses,
+    /// minus the AppHandle progress events).
+    async fn cleanup(backend: &Backend, path: &str) {
+        let _ = backend
+            .exec_capture(LOCAL, &format!("rm -rf -- {}", shell_single_quote(path)))
+            .await;
+    }
+
+    /// Live: two sequential fs_* calls ride one SFTP subsystem. Needs sshd on
+    /// 127.0.0.1:22 accepting $USER via agent or ~/.ssh/id_*; run with `--ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn pooled_sftp_opens_the_subsystem_once_across_calls() {
+        let backend = test_backend();
+        let first = backend.fs_list(LOCAL, None).await.expect("first list");
+        assert!(first.path.starts_with('/'));
+        backend.fs_list(LOCAL, Some(first.path.clone())).await.expect("second list");
+        backend.fs_stat(LOCAL, first.path).await.expect("stat");
+        assert_eq!(backend.sftp_opens.load(Ordering::Relaxed), 1);
+    }
+
+    /// Live: killing the SSH session under the pooled SFTP channel is healed by
+    /// the next call (evict + redial, one new subsystem open).
+    #[tokio::test]
+    #[ignore]
+    async fn dropped_session_redials_transparently() {
+        let backend = test_backend();
+        backend.fs_list(LOCAL, None).await.expect("first list");
+        let session = backend.containers.lock().await.get(LOCAL).cloned().expect("pooled session");
+        session
+            .handle
+            .disconnect(russh::Disconnect::ByApplication, "test kill", "")
+            .await
+            .ok();
+        let relisted = backend.fs_list(LOCAL, None).await.expect("list after kill");
+        assert!(relisted.path.starts_with('/'));
+        assert_eq!(backend.sftp_opens.load(Ordering::Relaxed), 2);
+    }
+
+    /// Live: a Status error (nonexistent path) is returned as-is and does NOT
+    /// burn the pooled session.
+    #[tokio::test]
+    #[ignore]
+    async fn status_errors_do_not_evict_the_pooled_session() {
+        let backend = test_backend();
+        let home = backend.fs_list(LOCAL, None).await.expect("list").path;
+        let missing = join_remote(&home, "mast_definitely_missing_xyz");
+        assert!(backend.fs_stat(LOCAL, missing).await.is_err());
+        backend.fs_list(LOCAL, Some(home)).await.expect("list still works");
+        assert_eq!(backend.sftp_opens.load(Ordering::Relaxed), 1);
+    }
+
+    /// Live: fs_list_deep walks a fixture tree — pruning, depth bounding, and
+    /// truncation observable, entries identical to fs_list's shape.
+    #[tokio::test]
+    #[ignore]
+    async fn fs_list_deep_prunes_bounds_and_truncates() {
+        let backend = test_backend();
+        let home = backend.fs_list(LOCAL, None).await.expect("home").path;
+        let root = join_remote(&home, "mast_deep_fixture");
+        cleanup(&backend, &root).await;
+
+        for dir in [
+            root.clone(),
+            join_remote(&root, "sub"),
+            join_remote(&root, "sub/inner"),
+            join_remote(&root, "node_modules"),
+        ] {
+            backend.fs_mkdir(LOCAL, dir).await.expect("mkdir");
+        }
+        backend.fs_write(LOCAL, join_remote(&root, "a.txt"), b"aa".to_vec()).await.unwrap();
+        backend.fs_write(LOCAL, join_remote(&root, "sub/b.txt"), b"bb".to_vec()).await.unwrap();
+        backend.fs_write(LOCAL, join_remote(&root, "sub/inner/c.txt"), b"cc".to_vec()).await.unwrap();
+        backend
+            .fs_write(LOCAL, join_remote(&root, "node_modules/junk.txt"), b"jj".to_vec())
+            .await
+            .unwrap();
+
+        let deep = backend
+            .fs_list_deep(LOCAL, Some(root.clone()), 3, 2000)
+            .await
+            .expect("deep list");
+        assert!(!deep.truncated);
+        let listed: Vec<&str> = deep.listings.iter().map(|l| l.path.as_str()).collect();
+        assert!(listed.contains(&root.as_str()));
+        assert!(listed.contains(&join_remote(&root, "sub").as_str()));
+        assert!(listed.contains(&join_remote(&root, "sub/inner").as_str()));
+        assert!(
+            !listed.contains(&join_remote(&root, "node_modules").as_str()),
+            "heavy dirs are not descended into"
+        );
+
+        // The pruned dir still shows up as an entry of its parent, and the deep
+        // root listing matches fs_list exactly.
+        let deep_root = deep.listings.iter().find(|l| l.path == root).unwrap();
+        assert!(deep_root.entries.iter().any(|e| e.name == "node_modules" && e.is_dir));
+        let flat = backend.fs_list(LOCAL, Some(root.clone())).await.expect("flat list");
+        let shape = |l: &FsListing| -> Vec<(String, String, bool, u64)> {
+            l.entries
+                .iter()
+                .map(|e| (e.name.clone(), e.path.clone(), e.is_dir, e.size))
+                .collect()
+        };
+        assert_eq!(shape(deep_root), shape(&flat));
+
+        // Expanding a pruned dir directly lists it normally.
+        let direct = backend
+            .fs_list_deep(LOCAL, Some(join_remote(&root, "node_modules")), 1, 2000)
+            .await
+            .expect("direct deep list of pruned dir");
+        assert_eq!(direct.listings.len(), 1);
+        assert!(direct.listings[0].entries.iter().any(|e| e.name == "junk.txt"));
+
+        // Depth bounding: depth 1 returns only the root listing.
+        let shallow = backend
+            .fs_list_deep(LOCAL, Some(root.clone()), 1, 2000)
+            .await
+            .expect("depth-1 deep list");
+        assert_eq!(shallow.listings.len(), 1);
+        assert!(!shallow.truncated, "a depth bound is not truncation");
+
+        // Truncation: a budget that only fits the root listing stops there and
+        // says so.
+        let cut = backend
+            .fs_list_deep(LOCAL, Some(root.clone()), 3, deep_root.entries.len())
+            .await
+            .expect("capped deep list");
+        assert!(cut.truncated);
+        assert_eq!(cut.listings.len(), 1);
+        assert_eq!(cut.listings[0].path, root);
+
+        cleanup(&backend, &root).await;
+    }
+
+    /// Live: fs_stat reports files and dirs; fs_read enforces the byte cap with
+    /// the typed TooLarge error and still round-trips under it.
+    #[tokio::test]
+    #[ignore]
+    async fn fs_stat_and_read_cap_roundtrip() {
+        let backend = test_backend();
+        let home = backend.fs_list(LOCAL, None).await.expect("home").path;
+        let path = join_remote(&home, "mast_read_cap_test.bin");
+        backend.fs_write(LOCAL, path.clone(), vec![7u8; 64]).await.expect("write");
+
+        let stat = backend.fs_stat(LOCAL, path.clone()).await.expect("stat");
+        assert!(!stat.is_dir);
+        assert_eq!(stat.size, 64);
+        assert!(stat.modified.is_some());
+        assert!(backend.fs_stat(LOCAL, home).await.expect("stat dir").is_dir);
+
+        let err = backend.fs_read(LOCAL, path.clone(), 16).await.expect_err("over the cap");
+        assert!(matches!(err, Error::TooLarge { size: 64, max: 16, .. }));
+        assert!(err.to_string().starts_with("too large:"), "matchable prefix: {err}");
+        assert_eq!(backend.fs_read(LOCAL, path.clone(), 64).await.expect("under the cap"), vec![7u8; 64]);
+
+        // The read itself is bounded, not just preflighted: even when the stat
+        // gate is bypassed, at most cap + 1 detection byte come off the wire.
+        let sftp = backend.transfer_sftp(LOCAL).await.expect("session");
+        let bounded = read_capped(&sftp, path.clone(), 16).await.expect("capped read");
+        assert_eq!(bounded.len(), 17, "streaming stops at the cap, never buffering the rest");
+
+        cleanup(&backend, &path).await;
+    }
+
+    /// Live: a dead pooled session under a mutation is healed by the read-only
+    /// probe (evict + redial), so the save still lands — without ever running
+    /// the mutation twice.
+    #[tokio::test]
+    #[ignore]
+    async fn dropped_session_heals_before_a_mutation() {
+        let backend = test_backend();
+        let home = backend.fs_list(LOCAL, None).await.expect("home").path;
+        let session = backend.containers.lock().await.get(LOCAL).cloned().expect("pooled session");
+        session
+            .handle
+            .disconnect(russh::Disconnect::ByApplication, "test kill", "")
+            .await
+            .ok();
+        let path = join_remote(&home, "mast_mutation_heal_test.txt");
+        backend.fs_write(LOCAL, path.clone(), b"healed".to_vec()).await.expect("write after kill");
+        assert_eq!(backend.fs_read(LOCAL, path.clone(), 1024).await.expect("read back"), b"healed");
+        assert_eq!(backend.sftp_opens.load(Ordering::Relaxed), 2);
+        cleanup(&backend, &path).await;
+    }
+
+    /// Live: a mutation's op runs exactly once — a transport-shaped failure is
+    /// never replayed (the server may already have applied it) — and burns the
+    /// pooled session so the next call redials. A Status failure (mkdir on an
+    /// existing path) is the server answering and does not evict.
+    #[tokio::test]
+    #[ignore]
+    async fn mutations_never_replay_and_evict_on_transport_failure() {
+        let backend = test_backend();
+        let home = backend.fs_list(LOCAL, None).await.expect("home").path;
+
+        assert!(backend.fs_mkdir(LOCAL, home).await.is_err(), "mkdir on an existing path fails");
+        assert_eq!(backend.sftp_opens.load(Ordering::Relaxed), 1, "a Status error does not evict");
+
+        let calls = AtomicU64::new(0);
+        let outcome = backend
+            .mutate_sftp(LOCAL, |_| async {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Err::<(), SftpError>(
+                    std::io::Error::new(std::io::ErrorKind::ConnectionReset, "mid-request drop").into(),
+                )
+            })
+            .await;
+        assert!(outcome.is_err());
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "mutations are never replayed");
+        assert!(
+            backend.sftp_pool.lock().await.get(LOCAL).is_none(),
+            "a transport failure evicts the session"
+        );
+        backend.fs_list(LOCAL, None).await.expect("next call redials");
+        assert_eq!(backend.sftp_opens.load(Ordering::Relaxed), 2);
     }
 
     #[test]
