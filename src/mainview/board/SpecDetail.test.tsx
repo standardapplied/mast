@@ -37,7 +37,7 @@ function deferred<T>(): Deferred<T> {
 function makeGateway(
   status: GlobalSpecView["status"] = "pending",
   assignee?: string,
-  opts: { noFdeRoster?: boolean } = {},
+  opts: { noFdeRoster?: boolean; capabilities?: string[] } = {},
 ) {
   const main = spec({ id: "s1", depends_on: ["dep-a"], status, assignee });
   const dep = spec({ id: "dep-a", status: "done" });
@@ -56,7 +56,12 @@ function makeGateway(
   const gateway = {
     whoami: async () => ({
       ok: true as const,
-      value: { name: "uday", fde: "uday", role: "admin" as const, capabilities: ["admin"] },
+      value: {
+        name: "uday",
+        fde: "uday",
+        role: "admin" as const,
+        capabilities: opts.capabilities ?? ["read", "write", "admin"],
+      },
     }),
     listFdes: async () =>
       opts.noFdeRoster
@@ -271,6 +276,19 @@ describe("SpecDetail anti-flicker", () => {
     const fake = makeGateway();
     await mount(fake.gateway);
     expect(container.querySelector('[data-testid="detail-dispatch"]')?.textContent).toBe("Dispatch");
+  });
+
+  test("a member's write credential dispatches from the detail — no local admin gate", async () => {
+    const fake = makeGateway("pending", undefined, { capabilities: ["read", "write"] });
+    await mount(fake.gateway);
+
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="detail-dispatch"]')?.click());
+    await settle();
+
+    expect(container.querySelector('[data-testid="dispatch-role"]')).toBeNull();
+    expect(
+      container.querySelector<HTMLButtonElement>('[data-testid="dispatch-go"]')?.disabled,
+    ).toBe(false);
   });
 
   test("own in-progress spec: the log button is enabled", async () => {

@@ -149,10 +149,39 @@ describe("DispatchDialog", () => {
     expect(go().disabled).toBe(true);
   });
 
-  test("restart mode still role-gates a non-admin credential", () => {
+  test("restart mode still gates a read-only credential", () => {
     mount({ spec: { ...SPEC, status: "review" }, restart: true, canDispatch: false });
     expect(container.querySelector('[data-testid="dispatch-role"]')).not.toBeNull();
+    expect(container.textContent).toContain("read-only");
+    expect(container.textContent).not.toContain("admin");
     expect(go().disabled).toBe(true);
+  });
+
+  test("a 403 renders the server's refusal verbatim — never a blanket admin claim", async () => {
+    const refusing = {
+      dispatch: async () => ({
+        ok: false as const,
+        error: {
+          status: 403,
+          code: "NOT_YOUR_SPEC",
+          message: "Spec 's1' is assigned to ravi, not you.",
+          action: "Reassign it to yourself or ask an admin to dispatch it.",
+        },
+      }),
+    } as unknown as Gateway;
+    const calls = mount({ gateway: refusing });
+
+    act(() => go().click());
+    await settle();
+
+    expect(calls.results).toEqual([
+      {
+        message:
+          "Dispatch refused: Spec 's1' is assigned to ravi, not you. — Reassign it to yourself or ask an admin to dispatch it.",
+        ok: false,
+      },
+    ]);
+    expect(calls.closed).toBe(1);
   });
 
   test("a structured refusal surfaces the server message and action verbatim", async () => {

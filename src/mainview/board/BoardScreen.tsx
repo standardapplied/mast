@@ -11,7 +11,7 @@ import { Select } from "../components/Select";
 import { useToast } from "../components/Toast";
 import { Badge, Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
-import { BOARD_COLUMNS, canTransition, STATUS_LABEL, STATUS_TONE } from "./lifecycle";
+import { BOARD_COLUMNS, canLaunchAgents, canTransition, STATUS_LABEL, STATUS_TONE } from "./lifecycle";
 import { LiveLog } from "./LiveLog";
 import { logsElsewhere, unmetDependencies, useBoard } from "./useBoard";
 
@@ -337,15 +337,15 @@ export function BoardScreen({
   const canvasRef = useRef<HTMLDivElement>(null);
   const { showToast } = useToast();
 
-  // Fetch identity once so dispatch can be role-gated up front; if the server
-  // has no whoami endpoint yet (404), role stays unknown and dispatch is
+  // Fetch identity once so dispatch can be gated up front; if the server has
+  // no whoami endpoint yet (404), role stays unknown and dispatch is
   // attempted, with the server's 403 handled cleanly. The FDE handle gates the
   // live-log controls: a foreign spec's run logs live on its assignee's box.
   useEffect(() => {
     void gateway.whoami().then((result) => {
       if (result.ok) {
         setRole({
-          canDispatch: result.value.capabilities.includes("admin"),
+          canDispatch: canLaunchAgents(result.value.capabilities),
           known: true,
           fde: result.value.fde,
         });
