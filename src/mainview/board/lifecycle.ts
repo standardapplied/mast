@@ -45,6 +45,17 @@ export function statusTone(status: SpecStatus | string): BadgeTone {
   return STATUS_TONE[status as SpecStatus] ?? "neutral";
 }
 
+/**
+ * The UI's dispatch gate mirrors sail's route tier, not its resource policy:
+ * any write credential may attempt a dispatch (members launch their own specs
+ * on their own box). The server's DispatchPolicy — assignee-or-admin, right
+ * node — stays the authority, and its refusals are rendered verbatim. Only a
+ * read-only credential is refused locally.
+ */
+export function canLaunchAgents(capabilities: string[]): boolean {
+  return capabilities.includes("write");
+}
+
 const ORDER: readonly SpecStatus[] = [
   "draft",
   "pending",

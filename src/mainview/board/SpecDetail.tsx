@@ -25,7 +25,7 @@ import { Markdown } from "../markdown";
 import { DispatchDialog } from "./DispatchDialog";
 import { LiveLog } from "./LiveLog";
 import { ReviewFindings } from "./ReviewFindings";
-import { STATUS_LABEL, statusLabel, statusTone } from "./lifecycle";
+import { canLaunchAgents, STATUS_LABEL, statusLabel, statusTone } from "./lifecycle";
 import { mapStopOutcome, noRunningRunMessage, runningBuildRun } from "./stopRun";
 import { dependentsOf, logsElsewhere, unmetDependencies } from "./useBoard";
 
@@ -121,7 +121,7 @@ export function SpecDetail({
     void gateway.whoami().then((r) => {
       setRole(
         r.ok
-          ? { canDispatch: r.value.capabilities.includes("admin"), known: true, fde: r.value.fde }
+          ? { canDispatch: canLaunchAgents(r.value.capabilities), known: true, fde: r.value.fde }
           : { canDispatch: true, known: false },
       );
     });

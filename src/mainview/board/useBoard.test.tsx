@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { ProjectListResponse } from "../../shared/sail-models";
 import type { SailResult } from "../../shared/types";
 import { createDemoGateway, type DemoGateway } from "../gateway";
-import { canTransition } from "./lifecycle";
+import { canLaunchAgents, canTransition } from "./lifecycle";
 import { logsElsewhere, useBoard, type MoveOutcome } from "./useBoard";
 
 let root: Root;
@@ -203,5 +203,17 @@ describe("lifecycle transitions", () => {
     const unknown = "paused" as Parameters<typeof canTransition>[0];
     expect(canTransition(unknown, "draft")).toBe(false);
     expect(canTransition("draft", unknown)).toBe(false);
+  });
+});
+
+describe("canLaunchAgents", () => {
+  test("any write credential may attempt a dispatch — the server's policy is the authority", () => {
+    expect(canLaunchAgents(["read", "write"])).toBe(true);
+    expect(canLaunchAgents(["read", "write", "admin"])).toBe(true);
+  });
+
+  test("only a read-only credential is refused locally", () => {
+    expect(canLaunchAgents(["read"])).toBe(false);
+    expect(canLaunchAgents([])).toBe(false);
   });
 });

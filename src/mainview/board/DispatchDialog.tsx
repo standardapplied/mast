@@ -7,8 +7,10 @@ import { unmetDependencies } from "./useBoard";
 
 /**
  * Dispatch confirmation: shows the agent/model/branch the launch will use and
- * the real dispatch — role-gated for non-admins, readiness-gated for blocked
- * specs. Dispatch always runs the agent in the background (autonomous in the
+ * the real dispatch — gated locally only for read-only credentials (any write
+ * credential may attempt; the server's assignee-or-admin policy decides and
+ * its refusal is rendered verbatim), readiness-gated for blocked specs.
+ * Dispatch always runs the agent in the background (autonomous in the
  * container); there is no terminal here.
  *
  * Restart mode re-dispatches a review/done spec: the server atomically resets
@@ -55,12 +57,12 @@ export function DispatchDialog({
       ...(restart ? { restart: true } : {}),
     });
     if (!result.ok) {
+      // The server's resource policy is the authority and its refusals name
+      // the exact remedy (wrong assignee, wrong node, read-only credential) —
+      // render them verbatim instead of guessing at a blanket cause.
       const forbidden = result.error.status === 403;
       const detail = `${result.error.message}${result.error.action ? ` — ${result.error.action}` : ""}`;
-      onResult(
-        forbidden ? `Dispatch needs admin role — ${detail}` : `Dispatch failed: ${detail}`,
-        false,
-      );
+      onResult(forbidden ? `Dispatch refused: ${detail}` : `Dispatch failed: ${detail}`, false);
       onClose();
       return;
     }
@@ -137,7 +139,7 @@ export function DispatchDialog({
         )}
         {depsKnown && roleKnown && !canDispatch && !blocked && !notPending && (
           <p className="dispatch-block" data-testid="dispatch-role">
-            Dispatch requires the admin role. Your credential can’t launch agents.
+            Your credential is read-only — launching agents needs write access.
           </p>
         )}
       </div>

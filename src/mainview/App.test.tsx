@@ -275,12 +275,12 @@ describe("App cockpit", () => {
     expect(container.textContent).toContain("Re-dispatched chorus-rate-limits (was review).");
   });
 
-  test("dispatch dialog role-gates a non-admin credential", async () => {
+  const renderAs = async (role: "member" | "viewer", capabilities: string[]) => {
     gateway = createDemoGateway();
     gateway.whoami = () =>
       Promise.resolve({
         ok: true,
-        value: { fde: "ravi", name: "ravi", role: "member", capabilities: ["read", "write"] },
+        value: { fde: "ravi", name: "ravi", role, capabilities },
       });
     const theme = createThemeController(browserThemeDeps(() => {}));
     location.hash = "#/";
@@ -303,7 +303,16 @@ describe("App cockpit", () => {
         ?.click();
     });
     await flush();
+  };
 
+  test("a member (write credential) can dispatch — the server's policy is the authority", async () => {
+    await renderAs("member", ["read", "write"]);
+    expect(container.querySelector('[data-testid="dispatch-role"]')).toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="dispatch-go"]')?.disabled).toBe(false);
+  });
+
+  test("dispatch dialog gates a read-only credential", async () => {
+    await renderAs("viewer", ["read"]);
     expect(container.querySelector('[data-testid="dispatch-role"]')).not.toBeNull();
     expect(container.querySelector<HTMLButtonElement>('[data-testid="dispatch-go"]')?.disabled).toBe(true);
   });
