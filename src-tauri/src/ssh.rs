@@ -8,7 +8,7 @@
 //! Proven feasible in `spike/russh-proof` against a live sshd; this is the same
 //! russh 0.45 API wired behind Tauri commands.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -46,6 +46,11 @@ pub const DEFAULT_READ_CAP: u64 = 10 * 1024 * 1024;
 /// to walk, and the total-entry budget across all returned listings.
 pub const DEEP_LIST_DEPTH: u32 = 3;
 pub const DEEP_LIST_MAX_ENTRIES: usize = 2000;
+/// How many directory listings the deep walker keeps in flight at once. The
+/// SFTP session multiplexes request ids, so pipelining turns a
+/// round-trip-per-directory walk into round-trip-per-batch; the cap also
+/// bounds wasted reads when the entry budget cuts a level short.
+const DEEP_LIST_CONCURRENCY: usize = 16;
 
 /// Directories the deep walker never descends into (dependency/build trees that
 /// dwarf the source they belong to). They still appear as entries in their
@@ -60,6 +65,14 @@ const PRUNED_DIRS: &[&str] = &[
     "__pycache__",
     ".venv",
     "venv",
+    ".cache",
+    ".cargo",
+    ".gradle",
+    ".local",
+    ".m2",
+    ".npm",
+    ".nvm",
+    ".rustup",
 ];
 
 /// Ghostty's compiled terminfo (from the Ghostty project, MIT), base64 so it
@@ -723,26 +736,31 @@ impl Backend {
             async move {
                 let root = resolve_dir(&sftp, path).await?;
                 let mut budget = WalkBudget::new(max_entries);
-                let mut next_cursor = None;
-                let mut listings: Vec<FsListing> = Vec::new();
-                let mut queue = VecDeque::from([(root, 1u32)]);
-                while let Some((dir, level)) = queue.pop_front() {
-                    let mut listing = match read_listing(&sftp, &dir).await {
-                        Ok(listing) => listing,
-                        Err(SftpError::Status(_)) if level > 1 => continue,
-                        Err(e) => return Err(e),
-                    };
-                    if listings.is_empty() {
-                        next_cursor = budget.admit_root(after.as_ref(), &mut listing.entries);
-                    } else if !budget.admit(&listing.entries) {
-                        break;
-                    }
-                    if level < depth {
-                        for entry in listing.entries.iter().filter(|e| e.is_dir && !is_pruned(&e.name)) {
-                            queue.push_back((entry.path.clone(), level + 1));
+                let mut root_listing = read_listing(&sftp, &root).await?;
+                let next_cursor = budget.admit_root(after.as_ref(), &mut root_listing.entries);
+                let mut level_dirs = if depth > 1 { child_dirs(&root_listing) } else { Vec::new() };
+                let mut listings = vec![root_listing];
+                let mut level = 2u32;
+                'walk: while level <= depth && !level_dirs.is_empty() {
+                    let mut next_level = Vec::new();
+                    for batch in level_dirs.chunks(DEEP_LIST_CONCURRENCY) {
+                        for result in read_batch(&sftp, batch).await {
+                            let listing = match result {
+                                Ok(listing) => listing,
+                                Err(SftpError::Status(_)) => continue,
+                                Err(e) => return Err(e),
+                            };
+                            if !budget.admit(&listing.entries) {
+                                break 'walk;
+                            }
+                            if level < depth {
+                                next_level.extend(child_dirs(&listing));
+                            }
+                            listings.push(listing);
                         }
                     }
-                    listings.push(listing);
+                    level_dirs = next_level;
+                    level += 1;
                 }
                 Ok(DeepListing {
                     listings,
@@ -1840,6 +1858,35 @@ async fn read_listing(sftp: &SftpSession, dir: &str) -> Result<FsListing, SftpEr
         .collect();
     sort_entries(&mut entries);
     Ok(FsListing { path: dir.to_string(), entries })
+}
+
+/// The subdirectories the deep walker descends into from one listing.
+fn child_dirs(listing: &FsListing) -> Vec<String> {
+    listing
+        .entries
+        .iter()
+        .filter(|e| e.is_dir && !is_pruned(&e.name))
+        .map(|e| e.path.clone())
+        .collect()
+}
+
+/// List one batch of directories concurrently over the shared session,
+/// returning results in the batch's order so budget admission (and therefore
+/// truncation) stays deterministic. The caller sizes batches to
+/// `DEEP_LIST_CONCURRENCY`.
+async fn read_batch(sftp: &Arc<SftpSession>, dirs: &[String]) -> Vec<Result<FsListing, SftpError>> {
+    let mut tasks = tokio::task::JoinSet::new();
+    for (index, dir) in dirs.iter().enumerate() {
+        let sftp = sftp.clone();
+        let dir = dir.clone();
+        tasks.spawn(async move { (index, read_listing(&sftp, &dir).await) });
+    }
+    let mut results: Vec<Option<Result<FsListing, SftpError>>> = dirs.iter().map(|_| None).collect();
+    while let Some(joined) = tasks.join_next().await {
+        let (index, result) = joined.expect("deep-walk listing task panicked");
+        results[index] = Some(result);
+    }
+    results.into_iter().map(|r| r.expect("every batch index joined")).collect()
 }
 
 /// The listing order — dirs first, case-insensitive by name, exact name as the

@@ -7,6 +7,7 @@ const file = (name: string, base = "/root"): FileEntry => ({ name, path: `${base
 type Pending = {
   path: string | null;
   after: PageCursor | undefined;
+  depth: number | undefined;
   done: boolean;
   resolve: (deep: DeepListing) => void;
   reject: (e: unknown) => void;
@@ -15,11 +16,12 @@ type Pending = {
 function controllableFs() {
   const pending: Pending[] = [];
   const fs: FsApi = {
-    listDeep: (path, after) =>
+    listDeep: (path, after, depth) =>
       new Promise((res, rej) => {
         const p: Pending = {
           path,
           after,
+          depth,
           done: false,
           resolve: (deep) => {
             p.done = true;
@@ -50,23 +52,46 @@ const deep = (listings: { path: string; entries: FileEntry[] }[], truncated = fa
   truncated,
 });
 
+/** Drive loadRoot through both phases: the shallow paint gets the first
+ *  listing alone, the deep background seed gets them all. */
+async function seedRoot(
+  store: FileTreeStore,
+  h: { settle: () => Promise<void>; take: (path: string | null) => Pending },
+  listings: { path: string; entries: FileEntry[] }[],
+  truncated = false,
+) {
+  void store.loadRoot();
+  await h.settle();
+  h.take(null).resolve(deep([listings[0]!]));
+  await h.settle();
+  h.take(listings[0]!.path).resolve(deep(listings, truncated));
+  await h.settle();
+}
+
 describe("FileTreeStore", () => {
-  test("loadRoot: loading → ready, seeding every listed descendant", async () => {
+  test("loadRoot: shallow first paint, then a deep background seed of descendants", async () => {
     const { fs, settle, take, countFor } = controllableFs();
     const store = new FileTreeStore(fs);
     void store.loadRoot();
     await settle();
     expect(store.rootPath).toBeNull(); // listDeep(null) still pending
 
-    take(null).resolve(
+    const shallow = take(null);
+    expect(shallow.depth).toBe(1); // first paint never waits on a subtree walk
+    shallow.resolve(deep([{ path: "/root", entries: [dir("sub"), file("a.txt")] }]));
+    await settle();
+    expect(store.rootPath).toBe("/root"); // painted before the deep walk returns
+    expect(store.dir("/root")).toEqual({ status: "ready", entries: [dir("sub"), file("a.txt")], stale: false });
+
+    const seedFetch = take("/root");
+    expect(seedFetch.depth).toBeUndefined(); // the background seed is the deep walk
+    seedFetch.resolve(
       deep([
         { path: "/root", entries: [dir("sub"), file("a.txt")] },
         { path: "/root/sub", entries: [file("inner.txt", "/root/sub")] },
       ]),
     );
     await settle();
-    expect(store.rootPath).toBe("/root");
-    expect(store.dir("/root")).toEqual({ status: "ready", entries: [dir("sub"), file("a.txt")], stale: false });
     expect(store.dir("/root/sub")).toEqual({
       status: "ready",
       entries: [file("inner.txt", "/root/sub")],
@@ -75,25 +100,22 @@ describe("FileTreeStore", () => {
     expect(countFor("/root/sub")).toBe(0); // seeded, not fetched
   });
 
-  test("expanding a deep-seeded dir renders instantly (SWR refresh in background)", async () => {
+  test("expanding a deep-seeded dir renders instantly (shallow SWR refresh in background)", async () => {
     const { fs, settle, take, countFor } = controllableFs();
     const store = new FileTreeStore(fs);
-    void store.loadRoot();
-    await settle();
-    take(null).resolve(
-      deep([
-        { path: "/root", entries: [dir("sub")] },
-        { path: "/root/sub", entries: [file("inner.txt", "/root/sub")] },
-      ]),
-    );
-    await settle();
+    await seedRoot(store, { settle, take }, [
+      { path: "/root", entries: [dir("sub")] },
+      { path: "/root/sub", entries: [file("inner.txt", "/root/sub")] },
+    ]);
 
     store.toggle(dir("sub"));
     expect(store.dir("/root/sub")).toMatchObject({ status: "ready", stale: true }); // instant, no spinner
     await settle();
     expect(countFor("/root/sub")).toBe(1); // one background refresh
 
-    take("/root/sub").resolve(deep([{ path: "/root/sub", entries: [file("new.txt", "/root/sub")] }]));
+    const refresh = take("/root/sub");
+    expect(refresh.depth).toBe(1); // a refresh re-lists one dir, not a subtree
+    refresh.resolve(deep([{ path: "/root/sub", entries: [file("new.txt", "/root/sub")] }]));
     await settle();
     expect(store.dir("/root/sub")).toMatchObject({ status: "ready", stale: false });
     expect((store.dir("/root/sub") as { entries: FileEntry[] }).entries[0]!.name).toBe("new.txt");
@@ -102,10 +124,7 @@ describe("FileTreeStore", () => {
   test("dedupe: one in-flight fetch per path, ever", async () => {
     const { fs, settle, take, countFor } = controllableFs();
     const store = new FileTreeStore(fs);
-    void store.loadRoot();
-    await settle();
-    take(null).resolve(deep([{ path: "/root", entries: [dir("sub")] }]));
-    await settle();
+    await seedRoot(store, { settle, take }, [{ path: "/root", entries: [dir("sub")] }]);
 
     store.toggle(dir("sub")); // not cached → fetch
     store.revalidate("/root/sub"); // same path while in flight
@@ -113,18 +132,23 @@ describe("FileTreeStore", () => {
     expect(countFor("/root/sub")).toBe(1);
   });
 
+  test("a cold expansion fetches deep so the next level renders instantly", async () => {
+    const { fs, settle, take } = controllableFs();
+    const store = new FileTreeStore(fs);
+    await seedRoot(store, { settle, take }, [{ path: "/root", entries: [dir("sub")] }]);
+
+    store.toggle(dir("sub")); // never listed → the fetch seeds descendants too
+    await settle();
+    expect(take("/root/sub").depth).toBeUndefined();
+  });
+
   test("a failed background refresh keeps the good cache", async () => {
     const { fs, settle, take } = controllableFs();
     const store = new FileTreeStore(fs);
-    void store.loadRoot();
-    await settle();
-    take(null).resolve(
-      deep([
-        { path: "/root", entries: [dir("sub")] },
-        { path: "/root/sub", entries: [file("keep.txt", "/root/sub")] },
-      ]),
-    );
-    await settle();
+    await seedRoot(store, { settle, take }, [
+      { path: "/root", entries: [dir("sub")] },
+      { path: "/root/sub", entries: [file("keep.txt", "/root/sub")] },
+    ]);
 
     store.toggle(dir("sub"));
     await settle();
@@ -137,18 +161,15 @@ describe("FileTreeStore", () => {
   test("a truncated walk marks the requested dir, not the seeded descendants", async () => {
     const { fs, settle, take } = controllableFs();
     const store = new FileTreeStore(fs);
-    void store.loadRoot();
-    await settle();
-    take(null).resolve(
-      deep(
-        [
-          { path: "/root", entries: [dir("sub")] },
-          { path: "/root/sub", entries: [file("inner.txt", "/root/sub")] },
-        ],
-        true,
-      ),
+    await seedRoot(
+      store,
+      { settle, take },
+      [
+        { path: "/root", entries: [dir("sub")] },
+        { path: "/root/sub", entries: [file("inner.txt", "/root/sub")] },
+      ],
+      true,
     );
-    await settle();
     expect(store.dir("/root")).toMatchObject({ truncated: true });
     expect(store.dir("/root/sub")).toEqual({
       status: "ready",
@@ -160,15 +181,18 @@ describe("FileTreeStore", () => {
   test("a paged root records its continuation, and loadMore appends the next page deduped", async () => {
     const { fs, settle, take } = controllableFs();
     const store = new FileTreeStore(fs);
-    void store.loadRoot();
-    await settle();
-    take(null).resolve({
+    const paged: DeepListing = {
       listings: [{ path: "/root", entries: [file("a.txt")] }],
       truncated: true,
       nextCursor: { isDir: false, name: "a.txt" },
-    });
+    };
+    void store.loadRoot();
+    await settle();
+    take(null).resolve(paged);
     await settle();
     expect(store.dir("/root")).toMatchObject({ truncated: true, nextCursor: { isDir: false, name: "a.txt" } });
+    take("/root").resolve(paged); // the background deep seed settles first
+    await settle();
 
     store.loadMore("/root");
     await settle();
@@ -191,13 +215,16 @@ describe("FileTreeStore", () => {
   test("a middle page keeps the continuation; a failed page keeps the partial cache", async () => {
     const { fs, settle, take } = controllableFs();
     const store = new FileTreeStore(fs);
-    void store.loadRoot();
-    await settle();
-    take(null).resolve({
+    const paged: DeepListing = {
       listings: [{ path: "/root", entries: [file("a.txt")] }],
       truncated: true,
       nextCursor: { isDir: false, name: "a.txt" },
-    });
+    };
+    void store.loadRoot();
+    await settle();
+    take(null).resolve(paged);
+    await settle();
+    take("/root").resolve(paged);
     await settle();
 
     store.loadMore("/root");
@@ -224,34 +251,32 @@ describe("FileTreeStore", () => {
     });
   });
 
-  test("a fresh un-truncated fetch clears a previous truncated flag", async () => {
+  test("a shallow revalidate shows a mutation immediately and clears a stale truncated flag", async () => {
     const { fs, settle, take } = controllableFs();
     const store = new FileTreeStore(fs);
-    void store.loadRoot();
-    await settle();
-    take(null).resolve(deep([{ path: "/root", entries: [dir("sub")] }], true));
-    await settle();
+    await seedRoot(store, { settle, take }, [{ path: "/root", entries: [dir("sub")] }], true);
     expect(store.dir("/root")).toMatchObject({ truncated: true });
 
-    store.revalidate("/root");
+    store.revalidate("/root"); // what an upload triggers
     await settle();
-    take("/root").resolve(deep([{ path: "/root", entries: [dir("sub")] }]));
+    const refresh = take("/root");
+    expect(refresh.depth).toBe(1); // one listing — the new file never waits on a subtree walk
+    refresh.resolve(deep([{ path: "/root", entries: [dir("sub"), file("dropped.txt")] }]));
     await settle();
-    expect(store.dir("/root")).toEqual({ status: "ready", entries: [dir("sub")], stale: false });
+    expect(store.dir("/root")).toEqual({
+      status: "ready",
+      entries: [dir("sub"), file("dropped.txt")],
+      stale: false,
+    });
   });
 
   test("beginDelete locks a node (collapses it) until endDelete", async () => {
     const { fs, settle, take } = controllableFs();
     const store = new FileTreeStore(fs);
-    void store.loadRoot();
-    await settle();
-    take(null).resolve(
-      deep([
-        { path: "/root", entries: [dir("sub")] },
-        { path: "/root/sub", entries: [file("a.txt", "/root/sub")] },
-      ]),
-    );
-    await settle();
+    await seedRoot(store, { settle, take }, [
+      { path: "/root", entries: [dir("sub")] },
+      { path: "/root/sub", entries: [file("a.txt", "/root/sub")] },
+    ]);
 
     store.toggle(dir("sub"));
     await settle();
@@ -285,8 +310,8 @@ describe("FileTreeStore", () => {
     expect(store.rootError).toContain("empty deep listing");
   });
 
-  test("responses after dispose() are dropped", async () => {
-    const { fs, settle, take } = controllableFs();
+  test("responses after dispose() are dropped, and no background seed fires", async () => {
+    const { fs, settle, take, countFor } = controllableFs();
     const store = new FileTreeStore(fs);
     void store.loadRoot();
     await settle();
@@ -294,5 +319,6 @@ describe("FileTreeStore", () => {
     take(null).resolve(deep([{ path: "/root", entries: [dir("sub")] }]));
     await settle();
     expect(store.rootPath).toBeNull(); // ignored after dispose
+    expect(countFor("/root")).toBe(0);
   });
 });

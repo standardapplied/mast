@@ -9,8 +9,10 @@ export type DeepListing = { listings: FsListing[]; truncated: boolean; nextCurso
 export type FsApi = {
   /** Bounded subtree listing (`fs_list_deep`): the requested dir plus
    *  descendants down to the backend's depth/entry budget. `after` resumes a
-   *  paged root listing where the previous response's `nextCursor` stopped. */
-  listDeep: (path: string | null, after?: PageCursor) => Promise<DeepListing>;
+   *  paged root listing where the previous response's `nextCursor` stopped.
+   *  `depth` overrides the backend's default walk depth: 1 lists just the
+   *  requested dir — the cheap shape for refreshes and the first paint. */
+  listDeep: (path: string | null, after?: PageCursor, depth?: number) => Promise<DeepListing>;
 };
 
 export type DirState =
@@ -100,19 +102,23 @@ export class FileTreeStore {
     }
   }
 
-  /** Load the tree root — a specific directory, or the login dir when omitted. */
+  /** Load the tree root — a specific directory, or the login dir when omitted.
+   *  Two-phase so the first paint never waits on a subtree walk: a depth-1
+   *  listing renders the root immediately, then a background deep fetch seeds
+   *  descendants so expansions are instant. */
   async loadRoot(dir?: string | null): Promise<void> {
     this.rootPath = null;
     this.rootError = null;
     this.emit();
     try {
-      const deep = await this.fs.listDeep(dir ?? null);
+      const shallow = await this.fs.listDeep(dir ?? null, undefined, 1);
       if (this.disposed) return;
-      const root = deep.listings[0];
+      const root = shallow.listings[0];
       if (!root) throw new Error("empty deep listing");
       this.rootPath = root.path;
-      this.seed(deep, root.path);
+      this.seed(shallow, root.path);
       this.emit();
+      void this.fetch(root.path, true);
     } catch (e) {
       if (this.disposed) return;
       this.rootError = String(e);
@@ -130,10 +136,11 @@ export class FileTreeStore {
     this.expanded.add(entry.path);
     const cached = this.nodes.get(entry.path);
     if (cached && cached.status === "ready") {
-      // Show cached immediately, refresh in the background.
+      // Show cached immediately, refresh in the background — shallow, because
+      // collapsed descendants refresh themselves when expanded.
       this.nodes.set(entry.path, { ...cached, stale: true });
       this.emit();
-      void this.fetch(entry.path, true);
+      void this.fetch(entry.path, true, 1);
     } else {
       this.nodes.set(entry.path, { status: "loading" });
       this.emit();
@@ -141,14 +148,16 @@ export class FileTreeStore {
     }
   }
 
-  /** Silent background refresh of a directory (after an upload, or manual). */
+  /** Silent background refresh of a directory (after an upload, or manual).
+   *  Depth 1: one listing shows the mutation — a subtree walk would make the
+   *  just-uploaded file wait on every descendant directory. */
   revalidate(path: string): void {
     if (path === this.rootPath) {
       const cached = this.nodes.get(path);
       if (cached?.status === "ready") this.nodes.set(path, { ...cached, stale: true });
       this.emit();
     }
-    void this.fetch(path, true);
+    void this.fetch(path, true, 1);
   }
 
   refresh(): void {
@@ -215,12 +224,12 @@ export class FileTreeStore {
     }
   }
 
-  private async fetch(path: string, background: boolean): Promise<void> {
+  private async fetch(path: string, background: boolean, depth?: number): Promise<void> {
     if (this.inflight.has(path)) return;
     this.inflight.add(path);
     this.emit();
     try {
-      const deep = await this.fs.listDeep(path);
+      const deep = await this.fs.listDeep(path, undefined, depth);
       if (this.disposed) return;
       if (deep.listings.length === 0) throw new Error("empty deep listing");
       this.seed(deep, path);
