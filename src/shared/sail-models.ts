@@ -155,6 +155,8 @@ export type RunView = {
   completed_at?: string;
   exit_code?: number;
   log_path?: string;
+  principal?: string;
+  owner?: string;
 };
 
 /**
@@ -345,6 +347,30 @@ export type ReviewApproveResponse = {
 export type FindingDismissResponse = {
   finding_id: string;
   dismissed: boolean;
+};
+
+export type SpecMessage = {
+  id: string;
+  spec_id: string;
+  author: string;
+  body: string;
+  created_at: string;
+  reply_to?: string;
+};
+
+export type SpecMessageListResponse = {
+  spec_id: string;
+  messages: SpecMessage[];
+  total: number;
+};
+
+export type SpecMessagePostRequest = {
+  body: string;
+  reply_to?: string;
+};
+
+export type SpecMessagePostResponse = {
+  message: SpecMessage;
 };
 
 /** Event wire shape (Event.toJsonLine): id present only when > 0. */

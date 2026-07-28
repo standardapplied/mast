@@ -129,6 +129,26 @@ function makeGateway(
         },
       };
     },
+    listSpecMessages: async () => ({
+      ok: true as const,
+      value: { spec_id: "s1", messages: [], total: 0 },
+    }),
+    postSpecMessage: async (_id: string, request: { body: string }) => ({
+      ok: true as const,
+      value: {
+        message: {
+          id: "m-1",
+          spec_id: "s1",
+          author: "uday",
+          body: request.body,
+          created_at: "2026-07-14T10:00:00Z",
+        },
+      },
+    }),
+    recentEvents: async () => ({
+      ok: true as const,
+      value: { limit: 100, returned: 0, events: [] },
+    }),
     reviewDetail: async (id: string) => ({
       ok: true as const,
       value: {
@@ -155,6 +175,14 @@ function makeGateway(
           },
         ],
       },
+    }),
+    approveReview: async (reviewId: string) => ({
+      ok: true as const,
+      value: { review_id: reviewId, approved: true },
+    }),
+    dismissFinding: async (_reviewId: string, findingId: string) => ({
+      ok: true as const,
+      value: { finding_id: findingId, dismissed: true },
     }),
     listSpecs: async () => {
       await enrichGate;
@@ -226,13 +254,13 @@ describe("SpecDetail anti-flicker", () => {
 
     expect(text()).toContain("s1");
     expect(container.querySelector('[data-testid="blocked-banner"]')).toBeNull();
-    expect(text()).not.toContain("No reviews yet.");
+    expect(text()).not.toContain("No conversation yet.");
 
     await act(async () => gate.resolve());
     await settle();
 
     expect(container.querySelector('[data-testid="blocked-banner"]')).toBeNull();
-    expect(text()).toContain("No reviews yet.");
+    expect(text()).toContain("No conversation yet.");
     expect(text()).toContain("rev 1");
   });
 
@@ -251,7 +279,7 @@ describe("SpecDetail anti-flicker", () => {
     await settle();
 
     expect(text()).toContain("rev 1");
-    expect(text()).toContain("No reviews yet.");
+    expect(text()).toContain("No conversation yet.");
 
     await act(async () => gate.resolve());
     await settle();
@@ -489,8 +517,8 @@ describe("SpecDetail stop action", () => {
   });
 });
 
-describe("SpecDetail review findings", () => {
-  test("a review row opens its findings in a dialog", async () => {
+describe("SpecDetail room findings", () => {
+  test("a review card expands its findings inline", async () => {
     const fake = makeGateway("review");
     await mount(fake.gateway);
 

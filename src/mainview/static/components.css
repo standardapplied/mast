@@ -2670,6 +2670,202 @@ span.checkbox {
   padding-left: 8px;
 }
 
+/* Spec room ------------------------------------------------------------------ */
+
+.spec-room {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.room-load-earlier {
+  justify-self: center;
+}
+
+.room-timeline {
+  display: grid;
+  gap: 12px;
+  max-height: 620px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 8px 8px 0;
+  scroll-behavior: smooth;
+}
+
+.room-empty {
+  margin: 18px 0;
+  color: var(--subtle-foreground);
+  font-size: 13px;
+  text-align: center;
+}
+
+.room-message {
+  display: grid;
+  gap: 7px;
+  width: min(82%, 720px);
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  background: var(--background);
+}
+
+.room-message.is-pending {
+  opacity: 0.62;
+}
+
+.room-message.is-failed {
+  border-color: var(--error);
+}
+
+.room-message-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--subtle-foreground);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.room-message-head time {
+  margin-left: auto;
+}
+
+.room-message .markdown {
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.room-message .markdown > :first-child {
+  margin-top: 0;
+}
+
+.room-message .markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.room-message-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--error);
+  font-size: 12px;
+}
+
+.room-system-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--subtle-foreground);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.room-system-row strong {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.room-system-row time {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.room-system-mark {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  background: var(--subtle-foreground);
+}
+
+.room-decision-row .room-system-mark {
+  background: var(--success);
+}
+
+.room-review-card {
+  border: 1px solid var(--border-strong);
+  background: var(--lane-bg);
+}
+
+.room-review-head {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 12px 14px;
+  border: none;
+  background: none;
+  color: var(--foreground);
+  font: 500 13px var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.room-review-head:hover {
+  background: var(--surface-hover);
+}
+
+.room-review-body {
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.finding-actions,
+.room-review-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.room-review-actions {
+  padding-top: 12px;
+}
+
+.room-new-pill {
+  appearance: none;
+  position: absolute;
+  right: 12px;
+  bottom: 76px;
+  z-index: 1;
+  padding: 5px 10px;
+  border: 1px solid var(--primary);
+  background: var(--background);
+  color: var(--primary);
+  font: 500 11px var(--font-mono);
+  cursor: pointer;
+}
+
+.room-new-pill:hover {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.room-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 640px) {
+  .room-message {
+    width: auto;
+  }
+
+  .room-system-row {
+    flex-wrap: wrap;
+  }
+
+  .room-system-row time {
+    margin-left: 13px;
+  }
+}
+
 /* Markdown -------------------------------------------------------------------- */
 
 .markdown {
