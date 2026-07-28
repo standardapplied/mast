@@ -20,6 +20,9 @@ import type {
   SpecContentRequest,
   SpecCreateRequest,
   SpecFilter,
+  SpecMessageListResponse,
+  SpecMessagePostRequest,
+  SpecMessagePostResponse,
   SpecUpdateRequest,
 } from "../../shared/sail-models";
 import type { ApiResult, SailHttp } from "./http";
@@ -74,6 +77,21 @@ export class SailClient {
 
   specReviews(id: string): Promise<ApiResult<ReviewListResponse>> {
     return this.http.request("GET", `/v1/specs/${id}/reviews`);
+  }
+
+  listSpecMessages(
+    id: string,
+    before?: string,
+    limit?: number,
+  ): Promise<ApiResult<SpecMessageListResponse>> {
+    return this.http.request("GET", `/v1/specs/${id}/messages`, { query: { before, limit } });
+  }
+
+  postSpecMessage(
+    id: string,
+    request: SpecMessagePostRequest,
+  ): Promise<ApiResult<SpecMessagePostResponse>> {
+    return this.http.request("POST", `/v1/specs/${id}/messages`, { body: request });
   }
 
   specHistory(id: string): Promise<ApiResult<GlobalSpecHistoryResponse>> {

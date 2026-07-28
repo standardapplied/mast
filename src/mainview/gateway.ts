@@ -12,12 +12,19 @@ import type {
   GlobalSpecsListResponse,
   GlobalSpecView,
   ProjectListResponse,
+  RecentEventsResponse,
   ReviewDetailResponse,
   ReviewListResponse,
+  ReviewApproveResponse,
+  FindingDismissResponse,
   RunListResponse,
   SailEvent,
   SpecContentRequest,
   SpecFilter,
+  SpecMessage,
+  SpecMessageListResponse,
+  SpecMessagePostRequest,
+  SpecMessagePostResponse,
   SpecStatus,
   SpecUpdateRequest,
   StopRunResponse,
@@ -65,8 +72,23 @@ export type Gateway = {
   specHistory(id: string): Promise<SailResult<GlobalSpecHistoryResponse>>;
   restoreSpec(id: string, rev: number): Promise<SailResult<GlobalSpecDetailResponse>>;
   specReviews(id: string): Promise<SailResult<ReviewListResponse>>;
+  listSpecMessages(
+    id: string,
+    before?: string,
+    limit?: number,
+  ): Promise<SailResult<SpecMessageListResponse>>;
+  postSpecMessage(
+    id: string,
+    request: SpecMessagePostRequest,
+  ): Promise<SailResult<SpecMessagePostResponse>>;
   /** One review with its full findings (GET /v1/reviews/{id}). */
   reviewDetail(reviewId: string): Promise<SailResult<ReviewDetailResponse>>;
+  approveReview(reviewId: string): Promise<SailResult<ReviewApproveResponse>>;
+  dismissFinding(
+    reviewId: string,
+    findingId: string,
+  ): Promise<SailResult<FindingDismissResponse>>;
+  recentEvents(limit?: number): Promise<SailResult<RecentEventsResponse>>;
   dispatch(project: string, request: DispatchRequest): Promise<SailResult<DispatchResponse>>;
   whoami(): Promise<SailResult<WhoAmI>>;
   /** The full synced project roster — every catalogued project with its local container state. */
@@ -147,7 +169,14 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     specHistory: (id) => read(() => api.sailSpecHistory({ id })),
     restoreSpec: (id, rev) => api.sailRestoreSpec({ id, rev }),
     specReviews: (id) => read(() => api.sailSpecReviews({ id })),
+    listSpecMessages: (id, before, limit) =>
+      read(() => api.sailListSpecMessages({ id, before, limit })),
+    postSpecMessage: (id, request) => api.sailPostSpecMessage({ id, request }),
     reviewDetail: (reviewId) => read(() => api.sailGetReview({ reviewId })),
+    approveReview: (reviewId) => api.sailApproveReview({ reviewId }),
+    dismissFinding: (reviewId, findingId) =>
+      api.sailDismissFinding({ reviewId, findingId }),
+    recentEvents: (limit) => read(() => api.sailRecentEvents({ limit })),
     dispatch: (project, request) => api.sailDispatch({ project, request }),
     whoami: () => api.sailWhoami(),
     // Agent logs and the project roster ride the Tauri seam; the retired
@@ -294,6 +323,8 @@ export function createDemoGateway(): DemoGateway {
   ];
 
   const listeners = new Set<(event: SailEvent) => void>();
+  const events: SailEvent[] = [];
+  const messages = new Map<string, SpecMessage[]>();
   let eventId = 100;
 
   const ok = <T>(value: T, etag?: string): SailResult<T> => ({ ok: true, value, etag });
@@ -304,7 +335,10 @@ export function createDemoGateway(): DemoGateway {
   const find = (id: string) => specs.find((s) => s.id === id);
   const etagOf = (spec: DemoSpec) => `"${spec.updated_at}"`;
 
-  const emit = (event: SailEvent) => listeners.forEach((l) => l(event));
+  const emit = (event: SailEvent) => {
+    events.push(event);
+    listeners.forEach((l) => l(event));
+  };
 
   const view = ({ body: _b, plan: _p, ...spec }: DemoSpec): GlobalSpecView => spec;
 
@@ -618,6 +652,40 @@ export function createDemoGateway(): DemoGateway {
       return ok({ spec_id: id, reviews });
     },
 
+    async listSpecMessages(id, before, limit = 50) {
+      if (!find(id)) return notFound(id);
+      const all = messages.get(id) ?? [];
+      const end = before ? all.findIndex((message) => message.id === before) : all.length;
+      const pageEnd = end < 0 ? all.length : end;
+      const page = all.slice(Math.max(0, pageEnd - limit), pageEnd);
+      return ok({ spec_id: id, messages: page, total: page.length });
+    },
+
+    async postSpecMessage(id, request) {
+      if (!find(id)) return notFound(id);
+      const message: SpecMessage = {
+        id: crypto.randomUUID(),
+        spec_id: id,
+        author: "uday",
+        body: request.body,
+        created_at: new Date().toISOString(),
+        ...(request.reply_to ? { reply_to: request.reply_to } : {}),
+      };
+      messages.set(id, [...(messages.get(id) ?? []), message]);
+      emit({
+        v: 1,
+        id: ++eventId,
+        ts: message.created_at,
+        project: find(id)!.project,
+        spec: id,
+        type: "spec_message_posted",
+        agent: message.author,
+        host: "demo",
+        data: { message_id: message.id, preview: message.body.slice(0, 160) },
+      });
+      return ok({ message });
+    },
+
     async reviewDetail(reviewId) {
       if (reviewId !== "rev-1") {
         return {
@@ -662,6 +730,19 @@ export function createDemoGateway(): DemoGateway {
           },
         ],
       });
+    },
+
+    async approveReview(reviewId) {
+      return ok({ review_id: reviewId, approved: true });
+    },
+
+    async dismissFinding(_reviewId, findingId) {
+      return ok({ finding_id: findingId, dismissed: true });
+    },
+
+    async recentEvents(limit = 100) {
+      const page = events.slice(-limit);
+      return ok({ limit, returned: page.length, events: page });
     },
 
     async connection() {

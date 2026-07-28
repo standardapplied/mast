@@ -3,7 +3,6 @@ import type {
   FdeView,
   GlobalSpecDetailResponse,
   GlobalSpecView,
-  ReviewView,
   RunView,
   SpecRevisionView,
   SpecStatus,
@@ -24,7 +23,7 @@ import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
 import { DispatchDialog } from "./DispatchDialog";
 import { LiveLog } from "./LiveLog";
-import { ReviewFindings } from "./ReviewFindings";
+import { SpecRoom } from "./SpecRoom";
 import { canLaunchAgents, STATUS_LABEL, statusLabel, statusTone } from "./lifecycle";
 import { mapStopOutcome, noRunningRunMessage, runningBuildRun } from "./stopRun";
 import { dependentsOf, logsElsewhere, unmetDependencies } from "./useBoard";
@@ -62,7 +61,6 @@ type Loaded = {
   body: string;
   plan: string;
   history: SpecRevisionView[];
-  reviews: ReviewView[];
   allSpecs: GlobalSpecView[];
   /** True once enrichment has landed at least once. Until then, readiness and
    *  empty-states are unknown — render nothing rather than a wrong guess that
@@ -107,9 +105,14 @@ export function SpecDetail({
   const [stopTarget, setStopTarget] = useState<RunView | null>(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
-  const [findingsReview, setFindingsReview] = useState<ReviewView | null>(null);
-  const [role, setRole] = useState<{ canDispatch: boolean; known: boolean; fde?: string }>({
+  const [role, setRole] = useState<{
+    canDispatch: boolean;
+    canWrite: boolean;
+    known: boolean;
+    fde?: string;
+  }>({
     canDispatch: false,
+    canWrite: false,
     known: false,
   });
   // The FDE roster backs the assignee select; null (endpoint missing, older
@@ -121,8 +124,13 @@ export function SpecDetail({
     void gateway.whoami().then((r) => {
       setRole(
         r.ok
-          ? { canDispatch: canLaunchAgents(r.value.capabilities), known: true, fde: r.value.fde }
-          : { canDispatch: true, known: false },
+          ? {
+              canDispatch: canLaunchAgents(r.value.capabilities),
+              canWrite: r.value.capabilities.includes("write"),
+              known: true,
+              fde: r.value.fde,
+            }
+          : { canDispatch: true, canWrite: true, known: false },
       );
     });
     void gateway.listFdes().then((r) => {
@@ -142,25 +150,22 @@ export function SpecDetail({
       return;
     }
     setError(null);
-    // A reload keeps the previous enrichment on screen — blanking history,
-    // reviews, and the dependency graph on every SSE-triggered refresh is what
-    // made the side cards flicker between empty and filled.
+    // A reload keeps the previous enrichment on screen — blanking history and
+    // the dependency graph on every SSE-triggered refresh made the cards flicker.
     setLoaded((prev) => ({
       detail: detail.value,
       etag: detail.etag,
       body: content.ok ? content.value.body : (detail.value.body ?? ""),
       plan: content.ok ? content.value.plan : "",
       history: prev?.history ?? [],
-      reviews: prev?.reviews ?? [],
       allSpecs: prev?.allSpecs ?? [],
       enriched: prev?.enriched ?? false,
     }));
 
-    // Enrichment — history, reviews, dependency graph — is non-fatal and
+    // Enrichment — history and the dependency graph — is non-fatal and
     // merged in as it arrives; a failure here leaves the page usable.
-    const [history, reviews, all] = await Promise.all([
+    const [history, all] = await Promise.all([
       gateway.specHistory(specId),
-      gateway.specReviews(specId),
       gateway.listSpecs({}),
     ]);
     setLoaded((prev) =>
@@ -168,7 +173,6 @@ export function SpecDetail({
         ? {
             ...prev,
             history: history.ok ? history.value.revisions : prev.history,
-            reviews: reviews.ok ? reviews.value.reviews : prev.reviews,
             allSpecs: all.ok ? all.value.specs : prev.allSpecs,
             enriched: true,
           }
@@ -187,7 +191,7 @@ export function SpecDetail({
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const off = gateway.onEvent((event) => {
-      if (event.spec !== specId) return;
+      if (event.spec !== specId || event.type === "spec_message_posted") return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => void load(), eventDebounceMs);
     });
@@ -506,7 +510,14 @@ export function SpecDetail({
 
       <div className={editing ? "detail-grid is-editing" : "detail-grid"}>
         <div className="detail-main">
-          <Card>
+          <SpecRoom
+            gateway={gateway}
+            specId={spec.id}
+            canWrite={role.canWrite}
+            currentUser={role.fde}
+            onOpenLog={() => setLogOpen(true)}
+          />
+          <Card title="Spec">
             {editing ? (
               <div className="md-editor" data-pane={editorPane}>
                 <ToggleButton
@@ -570,29 +581,6 @@ export function SpecDetail({
               </div>
             </Card>
           )}
-
-          <Card title="Reviews">
-            {loaded.enriched && loaded.reviews.length === 0 && (
-              <span className="meta-value">No reviews yet.</span>
-            )}
-            {loaded.reviews.map((review) => (
-              <button
-                key={review.id}
-                type="button"
-                className="review-row review-row--open"
-                data-testid={`review-row-${review.id}`}
-                title="View the findings"
-                onClick={() => setFindingsReview(review)}
-              >
-                <span className="meta-value">
-                  #{review.iteration} · {review.status}
-                </span>
-                <span className="eyebrow">
-                  {review.stages.reduce((n, s) => n + s.finding_count, 0)} findings
-                </span>
-              </button>
-            ))}
-          </Card>
 
           <Card title="History">
             {loaded.history.map((revision) => (
@@ -670,14 +658,6 @@ export function SpecDetail({
             showToast(ok ? "success" : "error", message);
             if (ok) void load();
           }}
-        />
-      )}
-
-      {findingsReview && (
-        <ReviewFindings
-          gateway={gateway}
-          review={findingsReview}
-          onClose={() => setFindingsReview(null)}
         />
       )}
 

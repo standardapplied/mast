@@ -37,6 +37,9 @@ import type {
   SpecContentRequest,
   SpecCreateRequest,
   SpecFilter,
+  SpecMessageListResponse,
+  SpecMessagePostRequest,
+  SpecMessagePostResponse,
   SpecUpdateRequest,
   WhoAmI,
 } from "./sail-models";
@@ -106,6 +109,14 @@ export type AppRPCSchema = {
         response: SailResult<GlobalSpecContentResponse>;
       };
       sailSpecReviews: { params: { id: string }; response: SailResult<ReviewListResponse> };
+      sailListSpecMessages: {
+        params: { id: string; before?: string; limit?: number };
+        response: SailResult<SpecMessageListResponse>;
+      };
+      sailPostSpecMessage: {
+        params: { id: string; request: SpecMessagePostRequest };
+        response: SailResult<SpecMessagePostResponse>;
+      };
       sailSpecHistory: { params: { id: string }; response: SailResult<GlobalSpecHistoryResponse> };
       sailRestoreSpec: {
         params: { id: string; rev: number };

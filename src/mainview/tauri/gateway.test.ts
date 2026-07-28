@@ -69,3 +69,52 @@ describe("Tauri gateway stop wire", () => {
     }
   });
 });
+
+describe("Tauri gateway room wire", () => {
+  test("lists and posts messages with encoded spec ids and pagination", async () => {
+    const calls = stubInvoke({
+      status: 200,
+      body: JSON.stringify({ spec_id: "spec 1", messages: [], total: 0 }),
+    });
+    const gateway = createTauriGateway();
+
+    await gateway.listSpecMessages("spec 1", "message/1", 100);
+    await gateway.postSpecMessage("spec 1", { body: "hello" });
+
+    expect(calls).toEqual([
+      {
+        cmd: "sail_request",
+        args: {
+          method: "GET",
+          path: "/v1/specs/spec%201/messages?before=message%2F1&limit=100",
+          body: null,
+          ifMatch: null,
+        },
+      },
+      {
+        cmd: "sail_request",
+        args: {
+          method: "POST",
+          path: "/v1/specs/spec%201/messages",
+          body: JSON.stringify({ body: "hello" }),
+          ifMatch: null,
+        },
+      },
+    ]);
+  });
+
+  test("wires review decisions and recent event reconciliation", async () => {
+    const calls = stubInvoke({ status: 200, body: "{}" });
+    const gateway = createTauriGateway();
+
+    await gateway.approveReview("review 1");
+    await gateway.dismissFinding("review 1", "finding/1");
+    await gateway.recentEvents(100);
+
+    expect(calls.map((call) => call.args.path)).toEqual([
+      "/v1/reviews/review%201/approve",
+      "/v1/reviews/review%201/dismiss/finding%2F1",
+      "/v1/events/recent?limit=100",
+    ]);
+  });
+});

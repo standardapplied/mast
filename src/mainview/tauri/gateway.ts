@@ -358,7 +358,23 @@ export function createTauriGateway(): Gateway {
     restoreSpec: (id, rev) =>
       read("POST", `/v1/specs/${encodeURIComponent(id)}/restore`, { body: { rev } }),
     specReviews: (id) => read("GET", `/v1/specs/${encodeURIComponent(id)}/reviews`),
+    listSpecMessages: (id, before, limit) =>
+      read(
+        "GET",
+        `/v1/specs/${encodeURIComponent(id)}/messages${queryString({ before, limit })}`,
+      ),
+    postSpecMessage: (id, request) =>
+      read("POST", `/v1/specs/${encodeURIComponent(id)}/messages`, { body: request }),
     reviewDetail: (reviewId) => read("GET", `/v1/reviews/${encodeURIComponent(reviewId)}`),
+    approveReview: (reviewId) =>
+      read("POST", `/v1/reviews/${encodeURIComponent(reviewId)}/approve`),
+    dismissFinding: (reviewId, findingId) =>
+      read(
+        "POST",
+        `/v1/reviews/${encodeURIComponent(reviewId)}/dismiss/${encodeURIComponent(findingId)}`,
+      ),
+    recentEvents: (limit) =>
+      read("GET", `/v1/events/recent${queryString({ limit })}`),
     dispatch: (project, request) =>
       read("POST", `/v1/projects/${encodeURIComponent(project)}/dispatch`, { body: request }),
     whoami: () => read("GET", "/v1/whoami"),

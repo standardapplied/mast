@@ -23,6 +23,8 @@ export type SailPort = Pick<
   | "getSpecContent"
   | "putSpecContent"
   | "specReviews"
+  | "listSpecMessages"
+  | "postSpecMessage"
   | "specHistory"
   | "restoreSpec"
   | "getProject"
@@ -106,6 +108,9 @@ export function createRequestHandlers(deps: HandlerDeps): BunRequestHandlers {
     sailPutSpecContent: ({ id, content, ifMatch }) =>
       wrap(() => sail().putSpecContent(id, content, ifMatch)),
     sailSpecReviews: ({ id }) => wrap(() => sail().specReviews(id)),
+    sailListSpecMessages: ({ id, before, limit }) =>
+      wrap(() => sail().listSpecMessages(id, before, limit)),
+    sailPostSpecMessage: ({ id, request }) => wrap(() => sail().postSpecMessage(id, request)),
     sailSpecHistory: ({ id }) => wrap(() => sail().specHistory(id)),
     sailRestoreSpec: ({ id, rev }) => wrap(() => sail().restoreSpec(id, rev)),
     sailGetProject: ({ project }) => wrap(() => sail().getProject(project)),

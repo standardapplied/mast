@@ -25,6 +25,13 @@ const SPEC = {
 
 let specBody = "# original";
 let rateLimitHits = 0;
+const SPEC_MESSAGE = {
+  id: "019f0000-0000-7000-8000-000000000001",
+  spec_id: SPEC.id,
+  author: "uday",
+  body: "Ship the room",
+  created_at: "2026-07-28T10:00:00Z",
+};
 
 function envelope(payload: Record<string, unknown>): Response {
   return Response.json({ schema_version: 1, ...payload });
@@ -82,6 +89,20 @@ const server = Bun.serve({
         specBody = (body as { body: string }).body;
         return envelope({ spec_id: SPEC.id, body: specBody, plan: "" });
       });
+    }
+    if (url.pathname === `/v1/specs/${SPEC.id}/messages`) {
+      if (req.method === "GET") {
+        return envelope({
+          spec_id: SPEC.id,
+          messages: [SPEC_MESSAGE],
+          total: 1,
+          cursor: url.searchParams.get("before"),
+          limit: Number(url.searchParams.get("limit")),
+        });
+      }
+      return req.json().then((body) =>
+        envelope({ message: { ...SPEC_MESSAGE, body: (body as { body: string }).body } }),
+      );
     }
     if (url.pathname === "/v1/projects/chorus/dispatch" && req.method === "POST") {
       // Faithful to the control plane: only snake_case spec_id selects a spec
@@ -160,6 +181,17 @@ describe("SailClient against a mock control plane", () => {
     expect(result.data.dispatched).toBe(true);
     expect(result.data.branch_created).toBe(true);
     expect(result.data.restarted).toBe(false);
+  });
+
+  test("pages and posts spec messages through the room wire contract", async () => {
+    const { client } = makeClient();
+    const page = await client.listSpecMessages(SPEC.id, SPEC_MESSAGE.id, 100);
+    expect(page.data.messages).toEqual([SPEC_MESSAGE]);
+    expect(page.data.total).toBe(1);
+
+    const posted = await client.postSpecMessage(SPEC.id, { body: "A second client replied" });
+    expect(posted.data.message.body).toBe("A second client replied");
+    expect(posted.data.message.author).toBe("uday");
   });
 
   test("re-dispatch sends the snake_case restart key and reads restarted back", async () => {
