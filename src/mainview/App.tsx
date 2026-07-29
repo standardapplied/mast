@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { ConnectionStatus, WhoAmI } from "../shared/sail-models";
 import type { BridgeStatus } from "../shared/types";
 import { BoardScreen } from "./board/BoardScreen";
+import { RoomsScreen } from "./board/RoomsScreen";
 import { SpecDetail } from "./board/SpecDetail";
 import { Diagnostics } from "./components/Diagnostics";
 import { Logo } from "./components/icons";
@@ -16,9 +17,12 @@ import type { ThemeController } from "./theme";
 import type { Updater } from "./updater";
 
 const NAV_OPTIONS = [
+  { value: "rooms", label: "Rooms" },
   { value: "board", label: "Board" },
   { value: "terminal", label: "Terminal" },
 ];
+
+type AppView = "rooms" | "board" | "terminal";
 
 function pill(status: ConnectionStatus): { label: string; state: string } {
   switch (status.phase) {
@@ -94,7 +98,7 @@ export function App({
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [everReady, setEverReady] = useState(false);
   const [specId, setSpecId] = useState<string | null>(specIdFromHash(location.hash));
-  const [view, setView] = useState<"board" | "terminal">("board");
+  const [view, setView] = useState<AppView>(() => specId ? "board" : "rooms");
   // Mount the terminal on first visit and keep it alive (hidden) thereafter, so
   // switching to the board and back doesn't tear down the shell session.
   const [terminalOpened, setTerminalOpened] = useState(false);
@@ -131,7 +135,11 @@ export function App({
   }, [gateway, ready]);
 
   useEffect(() => {
-    const onHashChange = () => setSpecId(specIdFromHash(location.hash));
+    const onHashChange = () => {
+      const next = specIdFromHash(location.hash);
+      setSpecId(next);
+      if (next) setView("board");
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
@@ -148,6 +156,11 @@ export function App({
   const goBoard = () => {
     setView("board");
     backToBoard();
+  };
+  const goRooms = () => {
+    setView("rooms");
+    location.hash = "#/";
+    setSpecId(null);
   };
   const goTerminal = () => {
     setTerminalOpened(true);
@@ -172,14 +185,14 @@ export function App({
 
   const pillView = status ? pill(status) : { label: "Connecting…", state: "connecting" };
 
-  // Board renders once we've ever been ready — transient degradation keeps the
+  // The workspace renders once we've ever been ready — transient degradation keeps the
   // last view (pill carries the truth) instead of yanking it to a full-screen
   // error. Only a genuinely unusable state takes over the whole surface:
   // unauthenticated (needs sign-in), or first-connect probing/failure.
   const needsLogin = status?.phase === "unauthenticated";
   const firstConnectBlocking =
     !everReady && (!status || status.phase !== "ready");
-  const showBoard = !needsLogin && !firstConnectBlocking;
+  const showWorkspace = !needsLogin && !firstConnectBlocking;
 
   return (
     <ToastProvider>
@@ -188,20 +201,22 @@ export function App({
           <button
             type="button"
             className="cockpit-brand electrobun-webkit-app-region-no-drag"
-            onClick={goBoard}
+            onClick={goRooms}
           >
             <Logo size={20} />
             <span className="cockpit-wordmark">Mast</span>
           </button>
-          {terminal && (
-            <span className="cockpit-nav electrobun-webkit-app-region-no-drag">
-              <ToggleButton
-                options={NAV_OPTIONS}
-                value={view}
-                onChange={(v) => (v === "terminal" ? goTerminal() : goBoard())}
-              />
-            </span>
-          )}
+          <span className="cockpit-nav electrobun-webkit-app-region-no-drag">
+            <ToggleButton
+              options={terminal ? NAV_OPTIONS : NAV_OPTIONS.slice(0, 2)}
+              value={view}
+              onChange={(next) => {
+                if (next === "terminal") goTerminal();
+                else if (next === "board") goBoard();
+                else goRooms();
+              }}
+            />
+          </span>
           <span className="cockpit-toolbar-spacer" />
           <span className="stream-pill" data-state={pillView.state} title={status?.detail ?? "Connection"}>
             {pillView.label}
@@ -224,8 +239,19 @@ export function App({
           </span>
         </header>
         <main className="cockpit-main">
+          <section className="cockpit-view" style={{ display: view === "rooms" ? "flex" : "none" }}>
+            {view === "rooms" && (!showWorkspace ? (
+              status && (needsLogin || status.phase === "no-host" || status.phase === "failed") ? (
+                <ConnectScreen status={status} onLogin={() => void login()} busy={loginBusy} loginError={loginError} />
+              ) : (
+                <LoadingMark label={status?.phase === "tunnel-connecting" ? "Opening the tunnel" : "Finding the control plane"} />
+              )
+            ) : (
+              <RoomsScreen gateway={gateway} />
+            ))}
+          </section>
           <section className="cockpit-view" style={{ display: view === "board" ? "flex" : "none" }}>
-            {!showBoard ? (
+            {view === "board" && (!showWorkspace ? (
               status && (needsLogin || status.phase === "no-host" || status.phase === "failed") ? (
                 <ConnectScreen status={status} onLogin={() => void login()} busy={loginBusy} loginError={loginError} />
               ) : (
@@ -240,7 +266,7 @@ export function App({
                 server={status?.server}
                 tokenPresent={status?.tokenPresent ?? true}
               />
-            )}
+            ))}
           </section>
           {terminal && terminalOpened && (
             <section className="cockpit-view" style={{ display: view === "terminal" ? "flex" : "none" }}>

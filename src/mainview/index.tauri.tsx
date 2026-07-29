@@ -27,7 +27,7 @@ const theme = createThemeController(browserThemeDeps(() => {}));
 const container = document.getElementById("root");
 if (!container) throw new Error("Missing #root element");
 
-// Navigation (board ⇄ terminal ⇄ spec) is React state inside <App>; it must NOT
+// Navigation (rooms ⇄ board ⇄ terminal ⇄ spec) is React state inside <App>; it must NOT
 // reload the page, or the terminal tabs and their live sessions — and all other
 // in-memory state — are lost. The board writes the current spec to location.hash
 // for deep-linking, and <App> syncs from it without reloading. Only the

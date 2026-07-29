@@ -127,7 +127,10 @@ function authorLabel(author: string, runs: RunView[]): string {
 function eventDetail(event: SailEvent): string {
   const source = event.data?.source;
   const exitCode = event.data?.exit_code;
+  const from = event.data?.from;
+  const to = event.data?.to;
   return [
+    typeof from === "string" && typeof to === "string" && `${from} → ${to}`,
     typeof source === "string" && source,
     typeof exitCode === "number" && `exit ${exitCode}`,
   ]

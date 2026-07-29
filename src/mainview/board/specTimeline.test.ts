@@ -81,8 +81,8 @@ test("the event registry renders rows and applies review overlays", () => {
     runs: [],
   });
 
-  expect(timeline.map((item) => item.kind)).toEqual(["review", "decision"]);
-  expect(timeline[0]?.kind === "review" && timeline[0].review.completed_at).toBe(
+  expect(timeline.map((item) => item.kind)).toEqual(["lifecycle", "review", "decision"]);
+  expect(timeline[1]?.kind === "review" && timeline[1].review.completed_at).toBe(
     "2026-07-28T10:02:00Z",
   );
 });

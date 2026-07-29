@@ -349,6 +349,7 @@ export function createTauriGateway(): Gateway {
     listSpecs: (filter = {}) => read("GET", `/v1/specs${queryString(filter)}`),
     board: (project) => read("GET", `/v1/specs/board${queryString({ project })}`),
     getSpec: (id) => read("GET", `/v1/specs/${encodeURIComponent(id)}`),
+    createSpec: (request) => read("POST", "/v1/specs", { body: request }),
     getSpecContent: (id) => read("GET", `/v1/specs/${encodeURIComponent(id)}/content`),
     putSpecContent: (id, content, ifMatch) =>
       read("PUT", `/v1/specs/${encodeURIComponent(id)}/content`, { body: content, ifMatch }),

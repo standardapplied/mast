@@ -15,6 +15,8 @@ import { Tooltip } from "./components/Tooltip";
 import { Textarea } from "./components/Textarea";
 import { ToastProvider, useToast } from "./components/Toast";
 import { Badge, Button, Card, Eyebrow } from "./components/ui";
+import { RoomList } from "./board/RoomList";
+import type { RoomView } from "./board/rooms";
 import type { TimeValue } from "./lib/date-utils";
 import type { ThemeController, ThemeMode } from "./theme";
 
@@ -107,6 +109,56 @@ function SplitterDemo() {
       <div style={{ ...pane, flex: 1 }}>flex</div>
       <Splitter value={width} min={120} max={360} onChange={setWidth} ariaLabel="Demo splitter" />
       <div style={{ ...pane, width, flexShrink: 0 }}>{width}px</div>
+    </div>
+  );
+}
+
+const ROOM_DEMO: RoomView[] = [
+  {
+    spec: {
+      id: "mast-rooms",
+      project: "mast",
+      title: "Rooms are the front door",
+      status: "in_progress",
+      priority: 80,
+      created_at: "2026-07-28T08:00:00Z",
+      updated_at: "2026-07-28T09:00:00Z",
+    },
+    activityAt: "2026-07-28T09:00:00Z",
+    unread: true,
+  },
+  {
+    spec: {
+      id: "mast-spec-room",
+      project: "mast",
+      title: "Spec room timeline",
+      status: "review",
+      priority: 70,
+      created_at: "2026-07-27T08:00:00Z",
+      updated_at: "2026-07-27T09:00:00Z",
+    },
+    activityAt: "2026-07-27T09:00:00Z",
+    unread: false,
+  },
+];
+
+function RoomListDemo() {
+  const [selected, setSelected] = useState("mast-rooms");
+  return (
+    <div style={{ width: 340, height: 360, border: "1px solid var(--border-strong)" }}>
+      <RoomList
+        rooms={ROOM_DEMO}
+        projects={["mast", "sail"]}
+        project="mast"
+        selectedId={selected}
+        showArchive={false}
+        creating={false}
+        workingIds={new Set(["mast-rooms"])}
+        onProject={() => {}}
+        onSelect={(room) => setSelected(room.spec.id)}
+        onShowArchive={() => {}}
+        onCreate={async () => true}
+      />
     </div>
   );
 }
@@ -456,6 +508,10 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
               <KanbanCard title="sail-watch-live-phase" meta={<Badge tone="warning">Review</Badge>} />
             </KanbanColumn>
           </KanbanBoard>
+        </Section>
+
+        <Section index="10b" title="Room list">
+          <RoomListDemo />
         </Section>
 
         <Section index="11" title="Splitter">

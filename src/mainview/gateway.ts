@@ -20,6 +20,7 @@ import type {
   RunListResponse,
   SailEvent,
   SpecContentRequest,
+  SpecCreateRequest,
   SpecFilter,
   SpecMessage,
   SpecMessageListResponse,
@@ -58,6 +59,7 @@ export type Gateway = {
   listSpecs(filter?: SpecFilter): Promise<SailResult<GlobalSpecsListResponse>>;
   board(project?: string): Promise<SailResult<GlobalBoardResponse>>;
   getSpec(id: string): Promise<SailResult<GlobalSpecDetailResponse>>;
+  createSpec(request: SpecCreateRequest): Promise<SailResult<GlobalSpecDetailResponse>>;
   getSpecContent(id: string): Promise<SailResult<GlobalSpecContentResponse>>;
   putSpecContent(
     id: string,
@@ -163,6 +165,7 @@ export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep):
     listSpecs: (filter) => read(() => api.sailListSpecs(filter ?? {})),
     board: (project) => read(() => api.sailBoard({ project })),
     getSpec: (id) => read(() => api.sailGetSpec({ id })),
+    createSpec: (request) => api.sailCreateSpec(request),
     getSpecContent: (id) => read(() => api.sailGetSpecContent({ id })),
     putSpecContent: (id, content, ifMatch) => api.sailPutSpecContent({ id, content, ifMatch }),
     updateSpec: (id, request, ifMatch) => api.sailUpdateSpec({ id, request, ifMatch }),
@@ -376,6 +379,39 @@ export function createDemoGateway(): DemoGateway {
     async getSpec(id) {
       const spec = find(id);
       if (!spec) return notFound(id);
+      return ok({ spec: view(spec), body: spec.body }, etagOf(spec));
+    },
+
+    async createSpec(request) {
+      if (find(request.id)) {
+        return {
+          ok: false,
+          error: {
+            status: 409,
+            code: "spec_exists",
+            message: `Spec '${request.id}' already exists.`,
+          },
+        };
+      }
+      const now = new Date().toISOString();
+      const spec = demoSpec({
+        ...request,
+        project: request.project ?? "",
+        status: request.status ?? "draft",
+        created_at: now,
+        updated_at: now,
+      });
+      specs.push(spec);
+      emit({
+        v: 1,
+        id: ++eventId,
+        ts: now,
+        project: spec.project,
+        spec: spec.id,
+        type: "spec_created",
+        agent: "mast",
+        host: "demo",
+      });
       return ok({ spec: view(spec), body: spec.body }, etagOf(spec));
     },
 

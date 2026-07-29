@@ -17,9 +17,14 @@ const flush = async () => {
 beforeEach(() => {
   location.hash = "#/";
   localStorage.removeItem("mast.board.lanes");
+  localStorage.removeItem("mast.rooms.watermarks");
+  localStorage.removeItem("mast.rooms.selections");
 });
 
-async function render(terminal?: React.ReactNode) {
+async function render(
+  terminal?: React.ReactNode,
+  initialView: "rooms" | "board" = "board",
+) {
   gateway = createDemoGateway();
   const theme = createThemeController(browserThemeDeps(() => {}));
   container = document.createElement("div");
@@ -27,6 +32,12 @@ async function render(terminal?: React.ReactNode) {
   root = createRoot(container);
   act(() => root.render(<App gateway={gateway} theme={theme} terminal={terminal} />));
   await flush();
+  if (initialView === "board") {
+    const board = [...container.querySelectorAll<HTMLButtonElement>(".cockpit-nav .toggle-option")]
+      .find((button) => button.textContent === "Board");
+    await act(async () => board?.click());
+    await flush();
+  }
 }
 
 afterEach(() => {
@@ -35,9 +46,17 @@ afterEach(() => {
 });
 
 describe("App cockpit", () => {
-  test("renders the board with lifecycle columns and real cards", async () => {
-    await render();
+  test("lands on rooms and keeps the board one view away", async () => {
+    await render(undefined, "rooms");
     expect(container.querySelector(".cockpit-brand")?.textContent).toBe("Mast");
+    expect(container.querySelector(".cockpit-nav .toggle-option.is-selected")?.textContent).toBe(
+      "Rooms",
+    );
+    expect(container.querySelector('[data-testid="room-chorus-invoice-ui"]')).not.toBeNull();
+
+    const board = [...container.querySelectorAll<HTMLButtonElement>(".cockpit-nav .toggle-option")]
+      .find((button) => button.textContent === "Board");
+    await act(async () => board?.click());
     expect(container.querySelectorAll(".kanban-column").length).toBe(7);
     expect(container.querySelector('[data-testid="card-mast-kanban-board"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="column-done"]')?.textContent).toContain(
@@ -45,28 +64,30 @@ describe("App cockpit", () => {
     );
   });
 
-  test("no Board/Terminal nav when no terminal is injected", async () => {
-    await render();
-    expect(container.querySelector(".cockpit-nav")).toBeNull();
+  test("Rooms/Board nav remains reachable when no terminal is injected", async () => {
+    await render(undefined, "rooms");
+    const labels = [...container.querySelectorAll(".cockpit-nav .toggle-option")]
+      .map((button) => button.textContent);
+    expect(labels).toEqual(["Rooms", "Board"]);
   });
 
-  test("Board/Terminal nav switches views and keeps the terminal mounted", async () => {
-    await render(<div data-testid="term-stub">TERM</div>);
+  test("Rooms/Board/Terminal nav switches views and keeps the terminal mounted", async () => {
+    await render(<div data-testid="term-stub">TERM</div>, "rooms");
     const nav = () => [...container.querySelectorAll<HTMLButtonElement>(".cockpit-nav .toggle-option")];
     const active = () => container.querySelector(".cockpit-nav .toggle-option.is-selected")?.textContent;
 
-    expect(nav().map((i) => i.textContent)).toEqual(["Board", "Terminal"]);
-    expect(active()).toBe("Board");
+    expect(nav().map((i) => i.textContent)).toEqual(["Rooms", "Board", "Terminal"]);
+    expect(active()).toBe("Rooms");
     expect(container.querySelector('[data-testid="term-stub"]')).toBeNull();
 
-    await act(async () => nav()[1]!.click());
+    await act(async () => nav()[2]!.click());
     const stub = container.querySelector('[data-testid="term-stub"]');
     expect(stub).not.toBeNull();
     expect((stub!.closest(".cockpit-view") as HTMLElement).style.display).toBe("flex");
     expect(active()).toBe("Terminal");
 
     // Back to the board: the terminal stays mounted (session preserved), just hidden.
-    await act(async () => nav()[0]!.click());
+    await act(async () => nav()[1]!.click());
     const stillThere = container.querySelector('[data-testid="term-stub"]');
     expect(stillThere).not.toBeNull();
     expect((stillThere!.closest(".cockpit-view") as HTMLElement).style.display).toBe("none");
@@ -289,6 +310,10 @@ describe("App cockpit", () => {
     root = createRoot(container);
     act(() => root.render(<App gateway={gateway} theme={theme} />));
     await flush();
+    await flush();
+    const board = [...container.querySelectorAll<HTMLButtonElement>(".cockpit-nav .toggle-option")]
+      .find((button) => button.textContent === "Board");
+    await act(async () => board?.click());
     await flush();
 
     const card = container.querySelector<HTMLElement>('[data-testid="card-chorus-billing-export"]');
