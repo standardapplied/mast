@@ -51,6 +51,16 @@ export type TimelineItem =
       decision: TimelineDecision;
     };
 
+export type TimelineGroup =
+  | {
+      kind: "message-group";
+      id: string;
+      occurredAt: string;
+      author: string;
+      messages: Extract<TimelineItem, { kind: "message" }>[];
+    }
+  | Exclude<TimelineItem, { kind: "message" }>;
+
 type EventRule =
   | { mode: "row"; label: string; kind: "lifecycle" | "decision" }
   | { mode: "overlay"; target: "review" | "lifecycle" | "none" };
@@ -129,6 +139,51 @@ function overlayReviews(
 function timestamp(item: TimelineItem): number {
   const parsed = Date.parse(item.occurredAt);
   return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function calendarDay(value: string): string {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf())
+    ? value
+    : `${parsed.getFullYear()}-${parsed.getMonth()}-${parsed.getDate()}`;
+}
+
+export function groupTimeline(
+  items: TimelineItem[],
+  windowMs = 5 * 60 * 1000,
+): TimelineGroup[] {
+  const groups: TimelineGroup[] = [];
+  for (const item of items) {
+    if (item.kind !== "message") {
+      groups.push(item);
+      continue;
+    }
+    const previous = groups.at(-1);
+    const previousMessage = previous?.kind === "message-group"
+      ? previous.messages.at(-1)
+      : undefined;
+    const elapsed = previousMessage
+      ? timestamp(item) - timestamp(previousMessage)
+      : Number.POSITIVE_INFINITY;
+    if (
+      previous?.kind === "message-group" &&
+      previous.author === item.message.author &&
+      elapsed >= 0 &&
+      elapsed <= windowMs &&
+      calendarDay(previousMessage!.occurredAt) === calendarDay(item.occurredAt)
+    ) {
+      previous.messages.push(item);
+      continue;
+    }
+    groups.push({
+      kind: "message-group",
+      id: `group:${item.id}`,
+      occurredAt: item.occurredAt,
+      author: item.message.author,
+      messages: [item],
+    });
+  }
+  return groups;
 }
 
 export function assembleTimeline({

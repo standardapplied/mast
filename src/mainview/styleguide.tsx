@@ -1,12 +1,15 @@
 import { useState, type ReactNode } from "react";
 import { DARK_TERMINAL_THEME, LIGHT_TERMINAL_THEME, type TerminalTheme } from "./ansi";
 import { DateTimePicker } from "./components/DateTimePicker";
+import { DetailsDrawer } from "./components/DetailsDrawer";
 import { Dialog } from "./components/Dialog";
 import { Input } from "./components/Input";
 import { KanbanBoard, KanbanCard, KanbanColumn } from "./components/Kanban";
 import { Checkbox } from "./components/Checkbox";
+import { Avatar } from "./components/Avatar";
 import { Info } from "./components/icons";
 import { NumberStepper } from "./components/NumberStepper";
+import { RoomHeader } from "./components/RoomHeader";
 import { Select } from "./components/Select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/Tabs";
 import { Splitter } from "./components/Splitter";
@@ -159,6 +162,41 @@ function RoomListDemo() {
         onShowArchive={() => {}}
         onCreate={async () => true}
       />
+    </div>
+  );
+}
+
+function RoomConversationDemo() {
+  const [drawerOpen, setDrawerOpen] = useState(true);
+  const [drawerWidth, setDrawerWidth] = useState(340);
+  return (
+    <div className="room-detail room-components-demo">
+      <RoomHeader
+        title="The room reads like a conversation"
+        status="In progress"
+        statusTone="accent"
+        drawerOpen={drawerOpen}
+        onToggleDrawer={() => setDrawerOpen((open) => !open)}
+        actions={<Button variant="ghost">Edit</Button>}
+      />
+      <div className="room-layout">
+        <div className="room-conversation room-avatar-demo">
+          <Avatar author="uday" />
+          <Avatar author="codex" agent />
+        </div>
+        {drawerOpen && (
+          <DetailsDrawer
+            width={drawerWidth}
+            onWidth={setDrawerWidth}
+            onClose={() => setDrawerOpen(false)}
+          >
+            <section className="room-drawer-section">
+              <h3>Spec</h3>
+              <p className="meta-value">Body, metadata, dependencies, and history live here.</p>
+            </section>
+          </DetailsDrawer>
+        )}
+      </div>
     </div>
   );
 }
@@ -512,6 +550,10 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
 
         <Section index="10b" title="Room list">
           <RoomListDemo />
+        </Section>
+
+        <Section index="10c" title="Room conversation">
+          <RoomConversationDemo />
         </Section>
 
         <Section index="11" title="Splitter">

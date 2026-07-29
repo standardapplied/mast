@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { GlobalSpecView, RunView, SailEvent, StopRunResponse } from "../../shared/sail-models";
@@ -240,12 +240,36 @@ const settle = async () => {
 
 const text = () => container.textContent ?? "";
 
+beforeEach(() => {
+  localStorage.removeItem("mast.room.details.rooms.open");
+  localStorage.removeItem("mast.room.details.board.open");
+  localStorage.removeItem("mast.room.details.width");
+});
+
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
 });
 
 describe("SpecDetail anti-flicker", () => {
+  test("board deep-links default details open and remember an explicit close", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+
+    expect(container.querySelector(".room-details-drawer")).not.toBeNull();
+    act(() =>
+      container.querySelector<HTMLButtonElement>('[data-testid="details-toggle"]')?.click(),
+    );
+    expect(container.querySelector(".room-details-drawer")).toBeNull();
+    expect(localStorage.getItem("mast.room.details.board.open")).toBe("false");
+    expect(container.querySelector(".room-header-title")?.textContent).toBe("s1");
+
+    act(() => root.unmount());
+    container.remove();
+    await mount(fake.gateway);
+    expect(container.querySelector(".room-details-drawer")).toBeNull();
+  });
+
   test("readiness and empty-states wait for enrichment instead of guessing", async () => {
     const fake = makeGateway();
     const gate = deferred<void>();
@@ -279,7 +303,7 @@ describe("SpecDetail anti-flicker", () => {
     await settle();
 
     expect(text()).toContain("rev 1");
-    expect(text()).toContain("Status changed");
+    expect(text()).toContain("status changed");
 
     await act(async () => gate.resolve());
     await settle();

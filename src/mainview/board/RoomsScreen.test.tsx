@@ -28,6 +28,9 @@ beforeEach(() => {
   localStorage.removeItem("mast.rooms.watermarks");
   localStorage.removeItem("mast.rooms.selections");
   localStorage.removeItem("mast.rooms.sidebar.width");
+  localStorage.removeItem("mast.room.details.rooms.open");
+  localStorage.removeItem("mast.room.details.board.open");
+  localStorage.removeItem("mast.room.details.width");
 });
 
 afterEach(() => {
@@ -36,6 +39,33 @@ afterEach(() => {
 });
 
 describe("RoomsScreen", () => {
+  test("keeps details closed by default and opens body, dependencies, and history in the drawer", async () => {
+    await render();
+
+    expect(container.querySelector(".room-details-drawer")).toBeNull();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[data-testid="room-chorus-ledger-sync"]')?.click(),
+    );
+    await act(async () => {});
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="details-toggle"]')!;
+    expect(toggle.textContent).toBe("Details");
+
+    act(() => toggle.click());
+    await act(async () => {});
+
+    const drawer = container.querySelector(".room-details-drawer");
+    expect(drawer?.textContent).toContain("Spec");
+    expect(drawer?.textContent).toContain("Dependencies");
+    expect(drawer?.textContent).toContain("History");
+    expect(localStorage.getItem("mast.room.details.rooms.open")).toBe("true");
+
+    act(() =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Close details"]')?.click(),
+    );
+    expect(container.querySelector(".room-details-drawer")).toBeNull();
+    expect(localStorage.getItem("mast.room.details.rooms.open")).toBe("false");
+  });
+
   test("ignores late detail responses after selecting another room", async () => {
     const gateway = createDemoGateway();
     const getSpec = gateway.getSpec;
@@ -60,7 +90,9 @@ describe("RoomsScreen", () => {
     );
     await act(async () => next?.click());
     await act(async () => {});
-    expect(container.querySelector(".detail-title")?.textContent).toBe("chorus-billing-export");
+    expect(container.querySelector(".detail-title")?.textContent).toBe(
+      "Billing export to NetSuite",
+    );
 
     await act(async () => {
       resolveDetail(initialDetail);
@@ -69,7 +101,9 @@ describe("RoomsScreen", () => {
     });
     await act(async () => {});
 
-    expect(container.querySelector(".detail-title")?.textContent).toBe("chorus-billing-export");
+    expect(container.querySelector(".detail-title")?.textContent).toBe(
+      "Billing export to NetSuite",
+    );
   });
 
   test("creates a draft room from only a title and opens it", async () => {
@@ -93,7 +127,7 @@ describe("RoomsScreen", () => {
     await act(async () => {});
 
     expect(container.querySelector('[data-testid="room-fresh-planning-room"]')).not.toBeNull();
-    expect(container.querySelector(".detail-title")?.textContent).toBe("fresh-planning-room");
+    expect(container.querySelector(".detail-title")?.textContent).toBe("Fresh planning room");
     expect(container.querySelector(".detail-draft-note")?.textContent).toContain("Draft");
 
     const listed = await gateway.listSpecs({ project: "chorus" });
@@ -135,9 +169,9 @@ describe("RoomsScreen", () => {
 
     expect(container.querySelector('[data-testid="room-chorus-billing-export"]')).toBeNull();
     expect(container.querySelector(".room-archive-toggle")?.textContent).toBe("Show archive");
-    expect(container.querySelector(".detail-header-actions")?.textContent).toContain("Cancelled");
+    expect(container.querySelector(".room-header")?.textContent).toContain("Cancelled");
     expect(container.querySelector(".room-system-row")?.textContent).toContain(
-      "Status changed to cancelled",
+      "status changed to cancelled",
     );
 
     act(() => {

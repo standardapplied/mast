@@ -168,7 +168,7 @@ describe("App cockpit", () => {
     await flush();
 
     const board = container.querySelector('[data-testid="view-board"]')!;
-    expect(board.querySelector(".detail-title")?.textContent).toBe("chorus-ledger-sync");
+    expect(board.querySelector(".detail-title")?.textContent).toBe("Ledger sync worker");
     expect(board.querySelector('[data-testid="blocked-banner"]')?.textContent).toContain(
       "chorus-billing-export",
     );
@@ -261,7 +261,7 @@ describe("App cockpit", () => {
     );
     act(() => view?.click());
     await flush();
-    expect(container.querySelector(".detail-title")?.textContent).toBe("chorus-auth-flow");
+    expect(container.querySelector(".detail-title")?.textContent).toBe("Passkey auth flow");
   });
 
   test("context menu offers Re-dispatch only for review and done specs", async () => {

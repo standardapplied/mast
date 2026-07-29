@@ -31,10 +31,21 @@ const remoteMessage = (id: string, body: string): SpecMessage => ({
   created_at: "2026-07-28T10:02:00Z",
 });
 
-function makeGateway({ withReview = false, postError }: { withReview?: boolean; postError?: string } = {}) {
+function makeGateway({
+  withReview = false,
+  reviewStatus = review.status,
+  withFindings = true,
+  postError,
+}: {
+  withReview?: boolean;
+  reviewStatus?: string;
+  withFindings?: boolean;
+  postError?: string;
+} = {}) {
   let messages: SpecMessage[] = [];
   const listeners = new Set<(event: SailEvent) => void>();
   const calls = { posts: [] as string[], approved: [] as string[], dismissed: [] as string[] };
+  const selectedReview = { ...review, status: reviewStatus };
   const gateway = {
     listSpecMessages: async () => ({
       ok: true as const,
@@ -77,26 +88,28 @@ function makeGateway({ withReview = false, postError }: { withReview?: boolean; 
     }),
     specReviews: async () => ({
       ok: true as const,
-      value: { spec_id: "s1", reviews: withReview ? [review] : [] },
+      value: { spec_id: "s1", reviews: withReview ? [selectedReview] : [] },
     }),
     reviewDetail: async () => ({
       ok: true as const,
       value: {
-        review,
-        findings: [
-          {
-            id: "finding-1",
-            severity: "HIGH" as const,
-            category: "correctness",
-            file: "src/room.ts",
-            line_start: 12,
-            line_end: 12,
-            title: "Lost message",
-            description: "The echo can race the response.",
-            confidence: 0.9,
-            resolution: "OPEN" as const,
-          },
-        ],
+        review: selectedReview,
+        findings: withFindings
+          ? [
+              {
+                id: "finding-1",
+                severity: "HIGH" as const,
+                category: "correctness",
+                file: "src/room.ts",
+                line_start: 12,
+                line_end: 12,
+                title: "Lost message",
+                description: "The echo can race the response.",
+                confidence: 0.9,
+                resolution: "OPEN" as const,
+              },
+            ]
+          : [],
       },
     }),
     listRuns: async () => ({
@@ -224,7 +237,22 @@ describe("SpecRoom", () => {
     await settle();
 
     expect(container.textContent).toContain("Full body from the server");
-    expect(container.textContent).toContain("codex/run-1 (for uday)");
+    expect(container.textContent).toContain("codex (for uday)");
+  });
+
+  test("renders consecutive agent reports as one visual group", async () => {
+    const fake = makeGateway();
+    for (let index = 0; index < 4; index++) {
+      fake.receive({
+        ...remoteMessage(`message-${index}`, `Report ${index + 1}`),
+        created_at: `2026-07-28T10:0${index}:00Z`,
+      });
+    }
+    await mount(fake.gateway);
+
+    expect(container.querySelectorAll('[data-testid^="message-group-"]').length).toBe(1);
+    expect(container.querySelectorAll('[data-testid^="room-message-"]').length).toBe(4);
+    expect(container.querySelectorAll(".room-avatar.is-agent").length).toBe(1);
   });
 
   test("renders a 403 message verbatim with an inline retry", async () => {
@@ -268,6 +296,8 @@ describe("SpecRoom", () => {
     const fake = makeGateway({ withReview: true });
     await mount(fake.gateway);
 
+    expect(container.querySelector(".spec-room > .card")).toBeNull();
+    expect(container.querySelectorAll(".room-review-card").length).toBe(1);
     act(() =>
       container
         .querySelector<HTMLButtonElement>('[data-testid="review-row-review-1"]')!
@@ -316,6 +346,15 @@ describe("SpecRoom", () => {
       (button) => button.textContent === "Approve review",
     )!;
     expect(quiet.className).toContain("btn-ghost");
+  });
+
+  test("shows a failed review status even when the review has no findings", async () => {
+    const failed = makeGateway({ withReview: true, reviewStatus: "failed", withFindings: false });
+    await mount(failed.gateway);
+
+    expect(
+      container.querySelector<HTMLButtonElement>('[data-testid="review-row-review-1"]')?.textContent,
+    ).toContain("Review #1 · failed · 0 findings · 0 open");
   });
 
   test("shows the loading mark, not text, while the room loads", async () => {
