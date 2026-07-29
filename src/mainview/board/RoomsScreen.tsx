@@ -128,6 +128,7 @@ export function RoomsScreen({
           </div>
         ) : selected ? (
           <SpecDetail
+            key={selected.spec.id}
             gateway={gateway}
             specId={selected.spec.id}
             onOpenSpec={(id) => {

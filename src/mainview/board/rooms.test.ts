@@ -103,6 +103,22 @@ describe("room ordering and unread state", () => {
     expect(rooms[0]?.unread).toBe(false);
   });
 
+  test("uses the persisted spec update time when recent events are unavailable", () => {
+    const updated = {
+      ...spec("s1", "pending", "2026-01-01T00:00:00Z"),
+      updated_at: "2026-07-29T00:00:00Z",
+    };
+    const rooms = assembleRooms(
+      [updated],
+      new Map(),
+      [],
+      { s1: "2026-07-28T00:00:00Z" },
+    );
+
+    expect(rooms[0]?.activityAt).toBe(updated.updated_at);
+    expect(rooms[0]?.unread).toBe(true);
+  });
+
   test("archive filtering hides terminal states but keeps all active states", () => {
     const rooms = assembleRooms(
       [
@@ -137,6 +153,18 @@ describe("room ordering and unread state", () => {
     expect(watermarks).toEqual({ s1: room.activityAt });
     expect(readRoomWatermarks(storage)).toEqual(watermarks);
     expect(selectedRoom(storage, "mast")).toBe("s1");
+  });
+
+  test("visiting remains usable when preference storage rejects writes", () => {
+    const storage: StorageLike = {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException("blocked", "SecurityError");
+      },
+    };
+    const room = assembleRooms([spec("s1")], new Map(), [], {})[0]!;
+
+    expect(visitRoom(storage, room)).toEqual({ s1: room.activityAt });
   });
 });
 

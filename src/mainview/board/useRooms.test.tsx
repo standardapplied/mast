@@ -104,6 +104,29 @@ describe("useRooms", () => {
     );
   });
 
+  test("retries with a suffixed id when another creator wins the race", async () => {
+    const { gateway, handle } = await render();
+    const createSpec = gateway.createSpec;
+    let raced = false;
+    gateway.createSpec = async (request) => {
+      if (!raced && request.id === "passkey-auth") {
+        raced = true;
+        await createSpec(request);
+      }
+      return createSpec(request);
+    };
+
+    let result: Awaited<ReturnType<Handle["create"]>> | undefined;
+    await act(async () => {
+      result = await handle().create("Passkey auth", "chorus");
+    });
+    await act(async () => {});
+
+    expect(result?.ok).toBe(true);
+    if (!result?.ok) return;
+    expect(result.value.spec.id).toBe("passkey-auth-2");
+  });
+
   test("an externally created spec arrives through SSE without polling", async () => {
     const { gateway, handle } = await render();
 

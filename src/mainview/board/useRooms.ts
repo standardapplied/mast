@@ -159,24 +159,40 @@ export function useRooms(
         error: { status: 0, code: "invalid_project", message: "Choose a project." },
       };
     }
+    const existingIds = new Set(data.rooms.map((room) => room.spec.id));
     let id: string;
     try {
-      id = specIdFromTitle(trimmed, new Set(data.rooms.map((room) => room.spec.id)));
+      id = specIdFromTitle(trimmed, existingIds);
     } catch (error) {
       return {
         ok: false as const,
         error: { status: 0, code: "invalid_title", message: errorMessage(error) },
       };
     }
-    const result = await gateway.createSpec({
-      id,
-      project,
-      title: trimmed,
-      status: "draft",
-      body: "",
-    });
-    if (result.ok) await refresh();
-    return result;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const result = await gateway.createSpec({
+        id,
+        project,
+        title: trimmed,
+        status: "draft",
+        body: "",
+      });
+      if (result.ok) {
+        await refresh();
+        return result;
+      }
+      if (result.error.status !== 409 || result.error.code !== "spec_exists") return result;
+      existingIds.add(id);
+      id = specIdFromTitle(trimmed, existingIds);
+    }
+    return {
+      ok: false as const,
+      error: {
+        status: 409,
+        code: "spec_exists",
+        message: "Could not allocate a unique room ID. Try again.",
+      },
+    };
   }, [data.rooms, gateway, refresh]);
 
   const rooms = useMemo(

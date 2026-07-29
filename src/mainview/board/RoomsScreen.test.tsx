@@ -2,14 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ToastProvider } from "../components/Toast";
-import { createDemoGateway } from "../gateway";
+import { createDemoGateway, type DemoGateway } from "../gateway";
 import { RoomsScreen } from "./RoomsScreen";
 
 let root: Root;
 let container: HTMLElement;
 
-async function render() {
-  const gateway = createDemoGateway();
+async function render(gateway: DemoGateway = createDemoGateway()) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -37,6 +36,42 @@ afterEach(() => {
 });
 
 describe("RoomsScreen", () => {
+  test("ignores late detail responses after selecting another room", async () => {
+    const gateway = createDemoGateway();
+    const getSpec = gateway.getSpec;
+    const getSpecContent = gateway.getSpecContent;
+    const initialDetail = await getSpec("chorus-auth-flow");
+    const initialContent = await getSpecContent("chorus-auth-flow");
+    let resolveDetail!: (value: typeof initialDetail) => void;
+    let resolveContent!: (value: typeof initialContent) => void;
+    const delayedDetail = new Promise<typeof initialDetail>((resolve) => {
+      resolveDetail = resolve;
+    });
+    const delayedContent = new Promise<typeof initialContent>((resolve) => {
+      resolveContent = resolve;
+    });
+    gateway.getSpec = (id) => id === "chorus-auth-flow" ? delayedDetail : getSpec(id);
+    gateway.getSpecContent = (id) =>
+      id === "chorus-auth-flow" ? delayedContent : getSpecContent(id);
+
+    await render(gateway);
+    const next = container.querySelector<HTMLButtonElement>(
+      '[data-testid="room-chorus-billing-export"]',
+    );
+    await act(async () => next?.click());
+    await act(async () => {});
+    expect(container.querySelector(".detail-title")?.textContent).toBe("chorus-billing-export");
+
+    await act(async () => {
+      resolveDetail(initialDetail);
+      resolveContent(initialContent);
+      await Promise.all([delayedDetail, delayedContent]);
+    });
+    await act(async () => {});
+
+    expect(container.querySelector(".detail-title")?.textContent).toBe("chorus-billing-export");
+  });
+
   test("creates a draft room from only a title and opens it", async () => {
     const gateway = await render();
     act(() => {

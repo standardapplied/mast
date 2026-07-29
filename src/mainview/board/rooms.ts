@@ -75,6 +75,7 @@ export function assembleRooms(
       )[0];
       const candidates = [
         spec.created_at,
+        spec.updated_at,
         latestMessage?.created_at,
         eventActivity.get(spec.id),
       ].filter((value): value is string => Boolean(value));
@@ -109,12 +110,16 @@ export function readRoomWatermarks(storage: StorageLike): Record<string, string>
 
 export function visitRoom(storage: StorageLike, room: RoomView): Record<string, string> {
   const next = { ...readRoomWatermarks(storage), [room.spec.id]: room.activityAt };
-  storage.setItem(ROOM_WATERMARKS_KEY, JSON.stringify(next));
+  try {
+    storage.setItem(ROOM_WATERMARKS_KEY, JSON.stringify(next));
+  } catch {}
   const selections = storedMap(storage, ROOM_SELECTIONS_KEY);
-  storage.setItem(
-    ROOM_SELECTIONS_KEY,
-    JSON.stringify({ ...selections, [room.spec.project]: room.spec.id }),
-  );
+  try {
+    storage.setItem(
+      ROOM_SELECTIONS_KEY,
+      JSON.stringify({ ...selections, [room.spec.project]: room.spec.id }),
+    );
+  } catch {}
   return next;
 }
 
