@@ -523,6 +523,7 @@ export function SpecDetail({
           <SpecRoom
             gateway={gateway}
             specId={spec.id}
+            specStatus={spec.status}
             canWrite={
               role.canWrite &&
               spec.status !== "done" &&
