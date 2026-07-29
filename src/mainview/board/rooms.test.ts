@@ -65,15 +65,12 @@ function memoryStorage(initial: Record<string, string> = {}): StorageLike {
 
 describe("room ordering and unread state", () => {
   test("orders by message or record activity with a stable id tie-break", () => {
-    const messages = new Map<string, SpecMessage[]>([
-      ["beta", [message("beta", "2026-07-28T12:00:00Z")]],
-    ]);
     const rooms = assembleRooms(
       [spec("alpha"), spec("beta"), spec("gamma")],
-      messages,
       [
         event(1, "alpha", "spec_status_changed", "2026-07-28T13:00:00Z"),
-        event(2, "gamma", "agent_tool_started", "2026-07-28T14:00:00Z"),
+        event(2, "beta", "spec_message_posted", "2026-07-28T12:00:00Z"),
+        event(3, "gamma", "agent_tool_started", "2026-07-28T14:00:00Z"),
       ],
       {},
     );
@@ -93,10 +90,12 @@ describe("room ordering and unread state", () => {
     expect(
       isRoomActivityEvent(event(2, "s1", "spec_status_changed", "2026-07-28T12:00:00Z")),
     ).toBe(true);
+    expect(
+      isRoomActivityEvent(event(3, "s1", "spec_message_posted", "2026-07-28T12:00:00Z")),
+    ).toBe(true);
 
     const rooms = assembleRooms(
       [spec("s1")],
-      new Map(),
       [event(1, "s1", "agent_tool_started", "2026-07-28T12:00:00Z")],
       { s1: "2026-07-28T10:00:00Z" },
     );
@@ -108,12 +107,7 @@ describe("room ordering and unread state", () => {
       ...spec("s1", "pending", "2026-01-01T00:00:00Z"),
       updated_at: "2026-07-29T00:00:00Z",
     };
-    const rooms = assembleRooms(
-      [updated],
-      new Map(),
-      [],
-      { s1: "2026-07-28T00:00:00Z" },
-    );
+    const rooms = assembleRooms([updated], [], { s1: "2026-07-28T00:00:00Z" });
 
     expect(rooms[0]?.activityAt).toBe(updated.updated_at);
     expect(rooms[0]?.unread).toBe(true);
@@ -131,7 +125,6 @@ describe("room ordering and unread state", () => {
         spec("cancelled", "cancelled"),
         spec("archived", "archived"),
       ],
-      new Map(),
       [],
       {},
     );
@@ -147,7 +140,7 @@ describe("room ordering and unread state", () => {
 
   test("visiting persists both the activity watermark and per-project selection", () => {
     const storage = memoryStorage();
-    const room = assembleRooms([spec("s1")], new Map(), [], {})[0]!;
+    const room = assembleRooms([spec("s1")], [], {})[0]!;
     const watermarks = visitRoom(storage, room);
 
     expect(watermarks).toEqual({ s1: room.activityAt });
@@ -162,7 +155,7 @@ describe("room ordering and unread state", () => {
         throw new DOMException("blocked", "SecurityError");
       },
     };
-    const room = assembleRooms([spec("s1")], new Map(), [], {})[0]!;
+    const room = assembleRooms([spec("s1")], [], {})[0]!;
 
     expect(visitRoom(storage, room)).toEqual({ s1: room.activityAt });
   });

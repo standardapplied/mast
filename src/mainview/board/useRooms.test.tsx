@@ -83,6 +83,33 @@ describe("useRooms", () => {
     expect(handle().data.rooms[0]?.spec.id).toBe("chorus-billing-export");
   });
 
+  test("paints rooms from the spec list even when recent events never arrive", async () => {
+    const gateway = createDemoGateway();
+    const hanging = Object.create(gateway) as DemoGateway;
+    hanging.recentEvents = () => new Promise(() => {});
+    const storage = memoryStorage();
+    let latest: Handle | undefined;
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root.render(
+        <Harness
+          gateway={hanging}
+          storage={storage}
+          capture={(handle) => {
+            latest = handle;
+          }}
+        />,
+      );
+    });
+    await act(async () => {});
+    await act(async () => {});
+
+    expect(latest!.data.loading).toBe(false);
+    expect(latest!.data.rooms.length).toBeGreaterThan(0);
+  });
+
   test("creates a collision-safe draft and refreshes it into the room list", async () => {
     const { gateway, handle } = await render();
 

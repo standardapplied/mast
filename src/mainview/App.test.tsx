@@ -94,6 +94,30 @@ describe("App cockpit", () => {
     expect(active()).toBe("Board");
   });
 
+  test("leaving a view and returning never cold-boots it", async () => {
+    await render(<div data-testid="term-stub">TERM</div>, "rooms");
+    const originalListSpecs = gateway.listSpecs.bind(gateway);
+    let refetches = 0;
+    gateway.listSpecs = (filter) => {
+      refetches++;
+      return originalListSpecs(filter);
+    };
+    const nav = () => [...container.querySelectorAll<HTMLButtonElement>(".cockpit-nav .toggle-option")];
+    const roomsView = () => container.querySelector('[data-testid="view-rooms"]') as HTMLElement;
+    expect(roomsView().querySelector(".rooms-sidebar")).not.toBeNull();
+
+    await act(async () => nav()[2]!.click());
+    await flush();
+    expect(roomsView().style.display).toBe("none");
+    expect(roomsView().querySelector(".rooms-sidebar")).not.toBeNull();
+
+    await act(async () => nav()[0]!.click());
+    await flush();
+    expect(roomsView().style.display).toBe("flex");
+    expect(roomsView().querySelector(".rooms-sidebar")).not.toBeNull();
+    expect(refetches).toBe(0);
+  });
+
   test("shows a blocked card with its unmet dependencies", async () => {
     await render();
     const blocked = container.querySelector('[data-testid="card-chorus-ledger-sync"]');
@@ -143,13 +167,14 @@ describe("App cockpit", () => {
     await flush();
     await flush();
 
-    expect(container.querySelector(".detail-title")?.textContent).toBe("chorus-ledger-sync");
-    expect(container.querySelector('[data-testid="blocked-banner"]')?.textContent).toContain(
+    const board = container.querySelector('[data-testid="view-board"]')!;
+    expect(board.querySelector(".detail-title")?.textContent).toBe("chorus-ledger-sync");
+    expect(board.querySelector('[data-testid="blocked-banner"]')?.textContent).toContain(
       "chorus-billing-export",
     );
-    expect(container.querySelector(".markdown h1")?.textContent).toBe("Overview");
-    expect(container.querySelectorAll(".history-row").length).toBe(3);
-    expect(container.querySelector(".dep-chip.is-unmet")?.textContent).toBe("chorus-billing-export");
+    expect(board.querySelector(".markdown h1")?.textContent).toBe("Overview");
+    expect(board.querySelectorAll(".history-row").length).toBe(3);
+    expect(board.querySelector(".dep-chip.is-unmet")?.textContent).toBe("chorus-billing-export");
   });
 
   test("a bridge timeout in spec detail shows 'lost contact', not the raw RPC error", async () => {

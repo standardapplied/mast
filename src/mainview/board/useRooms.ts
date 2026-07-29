@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  GlobalSpecView,
-  SailEvent,
-  SpecMessage,
-} from "../../shared/sail-models";
+import type { GlobalSpecView, SailEvent } from "../../shared/sail-models";
 import type { SailWireError } from "../../shared/types";
 import type { Gateway } from "../gateway";
 import {
@@ -68,15 +64,11 @@ export function useRooms(
 
   const refresh = useCallback(async () => {
     const current = ++generation.current;
+    const recentPromise = gateway.recentEvents(500).catch(() => null);
+    const catalogPromise = projectNames(gateway);
     let specsResult;
-    let recentResult;
-    let catalog;
     try {
-      [specsResult, recentResult, catalog] = await Promise.all([
-        gateway.listSpecs({}),
-        gateway.recentEvents(500),
-        projectNames(gateway),
-      ]);
+      specsResult = await gateway.listSpecs({});
     } catch (error) {
       if (current !== generation.current) return;
       setData((previous) => ({
@@ -93,16 +85,14 @@ export function useRooms(
     }
 
     const specs = specsResult.value.specs;
-    const pages = await Promise.all(
-      specs.map(async (spec): Promise<[string, SpecMessage[]]> => {
-        try {
-          const result = await gateway.listSpecMessages(spec.id, undefined, 1);
-          return [spec.id, result.ok ? result.value.messages : []];
-        } catch {
-          return [spec.id, []];
-        }
-      }),
-    );
+    setData({
+      rooms: assembleRooms(specs, [], watermarksRef.current),
+      projects: [...new Set(specs.map((spec: GlobalSpecView) => spec.project))].sort(),
+      loading: false,
+      error: null,
+    });
+
+    const [recentResult, catalog] = await Promise.all([recentPromise, catalogPromise]);
     if (current !== generation.current) return;
     const projects = [
       ...new Set([...catalog, ...specs.map((spec: GlobalSpecView) => spec.project)]),
@@ -110,8 +100,7 @@ export function useRooms(
     setData({
       rooms: assembleRooms(
         specs,
-        new Map(pages),
-        recentResult.ok ? mergeEvents(recentResult.value.events) : [],
+        recentResult?.ok ? mergeEvents(recentResult.value.events) : [],
         watermarksRef.current,
       ),
       projects,
