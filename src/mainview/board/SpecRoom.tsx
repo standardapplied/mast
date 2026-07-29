@@ -674,7 +674,8 @@ export function SpecRoom({
                     }
                   >
                     <span>
-                      Review #{item.review.iteration} · {item.findings.length} findings · {openCount} open
+                      Review #{item.review.iteration} · {item.review.status.replaceAll("_", " ")} ·{" "}
+                      {item.findings.length} findings · {openCount} open
                     </span>
                   </button>
                   {expanded && (

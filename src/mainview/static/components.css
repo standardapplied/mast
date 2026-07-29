@@ -2534,6 +2534,7 @@ span.checkbox {
 
 .detail.room-detail {
   display: flex;
+  flex-direction: column;
   overflow: hidden;
   gap: 0;
   padding: 0;

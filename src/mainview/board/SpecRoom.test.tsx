@@ -31,10 +31,21 @@ const remoteMessage = (id: string, body: string): SpecMessage => ({
   created_at: "2026-07-28T10:02:00Z",
 });
 
-function makeGateway({ withReview = false, postError }: { withReview?: boolean; postError?: string } = {}) {
+function makeGateway({
+  withReview = false,
+  reviewStatus = review.status,
+  withFindings = true,
+  postError,
+}: {
+  withReview?: boolean;
+  reviewStatus?: string;
+  withFindings?: boolean;
+  postError?: string;
+} = {}) {
   let messages: SpecMessage[] = [];
   const listeners = new Set<(event: SailEvent) => void>();
   const calls = { posts: [] as string[], approved: [] as string[], dismissed: [] as string[] };
+  const selectedReview = { ...review, status: reviewStatus };
   const gateway = {
     listSpecMessages: async () => ({
       ok: true as const,
@@ -77,26 +88,28 @@ function makeGateway({ withReview = false, postError }: { withReview?: boolean; 
     }),
     specReviews: async () => ({
       ok: true as const,
-      value: { spec_id: "s1", reviews: withReview ? [review] : [] },
+      value: { spec_id: "s1", reviews: withReview ? [selectedReview] : [] },
     }),
     reviewDetail: async () => ({
       ok: true as const,
       value: {
-        review,
-        findings: [
-          {
-            id: "finding-1",
-            severity: "HIGH" as const,
-            category: "correctness",
-            file: "src/room.ts",
-            line_start: 12,
-            line_end: 12,
-            title: "Lost message",
-            description: "The echo can race the response.",
-            confidence: 0.9,
-            resolution: "OPEN" as const,
-          },
-        ],
+        review: selectedReview,
+        findings: withFindings
+          ? [
+              {
+                id: "finding-1",
+                severity: "HIGH" as const,
+                category: "correctness",
+                file: "src/room.ts",
+                line_start: 12,
+                line_end: 12,
+                title: "Lost message",
+                description: "The echo can race the response.",
+                confidence: 0.9,
+                resolution: "OPEN" as const,
+              },
+            ]
+          : [],
       },
     }),
     listRuns: async () => ({
@@ -333,6 +346,15 @@ describe("SpecRoom", () => {
       (button) => button.textContent === "Approve review",
     )!;
     expect(quiet.className).toContain("btn-ghost");
+  });
+
+  test("shows a failed review status even when the review has no findings", async () => {
+    const failed = makeGateway({ withReview: true, reviewStatus: "failed", withFindings: false });
+    await mount(failed.gateway);
+
+    expect(
+      container.querySelector<HTMLButtonElement>('[data-testid="review-row-review-1"]')?.textContent,
+    ).toContain("Review #1 · failed · 0 findings · 0 open");
   });
 
   test("shows the loading mark, not text, while the room loads", async () => {
