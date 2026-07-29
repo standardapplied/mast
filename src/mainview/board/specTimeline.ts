@@ -164,7 +164,28 @@ export function assembleTimeline({
 
   for (const event of events) {
     const rule = EVENT_REGISTRY[event.type];
-    if (!rule || rule.mode !== "row") continue;
+    if (!rule) continue;
+    if (rule.mode === "overlay" && rule.target === "lifecycle") {
+      const covered = events.some((candidate) => {
+        const candidateRule = EVENT_REGISTRY[candidate.type];
+        return candidate !== event &&
+          candidate.ts === event.ts &&
+          candidateRule?.mode === "row" &&
+          candidateRule.kind === "lifecycle";
+      });
+      if (!covered) {
+        const to = dataString(event, "to", "status");
+        items.push({
+          kind: "lifecycle",
+          id: eventId(event),
+          occurredAt: event.ts,
+          event,
+          label: to ? `Status changed to ${to}` : "Status changed",
+        });
+      }
+      continue;
+    }
+    if (rule.mode !== "row") continue;
     if (rule.kind === "decision") {
       const decision = eventDecision(event);
       items.push({

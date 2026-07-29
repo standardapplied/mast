@@ -279,7 +279,7 @@ describe("SpecDetail anti-flicker", () => {
     await settle();
 
     expect(text()).toContain("rev 1");
-    expect(text()).toContain("No conversation yet.");
+    expect(text()).toContain("Status changed");
 
     await act(async () => gate.resolve());
     await settle();

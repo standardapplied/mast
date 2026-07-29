@@ -71,6 +71,39 @@ describe("Tauri gateway stop wire", () => {
 });
 
 describe("Tauri gateway room wire", () => {
+  test("creates a draft spec through the existing POST /v1/specs route", async () => {
+    const calls = stubInvoke({
+      status: 201,
+      body: JSON.stringify({ spec: { id: "fresh-room" } }),
+    });
+
+    await createTauriGateway().createSpec({
+      id: "fresh-room",
+      project: "mast",
+      title: "Fresh room",
+      status: "draft",
+      body: "",
+    });
+
+    expect(calls).toEqual([
+      {
+        cmd: "sail_request",
+        args: {
+          method: "POST",
+          path: "/v1/specs",
+          body: JSON.stringify({
+            id: "fresh-room",
+            project: "mast",
+            title: "Fresh room",
+            status: "draft",
+            body: "",
+          }),
+          ifMatch: null,
+        },
+      },
+    ]);
+  });
+
   test("lists and posts messages with encoded spec ids and pagination", async () => {
     const calls = stubInvoke({
       status: 200,

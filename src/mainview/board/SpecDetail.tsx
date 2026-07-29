@@ -85,12 +85,14 @@ export function SpecDetail({
   specId,
   onOpenSpec,
   onBack,
+  embedded = false,
   eventDebounceMs = 300,
 }: {
   gateway: Gateway;
   specId: string;
   onOpenSpec: (id: string) => void;
   onBack: () => void;
+  embedded?: boolean;
   /** Coalescing window for event-driven reloads; tests pass 0. */
   eventDebounceMs?: number;
 }) {
@@ -213,9 +215,11 @@ export function SpecDetail({
     return (
       <div className="detail">
         <div className="detail-heading-row">
-          <button type="button" className="back-btn" onClick={onBack} aria-label="Back to board">
-            <CaretLeft size={16} />
-          </button>
+          {!embedded && (
+            <button type="button" className="back-btn" onClick={onBack} aria-label="Back to board">
+              <CaretLeft size={16} />
+            </button>
+          )}
           <div className="detail-heading">
             <Eyebrow>{specId}</Eyebrow>
             <p className="detail-subtitle">
@@ -326,15 +330,17 @@ export function SpecDetail({
     <div className="detail">
       <div className="detail-header">
         <div className="detail-heading-row">
-          <button
-            type="button"
-            className="back-btn"
-            onClick={onBack}
-            aria-label="Back to board"
-            data-testid="back-to-board"
-          >
-            <CaretLeft size={16} />
-          </button>
+          {!embedded && (
+            <button
+              type="button"
+              className="back-btn"
+              onClick={onBack}
+              aria-label="Back to board"
+              data-testid="back-to-board"
+            >
+              <CaretLeft size={16} />
+            </button>
+          )}
           <div className="detail-heading">
             <Eyebrow>{spec.project}</Eyebrow>
             <h1 className="detail-title">{spec.id}</h1>
@@ -485,9 +491,13 @@ export function SpecDetail({
                   Stop
                 </Button>
               )}
-              <Button variant="ghost" onClick={() => setDispatchOpen(true)} data-testid="detail-dispatch">
-                {restart ? "Re-dispatch" : "Dispatch"}
-              </Button>
+              {spec.status === "draft" ? (
+                <span className="detail-draft-note">Draft — add details, then move to pending</span>
+              ) : (
+                <Button variant="ghost" onClick={() => setDispatchOpen(true)} data-testid="detail-dispatch">
+                  {restart ? "Re-dispatch" : "Dispatch"}
+                </Button>
+              )}
               <Button variant="ghost" onClick={startEdit}>
                 Edit
               </Button>
@@ -513,7 +523,12 @@ export function SpecDetail({
           <SpecRoom
             gateway={gateway}
             specId={spec.id}
-            canWrite={role.canWrite}
+            canWrite={
+              role.canWrite &&
+              spec.status !== "done" &&
+              spec.status !== "cancelled" &&
+              spec.status !== "archived"
+            }
             currentUser={role.fde}
             onOpenLog={() => setLogOpen(true)}
           />
