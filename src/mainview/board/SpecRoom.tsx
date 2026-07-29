@@ -14,14 +14,16 @@ import type {
   RunView,
   SailEvent,
 } from "../../shared/sail-models";
+import { Avatar } from "../components/Avatar";
 import { LoadingMark } from "../components/Loading";
 import { Textarea } from "../components/Textarea";
 import { useToast } from "../components/Toast";
-import { Badge, Button, Card, type BadgeTone } from "../components/ui";
+import { Badge, Button, type BadgeTone } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
 import {
   assembleTimeline,
+  groupTimeline,
   mergeMessages,
   type BufferedTail,
   type RoomMessage,
@@ -129,19 +131,23 @@ function dayLabel(value: string): string {
 
 function dateTime(value: string): string {
   const parsed = new Date(value);
-  return Number.isNaN(parsed.valueOf())
-    ? value
-    : new Intl.DateTimeFormat(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(parsed);
+  if (Number.isNaN(parsed.valueOf())) return value;
+  const today = new Date();
+  const sameDay =
+    parsed.getFullYear() === today.getFullYear() &&
+    parsed.getMonth() === today.getMonth() &&
+    parsed.getDate() === today.getDate();
+  return new Intl.DateTimeFormat(undefined, {
+    ...(sameDay ? {} : { month: "short", day: "numeric" }),
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
 }
 
 function authorLabel(author: string, runs: RunView[]): string {
   const run = runs.find((candidate) => candidate.principal === author);
-  return run?.owner ? `${author} (for ${run.owner})` : author;
+  if (run) return run.owner ? `${run.agent} (for ${run.owner})` : run.agent;
+  return author.includes("/") ? author.split("/")[0]! : author;
 }
 
 function eventDetail(event: SailEvent): string {
@@ -522,25 +528,26 @@ export function SpecRoom({
     );
   };
 
+  const groups = groupTimeline(tail.visible);
+
   return (
-    <Card title="Room">
-      <div className="spec-room">
-        {hasEarlier && (
-          <Button
-            variant="ghost"
-            className="room-load-earlier"
-            disabled={loadingEarlier}
-            onClick={() => void loadEarlier()}
-          >
-            {loadingEarlier ? "Loading…" : "Load earlier"}
-          </Button>
-        )}
-        <div
-          className="room-timeline"
-          ref={scroller}
-          onScroll={onScroll}
-          data-testid="room-timeline"
+    <div className="spec-room">
+      {hasEarlier && (
+        <Button
+          variant="ghost"
+          className="room-load-earlier"
+          disabled={loadingEarlier}
+          onClick={() => void loadEarlier()}
         >
+          {loadingEarlier ? "Loading…" : "Load earlier"}
+        </Button>
+      )}
+      <div
+        className="room-timeline"
+        ref={scroller}
+        onScroll={onScroll}
+        data-testid="room-timeline"
+      >
           {loading && (
             <div className="room-loading">
               <LoadingMark label="Loading room" />
@@ -549,39 +556,58 @@ export function SpecRoom({
           {!loading && tail.visible.length === 0 && (
             <p className="room-empty">No conversation yet. Lifecycle activity will appear here.</p>
           )}
-          {tail.visible.map((item, index) => {
-            const previous = tail.visible[index - 1];
+          {groups.map((item, index) => {
+            const previous = groups[index - 1];
             const daybreak = !previous || dayOf(previous.occurredAt) !== dayOf(item.occurredAt);
             const separator = daybreak && (
               <div className="room-day" key={`day:${item.id}`} role="separator">
                 <span>{dayLabel(item.occurredAt)}</span>
               </div>
             );
-            if (item.kind === "message") {
-              const isAgent = item.message.author.includes("/");
+            if (item.kind === "message-group") {
+              const run = sources.current.runs.find(
+                (candidate) => candidate.principal === item.author,
+              );
+              const isAgent = !!run || item.author.includes("/");
               return (
                 <Fragment key={item.id}>
                   {separator}
                   <article
-                    className={`room-message${item.message.delivery ? ` is-${item.message.delivery}` : ""}`}
-                    data-testid={`room-message-${item.message.id}`}
+                    className="room-message-group"
+                    data-testid={`message-group-${item.id}`}
                   >
-                    <header className="room-message-head">
-                      <Badge tone={isAgent ? "accent" : "neutral"}>
-                        {authorLabel(item.message.author, sources.current.runs)}
-                      </Badge>
-                      <time>{dateTime(item.occurredAt)}</time>
-                      {item.message.delivery === "pending" && <span>Sending…</span>}
-                    </header>
-                    <Markdown source={item.message.body} />
-                    {item.message.delivery === "failed" && (
-                      <div className="room-message-error">
-                        <span>{item.message.error}</span>
-                        <Button variant="ghost" onClick={() => void submitMessage(item.message)}>
-                          Retry
-                        </Button>
+                    <Avatar author={item.author} agent={isAgent} />
+                    <div className="room-message-content">
+                      <header className="room-message-head">
+                        <strong>{authorLabel(item.author, sources.current.runs)}</strong>
+                        <time dateTime={item.occurredAt}>{dateTime(item.occurredAt)}</time>
+                      </header>
+                      <div className="room-message-bodies">
+                        {item.messages.map((entry) => (
+                          <div
+                            key={entry.id}
+                            className={`room-message-body${entry.message.delivery ? ` is-${entry.message.delivery}` : ""}`}
+                            data-testid={`room-message-${entry.message.id}`}
+                          >
+                            <Markdown source={entry.message.body} />
+                            {entry.message.delivery === "pending" && (
+                              <span className="room-message-delivery">Sending…</span>
+                            )}
+                            {entry.message.delivery === "failed" && (
+                              <div className="room-message-error">
+                                <span>{entry.message.error}</span>
+                                <Button
+                                  variant="ghost"
+                                  onClick={() => void submitMessage(entry.message)}
+                                >
+                                  Retry
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
                       </div>
-                    )}
+                    </div>
                   </article>
                 </Fragment>
               );
@@ -592,13 +618,16 @@ export function SpecRoom({
                 <Fragment key={item.id}>
                   {separator}
                   <div className="room-system-row">
-                    <span className="room-system-mark" />
-                    <strong>{item.label}</strong>
-                    {detail && <span>{detail}</span>}
-                    <time>{dateTime(item.occurredAt)}</time>
+                    <span className="room-system-mark" aria-hidden="true" />
+                    <span>{item.label.toLowerCase()}</span>
+                    <span>·</span>
+                    <span>{item.run?.agent ?? item.event.agent.split("/")[0]}</span>
+                    {detail && <span>· {detail}</span>}
+                    <span>·</span>
+                    <time dateTime={item.occurredAt}>{dateTime(item.occurredAt)}</time>
                     {item.run && (
                       <button type="button" className="dep-chip" onClick={onOpenLog}>
-                        Run {item.run.id.slice(0, 8)} · raw log
+                        raw log
                       </button>
                     )}
                   </div>
@@ -610,14 +639,15 @@ export function SpecRoom({
                 <Fragment key={item.id}>
                   {separator}
                   <div className="room-system-row room-decision-row">
-                    <span className="room-system-mark" />
-                    <strong>
+                    <span className="room-system-mark" aria-hidden="true" />
+                    <span>
                       {item.decision.actor} {item.decision.action}
                       {item.decision.findingId
                         ? ` finding ${item.decision.findingId}`
                         : ` review ${item.decision.reviewId}`}
-                    </strong>
-                    <time>{dateTime(item.occurredAt)}</time>
+                    </span>
+                    <span>·</span>
+                    <time dateTime={item.occurredAt}>{dateTime(item.occurredAt)}</time>
                   </div>
                 </Fragment>
               );
@@ -644,10 +674,7 @@ export function SpecRoom({
                     }
                   >
                     <span>
-                      Review #{item.review.iteration} · {item.review.status}
-                    </span>
-                    <span className="eyebrow">
-                      {item.findings.length} findings · {openCount} open
+                      Review #{item.review.iteration} · {item.findings.length} findings · {openCount} open
                     </span>
                   </button>
                   {expanded && (
@@ -681,13 +708,13 @@ export function SpecRoom({
               </Fragment>
             );
           })}
-        </div>
-        {tail.buffered.length > 0 && (
-          <button type="button" className="room-new-pill" onClick={jumpToLatest}>
-            {tail.buffered.length} new
-          </button>
-        )}
-        <div className="room-composer">
+      </div>
+      {tail.buffered.length > 0 && (
+        <button type="button" className="room-new-pill" onClick={jumpToLatest}>
+          {tail.buffered.length} new
+        </button>
+      )}
+      <div className="room-composer">
           <Textarea
             value={draft}
             maxLength={65_536}
@@ -702,8 +729,7 @@ export function SpecRoom({
           <Button disabled={!canWrite || !draft.trim()} onClick={send}>
             Send
           </Button>
-        </div>
       </div>
-    </Card>
+    </div>
   );
 }

@@ -224,7 +224,22 @@ describe("SpecRoom", () => {
     await settle();
 
     expect(container.textContent).toContain("Full body from the server");
-    expect(container.textContent).toContain("codex/run-1 (for uday)");
+    expect(container.textContent).toContain("codex (for uday)");
+  });
+
+  test("renders consecutive agent reports as one visual group", async () => {
+    const fake = makeGateway();
+    for (let index = 0; index < 4; index++) {
+      fake.receive({
+        ...remoteMessage(`message-${index}`, `Report ${index + 1}`),
+        created_at: `2026-07-28T10:0${index}:00Z`,
+      });
+    }
+    await mount(fake.gateway);
+
+    expect(container.querySelectorAll('[data-testid^="message-group-"]').length).toBe(1);
+    expect(container.querySelectorAll('[data-testid^="room-message-"]').length).toBe(4);
+    expect(container.querySelectorAll(".room-avatar.is-agent").length).toBe(1);
   });
 
   test("renders a 403 message verbatim with an inline retry", async () => {
@@ -268,6 +283,8 @@ describe("SpecRoom", () => {
     const fake = makeGateway({ withReview: true });
     await mount(fake.gateway);
 
+    expect(container.querySelector(".spec-room > .card")).toBeNull();
+    expect(container.querySelectorAll(".room-review-card").length).toBe(1);
     act(() =>
       container
         .querySelector<HTMLButtonElement>('[data-testid="review-row-review-1"]')!

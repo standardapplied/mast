@@ -8,6 +8,7 @@ import type {
 import {
   assembleTimeline,
   bufferTail,
+  groupTimeline,
   mergeMessages,
   releaseTail,
 } from "./specTimeline";
@@ -142,4 +143,72 @@ test("attaches run links to lifecycle rows", () => {
     runs: [run],
   });
   expect(timeline[0]?.kind === "lifecycle" && timeline[0].run).toEqual(run);
+});
+
+describe("message grouping", () => {
+  test("groups consecutive same-author messages inside five minutes", () => {
+    const items = assembleTimeline({
+      messages: [
+        message("m1", "2026-07-28T10:00:00Z"),
+        message("m2", "2026-07-28T10:05:00Z"),
+        { ...message("m3", "2026-07-28T10:05:01Z"), author: "ravi" },
+        message("m4", "2026-07-28T10:05:02Z"),
+      ],
+      events: [],
+      reviews: [],
+      runs: [],
+    });
+
+    const groups = groupTimeline(items);
+    expect(groups.map((group) => group.kind)).toEqual([
+      "message-group",
+      "message-group",
+      "message-group",
+    ]);
+    expect(groups[0]?.kind === "message-group" && groups[0].messages.map((item) => item.id))
+      .toEqual(["message:m1", "message:m2"]);
+  });
+
+  test("breaks groups at lifecycle rows, the time window, and day dividers", () => {
+    const items = assembleTimeline({
+      messages: [
+        message("m1", "2026-07-28T23:59:00"),
+        message("m2", "2026-07-29T00:01:00"),
+        message("m3", "2026-07-29T00:07:00"),
+        message("m4", "2026-07-29T00:08:00"),
+      ],
+      events: [event(1, "spec_dispatched", "2026-07-29T00:07:30")],
+      reviews: [],
+      runs: [],
+    });
+
+    expect(groupTimeline(items).map((group) => group.kind)).toEqual([
+      "message-group",
+      "message-group",
+      "message-group",
+      "lifecycle",
+      "message-group",
+    ]);
+  });
+
+  test("keeps optimistic and failed deliveries inside their author's group", () => {
+    const items = assembleTimeline({
+      messages: [
+        message("m1", "2026-07-28T10:00:00Z"),
+        { ...message("pending:1", "2026-07-28T10:01:00Z"), delivery: "pending" },
+        {
+          ...message("pending:2", "2026-07-28T10:02:00Z"),
+          delivery: "failed",
+          error: "refused",
+        },
+      ],
+      events: [],
+      reviews: [],
+      runs: [],
+    });
+
+    const [group] = groupTimeline(items);
+    expect(group?.kind === "message-group" && group.messages.map((item) => item.message.delivery))
+      .toEqual([undefined, "pending", "failed"]);
+  });
 });

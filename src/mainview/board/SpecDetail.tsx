@@ -10,15 +10,18 @@ import type {
 } from "../../shared/sail-models";
 import type { SailWireError } from "../../shared/types";
 import { Dialog } from "../components/Dialog";
+import { DetailsDrawer } from "../components/DetailsDrawer";
+import { ContextMenu, type MenuNode } from "../components/ContextMenu";
 import { CaretLeft, Info } from "../components/icons";
 import { Input } from "../components/Input";
 import { LoadingMark } from "../components/Loading";
 import { NumberStepper } from "../components/NumberStepper";
+import { RoomHeader } from "../components/RoomHeader";
 import { Select, type SelectOption } from "../components/Select";
 import { ToggleButton } from "../components/ToggleButton";
 import { Tooltip } from "../components/Tooltip";
 import { useToast } from "../components/Toast";
-import { Badge, Button, Card, Eyebrow } from "../components/ui";
+import { Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
 import { DispatchDialog } from "./DispatchDialog";
@@ -32,6 +35,20 @@ const STATUS_OPTIONS = (Object.keys(STATUS_LABEL) as SpecStatus[]).map((value) =
   value,
   label: STATUS_LABEL[value],
 }));
+
+const DRAWER_WIDTH_KEY = "mast.room.details.width";
+
+function storedDrawerOpen(embedded: boolean): boolean {
+  const stored = localStorage.getItem(
+    embedded ? "mast.room.details.rooms.open" : "mast.room.details.board.open",
+  );
+  return stored === null ? !embedded : stored === "true";
+}
+
+function storedDrawerWidth(): number {
+  const parsed = Number(localStorage.getItem(DRAWER_WIDTH_KEY));
+  return Number.isFinite(parsed) && parsed >= 320 && parsed <= 640 ? parsed : 420;
+}
 
 /**
  * The assignee choices: Unassigned, then the roster by handle. A current
@@ -107,6 +124,9 @@ export function SpecDetail({
   const [stopTarget, setStopTarget] = useState<RunView | null>(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [actionMenu, setActionMenu] = useState<{ x: number; y: number } | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(() => storedDrawerOpen(embedded));
+  const [drawerWidth, setDrawerWidth] = useState(storedDrawerWidth);
   const [role, setRole] = useState<{
     canDispatch: boolean;
     canWrite: boolean;
@@ -265,10 +285,19 @@ export function SpecDetail({
     if (outcome.refresh) void load();
   };
 
+  const setDetailsOpen = (open: boolean) => {
+    setDrawerOpen(open);
+    localStorage.setItem(
+      embedded ? "mast.room.details.rooms.open" : "mast.room.details.board.open",
+      String(open),
+    );
+  };
+
   const startEdit = () => {
     setBodyDraft(loaded.body);
     setDraft({});
     setEditing(true);
+    setDetailsOpen(true);
   };
 
   const saveError = (err: SailWireError) => {
@@ -326,200 +355,104 @@ export function SpecDetail({
     </div>
   );
 
-  return (
-    <div className="detail">
-      <div className="detail-header">
-        <div className="detail-heading-row">
-          {!embedded && (
-            <button
-              type="button"
-              className="back-btn"
-              onClick={onBack}
-              aria-label="Back to board"
-              data-testid="back-to-board"
-            >
-              <CaretLeft size={16} />
-            </button>
-          )}
-          <div className="detail-heading">
-            <Eyebrow>{spec.project}</Eyebrow>
-            <h1 className="detail-title">{spec.id}</h1>
-            <p className="detail-subtitle">{spec.title}</p>
-          </div>
-        </div>
-        <div className="detail-header-actions">
-          {(spec.status === "in_progress" || spec.status === "review") && (
-            <Button
-              variant="ghost"
-              disabled={!!logsOwner}
-              title={logsOwner ? `Assigned to ${logsOwner} — logs live on their box.` : undefined}
-              onClick={() => setLogOpen(true)}
-              data-testid="follow-log"
-            >
-              {spec.status === "review" ? "Review log" : "Live log"}
-            </Button>
-          )}
-          <Badge tone={statusTone(spec.status)}>{statusLabel(spec.status)}</Badge>
-        </div>
-      </div>
+  const actionItems: MenuNode[] = [
+    ...((spec.status === "in_progress" || spec.status === "review")
+      ? [{
+          kind: "item" as const,
+          label: spec.status === "review" ? "Review log" : "Live log",
+          disabled: !!logsOwner,
+          hint: logsOwner ? `On ${logsOwner}'s box` : undefined,
+          onSelect: () => setLogOpen(true),
+        }]
+      : []),
+    ...(spec.status === "in_progress"
+      ? [{
+          kind: "item" as const,
+          label: "Stop",
+          danger: true,
+          onSelect: () => void beginStop(),
+        }]
+      : []),
+    ...(spec.status === "draft"
+      ? []
+      : [{
+          kind: "item" as const,
+          label: restart ? "Re-dispatch…" : "Dispatch…",
+          onSelect: () => setDispatchOpen(true),
+        }]),
+    { kind: "item", label: "Edit", onSelect: startEdit },
+  ];
 
-      <div className="prop-bar">
-        <div className="prop">
-          <span className="prop-label">Status</span>
-          {editing ? (
-            <Select
-              className="prop-status-select"
-              value={draft.status ?? spec.status}
-              options={STATUS_OPTIONS}
-              onChange={(v) => setDraft((d) => ({ ...d, status: v as SpecStatus }))}
-            />
-          ) : (
-            <span className="prop-value">{statusLabel(spec.status)}</span>
-          )}
-        </div>
-        <div className="prop prop-assignee">
-          <span className="prop-label">Assignee</span>
-          {editing ? (
-            fdes ? (
-              <Select
-                className="prop-status-select"
-                value={draft.assignee ?? spec.assignee ?? ""}
-                options={assigneeOptions(fdes, spec.assignee)}
-                onChange={(assignee) => setDraft((d) => ({ ...d, assignee }))}
-              />
-            ) : (
-              <Input
-                className="prop-input"
-                defaultValue={spec.assignee ?? ""}
-                onChange={(e) => setDraft((d) => ({ ...d, assignee: e.target.value }))}
-              />
-            )
-          ) : (
-            <span className="prop-value">{spec.assignee || "—"}</span>
-          )}
-        </div>
-        {propItem("Agent", "agent", spec.agent ?? "")}
-        {propItem("Model", "model", spec.model ?? "")}
-        <div className="prop">
-          <span className="prop-label prop-label-hint">
-            Priority
-            <Tooltip content="Higher number = higher priority. Dispatch picks the highest-priority ready spec first.">
-              <span className="prop-hint-icon" tabIndex={0}>
-                <Info size={13} />
-              </span>
-            </Tooltip>
-          </span>
-          {editing ? (
-            <NumberStepper
-              value={draft.priority ?? spec.priority}
-              min={0}
-              max={100}
-              step={10}
-              onChange={(priority) => setDraft((d) => ({ ...d, priority }))}
-            />
-          ) : (
-            <span className="prop-value">{spec.priority}</span>
-          )}
-        </div>
-        <div className="prop">
-          <span className="prop-label">Repos</span>
-          {editing ? (
-            <Input
-              className="prop-input"
-              defaultValue={(spec.repos ?? []).join(", ")}
-              placeholder="api, web"
-              onChange={(e) =>
-                setDraft((d) => ({
-                  ...d,
-                  repos: e.target.value.split(",").map((r) => r.trim()).filter(Boolean),
-                }))
-              }
-            />
-          ) : (
-            <span className="prop-value">{(spec.repos ?? []).join(", ") || "—"}</span>
-          )}
-        </div>
-        {editing && (
-          <div className="prop">
-            <span className="prop-label">Depends on</span>
-            <Input
-              className="prop-input prop-input-wide"
-              defaultValue={(spec.depends_on ?? []).join(", ")}
-              placeholder="spec-a, spec-b"
-              onChange={(e) =>
-                setDraft((d) => ({
-                  ...d,
-                  depends_on: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
-                }))
-              }
-            />
-          </div>
-        )}
-        <div className="prop">
-          <span className="prop-label">Branch</span>
-          <span className="prop-value">{spec.branch ?? "—"}</span>
-        </div>
-        <div className="prop">
-          <span className="prop-label">Updated</span>
-          <span className="prop-value">
-            {spec.updated_at.slice(0, 16).replace("T", " ")}
-            {spec.updated_by ? ` · ${spec.updated_by}` : ""}
-          </span>
-        </div>
-        <div className="prop-actions">
-          {editing ? (
-            <>
-              <Button onClick={() => void saveMeta()}>Save</Button>
+  return (
+    <div className="detail room-detail">
+      <RoomHeader
+        title={spec.title}
+        status={statusLabel(spec.status)}
+        statusTone={statusTone(spec.status)}
+        drawerOpen={drawerOpen}
+        onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
+        onBack={embedded ? undefined : onBack}
+        compactActions={
+          <Button
+            variant="ghost"
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setActionMenu({ x: rect.right, y: rect.bottom + 4 });
+            }}
+            aria-label="Room actions"
+          >
+            Actions
+          </Button>
+        }
+        actions={
+          <>
+            {(spec.status === "in_progress" || spec.status === "review") && (
               <Button
                 variant="ghost"
-                onClick={() => {
-                  setEditing(false);
-                  setDraft({});
-                }}
+                disabled={!!logsOwner}
+                title={logsOwner ? `Assigned to ${logsOwner} — logs live on their box.` : undefined}
+                onClick={() => setLogOpen(true)}
+                data-testid="follow-log"
               >
-                Cancel
+                {spec.status === "review" ? "Review log" : "Live log"}
               </Button>
-            </>
-          ) : (
-            <>
-              {spec.status === "in_progress" && (
-                <Button
-                  className="btn-danger"
-                  onClick={() => void beginStop()}
-                  data-testid="detail-stop"
-                >
-                  Stop
-                </Button>
-              )}
-              {spec.status === "draft" ? (
-                <span className="detail-draft-note">Draft — add details, then move to pending</span>
-              ) : (
-                <Button variant="ghost" onClick={() => setDispatchOpen(true)} data-testid="detail-dispatch">
-                  {restart ? "Re-dispatch" : "Dispatch"}
-                </Button>
-              )}
-              <Button variant="ghost" onClick={startEdit}>
-                Edit
+            )}
+            {spec.status === "in_progress" && (
+              <Button
+                className="btn-danger"
+                onClick={() => void beginStop()}
+                data-testid="detail-stop"
+              >
+                Stop
               </Button>
-            </>
-          )}
-        </div>
-      </div>
+            )}
+            {spec.status === "draft" ? (
+              <span className="detail-draft-note">Draft — add details, then move to pending</span>
+            ) : (
+              <Button
+                variant="ghost"
+                onClick={() => setDispatchOpen(true)}
+                data-testid="detail-dispatch"
+              >
+                {restart ? "Re-dispatch" : "Dispatch"}
+              </Button>
+            )}
+            <Button variant="ghost" onClick={startEdit}>Edit</Button>
+          </>
+        }
+      />
 
-      {loaded.enriched && unmet.length > 0 && (
-        <p className="detail-blocked" data-testid="blocked-banner">
-          Blocked — waiting on{" "}
-          {unmet.map((id, i) => (
-            <span key={id}>
-              {i > 0 && ", "}
-              <DepChip id={id} unmet onOpen={onOpenSpec} />
-            </span>
-          ))}
-        </p>
+      {actionMenu && (
+        <ContextMenu
+          x={actionMenu.x}
+          y={actionMenu.y}
+          items={actionItems}
+          onClose={() => setActionMenu(null)}
+        />
       )}
 
-      <div className={editing ? "detail-grid is-editing" : "detail-grid"}>
-        <div className="detail-main">
+      <div className="room-layout">
+        <main className="room-conversation">
           <SpecRoom
             gateway={gateway}
             specId={spec.id}
@@ -533,84 +466,232 @@ export function SpecDetail({
             currentUser={role.fde}
             onOpenLog={() => setLogOpen(true)}
           />
-          <Card title="Spec">
-            {editing ? (
-              <div className="md-editor" data-pane={editorPane}>
-                <ToggleButton
-                  className="md-editor__tabs"
-                  options={EDITOR_PANES}
-                  value={editorPane}
-                  onChange={(v) => setEditorPane(v as "write" | "preview")}
-                />
-                <textarea
-                  className="md-editor__input"
-                  value={bodyDraft}
-                  spellCheck={false}
-                  onChange={(e) => setBodyDraft(e.target.value)}
-                  placeholder="Markdown…"
-                />
-                <div className="md-editor__preview">
-                  <Markdown source={bodyDraft || "*No body yet.*"} />
+        </main>
+
+        {drawerOpen && (
+          <DetailsDrawer
+            width={drawerWidth}
+            onWidth={setDrawerWidth}
+            onWidthCommit={(width) => localStorage.setItem(DRAWER_WIDTH_KEY, String(width))}
+            onClose={() => setDetailsOpen(false)}
+          >
+            {loaded.enriched && unmet.length > 0 && (
+              <p className="detail-blocked" data-testid="blocked-banner">
+                Blocked — waiting on{" "}
+                {unmet.map((id, i) => (
+                  <span key={id}>
+                    {i > 0 && ", "}
+                    <DepChip id={id} unmet onOpen={onOpenSpec} />
+                  </span>
+                ))}
+              </p>
+            )}
+
+            <section className="room-drawer-section">
+              <div className="room-drawer-section-head">
+                <h3>Spec</h3>
+                {editing && (
+                  <div className="prop-actions">
+                    <Button onClick={() => void saveMeta()}>Save</Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setEditing(false);
+                        setDraft({});
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {editing ? (
+                <div className="md-editor" data-pane={editorPane}>
+                  <ToggleButton
+                    className="md-editor__tabs"
+                    options={EDITOR_PANES}
+                    value={editorPane}
+                    onChange={(v) => setEditorPane(v as "write" | "preview")}
+                  />
+                  <textarea
+                    className="md-editor__input"
+                    value={bodyDraft}
+                    spellCheck={false}
+                    onChange={(e) => setBodyDraft(e.target.value)}
+                    placeholder="Markdown…"
+                  />
+                  <div className="md-editor__preview">
+                    <Markdown source={bodyDraft || "*No body yet.*"} />
+                  </div>
+                </div>
+              ) : (
+                <Markdown source={loaded.body || "*No body yet.*"} />
+              )}
+            </section>
+
+            <section className="room-drawer-section">
+              <h3>Metadata</h3>
+              <div className="room-meta-grid">
+                <div className="prop">
+                  <span className="prop-label">Status</span>
+                  {editing ? (
+                    <Select
+                      className="prop-status-select"
+                      value={draft.status ?? spec.status}
+                      options={STATUS_OPTIONS}
+                      onChange={(v) => setDraft((d) => ({ ...d, status: v as SpecStatus }))}
+                    />
+                  ) : (
+                    <span className="prop-value">{statusLabel(spec.status)}</span>
+                  )}
+                </div>
+                <div className="prop prop-assignee">
+                  <span className="prop-label">Assignee</span>
+                  {editing ? (
+                    fdes ? (
+                      <Select
+                        className="prop-status-select"
+                        value={draft.assignee ?? spec.assignee ?? ""}
+                        options={assigneeOptions(fdes, spec.assignee)}
+                        onChange={(assignee) => setDraft((d) => ({ ...d, assignee }))}
+                      />
+                    ) : (
+                      <Input
+                        className="prop-input"
+                        defaultValue={spec.assignee ?? ""}
+                        onChange={(e) => setDraft((d) => ({ ...d, assignee: e.target.value }))}
+                      />
+                    )
+                  ) : (
+                    <span className="prop-value">{spec.assignee || "—"}</span>
+                  )}
+                </div>
+                {propItem("Agent", "agent", spec.agent ?? "")}
+                {propItem("Model", "model", spec.model ?? "")}
+                <div className="prop">
+                  <span className="prop-label prop-label-hint">
+                    Priority
+                    <Tooltip content="Higher number = higher priority. Dispatch picks the highest-priority ready spec first.">
+                      <span className="prop-hint-icon" tabIndex={0}><Info size={13} /></span>
+                    </Tooltip>
+                  </span>
+                  {editing ? (
+                    <NumberStepper
+                      value={draft.priority ?? spec.priority}
+                      min={0}
+                      max={100}
+                      step={10}
+                      onChange={(priority) => setDraft((d) => ({ ...d, priority }))}
+                    />
+                  ) : (
+                    <span className="prop-value">{spec.priority}</span>
+                  )}
+                </div>
+                <div className="prop">
+                  <span className="prop-label">Repos</span>
+                  {editing ? (
+                    <Input
+                      className="prop-input"
+                      defaultValue={(spec.repos ?? []).join(", ")}
+                      placeholder="api, web"
+                      onChange={(e) =>
+                        setDraft((d) => ({
+                          ...d,
+                          repos: e.target.value.split(",").map((r) => r.trim()).filter(Boolean),
+                        }))
+                      }
+                    />
+                  ) : (
+                    <span className="prop-value">{(spec.repos ?? []).join(", ") || "—"}</span>
+                  )}
+                </div>
+                {editing && (
+                  <div className="prop">
+                    <span className="prop-label">Depends on</span>
+                    <Input
+                      className="prop-input prop-input-wide"
+                      defaultValue={(spec.depends_on ?? []).join(", ")}
+                      placeholder="spec-a, spec-b"
+                      onChange={(e) =>
+                        setDraft((d) => ({
+                          ...d,
+                          depends_on: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                        }))
+                      }
+                    />
+                  </div>
+                )}
+                <div className="prop">
+                  <span className="prop-label">Branch</span>
+                  <span className="prop-value">{spec.branch ?? "—"}</span>
                 </div>
               </div>
-            ) : (
-              <Markdown source={loaded.body || "*No body yet.*"} />
+            </section>
+
+            {loaded.plan && (
+              <section className="room-drawer-section">
+                <h3>Plan</h3>
+                <Markdown source={loaded.plan} />
+              </section>
             )}
-          </Card>
-          {loaded.plan && (
-            <Card title="Plan">
-              <Markdown source={loaded.plan} />
-            </Card>
-          )}
-        </div>
 
-        {!editing && (
-        <div className="detail-side">
-          {((spec.depends_on ?? []).length > 0 || dependents.length > 0) && (
-            <Card title="Dependencies">
-              <div className="dep-section">
-                {(spec.depends_on ?? []).length > 0 && (
-                  <>
-                    <span className="eyebrow">Depends on</span>
-                    <div className="dep-chips">
-                      {(spec.depends_on ?? []).map((id) => (
-                        <DepChip
-                          key={id}
-                          id={id}
-                          unmet={loaded.enriched && unmet.includes(id)}
-                          onOpen={onOpenSpec}
-                        />
-                      ))}
-                    </div>
-                  </>
-                )}
-                {dependents.length > 0 && (
-                  <>
-                    <span className="eyebrow">Blocked by this</span>
-                    <div className="dep-chips">
-                      {dependents.map((s) => (
-                        <DepChip key={s.id} id={s.id} unmet={false} onOpen={onOpenSpec} />
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-            </Card>
-          )}
+            {((spec.depends_on ?? []).length > 0 || dependents.length > 0) && (
+              <section className="room-drawer-section">
+                <h3>Dependencies</h3>
+                <div className="dep-section">
+                  {(spec.depends_on ?? []).length > 0 && (
+                    <>
+                      <span className="eyebrow">Depends on</span>
+                      <div className="dep-chips">
+                        {(spec.depends_on ?? []).map((id) => (
+                          <DepChip
+                            key={id}
+                            id={id}
+                            unmet={loaded.enriched && unmet.includes(id)}
+                            onOpen={onOpenSpec}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {dependents.length > 0 && (
+                    <>
+                      <span className="eyebrow">Blocked by this</span>
+                      <div className="dep-chips">
+                        {dependents.map((dependent) => (
+                          <DepChip
+                            key={dependent.id}
+                            id={dependent.id}
+                            unmet={false}
+                            onOpen={onOpenSpec}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </section>
+            )}
 
-          <Card title="History">
-            {loaded.history.map((revision) => (
-              <div key={revision.rev} className="history-row">
-                <span className="meta-value">
-                  rev {revision.rev} · {revision.origin} {revision.actor ? `· ${revision.actor}` : ""}
-                </span>
-                <button type="button" className="dep-chip" onClick={() => setRestoring(revision.rev)}>
-                  Restore
-                </button>
-              </div>
-            ))}
-          </Card>
-        </div>
+            <section className="room-drawer-section">
+              <h3>History</h3>
+              {loaded.history.map((revision) => (
+                <div key={revision.rev} className="history-row">
+                  <span className="meta-value">
+                    rev {revision.rev} · {revision.origin}
+                    {revision.actor ? ` · ${revision.actor}` : ""}
+                  </span>
+                  <button
+                    type="button"
+                    className="dep-chip"
+                    onClick={() => setRestoring(revision.rev)}
+                  >
+                    Restore
+                  </button>
+                </div>
+              ))}
+            </section>
+          </DetailsDrawer>
         )}
       </div>
 
