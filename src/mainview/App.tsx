@@ -193,6 +193,21 @@ export function App({
   const firstConnectBlocking =
     !everReady && (!status || status.phase !== "ready");
   const showWorkspace = !needsLogin && !firstConnectBlocking;
+  const connectGate =
+    status && (needsLogin || status.phase === "no-host" || status.phase === "failed") ? (
+      <ConnectScreen
+        status={status}
+        onLogin={() => void login()}
+        busy={loginBusy}
+        loginError={loginError}
+      />
+    ) : (
+      <LoadingMark
+        label={
+          status?.phase === "tunnel-connecting" ? "Opening the tunnel" : "Finding the control plane"
+        }
+      />
+    );
 
   return (
     <ToastProvider>
@@ -238,25 +253,28 @@ export function App({
             />
           </span>
         </header>
+        {/* Workspace views stay mounted once ready and hide via display:none — the
+            terminal's session-preserving pattern applied to rooms and board, so a
+            tab switch never cold-boots the view it left. */}
         <main className="cockpit-main">
-          <section className="cockpit-view" style={{ display: view === "rooms" ? "flex" : "none" }}>
-            {view === "rooms" && (!showWorkspace ? (
-              status && (needsLogin || status.phase === "no-host" || status.phase === "failed") ? (
-                <ConnectScreen status={status} onLogin={() => void login()} busy={loginBusy} loginError={loginError} />
-              ) : (
-                <LoadingMark label={status?.phase === "tunnel-connecting" ? "Opening the tunnel" : "Finding the control plane"} />
-              )
+          <section
+            className="cockpit-view"
+            data-testid="view-rooms"
+            style={{ display: view === "rooms" ? "flex" : "none" }}
+          >
+            {!showWorkspace ? (
+              view === "rooms" && connectGate
             ) : (
               <RoomsScreen gateway={gateway} />
-            ))}
+            )}
           </section>
-          <section className="cockpit-view" style={{ display: view === "board" ? "flex" : "none" }}>
-            {view === "board" && (!showWorkspace ? (
-              status && (needsLogin || status.phase === "no-host" || status.phase === "failed") ? (
-                <ConnectScreen status={status} onLogin={() => void login()} busy={loginBusy} loginError={loginError} />
-              ) : (
-                <LoadingMark label={status?.phase === "tunnel-connecting" ? "Opening the tunnel" : "Finding the control plane"} />
-              )
+          <section
+            className="cockpit-view"
+            data-testid="view-board"
+            style={{ display: view === "board" ? "flex" : "none" }}
+          >
+            {!showWorkspace ? (
+              view === "board" && connectGate
             ) : specId ? (
               <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} />
             ) : (
@@ -266,7 +284,7 @@ export function App({
                 server={status?.server}
                 tokenPresent={status?.tokenPresent ?? true}
               />
-            ))}
+            )}
           </section>
           {terminal && terminalOpened && (
             <section className="cockpit-view" style={{ display: view === "terminal" ? "flex" : "none" }}>

@@ -1,9 +1,4 @@
-import type {
-  GlobalSpecView,
-  SailEvent,
-  SpecMessage,
-  SpecStatus,
-} from "../../shared/sail-models";
+import type { GlobalSpecView, SailEvent, SpecStatus } from "../../shared/sail-models";
 
 export const ROOM_WATERMARKS_KEY = "mast.rooms.watermarks";
 export const ROOM_SELECTIONS_KEY = "mast.rooms.selections";
@@ -44,16 +39,11 @@ function storedMap(storage: StorageLike, key: string): Record<string, string> {
 }
 
 export function isRoomActivityEvent(event: SailEvent): boolean {
-  return Boolean(
-    event.spec &&
-    event.type !== "spec_message_posted" &&
-    !NON_RECORD_EVENT_TYPES.has(event.type),
-  );
+  return Boolean(event.spec && !NON_RECORD_EVENT_TYPES.has(event.type));
 }
 
 export function assembleRooms(
   specs: GlobalSpecView[],
-  messages: ReadonlyMap<string, readonly SpecMessage[]>,
   events: readonly SailEvent[],
   watermarks: Readonly<Record<string, string>>,
 ): RoomView[] {
@@ -68,15 +58,9 @@ export function assembleRooms(
 
   return specs
     .map((spec) => {
-      const latestMessage = [...(messages.get(spec.id) ?? [])].sort(
-        (left, right) =>
-          timestamp(right.created_at) - timestamp(left.created_at) ||
-          right.id.localeCompare(left.id),
-      )[0];
       const candidates = [
         spec.created_at,
         spec.updated_at,
-        latestMessage?.created_at,
         eventActivity.get(spec.id),
       ].filter((value): value is string => Boolean(value));
       const activityAt = candidates.sort(
