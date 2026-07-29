@@ -161,7 +161,7 @@ async function settle() {
   await act(async () => {});
 }
 
-async function mount(gateway: Gateway) {
+async function mount(gateway: Gateway, specStatus?: string) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -171,6 +171,7 @@ async function mount(gateway: Gateway) {
         <SpecRoom
           gateway={gateway}
           specId="s1"
+          specStatus={specStatus}
           canWrite
           currentUser="uday"
           onOpenLog={() => {}}
@@ -287,5 +288,77 @@ describe("SpecRoom", () => {
     expect(fake.calls.approved).toEqual(["review-1"]);
     expect(container.textContent).toContain("uday dismissed finding finding-1");
     expect(container.textContent).toContain("uday approved review review-1");
+  });
+
+  test("approve review is a primary action only while the spec is in review", async () => {
+    const inReview = makeGateway({ withReview: true });
+    await mount(inReview.gateway, "review");
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="review-row-review-1"]')!
+        .click(),
+    );
+    const primary = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Approve review",
+    )!;
+    expect(primary.className).toContain("btn-primary");
+    act(() => root.unmount());
+    container.remove();
+
+    const merged = makeGateway({ withReview: true });
+    await mount(merged.gateway, "awaiting_merge");
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="review-row-review-1"]')!
+        .click(),
+    );
+    const quiet = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Approve review",
+    )!;
+    expect(quiet.className).toContain("btn-ghost");
+  });
+
+  test("shows the loading mark, not text, while the room loads", async () => {
+    const fake = makeGateway();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root.render(
+        <ToastProvider>
+          <SpecRoom
+            gateway={fake.gateway}
+            specId="s1"
+            canWrite
+            currentUser="uday"
+            onOpenLog={() => {}}
+          />
+        </ToastProvider>,
+      ),
+    );
+    expect(container.querySelector('[data-testid="loading"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Loading room…");
+    await settle();
+    expect(container.querySelector('[data-testid="loading"]')).toBeNull();
+  });
+
+  test("separates the timeline by day with one separator per calendar day", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+
+    act(() => fake.receive(remoteMessage("message-day-1", "first day")));
+    await settle();
+    act(() =>
+      fake.receive({
+        ...remoteMessage("message-day-2", "second day"),
+        created_at: "2026-07-29T09:00:00Z",
+      }),
+    );
+    await settle();
+
+    const separators = [...container.querySelectorAll(".room-day")];
+    expect(separators.length).toBe(2);
+    expect(container.textContent).toContain("first day");
+    expect(container.textContent).toContain("second day");
   });
 });

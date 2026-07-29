@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useRef,
@@ -13,6 +14,7 @@ import type {
   RunView,
   SailEvent,
 } from "../../shared/sail-models";
+import { LoadingMark } from "../components/Loading";
 import { Textarea } from "../components/Textarea";
 import { useToast } from "../components/Toast";
 import { Badge, Button, Card, type BadgeTone } from "../components/ui";
@@ -107,6 +109,24 @@ function reconcileTimeline(
   };
 }
 
+function dayOf(value: string): string {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf())
+    ? value
+    : `${parsed.getFullYear()}-${parsed.getMonth()}-${parsed.getDate()}`;
+}
+
+function dayLabel(value: string): string {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf())
+    ? value
+    : new Intl.DateTimeFormat(undefined, {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      }).format(parsed);
+}
+
 function dateTime(value: string): string {
   const parsed = new Date(value);
   return Number.isNaN(parsed.valueOf())
@@ -180,12 +200,14 @@ function FindingRow({
 export function SpecRoom({
   gateway,
   specId,
+  specStatus,
   canWrite,
   currentUser,
   onOpenLog,
 }: {
   gateway: Gateway;
   specId: string;
+  specStatus?: string;
   canWrite: boolean;
   currentUser?: string;
   onOpenLog: () => void;
@@ -519,66 +541,85 @@ export function SpecRoom({
           onScroll={onScroll}
           data-testid="room-timeline"
         >
-          {loading && <p className="meta-value">Loading room…</p>}
+          {loading && (
+            <div className="room-loading">
+              <LoadingMark label="Loading room" />
+            </div>
+          )}
           {!loading && tail.visible.length === 0 && (
             <p className="room-empty">No conversation yet. Lifecycle activity will appear here.</p>
           )}
-          {tail.visible.map((item) => {
+          {tail.visible.map((item, index) => {
+            const previous = tail.visible[index - 1];
+            const daybreak = !previous || dayOf(previous.occurredAt) !== dayOf(item.occurredAt);
+            const separator = daybreak && (
+              <div className="room-day" key={`day:${item.id}`} role="separator">
+                <span>{dayLabel(item.occurredAt)}</span>
+              </div>
+            );
             if (item.kind === "message") {
               const isAgent = item.message.author.includes("/");
               return (
-                <article
-                  key={item.id}
-                  className={`room-message${item.message.delivery ? ` is-${item.message.delivery}` : ""}`}
-                  data-testid={`room-message-${item.message.id}`}
-                >
-                  <header className="room-message-head">
-                    <Badge tone={isAgent ? "accent" : "neutral"}>
-                      {authorLabel(item.message.author, sources.current.runs)}
-                    </Badge>
-                    <time>{dateTime(item.occurredAt)}</time>
-                    {item.message.delivery === "pending" && <span>Sending…</span>}
-                  </header>
-                  <Markdown source={item.message.body} />
-                  {item.message.delivery === "failed" && (
-                    <div className="room-message-error">
-                      <span>{item.message.error}</span>
-                      <Button variant="ghost" onClick={() => void submitMessage(item.message)}>
-                        Retry
-                      </Button>
-                    </div>
-                  )}
-                </article>
+                <Fragment key={item.id}>
+                  {separator}
+                  <article
+                    className={`room-message${item.message.delivery ? ` is-${item.message.delivery}` : ""}`}
+                    data-testid={`room-message-${item.message.id}`}
+                  >
+                    <header className="room-message-head">
+                      <Badge tone={isAgent ? "accent" : "neutral"}>
+                        {authorLabel(item.message.author, sources.current.runs)}
+                      </Badge>
+                      <time>{dateTime(item.occurredAt)}</time>
+                      {item.message.delivery === "pending" && <span>Sending…</span>}
+                    </header>
+                    <Markdown source={item.message.body} />
+                    {item.message.delivery === "failed" && (
+                      <div className="room-message-error">
+                        <span>{item.message.error}</span>
+                        <Button variant="ghost" onClick={() => void submitMessage(item.message)}>
+                          Retry
+                        </Button>
+                      </div>
+                    )}
+                  </article>
+                </Fragment>
               );
             }
             if (item.kind === "lifecycle") {
               const detail = eventDetail(item.event);
               return (
-                <div key={item.id} className="room-system-row">
-                  <span className="room-system-mark" />
-                  <strong>{item.label}</strong>
-                  {detail && <span>{detail}</span>}
-                  <time>{dateTime(item.occurredAt)}</time>
-                  {item.run && (
-                    <button type="button" className="dep-chip" onClick={onOpenLog}>
-                      Run {item.run.id.slice(0, 8)} · raw log
-                    </button>
-                  )}
-                </div>
+                <Fragment key={item.id}>
+                  {separator}
+                  <div className="room-system-row">
+                    <span className="room-system-mark" />
+                    <strong>{item.label}</strong>
+                    {detail && <span>{detail}</span>}
+                    <time>{dateTime(item.occurredAt)}</time>
+                    {item.run && (
+                      <button type="button" className="dep-chip" onClick={onOpenLog}>
+                        Run {item.run.id.slice(0, 8)} · raw log
+                      </button>
+                    )}
+                  </div>
+                </Fragment>
               );
             }
             if (item.kind === "decision") {
               return (
-                <div key={item.id} className="room-system-row room-decision-row">
-                  <span className="room-system-mark" />
-                  <strong>
-                    {item.decision.actor} {item.decision.action}
-                    {item.decision.findingId
-                      ? ` finding ${item.decision.findingId}`
-                      : ` review ${item.decision.reviewId}`}
-                  </strong>
-                  <time>{dateTime(item.occurredAt)}</time>
-                </div>
+                <Fragment key={item.id}>
+                  {separator}
+                  <div className="room-system-row room-decision-row">
+                    <span className="room-system-mark" />
+                    <strong>
+                      {item.decision.actor} {item.decision.action}
+                      {item.decision.findingId
+                        ? ` finding ${item.decision.findingId}`
+                        : ` review ${item.decision.reviewId}`}
+                    </strong>
+                    <time>{dateTime(item.occurredAt)}</time>
+                  </div>
+                </Fragment>
               );
             }
             const expanded = expandedReviews.has(item.review.id);
@@ -586,54 +627,58 @@ export function SpecRoom({
               (finding) => finding.resolution === "OPEN",
             ).length;
             return (
-              <article key={item.id} className="room-review-card">
-                <button
-                  type="button"
-                  className="room-review-head"
-                  data-testid={`review-row-${item.review.id}`}
-                  onClick={() =>
-                    setExpandedReviews((current) => {
-                      const next = new Set(current);
-                      if (next.has(item.review.id)) next.delete(item.review.id);
-                      else next.add(item.review.id);
-                      return next;
-                    })
-                  }
-                >
-                  <span>
-                    Review #{item.review.iteration} · {item.review.status}
-                  </span>
-                  <span className="eyebrow">
-                    {item.findings.length} findings · {openCount} open
-                  </span>
-                </button>
-                {expanded && (
-                  <div className="room-review-body">
-                    {item.findings.length === 0 && (
-                      <p className="meta-value">No findings — a clean review.</p>
-                    )}
-                    {item.findings.map((finding) => (
-                      <FindingRow
-                        key={finding.id}
-                        finding={finding}
-                        dismissing={acting.has(finding.id)}
-                        canWrite={canWrite}
-                        onDismiss={() => void decide(item.review.id, finding.id)}
-                      />
-                    ))}
-                    {item.review.status !== "approved" && (
-                      <div className="room-review-actions">
-                        <Button
-                          disabled={!canWrite || acting.has(item.review.id)}
-                          onClick={() => void decide(item.review.id)}
-                        >
-                          {acting.has(item.review.id) ? "Approving…" : "Approve review"}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </article>
+              <Fragment key={item.id}>
+                {separator}
+                <article className="room-review-card">
+                  <button
+                    type="button"
+                    className="room-review-head"
+                    data-testid={`review-row-${item.review.id}`}
+                    onClick={() =>
+                      setExpandedReviews((current) => {
+                        const next = new Set(current);
+                        if (next.has(item.review.id)) next.delete(item.review.id);
+                        else next.add(item.review.id);
+                        return next;
+                      })
+                    }
+                  >
+                    <span>
+                      Review #{item.review.iteration} · {item.review.status}
+                    </span>
+                    <span className="eyebrow">
+                      {item.findings.length} findings · {openCount} open
+                    </span>
+                  </button>
+                  {expanded && (
+                    <div className="room-review-body">
+                      {item.findings.length === 0 && (
+                        <p className="meta-value">No findings — a clean review.</p>
+                      )}
+                      {item.findings.map((finding) => (
+                        <FindingRow
+                          key={finding.id}
+                          finding={finding}
+                          dismissing={acting.has(finding.id)}
+                          canWrite={canWrite}
+                          onDismiss={() => void decide(item.review.id, finding.id)}
+                        />
+                      ))}
+                      {item.review.status !== "approved" && (
+                        <div className="room-review-actions">
+                          <Button
+                            variant={specStatus === "review" ? "primary" : "ghost"}
+                            disabled={!canWrite || acting.has(item.review.id)}
+                            onClick={() => void decide(item.review.id)}
+                          >
+                            {acting.has(item.review.id) ? "Approving…" : "Approve review"}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </article>
+              </Fragment>
             );
           })}
         </div>
