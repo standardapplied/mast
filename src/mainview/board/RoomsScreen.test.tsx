@@ -48,7 +48,7 @@ describe("RoomsScreen", () => {
     );
     await act(async () => {});
     const toggle = container.querySelector<HTMLButtonElement>('[data-testid="details-toggle"]')!;
-    expect(toggle.textContent).toBe("Details");
+    expect(toggle.getAttribute("aria-label")).toBe("Details");
 
     act(() => toggle.click());
     await act(async () => {});
@@ -149,8 +149,8 @@ describe("RoomsScreen", () => {
     await act(async () => {});
     await act(async () => {});
 
-    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="Message this room"]')?.disabled)
-      .toBe(true);
+    expect(container.querySelector('[aria-label="Message this room"]')).toBeNull();
+    expect(container.querySelector(".room-readonly")?.textContent).toContain("read-only");
   });
 
   test("a room cancelled elsewhere keeps its pane but leaves the sidebar until archive is shown", async () => {

@@ -400,4 +400,59 @@ describe("SpecRoom", () => {
     expect(container.textContent).toContain("first day");
     expect(container.textContent).toContain("second day");
   });
+
+  test("the composer is a contained surface with an icon send and a terse hint", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+
+    const sendButton = container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!;
+    expect(sendButton).not.toBeNull();
+    expect(sendButton.textContent).toBe("");
+    expect(sendButton.disabled).toBe(true);
+    expect(container.querySelector(".room-composer-hint")?.textContent).toBe("⏎ to send");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Message this room"]',
+    )!;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    act(() => {
+      setter?.call(textarea, "hello");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.disabled).toBe(false);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+    await settle();
+    expect(fake.calls.posts).toEqual(["hello"]);
+  });
+
+  test("a done room replaces the composer with a read-only whisper", async () => {
+    const fake = makeGateway();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root.render(
+        <ToastProvider>
+          <SpecRoom
+            gateway={fake.gateway}
+            specId="s1"
+            specStatus="done"
+            canWrite={false}
+            currentUser="uday"
+            onOpenLog={() => {}}
+          />
+        </ToastProvider>,
+      ),
+    );
+    await settle();
+
+    expect(container.querySelector('[aria-label="Message this room"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Send"]')).toBeNull();
+    expect(container.querySelector(".room-readonly")?.textContent).toBe(
+      "This room is done — read-only.",
+    );
+  });
 });

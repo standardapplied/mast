@@ -27,7 +27,7 @@ import { Markdown } from "../markdown";
 import { DispatchDialog } from "./DispatchDialog";
 import { LiveLog } from "./LiveLog";
 import { SpecRoom } from "./SpecRoom";
-import { canLaunchAgents, STATUS_LABEL, statusLabel, statusTone } from "./lifecycle";
+import { canLaunchAgents, STATUS_LABEL, statusGuidance, statusLabel, statusTone } from "./lifecycle";
 import { mapStopOutcome, noRunningRunMessage, runningBuildRun } from "./stopRun";
 import { dependentsOf, logsElsewhere, unmetDependencies } from "./useBoard";
 
@@ -389,6 +389,7 @@ export function SpecDetail({
         title={spec.title}
         status={statusLabel(spec.status)}
         statusTone={statusTone(spec.status)}
+        guidance={statusGuidance(spec.status)}
         drawerOpen={drawerOpen}
         onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
         onBack={embedded ? undefined : onBack}
@@ -486,48 +487,6 @@ export function SpecDetail({
                 ))}
               </p>
             )}
-
-            <section className="room-drawer-section">
-              <div className="room-drawer-section-head">
-                <h3>Spec</h3>
-                {editing && (
-                  <div className="prop-actions">
-                    <Button onClick={() => void saveMeta()}>Save</Button>
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        setEditing(false);
-                        setDraft({});
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                )}
-              </div>
-              {editing ? (
-                <div className="md-editor" data-pane={editorPane}>
-                  <ToggleButton
-                    className="md-editor__tabs"
-                    options={EDITOR_PANES}
-                    value={editorPane}
-                    onChange={(v) => setEditorPane(v as "write" | "preview")}
-                  />
-                  <textarea
-                    className="md-editor__input"
-                    value={bodyDraft}
-                    spellCheck={false}
-                    onChange={(e) => setBodyDraft(e.target.value)}
-                    placeholder="Markdown…"
-                  />
-                  <div className="md-editor__preview">
-                    <Markdown source={bodyDraft || "*No body yet.*"} />
-                  </div>
-                </div>
-              ) : (
-                <Markdown source={loaded.body || "*No body yet.*"} />
-              )}
-            </section>
 
             <section className="room-drawer-section">
               <h3>Metadata</h3>
@@ -672,6 +631,48 @@ export function SpecDetail({
                 </div>
               </section>
             )}
+
+            <section className="room-drawer-section">
+              <div className="room-drawer-section-head">
+                <h3>Spec</h3>
+                {editing && (
+                  <div className="prop-actions">
+                    <Button onClick={() => void saveMeta()}>Save</Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setEditing(false);
+                        setDraft({});
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {editing ? (
+                <div className="md-editor" data-pane={editorPane}>
+                  <ToggleButton
+                    className="md-editor__tabs"
+                    options={EDITOR_PANES}
+                    value={editorPane}
+                    onChange={(v) => setEditorPane(v as "write" | "preview")}
+                  />
+                  <textarea
+                    className="md-editor__input"
+                    value={bodyDraft}
+                    spellCheck={false}
+                    onChange={(e) => setBodyDraft(e.target.value)}
+                    placeholder="Markdown…"
+                  />
+                  <div className="md-editor__preview">
+                    <Markdown source={bodyDraft || "*No body yet.*"} />
+                  </div>
+                </div>
+              ) : (
+                <Markdown source={loaded.body || "*No body yet.*"} />
+              )}
+            </section>
 
             <section className="room-drawer-section">
               <h3>History</h3>

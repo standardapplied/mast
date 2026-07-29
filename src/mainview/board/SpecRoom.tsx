@@ -15,8 +15,10 @@ import type {
   SailEvent,
 } from "../../shared/sail-models";
 import { Avatar } from "../components/Avatar";
+import { Send } from "../components/icons";
 import { LoadingMark } from "../components/Loading";
 import { Textarea } from "../components/Textarea";
+import { Tooltip } from "../components/Tooltip";
 import { useToast } from "../components/Toast";
 import { Badge, Button, type BadgeTone } from "../components/ui";
 import type { Gateway } from "../gateway";
@@ -715,22 +717,40 @@ export function SpecRoom({
           {tail.buffered.length} new
         </button>
       )}
-      <div className="room-composer">
+      {canWrite ? (
+        <div className="room-composer">
           <Textarea
             value={draft}
             maxLength={65_536}
             autoGrow
-            rows={2}
-            disabled={!canWrite}
-            placeholder={canWrite ? "Message this room…" : "You don’t have write access."}
+            rows={1}
+            placeholder="Message this room…"
             aria-label="Message this room"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onComposerKeyDown}
           />
-          <Button disabled={!canWrite || !draft.trim()} onClick={send}>
-            Send
-          </Button>
-      </div>
+          <div className="room-composer-row">
+            <span className="room-composer-hint">⏎ to send</span>
+            <Tooltip content="Send">
+              <button
+                type="button"
+                className="room-send"
+                aria-label="Send"
+                disabled={!draft.trim()}
+                onClick={send}
+              >
+                <Send size={16} />
+              </button>
+            </Tooltip>
+          </div>
+        </div>
+      ) : (
+        <p className="room-readonly">
+          {["done", "cancelled", "archived"].includes(specStatus ?? "")
+            ? `This room is ${specStatus} — read-only.`
+            : "You don’t have write access."}
+        </p>
+      )}
     </div>
   );
 }

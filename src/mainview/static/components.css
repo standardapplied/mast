@@ -2053,52 +2053,66 @@ span.checkbox {
   background: var(--background);
 }
 
-.room-row-copy {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
+.room-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--badge-dot, var(--subtle-foreground));
 }
 
-.room-row-title,
-.room-row-id {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.room-status-dot.tone-accent {
+  --badge-dot: var(--primary);
+}
+
+.room-status-dot.tone-warning {
+  --badge-dot: var(--warning);
+}
+
+.room-status-dot.tone-info {
+  --badge-dot: var(--info);
+}
+
+.room-status-dot.tone-success {
+  --badge-dot: var(--success);
+}
+
+.room-status-dot.tone-error {
+  --badge-dot: var(--error);
+}
+
+.room-status-dot.is-working {
+  animation: room-dot-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes room-dot-pulse {
+  50% {
+    opacity: 0.35;
+  }
 }
 
 .room-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
-  font-weight: 560;
+  color: var(--muted-foreground);
 }
 
-.room-row-id {
+.room-row-title.is-unread {
+  color: var(--foreground);
+  font-weight: 640;
+}
+
+.room-row-time {
+  flex: 0 0 auto;
   color: var(--subtle-foreground);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10px;
 }
 
-.room-row-signals {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 7px;
-  flex-shrink: 0;
-}
-
-.room-unread {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--info);
-}
-
-.room-working {
-  color: var(--success);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
 
 .room-archive-toggle {
   appearance: none;
@@ -2545,7 +2559,7 @@ span.checkbox {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 52px;
+  min-height: 56px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
@@ -2553,6 +2567,31 @@ span.checkbox {
 }
 
 .room-header-main,
+.room-header-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.room-header-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.room-header-guidance {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--subtle-foreground);
+  font-size: 12px;
+}
+
+.room-details-toggle {
+  padding: 6px 8px;
+  line-height: 0;
+}
+
 .room-header-actions {
   display: flex;
   align-items: center;
@@ -3353,12 +3392,67 @@ span.checkbox {
 
 .room-composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--background);
+  gap: 0;
+  margin: 10px 16px 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+
+.room-composer textarea {
+  max-height: 200px;
+  border: none;
+  background: transparent;
+  resize: none;
+}
+
+.room-composer textarea:focus {
+  outline: none;
+}
+
+.room-composer-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 4px 6px 6px 12px;
+}
+
+.room-composer-hint {
+  display: none;
+  margin-right: auto;
+  color: var(--subtle-foreground);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+@media (min-width: 1024px) {
+  .room-composer-hint {
+    display: inline;
+  }
+}
+
+.room-send {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: var(--primary);
+  color: var(--on-primary);
+  cursor: pointer;
+}
+
+.room-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.room-readonly {
+  margin: 12px 16px 14px;
+  color: var(--subtle-foreground);
+  font-size: 12px;
+  text-align: center;
 }
 
 @media (max-width: 640px) {
