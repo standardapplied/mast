@@ -45,6 +45,22 @@ export function statusTone(status: SpecStatus | string): BadgeTone {
   return STATUS_TONE[status as SpecStatus] ?? "neutral";
 }
 
+const STATUS_GUIDANCE: Record<SpecStatus, string> = {
+  draft: "Add details, then move to pending",
+  pending: "Ready — dispatch when you are",
+  in_progress: "An agent is on it",
+  review: "Review findings await a decision",
+  awaiting_merge: "Merge the branch to finish",
+  done: "Shipped",
+  cancelled: "Cancelled",
+  archived: "Archived",
+};
+
+/** One quiet sentence of what this status means for the human, sentence case. */
+export function statusGuidance(status: SpecStatus | string): string {
+  return STATUS_GUIDANCE[status as SpecStatus] ?? "";
+}
+
 /**
  * The UI's dispatch gate mirrors sail's route tier, not its resource policy:
  * any write credential may attempt a dispatch (members launch their own specs

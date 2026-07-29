@@ -131,6 +131,24 @@ export function Plus(props: IconProps) {
   );
 }
 
+export function Send(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M14 2L2 6.5l4.5 2L8.5 13 14 2z" />
+      <path d="M14 2L6.5 8.5" />
+    </svg>
+  );
+}
+
+export function PanelRight(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="2" y="3" width="12" height="10" />
+      <path d="M10 3v10" />
+    </svg>
+  );
+}
+
 export function Info(props: IconProps) {
   return (
     <svg {...base(props)}>

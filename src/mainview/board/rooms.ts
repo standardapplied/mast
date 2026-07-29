@@ -61,6 +61,7 @@ export function assembleRooms(
       const candidates = [
         spec.created_at,
         spec.updated_at,
+        spec.last_activity_at,
         eventActivity.get(spec.id),
       ].filter((value): value is string => Boolean(value));
       const activityAt = candidates.sort(
@@ -109,6 +110,24 @@ export function visitRoom(storage: StorageLike, room: RoomView): Record<string, 
 
 export function selectedRoom(storage: StorageLike, project: string): string | undefined {
   return storedMap(storage, ROOM_SELECTIONS_KEY)[project];
+}
+
+const RELATIVE_STEPS: [number, (elapsed: number) => string][] = [
+  [60_000, () => "now"],
+  [3_600_000, (elapsed) => `${Math.floor(elapsed / 60_000)}m`],
+  [86_400_000, (elapsed) => `${Math.floor(elapsed / 3_600_000)}h`],
+  [604_800_000, (elapsed) => `${Math.floor(elapsed / 86_400_000)}d`],
+];
+
+/** Compact relative time for sidebar rows; falls back to a short date past a week. */
+export function relativeTime(value: string, now: number): string {
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return "";
+  const elapsed = Math.max(0, now - parsed);
+  for (const [limit, render] of RELATIVE_STEPS) {
+    if (elapsed < limit) return render(elapsed);
+  }
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(parsed);
 }
 
 export function specIdFromTitle(title: string, existingIds: ReadonlySet<string>): string {

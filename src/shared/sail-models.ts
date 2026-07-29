@@ -31,6 +31,8 @@ export type GlobalSpecView = {
   created_at: string;
   updated_at: string;
   updated_by?: string;
+  /** max(updated_at, latest room message); absent on pre-0.17.2 servers. */
+  last_activity_at?: string;
 };
 
 export type SpecView = {

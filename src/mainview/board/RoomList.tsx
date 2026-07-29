@@ -3,9 +3,9 @@ import { Plus } from "../components/icons";
 import { Input } from "../components/Input";
 import { Select } from "../components/Select";
 import { Tooltip } from "../components/Tooltip";
-import { Badge, Button } from "../components/ui";
+import { Button } from "../components/ui";
 import { statusLabel, statusTone } from "./lifecycle";
-import type { RoomView } from "./rooms";
+import { relativeTime, type RoomView } from "./rooms";
 
 export function RoomList({
   rooms,
@@ -14,6 +14,7 @@ export function RoomList({
   selectedId,
   showArchive,
   creating,
+  now = Date.now(),
   workingIds = new Set(),
   onProject,
   onSelect,
@@ -26,6 +27,8 @@ export function RoomList({
   selectedId?: string;
   showArchive: boolean;
   creating: boolean;
+  /** Injected clock so rows render deterministic relative times in tests. */
+  now?: number;
   workingIds?: ReadonlySet<string>;
   onProject: (project: string) => void;
   onSelect: (room: RoomView) => void;
@@ -134,15 +137,18 @@ export function RoomList({
             data-testid={`room-${room.spec.id}`}
             aria-current={selectedId === room.spec.id ? "page" : undefined}
           >
-            <span className="room-row-copy">
-              <span className="room-row-title">{room.spec.title}</span>
-              <span className="room-row-id">{room.spec.id}</span>
+            <Tooltip content={statusLabel(room.spec.status)} side="right">
+              <span
+                className={`room-status-dot tone-${statusTone(room.spec.status)}${
+                  workingIds.has(room.spec.id) ? " is-working" : ""
+                }`}
+                aria-label={statusLabel(room.spec.status)}
+              />
+            </Tooltip>
+            <span className={`room-row-title${room.unread ? " is-unread" : ""}`}>
+              {room.spec.title}
             </span>
-            <span className="room-row-signals">
-              {workingIds.has(room.spec.id) && <span className="room-working">Working</span>}
-              {room.unread && <span className="room-unread" aria-label="Unread activity" />}
-              <Badge tone={statusTone(room.spec.status)}>{statusLabel(room.spec.status)}</Badge>
-            </span>
+            <time className="room-row-time">{relativeTime(room.activityAt, now)}</time>
           </button>
         ))}
       </div>

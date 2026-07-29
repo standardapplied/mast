@@ -9,6 +9,7 @@ import {
   assembleRooms,
   isRoomActivityEvent,
   readRoomWatermarks,
+  relativeTime,
   selectedRoom,
   specIdFromTitle,
   visibleRooms,
@@ -169,5 +170,29 @@ describe("new room ids", () => {
 
   test("rejects a title with no usable id", () => {
     expect(() => specIdFromTitle("✨", new Set())).toThrow("letter or number");
+  });
+});
+
+describe("relative time and server activity", () => {
+  test("relativeTime steps from now to short dates", () => {
+    const now = Date.parse("2026-07-29T12:00:00Z");
+    expect(relativeTime("2026-07-29T11:59:30Z", now)).toBe("now");
+    expect(relativeTime("2026-07-29T11:20:00Z", now)).toBe("40m");
+    expect(relativeTime("2026-07-29T03:00:00Z", now)).toBe("9h");
+    expect(relativeTime("2026-07-27T12:00:00Z", now)).toBe("2d");
+    expect(relativeTime("2026-07-01T00:00:00Z", now)).toMatch(/Jul/);
+    expect(relativeTime("garbage", now)).toBe("");
+  });
+
+  test("server last_activity_at outranks the bounded event window", () => {
+    const withServerActivity = {
+      ...spec("s1", "pending", "2026-01-01T00:00:00Z"),
+      updated_at: "2026-01-02T00:00:00Z",
+      last_activity_at: "2026-07-29T09:00:00Z",
+    };
+    const rooms = assembleRooms([withServerActivity], [], {});
+
+    expect(rooms[0]?.activityAt).toBe("2026-07-29T09:00:00Z");
+    expect(rooms[0]?.unread).toBe(true);
   });
 });

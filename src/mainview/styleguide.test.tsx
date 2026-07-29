@@ -32,7 +32,7 @@ describe("Styleguide", () => {
     render(fakeTheme());
     expect(container.querySelectorAll("code").length).toBeGreaterThanOrEqual(15);
     expect(container.querySelector("h1")?.textContent).toBe("Mast styleguide");
-    expect(container.querySelectorAll("h2").length).toBe(16);
+    expect(container.querySelectorAll("h2").length).toBe(15);
     expect(container.querySelector(".room-avatar.is-agent")).not.toBeNull();
     expect(container.querySelector(".room-header")).not.toBeNull();
     expect(container.querySelector(".room-details-drawer")).not.toBeNull();

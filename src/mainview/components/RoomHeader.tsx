@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
-import { CaretLeft } from "./icons";
+import { CaretLeft, PanelRight } from "./icons";
+import { Tooltip } from "./Tooltip";
 import { Badge, Button, type BadgeTone } from "./ui";
 
 export function RoomHeader({
   title,
   status,
   statusTone,
+  guidance,
   drawerOpen,
   onToggleDrawer,
   onBack,
@@ -15,6 +17,7 @@ export function RoomHeader({
   title: string;
   status: string;
   statusTone: BadgeTone;
+  guidance?: string;
   drawerOpen: boolean;
   onToggleDrawer: () => void;
   onBack?: () => void;
@@ -35,21 +38,30 @@ export function RoomHeader({
             <CaretLeft size={16} />
           </button>
         )}
-        <h1 className="room-header-title detail-title">{title}</h1>
-        <Badge tone={statusTone}>{status}</Badge>
+        <div className="room-header-copy">
+          <h1 className="room-header-title detail-title">{title}</h1>
+          <div className="room-header-status">
+            <Badge tone={statusTone}>{status}</Badge>
+            {guidance && <span className="room-header-guidance">{guidance}</span>}
+          </div>
+        </div>
       </div>
       <div className="room-header-actions detail-header-actions">
         {actions && <div className="room-header-inline-actions">{actions}</div>}
         {compactActions && <div className="room-header-compact-actions">{compactActions}</div>}
-        <Button
-          variant="ghost"
-          aria-expanded={drawerOpen}
-          aria-controls="room-details-drawer"
-          onClick={onToggleDrawer}
-          data-testid="details-toggle"
-        >
-          {drawerOpen ? "Hide details" : "Details"}
-        </Button>
+        <Tooltip content={drawerOpen ? "Hide details" : "Details"}>
+          <Button
+            variant="ghost"
+            className="room-details-toggle"
+            aria-label={drawerOpen ? "Hide details" : "Details"}
+            aria-expanded={drawerOpen}
+            aria-controls="room-details-drawer"
+            onClick={onToggleDrawer}
+            data-testid="details-toggle"
+          >
+            <PanelRight size={16} />
+          </Button>
+        </Tooltip>
       </div>
     </header>
   );

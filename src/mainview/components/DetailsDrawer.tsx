@@ -45,7 +45,6 @@ export function DetailsDrawer({
         aria-label="Spec details"
       >
         <div className="room-drawer-head">
-          <h2>Details</h2>
           <button
             type="button"
             className="room-drawer-close"
