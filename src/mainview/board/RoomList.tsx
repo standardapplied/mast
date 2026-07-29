@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Plus } from "../components/icons";
 import { Input } from "../components/Input";
 import { Select } from "../components/Select";
-import { Badge, Button, Eyebrow } from "../components/ui";
+import { Tooltip } from "../components/Tooltip";
+import { Badge, Button } from "../components/ui";
 import { statusLabel, statusTone } from "./lifecycle";
 import type { RoomView } from "./rooms";
 
@@ -54,24 +56,27 @@ export function RoomList({
   return (
     <aside className="room-list">
       <div className="room-list-head">
-        <div>
-          <Eyebrow>Spec rooms</Eyebrow>
-          <h1>Rooms</h1>
-        </div>
-        <Button onClick={() => setNewRoom(true)} disabled={newRoom}>
-          New room
-        </Button>
+        {projects.length > 0 && (
+          <Select
+            className="room-project"
+            value={project}
+            options={projects.map((name) => ({ value: name, label: name }))}
+            onChange={onProject}
+            placeholder="Project"
+          />
+        )}
+        <Tooltip content="New room">
+          <Button
+            variant="ghost"
+            className="room-new-button"
+            aria-label="New room"
+            onClick={() => setNewRoom(true)}
+            disabled={newRoom}
+          >
+            <Plus size={16} />
+          </Button>
+        </Tooltip>
       </div>
-
-      {projects.length > 0 && (
-        <Select
-          className="room-project"
-          value={project}
-          options={projects.map((name) => ({ value: name, label: name }))}
-          onChange={onProject}
-          placeholder="Project"
-        />
-      )}
 
       {newRoom && (
         <form className="room-new" onSubmit={(event) => void submit(event)}>
@@ -147,7 +152,7 @@ export function RoomList({
         className="room-archive-toggle"
         onClick={() => onShowArchive(!showArchive)}
       >
-        {showArchive ? "Hide archive" : "Show done & cancelled"}
+        {showArchive ? "Hide archive" : "Show archive"}
       </button>
     </aside>
   );

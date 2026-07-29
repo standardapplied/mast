@@ -7,7 +7,6 @@ import type { Gateway } from "../gateway";
 import { RoomList } from "./RoomList";
 import { SpecDetail } from "./SpecDetail";
 import {
-  isArchivedRoom,
   selectedRoom,
   visibleRooms,
   type RoomView,
@@ -57,15 +56,16 @@ export function RoomsScreen({
   useEffect(() => {
     const current = projectRooms.find((room) => room.spec.id === selectedId);
     if (current) {
-      if (isArchivedRoom(current.spec.status)) setShowArchive(true);
       if (current.unread) open(current);
       return;
     }
+    // Remembered selections are honored only within the active filter — a room
+    // that has since been archived must not drag the archive into view.
     const remembered = selectedRoom(storage, project);
-    const next = projectRooms.find((room) => room.spec.id === remembered) ?? projectRooms[0];
+    const next = shownRooms.find((room) => room.spec.id === remembered) ?? shownRooms[0];
     setSelectedId(next?.spec.id);
     if (next) open(next);
-  }, [open, project, projectRooms, selectedId, storage]);
+  }, [open, project, projectRooms, selectedId, shownRooms, storage]);
 
   const select = (room: RoomView) => {
     setSelectedId(room.spec.id);

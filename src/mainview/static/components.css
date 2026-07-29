@@ -1991,20 +1991,21 @@ span.checkbox {
 
 .room-list-head {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 18px 16px 14px;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 10px;
   border-bottom: 1px solid var(--border);
 }
 
-.room-list-head h1 {
-  margin-top: 2px;
-  font-size: 24px;
+.room-list-head .room-project {
+  flex: 1;
+  min-width: 0;
 }
 
-.room-project {
-  margin: 12px 12px 0;
+.room-new-button {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  line-height: 0;
 }
 
 .room-new {

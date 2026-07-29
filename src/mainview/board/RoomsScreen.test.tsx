@@ -75,9 +75,7 @@ describe("RoomsScreen", () => {
   test("creates a draft room from only a title and opens it", async () => {
     const gateway = await render();
     act(() => {
-      [...container.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent === "New room")
-        ?.click();
+      container.querySelector<HTMLButtonElement>('[aria-label="New room"]')?.click();
     });
     const input = container.querySelector<HTMLInputElement>('[aria-label="Room title"]')!;
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
@@ -108,7 +106,7 @@ describe("RoomsScreen", () => {
     await render();
     act(() => {
       [...container.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent === "Show done & cancelled")
+        .find((button) => button.textContent === "Show archive")
         ?.click();
     });
     const done = container.querySelector<HTMLButtonElement>('[data-testid="room-chorus-onboarding"]');
@@ -121,7 +119,7 @@ describe("RoomsScreen", () => {
       .toBe(true);
   });
 
-  test("a room cancelled elsewhere stays selected and moves into the revealed archive", async () => {
+  test("a room cancelled elsewhere keeps its pane but leaves the sidebar until archive is shown", async () => {
     const gateway = await render();
     const room = container.querySelector<HTMLButtonElement>(
       '[data-testid="room-chorus-billing-export"]',
@@ -135,14 +133,19 @@ describe("RoomsScreen", () => {
     await act(async () => {});
     await act(async () => {});
 
+    expect(container.querySelector('[data-testid="room-chorus-billing-export"]')).toBeNull();
+    expect(container.querySelector(".room-archive-toggle")?.textContent).toBe("Show archive");
+    expect(container.querySelector(".detail-header-actions")?.textContent).toContain("Cancelled");
+    expect(container.querySelector(".room-system-row")?.textContent).toContain(
+      "Status changed to cancelled",
+    );
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>(".room-archive-toggle")?.click();
+    });
     expect(
       container.querySelector('[data-testid="room-chorus-billing-export"]')?.classList
         .contains("is-selected"),
     ).toBe(true);
-    expect(container.querySelector(".detail-header-actions")?.textContent).toContain("Cancelled");
-    expect(container.querySelector(".room-archive-toggle")?.textContent).toBe("Hide archive");
-    expect(container.querySelector(".room-system-row")?.textContent).toContain(
-      "Status changed to cancelled",
-    );
   });
 });
