@@ -90,6 +90,14 @@ export const SECTION_LABELS: Record<RoomSection, string> = {
   archive: "Archive",
 };
 
+/** Section marks speak the badge's tone vocabulary — same squares, same tokens. */
+export const SECTION_TONES: Record<RoomSection, string> = {
+  inflight: "accent",
+  ready: "info",
+  drafts: "neutral",
+  archive: "success",
+};
+
 const SECTION_ORDER: RoomSection[] = ["inflight", "ready", "drafts", "archive"];
 
 /** Unknown statuses from a newer sail are treated as active work, never silently hidden. */

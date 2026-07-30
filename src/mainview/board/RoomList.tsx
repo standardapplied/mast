@@ -4,7 +4,7 @@ import { Input } from "../components/Input";
 import { Select } from "../components/Select";
 import { Tooltip } from "../components/Tooltip";
 import { Button } from "../components/ui";
-import { relativeTime, SECTION_LABELS, sectionRooms, type RoomView } from "./rooms";
+import { relativeTime, SECTION_LABELS, SECTION_TONES, sectionRooms, type RoomView } from "./rooms";
 
 export function RoomList({
   rooms,
@@ -138,11 +138,15 @@ export function RoomList({
                 onClick={() => onShowArchive(!showArchive)}
               >
                 {showArchive ? <CaretDown size={12} /> : <CaretRight size={12} />}
+                <span className={`room-section-mark tone-${SECTION_TONES.archive}`} />
                 <span>{SECTION_LABELS.archive}</span>
                 <span className="room-section-count">{grouped.length}</span>
               </button>
             ) : (
-              <div className="room-section-head">{SECTION_LABELS[section]}</div>
+              <div className="room-section-head">
+                <span className={`room-section-mark tone-${SECTION_TONES[section]}`} />
+                {SECTION_LABELS[section]}
+              </div>
             )}
             {(section !== "archive" || showArchive) &&
               grouped.map((room) => (
