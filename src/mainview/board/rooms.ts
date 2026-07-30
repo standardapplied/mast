@@ -81,6 +81,45 @@ export function assembleRooms(
     );
 }
 
+export type RoomSection = "inflight" | "ready" | "drafts" | "archive";
+
+export const SECTION_LABELS: Record<RoomSection, string> = {
+  inflight: "In flight",
+  ready: "Ready",
+  drafts: "Drafts",
+  archive: "Archive",
+};
+
+const SECTION_ORDER: RoomSection[] = ["inflight", "ready", "drafts", "archive"];
+
+/** Unknown statuses from a newer sail are treated as active work, never silently hidden. */
+export function sectionOf(status: SpecStatus | string): RoomSection {
+  if (ARCHIVE_STATUSES.has(status as SpecStatus)) return "archive";
+  if (status === "draft") return "drafts";
+  if (status === "pending") return "ready";
+  return "inflight";
+}
+
+export type SectionedRooms = { section: RoomSection; rooms: RoomView[] };
+
+/**
+ * Rooms grouped for the sidebar: lifecycle sections in fixed order, activity order
+ * preserved within each. Empty sections vanish — except the archive, which always
+ * anchors the bottom as the collapsible history of the project.
+ */
+export function sectionRooms(rooms: readonly RoomView[]): SectionedRooms[] {
+  const buckets = new Map<RoomSection, RoomView[]>(
+    SECTION_ORDER.map((section) => [section, []]),
+  );
+  for (const room of rooms) {
+    buckets.get(sectionOf(room.spec.status))!.push(room);
+  }
+  return SECTION_ORDER.flatMap((section) => {
+    const bucket = buckets.get(section)!;
+    return bucket.length > 0 || section === "archive" ? [{ section, rooms: bucket }] : [];
+  });
+}
+
 export function visibleRooms(rooms: readonly RoomView[], showArchive: boolean): RoomView[] {
   return rooms.filter((room) => showArchive || !ARCHIVE_STATUSES.has(room.spec.status));
 }

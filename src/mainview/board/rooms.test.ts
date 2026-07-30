@@ -10,6 +10,7 @@ import {
   isRoomActivityEvent,
   readRoomWatermarks,
   relativeTime,
+  sectionRooms,
   selectedRoom,
   specIdFromTitle,
   visibleRooms,
@@ -194,5 +195,38 @@ describe("relative time and server activity", () => {
 
     expect(rooms[0]?.activityAt).toBe("2026-07-29T09:00:00Z");
     expect(rooms[0]?.unread).toBe(true);
+  });
+});
+
+describe("sidebar sections", () => {
+  test("groups rooms into lifecycle sections preserving activity order", () => {
+    const rooms = assembleRooms(
+      [
+        spec("building", "in_progress"),
+        spec("reviewing", "review"),
+        spec("merging", "awaiting_merge"),
+        spec("queued", "pending"),
+        spec("sketch", "draft"),
+        spec("shipped", "done"),
+        spec("dropped", "cancelled"),
+        spec("mystery", "someday_new_status" as never),
+      ],
+      [],
+      {},
+    );
+
+    const sections = sectionRooms(rooms);
+    const byId = Object.fromEntries(
+      sections.map((section) => [section.section, section.rooms.map((room) => room.spec.id)]),
+    );
+    expect(byId["inflight"]).toEqual(["building", "merging", "mystery", "reviewing"]);
+    expect(byId["ready"]).toEqual(["queued"]);
+    expect(byId["drafts"]).toEqual(["sketch"]);
+    expect(byId["archive"]).toEqual(["dropped", "shipped"]);
+  });
+
+  test("empty sections are omitted except the archive anchor", () => {
+    const sections = sectionRooms(assembleRooms([spec("sketch", "draft")], [], {}));
+    expect(sections.map((section) => section.section)).toEqual(["drafts", "archive"]);
   });
 });
