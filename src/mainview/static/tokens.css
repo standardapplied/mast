@@ -107,6 +107,7 @@
   --font-sans: "Switzer", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
   --radius: 0;
+  --control-height: 34px;
   --tracking-display: -0.012em;
   --tracking-eyebrow: 0.2em;
   --shadow: none;

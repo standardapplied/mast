@@ -28,6 +28,7 @@ beforeEach(() => {
   localStorage.removeItem("mast.rooms.watermarks");
   localStorage.removeItem("mast.rooms.selections");
   localStorage.removeItem("mast.rooms.sidebar.width");
+  localStorage.removeItem("mast.rooms.archive.open");
   localStorage.removeItem("mast.room.details.rooms.open");
   localStorage.removeItem("mast.room.details.board.open");
   localStorage.removeItem("mast.room.details.width");
@@ -139,9 +140,7 @@ describe("RoomsScreen", () => {
   test("archive toggle reveals done rooms and their composer is read-only", async () => {
     await render();
     act(() => {
-      [...container.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent === "Show archive")
-        ?.click();
+      container.querySelector<HTMLButtonElement>('[data-testid="archive-section"]')?.click();
     });
     const done = container.querySelector<HTMLButtonElement>('[data-testid="room-chorus-onboarding"]');
     expect(done).not.toBeNull();
@@ -168,14 +167,18 @@ describe("RoomsScreen", () => {
     await act(async () => {});
 
     expect(container.querySelector('[data-testid="room-chorus-billing-export"]')).toBeNull();
-    expect(container.querySelector(".room-archive-toggle")?.textContent).toBe("Show archive");
+    expect(
+      container
+        .querySelector('[data-testid="archive-section"]')
+        ?.getAttribute("aria-expanded"),
+    ).toBe("false");
     expect(container.querySelector(".room-header")?.textContent).toContain("Cancelled");
     expect(container.querySelector(".room-system-row")?.textContent).toContain(
       "status changed to cancelled",
     );
 
     act(() => {
-      container.querySelector<HTMLButtonElement>(".room-archive-toggle")?.click();
+      container.querySelector<HTMLButtonElement>('[data-testid="archive-section"]')?.click();
     });
     expect(
       container.querySelector('[data-testid="room-chorus-billing-export"]')?.classList

@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Plus } from "../components/icons";
+import { CaretDown, CaretRight, Plus } from "../components/icons";
 import { Input } from "../components/Input";
 import { Select } from "../components/Select";
 import { Tooltip } from "../components/Tooltip";
 import { Button } from "../components/ui";
-import { statusLabel, statusTone } from "./lifecycle";
-import { relativeTime, type RoomView } from "./rooms";
+import { relativeTime, SECTION_LABELS, sectionRooms, type RoomView } from "./rooms";
 
 export function RoomList({
   rooms,
@@ -71,7 +70,7 @@ export function RoomList({
         <Tooltip content="New room">
           <Button
             variant="ghost"
-            className="room-new-button"
+            icon
             aria-label="New room"
             onClick={() => setNewRoom(true)}
             disabled={newRoom}
@@ -128,38 +127,45 @@ export function RoomList({
       )}
 
       <div className="room-list-scroll">
-        {rooms.map((room) => (
-          <button
-            type="button"
-            key={room.spec.id}
-            className={`room-row${selectedId === room.spec.id ? " is-selected" : ""}`}
-            onClick={() => onSelect(room)}
-            data-testid={`room-${room.spec.id}`}
-            aria-current={selectedId === room.spec.id ? "page" : undefined}
-          >
-            <Tooltip content={statusLabel(room.spec.status)} side="right">
-              <span
-                className={`room-status-dot tone-${statusTone(room.spec.status)}${
-                  workingIds.has(room.spec.id) ? " is-working" : ""
-                }`}
-                aria-label={statusLabel(room.spec.status)}
-              />
-            </Tooltip>
-            <span className={`room-row-title${room.unread ? " is-unread" : ""}`}>
-              {room.spec.title}
-            </span>
-            <time className="room-row-time">{relativeTime(room.activityAt, now)}</time>
-          </button>
+        {sectionRooms(rooms).map(({ section, rooms: grouped }) => (
+          <div key={section} className="room-section">
+            {section === "archive" ? (
+              <button
+                type="button"
+                className="room-section-head is-disclosure"
+                aria-expanded={showArchive}
+                data-testid="archive-section"
+                onClick={() => onShowArchive(!showArchive)}
+              >
+                {showArchive ? <CaretDown size={12} /> : <CaretRight size={12} />}
+                <span>{SECTION_LABELS.archive}</span>
+                <span className="room-section-count">{grouped.length}</span>
+              </button>
+            ) : (
+              <div className="room-section-head">{SECTION_LABELS[section]}</div>
+            )}
+            {(section !== "archive" || showArchive) &&
+              grouped.map((room) => (
+                <button
+                  type="button"
+                  key={room.spec.id}
+                  className={`room-row${selectedId === room.spec.id ? " is-selected" : ""}`}
+                  onClick={() => onSelect(room)}
+                  data-testid={`room-${room.spec.id}`}
+                  aria-current={selectedId === room.spec.id ? "page" : undefined}
+                >
+                  <span className={`room-row-title${room.unread ? " is-unread" : ""}`}>
+                    {room.spec.title}
+                  </span>
+                  {workingIds.has(room.spec.id) && (
+                    <span className="room-working-dot" aria-label="Agent working" />
+                  )}
+                  <time className="room-row-time">{relativeTime(room.activityAt, now)}</time>
+                </button>
+              ))}
+          </div>
         ))}
       </div>
-
-      <button
-        type="button"
-        className="room-archive-toggle"
-        onClick={() => onShowArchive(!showArchive)}
-      >
-        {showArchive ? "Hide archive" : "Show archive"}
-      </button>
     </aside>
   );
 }

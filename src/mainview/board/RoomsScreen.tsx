@@ -15,6 +15,7 @@ import {
 import { useRooms } from "./useRooms";
 
 const SIDEBAR_KEY = "mast.rooms.sidebar.width";
+const ARCHIVE_KEY = "mast.rooms.archive.open";
 
 function storedWidth(storage: StorageLike): number {
   const parsed = Number(storage.getItem(SIDEBAR_KEY));
@@ -31,7 +32,7 @@ export function RoomsScreen({
   const { data, open, create } = useRooms(gateway, storage);
   const [project, setProject] = useState("");
   const [selectedId, setSelectedId] = useState<string>();
-  const [showArchive, setShowArchive] = useState(false);
+  const [showArchive, setShowArchive] = useState(() => storage.getItem(ARCHIVE_KEY) === "true");
   const [creating, setCreating] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => storedWidth(storage));
   const { showToast } = useToast();
@@ -51,7 +52,10 @@ export function RoomsScreen({
     () => data.rooms.filter((room) => room.spec.project === project),
     [data.rooms, project],
   );
-  const shownRooms = visibleRooms(projectRooms, showArchive);
+  const shownRooms = useMemo(
+    () => visibleRooms(projectRooms, showArchive),
+    [projectRooms, showArchive],
+  );
 
   useEffect(() => {
     const current = projectRooms.find((room) => room.spec.id === selectedId);
@@ -92,7 +96,7 @@ export function RoomsScreen({
     <div className="rooms">
       <div className="rooms-sidebar" style={{ width: sidebarWidth }}>
         <RoomList
-          rooms={shownRooms}
+          rooms={projectRooms}
           projects={data.projects}
           project={project}
           selectedId={selectedId}
@@ -103,7 +107,10 @@ export function RoomsScreen({
             setSelectedId(undefined);
           }}
           onSelect={select}
-          onShowArchive={setShowArchive}
+          onShowArchive={(open) => {
+            setShowArchive(open);
+            storage.setItem(ARCHIVE_KEY, String(open));
+          }}
           onCreate={createRoom}
         />
       </div>

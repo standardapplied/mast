@@ -19,6 +19,7 @@ beforeEach(() => {
   localStorage.removeItem("mast.board.lanes");
   localStorage.removeItem("mast.rooms.watermarks");
   localStorage.removeItem("mast.rooms.selections");
+  localStorage.removeItem("mast.rooms.archive.open");
 });
 
 async function render(

@@ -7,13 +7,20 @@ export function Eyebrow({ children }: { children: ReactNode }) {
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "ghost";
+  /** Square icon-only button: same control height as every text button and select. */
+  icon?: boolean;
 };
 
-export function Button({ variant = "primary", className, ...rest }: ButtonProps) {
+export function Button({ variant = "primary", icon = false, className, ...rest }: ButtonProps) {
   return (
     <button
       type="button"
-      className={cx("btn", variant === "primary" ? "btn-primary" : "btn-ghost", className)}
+      className={cx(
+        "btn",
+        variant === "primary" ? "btn-primary" : "btn-ghost",
+        icon && "btn-icon",
+        className,
+      )}
       {...rest}
     />
   );

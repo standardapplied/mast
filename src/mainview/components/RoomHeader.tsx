@@ -52,7 +52,7 @@ export function RoomHeader({
         <Tooltip content={drawerOpen ? "Hide details" : "Details"}>
           <Button
             variant="ghost"
-            className="room-details-toggle"
+            icon
             aria-label={drawerOpen ? "Hide details" : "Details"}
             aria-expanded={drawerOpen}
             aria-controls="room-details-drawer"
