@@ -70,9 +70,6 @@ control-plane REST API, `stream_open` for SSE tails, `fs_*` for the workbench ov
 `terminal_*` for interactive shells. Terminal rendering is
 [ghostty-web](https://www.npmjs.com/package/ghostty-web).
 
-`src/bun/` and `electrobun.config.ts` are the earlier Electrobun shell, kept in the tree
-with their unit tests. The app that ships is the Tauri one.
-
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ConnectionStatus, WhoAmI } from "../shared/sail-models";
-import type { BridgeStatus } from "../shared/types";
 import { BoardScreen } from "./board/BoardScreen";
 import { RoomsScreen } from "./board/RoomsScreen";
 import { SpecDetail } from "./board/SpecDetail";
@@ -89,12 +88,11 @@ export function App({
 }: {
   gateway: Gateway;
   theme: ThemeController;
-  /** The terminal section, injected by the Tauri entry (absent on Electrobun/demo). */
+  /** The terminal section, injected by the Tauri entry (absent in demo/tests). */
   terminal?: ReactNode;
   /** Auto-updater, injected by the Tauri entry (absent on demo/tests). */
   updater?: Updater;
 }) {
-  const [bridge, setBridge] = useState<BridgeStatus>("connected");
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [everReady, setEverReady] = useState(false);
   const [specId, setSpecId] = useState<string | null>(specIdFromHash(location.hash));
@@ -107,7 +105,6 @@ export function App({
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [identity, setIdentity] = useState<WhoAmI | null>(null);
 
-  useEffect(() => onPush("bridge-status", ({ status: s }) => setBridge(s)), []);
   useEffect(
     () =>
       gateway.onConnectionStatus((next) => {
@@ -212,16 +209,16 @@ export function App({
   return (
     <ToastProvider>
       <div className="cockpit">
-        <header className="toolbar cockpit-toolbar electrobun-webkit-app-region-drag">
+        <header className="toolbar cockpit-toolbar">
           <button
             type="button"
-            className="cockpit-brand electrobun-webkit-app-region-no-drag"
+            className="cockpit-brand"
             onClick={goRooms}
           >
             <Logo size={20} />
             <span className="cockpit-wordmark">Mast</span>
           </button>
-          <span className="cockpit-nav electrobun-webkit-app-region-no-drag">
+          <span className="cockpit-nav">
             <ToggleButton
               options={terminal ? NAV_OPTIONS : NAV_OPTIONS.slice(0, 2)}
               value={view}
@@ -236,12 +233,7 @@ export function App({
           <span className="stream-pill" data-state={pillView.state} title={status?.detail ?? "Connection"}>
             {pillView.label}
           </span>
-          {bridge !== "connected" && (
-            <span className="stream-pill" data-state="reconnecting" data-testid="bridge-status">
-              {bridge === "reconnecting" ? "Recovering…" : "Unresponsive"}
-            </span>
-          )}
-          <span className="electrobun-webkit-app-region-no-drag">
+          <span>
             <UserMenu
               theme={theme}
               tokenKind={status?.tokenKind}

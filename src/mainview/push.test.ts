@@ -5,18 +5,18 @@ describe("push re-dispatch", () => {
   test("dispatchPush emits an rpc:* CustomEvent carrying the payload", () => {
     let detail: unknown;
     const listener = (e: Event) => (detail = (e as CustomEvent).detail);
-    window.addEventListener("rpc:bridge-status", listener);
-    dispatchPush("bridge-status", { status: "reconnecting" });
-    window.removeEventListener("rpc:bridge-status", listener);
-    expect(detail).toEqual({ status: "reconnecting" });
+    window.addEventListener("rpc:update-status", listener);
+    dispatchPush("update-status", { status: "downloading", message: "42%" });
+    window.removeEventListener("rpc:update-status", listener);
+    expect(detail).toEqual({ status: "downloading", message: "42%" });
   });
 
   test("onPush subscribes, then the returned fn unsubscribes", () => {
     const seen: string[] = [];
-    const off = onPush("bridge-status", (p) => seen.push(p.status));
-    dispatchPush("bridge-status", { status: "connected" });
+    const off = onPush("update-status", (p) => seen.push(p.status));
+    dispatchPush("update-status", { status: "checking", message: "" });
     off();
-    dispatchPush("bridge-status", { status: "disconnected" });
-    expect(seen).toEqual(["connected"]);
+    dispatchPush("update-status", { status: "ready", message: "" });
+    expect(seen).toEqual(["checking"]);
   });
 });

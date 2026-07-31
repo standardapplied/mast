@@ -1,9 +1,8 @@
-# Mast — Tauri backend (spike)
+# Mast — Tauri backend
 
-The Rust core of the Tauri build. The webview is the same React app as the
-Electrobun build; this crate replaces the Bun main process with a Rust one that
-owns an in-process SSH session (russh) to the devbox — the piece that lets Mast
-run on iOS/Android, where a spawned `ssh` binary cannot.
+The Rust core. It owns an in-process SSH session (russh) to the devbox, which is
+the piece that lets Mast run on iOS/Android, where a spawned `ssh` binary
+cannot.
 
 ## Layout
 

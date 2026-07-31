@@ -395,17 +395,6 @@ describe("App cockpit", () => {
     );
   });
 
-  test("bridge state stays invisible until degraded", async () => {
-    await render();
-    expect(container.querySelector('[data-testid="bridge-status"]')).toBeNull();
-
-    act(() => dispatchPush("bridge-status", { status: "reconnecting" }));
-    expect(container.querySelector('[data-testid="bridge-status"]')?.textContent).toBe("Recovering…");
-
-    act(() => dispatchPush("bridge-status", { status: "connected" }));
-    expect(container.querySelector('[data-testid="bridge-status"]')).toBeNull();
-  });
-
   test("the filter menu hides lanes via the multi-select, persists, guards the last lane", async () => {
     await render();
     expect(container.querySelectorAll(".kanban-column").length).toBe(7);

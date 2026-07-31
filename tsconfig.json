@@ -16,5 +16,5 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "test", "types", "electrobun.config.ts"]
+  "include": ["src", "test"]
 }

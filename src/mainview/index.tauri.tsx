@@ -10,9 +10,9 @@ import { createTauriUpdater } from "./tauri/updater";
 import { browserThemeDeps, createThemeController } from "./theme";
 
 /**
- * Tauri webview entry. Same React app as the Electrobun build, but backed by
- * the Rust `invoke` gateway (SSH stack in-process) instead of the Bun bridge.
- * No `electrobun/*` import — this bundle is transport-clean for iOS/Android.
+ * The webview entry: the React app backed by the Rust `invoke` gateway, which
+ * runs the SSH stack in-process. Transport lives behind `./tauri/`, so this
+ * bundle stays portable to iOS/Android.
  */
 
 document.documentElement.classList.add("in-shell");

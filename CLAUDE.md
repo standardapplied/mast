@@ -22,15 +22,13 @@ dependencies on either side without explicit approval.
 - Never attribute commits, PRs, or any git artifact to Claude/AI: no
   `Co-Authored-By: Claude ...` trailers, no `🤖 Generated with Claude Code` footers, no
   assistant mentions. Messages read as if the author wrote them.
-- Modules imported by tests must not import a native bridge at load: `@tauri-apps/*` needs
-  the IPC host, and `electrobun/bun` dlopens native libs. Keep pure logic in bridge-free
-  modules and inject the side effects. The transport lives behind
-  `src/mainview/tauri/`, and `index.tauri.tsx` is the only place that wires it up.
+- Modules imported by tests must not import `@tauri-apps/*` at load: it needs the IPC host,
+  which does not exist under `bun test`. Keep pure logic in transport-free modules and
+  inject the side effects. The transport lives behind `src/mainview/tauri/`, and
+  `index.tauri.tsx` is the only place that wires it up.
 - No sleeps/waits in tests. Drive async paths with callbacks and injected timers.
 - `tauri dev`/`tauri build` run only on macOS. CI (`macos-15`) is the verification path for
   the app bundle. Everything else must pass locally with `bun test` and `bun run typecheck`.
-- `src/bun/` and `electrobun.config.ts` are the earlier Electrobun shell, still carrying
-  unit tests that `bun test` runs. Nothing there ships. Do not build new features on it.
 
 ## Releasing
 

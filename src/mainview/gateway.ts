@@ -32,8 +32,6 @@ import type {
   WhoAmI,
 } from "../shared/sail-models";
 import type { SailResult } from "../shared/types";
-import { onPush } from "./push";
-import type { Bridge } from "./rpc";
 import type { AgentLogLine, AgentLogState } from "./tauri/agentLogStream";
 
 /**
@@ -50,10 +48,10 @@ export type AgentLogHandle = {
 };
 
 /**
- * The webview's seam to the control plane. The real app talks over the
- * Electrobun RPC bridge; the browser dev preview and tests use the demo
- * gateway (seeded in-memory data with the same conflict semantics), so the
- * whole board is drivable without a native shell or a live server.
+ * The webview's seam to the control plane. The app is backed by the Tauri
+ * gateway; the browser dev preview and tests use the demo gateway (seeded
+ * in-memory data with the same conflict semantics), so the whole board is
+ * drivable without a native shell or a live server.
  */
 export type Gateway = {
   listSpecs(filter?: SpecFilter): Promise<SailResult<GlobalSpecsListResponse>>;
@@ -116,88 +114,6 @@ export type Gateway = {
   onEvent(listener: (event: SailEvent) => void): () => void;
   onConnectionStatus(listener: (status: ConnectionStatus) => void): () => void;
 };
-
-/**
- * The Electrobun RPC bridge (webview↔Bun socket) can drop or time out a
- * response under load even when the HTTP call behind it succeeded — a
- * transient status-0 that is NOT a real network failure. Retry reads a couple
- * of times with a short backoff so a bridge blip self-heals instead of
- * surfacing as a spurious "can't reach the control plane". Writes are not
- * retried here (the caller owns idempotency and conflict handling).
- */
-export type RetrySleep = (ms: number) => Promise<void>;
-
-const realSleep: RetrySleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function retryRead<T>(
-  call: () => Promise<SailResult<T>>,
-  sleep: RetrySleep,
-  attempts = 3,
-): Promise<SailResult<T>> {
-  for (let attempt = 1; ; attempt++) {
-    let result: SailResult<T>;
-    try {
-      result = await call();
-    } catch (error) {
-      if (attempt >= attempts) {
-        return { ok: false, error: { status: 0, code: "bridge", message: String(error) } };
-      }
-      await sleep(150 * attempt);
-      continue;
-    }
-    if (result.ok || result.error.status !== 0 || attempt >= attempts) return result;
-    await sleep(150 * attempt);
-  }
-}
-
-function unsupported<T>(message: string): Promise<SailResult<T>> {
-  return Promise.resolve({ ok: false, error: { status: 0, code: "unsupported", message } });
-}
-
-function inertAgentLogHandle(): AgentLogHandle {
-  return { onLine: () => () => {}, onState: () => () => {}, onError: () => () => {}, stop: () => {} };
-}
-
-export function createRpcGateway(bridge: Bridge, sleep: RetrySleep = realSleep): Gateway {
-  const api = bridge.api;
-  const read = <T>(call: () => Promise<SailResult<T>>) => retryRead(call, sleep);
-  return {
-    listSpecs: (filter) => read(() => api.sailListSpecs(filter ?? {})),
-    board: (project) => read(() => api.sailBoard({ project })),
-    getSpec: (id) => read(() => api.sailGetSpec({ id })),
-    createSpec: (request) => api.sailCreateSpec(request),
-    getSpecContent: (id) => read(() => api.sailGetSpecContent({ id })),
-    putSpecContent: (id, content, ifMatch) => api.sailPutSpecContent({ id, content, ifMatch }),
-    updateSpec: (id, request, ifMatch) => api.sailUpdateSpec({ id, request, ifMatch }),
-    specHistory: (id) => read(() => api.sailSpecHistory({ id })),
-    restoreSpec: (id, rev) => api.sailRestoreSpec({ id, rev }),
-    specReviews: (id) => read(() => api.sailSpecReviews({ id })),
-    listSpecMessages: (id, before, limit) =>
-      read(() => api.sailListSpecMessages({ id, before, limit })),
-    postSpecMessage: (id, request) => api.sailPostSpecMessage({ id, request }),
-    reviewDetail: (reviewId) => read(() => api.sailGetReview({ reviewId })),
-    approveReview: (reviewId) => api.sailApproveReview({ reviewId }),
-    dismissFinding: (reviewId, findingId) =>
-      api.sailDismissFinding({ reviewId, findingId }),
-    recentEvents: (limit) => read(() => api.sailRecentEvents({ limit })),
-    dispatch: (project, request) => api.sailDispatch({ project, request }),
-    whoami: () => api.sailWhoami(),
-    // Agent logs and the project roster ride the Tauri seam; the retired
-    // Electrobun bridge never grew RPC for them, so they are inert on this path.
-    listProjects: () => unsupported("The project roster requires the Tauri shell."),
-    listFdes: () => unsupported("The FDE roster requires the Tauri shell."),
-    listRuns: () => unsupported("Live agent logs require the Tauri shell."),
-    stopRun: () => unsupported("Stopping a run requires the Tauri shell."),
-    agentLogSnapshot: () => unsupported("Live agent logs require the Tauri shell."),
-    followAgentLog: () => inertAgentLogHandle(),
-    connection: () => api.sailConnection(),
-    login: () => api.sailLogin(),
-    logout: () => api.sailLogout(),
-    diagnostics: () => api.sailDiagnostics(),
-    onEvent: (listener) => onPush("sail-event", listener),
-    onConnectionStatus: (listener) => onPush("connection-status", listener),
-  };
-}
 
 /* ------------------------------------------------------------------------- */
 

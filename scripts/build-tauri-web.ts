@@ -2,9 +2,8 @@ import { cpSync, mkdirSync, rmSync } from "node:fs";
 
 /**
  * Bundle the Tauri webview with Bun (no Vite) into `dist-tauri/`, which
- * tauri.conf.json serves as `frontendDist`. Mirrors what `electrobun build`
- * does for the Bun/WebView build, minus the native shell: bundle the entry to
- * `index.js`, carry the static HTML + CSS alongside.
+ * tauri.conf.json serves as `frontendDist`: bundle the entry to `index.js`,
+ * carry the static HTML + CSS alongside.
  */
 
 const OUT = "dist-tauri";

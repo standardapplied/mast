@@ -2489,8 +2489,8 @@ button.room-section-head:hover {
   padding: 1px 5px;
 }
 
-/* Inside the Electrobun shell the toolbar doubles as the window drag region;
-   extra top padding keeps the lockup clear of the traffic lights. */
+/* In the desktop shell the toolbar sits under the traffic lights; the extra
+   height keeps the lockup clear of them. */
 .in-shell .cockpit-toolbar {
   min-height: 44px;
 }
