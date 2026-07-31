@@ -119,3 +119,12 @@ jobs:
             "$RUNNER_TEMP/rel/"*.dmg "gs://${BUCKET}/mast/${VERSION}/"
           gcloud storage cp --cache-control="no-cache, max-age=0" \
             "$RUNNER_TEMP/rel/latest.gcs.json" "gs://${BUCKET}/mast/latest.json"
+
+      # Last, so "Latest" on a public repo only ever names a version whose updater
+      # artifacts are already in the bucket. Left as a draft, the release is invisible
+      # to everyone but collaborators and the public download silently rots to whatever
+      # was published last.
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false --latest
