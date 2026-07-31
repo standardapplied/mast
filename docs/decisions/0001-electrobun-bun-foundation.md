@@ -1,7 +1,7 @@
 # 0001 — Electrobun + Bun foundation
 
 Date: 2026-07-01
-Status: Accepted
+Status: Superseded by [0003](0003-retire-the-electrobun-shell.md)
 
 ## Context
 

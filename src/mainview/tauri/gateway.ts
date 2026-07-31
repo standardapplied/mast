@@ -22,10 +22,10 @@ import { AgentLogStream, latestRun, TerminalLogError } from "./agentLogStream";
  * The Tauri seam to the control plane. Every read/write is one `sail_request`
  * invoke — the Rust core owns the SSH session, injects the bearer token, and
  * proxies HTTP over a direct-tcpip forward to the devbox. The webview never
- * sees the token or the tunnel, exactly as the Electrobun Bun process hid them.
+ * sees the token or the tunnel.
  *
- * This is the whole point of the pivot: the same React Gateway, now backed by
- * an in-process SSH stack that also runs on iOS/Android.
+ * The same React Gateway, backed by an in-process SSH stack that also runs on
+ * iOS/Android.
  */
 
 type RustResponse = { status: number; etag: string | null; body: string };
