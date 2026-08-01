@@ -33,5 +33,3 @@ a live connection; without it the app still renders and reports the error.
 | `connection_status` | config + session state for the banner |
 | `terminal_open {id, cols, rows}` | open a PTY; bytes arrive on `terminal://data/{id}` |
 | `terminal_write {id, data}` / `terminal_resize` / `terminal_close` | drive the PTY |
-
-See `../spike/FINDINGS.md` for what's proven vs. the deliberate scaffold gaps.

@@ -2,11 +2,8 @@
 //! as desktop. Every capability the app needs — HTTP to the control plane, an
 //! interactive terminal, (later) SFTP file transfer — rides one russh session
 //! to the devbox, with no `ssh` subprocess. That is the whole reason for the
-//! Tauri pivot: a spawned binary can't run inside the iOS/Android sandbox, but
-//! this library can.
-//!
-//! Proven feasible in `spike/russh-proof` against a live sshd; this is the same
-//! russh 0.45 API wired behind Tauri commands.
+//! A spawned `ssh` binary can't run inside the iOS/Android sandbox; this
+//! library can. russh 0.45 wired behind Tauri commands.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

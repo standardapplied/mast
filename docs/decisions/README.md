@@ -6,4 +6,6 @@ the *why* survives past the diff.
 
 - Number files sequentially: `NNNN-short-title.md`.
 - Keep them short: Context → Decision → Consequences.
-- ADRs are append-only; supersede rather than rewrite.
+- Every record describes the system as it stands. When a decision is reversed and
+  the thing it chose is gone from the tree, delete the record with it. A reader
+  should never have to work out which of these still apply.
