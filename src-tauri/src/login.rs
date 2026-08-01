@@ -1,4 +1,4 @@
-//! Passkey login ceremony, ported from the Electrobun connect autopilot.
+//! Passkey login ceremony.
 //!
 //! WebAuthn binds to the page origin, and the sail server allow-lists exactly
 //! `http://localhost:7070`. With an in-process russh session (no default

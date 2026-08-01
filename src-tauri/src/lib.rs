@@ -1,5 +1,4 @@
-//! Tauri entry point. The React webview (unchanged from the Electrobun build)
-//! talks to this Rust core over `invoke`; the core owns the SSH session that
+//! Tauri entry point. The React webview talks to this Rust core over `invoke`; the core owns the SSH session that
 //! reaches the control plane and the container terminals. One `run()` serves
 //! desktop (main.rs) and mobile (the `mobile_entry_point`).
 
