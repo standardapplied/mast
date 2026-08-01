@@ -32,10 +32,12 @@ dependencies on either side without explicit approval.
 
 ## Releasing
 
-Bump `version` in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`
-together, then push a `mast-v<version>` tag. CI builds, signs, notarizes, mirrors the
-artifacts to the GCS bucket the updater polls, and publishes the GitHub release.
+Bump `version` in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and
+the `mast` entry in `src-tauri/Cargo.lock` together, then push a `mast-v<version>` tag. CI
+builds, signs, notarizes, repoints the updater manifest at the release downloads, and
+publishes the release.
 
-Two distribution channels, not interchangeable. GitHub Releases is the human front door for
-first-time installs. The GCS bucket is the updater channel, and every install from 0.1.3
-onward has that URL compiled into the bundle, so the bucket has to keep serving.
+GitHub Releases is the only distribution channel: first-time installs download the `.dmg`
+from it, and the updater polls `releases/latest/download/latest.json` on the same releases.
+That works because the repo is public, so a release must actually be published for either
+to resolve. Publishing is the last step of the job for that reason.

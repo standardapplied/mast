@@ -42,7 +42,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE5MjA5NjhDQUQyMDM4QTUKUldTbE9DQ3RqSllncWVFN3MxejFRR1hSY2ppOEpBLzFKMFkxalc1cFRGbGVrUjlZQTUzcXYrV0YK",
       "endpoints": [
-        "https://storage.googleapis.com/mast-dist-441983c05b7f/mast/latest.json"
+        "https://github.com/standardapplied/mast/releases/latest/download/latest.json"
       ]
     }
   }
