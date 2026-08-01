@@ -76,54 +76,35 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}
           releaseBody: |
-            Build record — public distribution is the GCS bucket.
+            Download `Mast_<version>_universal.dmg` below. Signed and notarized;
+            the app updates itself from here after that.
           releaseDraft: true
           prerelease: false
 
-      # The GitHub release stays private (a build record). The signed artifacts +
-      # updater manifest are mirrored to an unlisted public GCS bucket so the Tauri
-      # updater (which fetches unauthenticated) can reach them.
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Publish to GCS
+      # tauri writes opaque `api.github.com/.../releases/assets/<id>` URLs into the
+      # manifest, and a plain GET on those returns the asset's JSON metadata rather
+      # than the binary. Rewrite them to the release's `releases/download/<tag>/<file>`
+      # URLs, which always serve bytes to an unauthenticated client. The universal
+      # build produces one .app.tar.gz that every darwin key points at.
+      - name: Point the updater manifest at the release downloads
         env:
-          GCS_SA_KEY_BASE64: ${{ secrets.GCS_SA_KEY_BASE64 }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          BUCKET="mast-dist-441983c05b7f"
-          VERSION="$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")"
-          echo "$GCS_SA_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/gcs_sa.json"
-          gcloud auth activate-service-account --key-file="$RUNNER_TEMP/gcs_sa.json"
-          # Pull the signed artifacts + tauri-generated manifest from the draft release.
+          TAG="${{ github.ref_name }}"
           mkdir -p "$RUNNER_TEMP/rel"
-          gh release download "${{ github.ref_name }}" --dir "$RUNNER_TEMP/rel" \
-            --pattern 'latest.json' --pattern '*.app.tar.gz' --pattern '*.dmg'
-          # Repoint the manifest's URLs from the private GitHub release to the public
-          # bucket, then upload artifacts (per-version) + the stable manifest.
-          GCS_BASE="https://storage.googleapis.com/${BUCKET}/mast/${VERSION}"
-          # The universal build produces one .app.tar.gz that every darwin key
-          # points at; tauri's manifest uses opaque api.github.com asset URLs, so
-          # rewrite them all to the bucket URL for that artifact.
+          gh release download "$TAG" --dir "$RUNNER_TEMP/rel" \
+            --pattern 'latest.json' --pattern '*.app.tar.gz'
           ARTIFACT="$(basename "$(ls "$RUNNER_TEMP/rel/"*.app.tar.gz | head -1)")"
-          jq --arg url "${GCS_BASE}/${ARTIFACT}" \
-            '.platforms |= map_values(.url = $url)' \
-            "$RUNNER_TEMP/rel/latest.json" > "$RUNNER_TEMP/rel/latest.gcs.json"
-          # Versioned artifacts are immutable — cache them hard. The manifest is the
-          # one mutable object and must never be stale: no-cache forces revalidation,
-          # so a check-for-updates minutes after a release sees the new version.
-          gcloud storage cp --cache-control="public, max-age=31536000, immutable" \
-            "$RUNNER_TEMP/rel/"*.app.tar.gz "gs://${BUCKET}/mast/${VERSION}/"
-          gcloud storage cp --cache-control="public, max-age=31536000, immutable" \
-            "$RUNNER_TEMP/rel/"*.dmg "gs://${BUCKET}/mast/${VERSION}/"
-          gcloud storage cp --cache-control="no-cache, max-age=0" \
-            "$RUNNER_TEMP/rel/latest.gcs.json" "gs://${BUCKET}/mast/latest.json"
+          URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${ARTIFACT}"
+          jq --arg url "$URL" '.platforms |= map_values(.url = $url)' \
+            "$RUNNER_TEMP/rel/latest.json" > "$RUNNER_TEMP/latest.json"
+          gh release upload "$TAG" "$RUNNER_TEMP/latest.json" --clobber
 
-      # Last, so "Latest" on a public repo only ever names a version whose updater
-      # artifacts are already in the bucket. Left as a draft, the release is invisible
-      # to everyone but collaborators and the public download silently rots to whatever
-      # was published last.
+      # Last: publishing is what makes those download URLs resolve for anonymous
+      # clients, and what points `releases/latest/download/latest.json` (the updater
+      # endpoint) at this build. Left a draft, the public download silently rots to
+      # whatever was published before.
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
