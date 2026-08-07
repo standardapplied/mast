@@ -25,6 +25,7 @@ import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
 import {
   assembleTimeline,
+  eventNarration,
   groupTimeline,
   mergeMessages,
   type BufferedTail,
@@ -161,6 +162,7 @@ function eventDetail(event: SailEvent): string {
     typeof from === "string" && typeof to === "string" && `${from} → ${to}`,
     typeof source === "string" && source,
     typeof exitCode === "number" && `exit ${exitCode}`,
+    eventNarration(event),
   ]
     .filter(Boolean)
     .join(" · ");

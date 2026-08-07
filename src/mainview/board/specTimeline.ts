@@ -77,8 +77,16 @@ export const EVENT_REGISTRY: Readonly<Record<string, EventRule>> = {
   spec_stranded: { mode: "row", kind: "lifecycle", label: "Spec stranded" },
   review_approved: { mode: "row", kind: "decision", label: "Review approved" },
   finding_dismissed: { mode: "row", kind: "decision", label: "Finding dismissed" },
+  review_stage_started: { mode: "row", kind: "lifecycle", label: "Review started" },
+  review_stage_passed: { mode: "row", kind: "lifecycle", label: "Review stage passed" },
+  review_stage_failed: { mode: "row", kind: "lifecycle", label: "Review stage failed" },
+  review_iteration_started: { mode: "row", kind: "lifecycle", label: "Fix iteration started" },
+  guardrail_triggered: { mode: "row", kind: "lifecycle", label: "Guardrail triggered" },
+  agent_stop_nudged: { mode: "row", kind: "lifecycle", label: "Agent nudged" },
+  review_errored: { mode: "row", kind: "lifecycle", label: "Review errored" },
+  review_escalated: { mode: "row", kind: "lifecycle", label: "Review escalated" },
+  review_pipeline_error: { mode: "row", kind: "lifecycle", label: "Review pipeline error" },
   review_completed: { mode: "overlay", target: "review" },
-  review_failed: { mode: "overlay", target: "review" },
   spec_status_changed: { mode: "overlay", target: "lifecycle" },
   spec_message_posted: { mode: "overlay", target: "none" },
   board_updated: { mode: "overlay", target: "none" },
@@ -129,11 +137,38 @@ function overlayReviews(
       ...detail,
       review: {
         ...detail.review,
-        status: event.type === "review_failed" ? "failed" : "pending_decision",
+        status: "pending_decision",
         completed_at: event.ts,
       },
     };
   });
+}
+
+const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
+
+/**
+ * The event's narration for a timeline row: the sail loop events carry their story in
+ * `detail` (stage name, escalation reason), `findings` (severity counts), and `reason`/`action`
+ * (guardrail, stop nudge). Empty string when the event carries none of them.
+ */
+export function eventNarration(event: SailEvent): string {
+  const { detail, findings, reason, action } = event.data ?? {};
+  const counts =
+    findings && typeof findings === "object"
+      ? SEVERITY_ORDER.filter(
+          (severity) => typeof (findings as Record<string, unknown>)[severity] === "number",
+        )
+          .map((severity) => `${(findings as Record<string, number>)[severity]} ${severity}`)
+          .join(", ")
+      : "";
+  return [
+    typeof detail === "string" && detail,
+    counts,
+    typeof reason === "string" && reason,
+    typeof action === "string" && action,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function timestamp(item: TimelineItem): number {
