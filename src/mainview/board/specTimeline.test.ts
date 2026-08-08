@@ -8,6 +8,7 @@ import type {
 import {
   assembleTimeline,
   bufferTail,
+  eventNarration,
   groupTimeline,
   mergeMessages,
   releaseTail,
@@ -210,5 +211,71 @@ describe("message grouping", () => {
     const [group] = groupTimeline(items);
     expect(group?.kind === "message-group" && group.messages.map((item) => item.message.delivery))
       .toEqual([undefined, "pending", "failed"]);
+  });
+});
+
+describe("review-loop events", () => {
+  test("every loop event renders as a labeled lifecycle row", () => {
+    const expectations: Array<[string, string]> = [
+      ["review_stage_started", "Review started"],
+      ["review_stage_passed", "Review stage passed"],
+      ["review_stage_failed", "Review stage failed"],
+      ["review_iteration_started", "Fix iteration started"],
+      ["guardrail_triggered", "Guardrail triggered"],
+      ["agent_stop_nudged", "Agent nudged"],
+      ["review_errored", "Review errored"],
+      ["review_escalated", "Review escalated"],
+      ["review_pipeline_error", "Review pipeline error"],
+    ];
+    const timeline = assembleTimeline({
+      messages: [],
+      events: expectations.map(([type], i) =>
+        event(i + 1, type, `2026-07-28T10:0${Math.min(i, 9)}:00Z`)
+      ),
+      reviews: [],
+      runs: [],
+    });
+
+    const rows = timeline.filter((item) => item.kind === "lifecycle");
+    expect(rows.map((row) => (row.kind === "lifecycle" ? row.label : ""))).toEqual(
+      expectations.map(([, label]) => label),
+    );
+  });
+
+  test("review_failed is not a sail event and renders nothing", () => {
+    const timeline = assembleTimeline({
+      messages: [],
+      events: [event(1, "review_failed", "2026-07-28T10:00:00Z")],
+      reviews: [],
+      runs: [],
+    });
+    expect(timeline).toEqual([]);
+  });
+});
+
+describe("eventNarration", () => {
+  test("renders detail and severity counts in severity order", () => {
+    const narration = eventNarration(
+      event(1, "review_stage_failed", "2026-07-28T10:00:00Z", {
+        detail: "codeandsecurity",
+        findings: { low: 2, high: 2, medium: 1 },
+      }),
+    );
+    expect(narration).toBe("codeandsecurity · 2 high, 1 medium, 2 low");
+  });
+
+  test("renders guardrail reason and action", () => {
+    const narration = eventNarration(
+      event(1, "guardrail_triggered", "2026-07-28T10:00:00Z", {
+        reason: "fix agent left uncommitted changes in api (2 files: A.java, B.java)",
+        action: "committed and pushed them to agent/spec",
+      }),
+    );
+    expect(narration).toContain("A.java");
+    expect(narration).toContain("committed and pushed");
+  });
+
+  test("renders nothing for an event without narration data", () => {
+    expect(eventNarration(event(1, "agent_stopped", "2026-07-28T10:00:00Z"))).toBe("");
   });
 });
