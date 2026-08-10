@@ -732,7 +732,11 @@ export function SpecRoom({
             onKeyDown={onComposerKeyDown}
           />
           <div className="room-composer-row">
-            <span className="room-composer-hint">⏎ to send</span>
+            <span className="room-composer-hint">
+              {specStatus === "in_progress"
+                ? "⏎ to send · the agent is working — replies are delivered to it as it works"
+                : "⏎ to send"}
+            </span>
             <Tooltip content="Send">
               <button
                 type="button"
