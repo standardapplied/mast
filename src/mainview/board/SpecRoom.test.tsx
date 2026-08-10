@@ -410,6 +410,7 @@ describe("SpecRoom", () => {
     expect(sendButton.textContent).toBe("");
     expect(sendButton.disabled).toBe(true);
     expect(container.querySelector(".room-composer-hint")?.textContent).toBe("⏎ to send");
+    expect(container.textContent).not.toContain("delivered to it as it works");
 
     const textarea = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Message this room"]',
@@ -426,6 +427,15 @@ describe("SpecRoom", () => {
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
     await settle();
     expect(fake.calls.posts).toEqual(["hello"]);
+  });
+
+  test("a live room states the delivery contract: replies reach the working agent", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, "in_progress");
+
+    expect(container.querySelector(".room-composer-hint")?.textContent).toBe(
+      "⏎ to send · the agent is working — replies are delivered to it as it works",
+    );
   });
 
   test("a done room replaces the composer with a read-only whisper", async () => {
