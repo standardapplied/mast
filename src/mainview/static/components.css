@@ -2003,7 +2003,7 @@ span.checkbox {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 56px;
+  height: 64px;
   padding: 8px 12px;
   box-sizing: border-box;
   border-bottom: 1px solid var(--border);
@@ -2183,16 +2183,16 @@ button.room-section-head:hover {
   color: var(--muted-foreground);
 }
 
-.room-timeline:has(.room-beginning) {
-  align-content: end;
-}
-
 .room-beginning {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
-  padding: 24px 20px 8px;
+  padding: 24px 20px 12px;
+  /* The room's start marker is the first (oldest) item and stays put as messages
+     accumulate above the composer; margin-top absorbs the slack so a short or
+     empty conversation sits at the bottom, and collapses once it overflows. */
+  margin-top: auto;
 }
 
 .room-beginning-badge {
@@ -2658,7 +2658,7 @@ button.room-section-head:hover {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 56px;
+  height: 64px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
@@ -3229,8 +3229,8 @@ button.room-section-head:hover {
 }
 
 .room-timeline {
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   flex: 1;
   gap: 2px;
   min-height: 0;
