@@ -36,11 +36,13 @@ function makeGateway({
   reviewStatus = review.status,
   withFindings = true,
   postError,
+  reviewGate,
 }: {
   withReview?: boolean;
   reviewStatus?: string;
   withFindings?: boolean;
   postError?: string;
+  reviewGate?: Promise<void>;
 } = {}) {
   let messages: SpecMessage[] = [];
   const listeners = new Set<(event: SailEvent) => void>();
@@ -86,10 +88,13 @@ function makeGateway({
       ok: true as const,
       value: { limit: 100, returned: 0, events: [] },
     }),
-    specReviews: async () => ({
-      ok: true as const,
-      value: { spec_id: "s1", reviews: withReview ? [selectedReview] : [] },
-    }),
+    specReviews: async () => {
+      if (reviewGate) await reviewGate;
+      return {
+        ok: true as const,
+        value: { spec_id: "s1", reviews: withReview ? [selectedReview] : [] },
+      };
+    },
     reviewDetail: async () => ({
       ok: true as const,
       value: {
@@ -379,6 +384,29 @@ describe("SpecRoom", () => {
     expect(container.textContent).not.toContain("Loading room…");
     await settle();
     expect(container.querySelector('[data-testid="loading"]')).toBeNull();
+  });
+
+  test("paints the conversation before reviews resolve, then fills them in", async () => {
+    let releaseReviews!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseReviews = resolve;
+    });
+    const fake = makeGateway({ withReview: true, reviewGate: gate });
+    await mount(fake.gateway);
+
+    expect(
+      container.querySelector('[data-testid="loading"]'),
+      "the conversation must paint without waiting on the per-review detail round-trips",
+    ).toBeNull();
+    expect(container.querySelector('[data-testid="review-row-review-1"]')).toBeNull();
+
+    releaseReviews();
+    await settle();
+
+    expect(
+      container.querySelector('[data-testid="review-row-review-1"]'),
+      "reviews fill in behind the conversation once their round-trips complete",
+    ).not.toBeNull();
   });
 
   test("separates the timeline by day with one separator per calendar day", async () => {
