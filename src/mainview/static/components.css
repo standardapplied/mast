@@ -1362,6 +1362,10 @@ html.is-dragging-active * {
   gap: 16px;
   padding: 72px 0;
   color: var(--muted-foreground);
+  /* Auto margins center the mark on both axes in any flex parent — the rooms
+     pane is a flex row, so without this the mark hugs the sidebar edge until
+     the real layout replaces it. */
+  margin: auto;
 }
 
 .loading-mark-m {
