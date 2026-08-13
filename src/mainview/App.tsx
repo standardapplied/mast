@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ConnectionStatus, WhoAmI } from "../shared/sail-models";
 import { BoardScreen } from "./board/BoardScreen";
+import { connectPresence, presenceStore } from "./board/presenceStore";
 import { RoomsScreen } from "./board/RoomsScreen";
 import { SpecDetail } from "./board/SpecDetail";
 import { Diagnostics } from "./components/Diagnostics";
@@ -129,6 +130,14 @@ export function App({
   useEffect(() => {
     if (!ready) return void setIdentity(null);
     void gateway.whoami().then((r) => setIdentity(r.ok ? r.value : null));
+  }, [gateway, ready]);
+
+  // Presence rides the app-wide event stream — no polling. One runs listing on
+  // connect seeds chips for agents already mid-work (or mid-silence); after
+  // that, progress and agent_presence events keep the store live.
+  useEffect(() => {
+    if (!ready) return;
+    return connectPresence(gateway, presenceStore);
   }, [gateway, ready]);
 
   useEffect(() => {
