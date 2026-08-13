@@ -54,26 +54,16 @@ afterEach(() => {
   container.remove();
 });
 
-test("a room row shows its spec id and the board's real status label", () => {
-  mount([room("linkedin-bulk-capture", "in_progress", "Bulk capture")]);
+test("a room row shows only the spec id — no title, no status", () => {
+  mount([room("linkedin-bulk-capture", "in_progress", "Bulk capture campaign")]);
 
   const row = container.querySelector('[data-testid="room-linkedin-bulk-capture"]')!;
-  expect(row.querySelector(".room-row-id")?.textContent).toBe("linkedin-bulk-capture");
-  expect(row.textContent).toContain("In progress");
-  expect(row.textContent).not.toContain("In flight");
-});
-
-test("every lifecycle status renders the same label the board uses", () => {
-  mount([
-    room("d", "draft", "Draft one"),
-    room("p", "pending", "Pending one"),
-    room("r", "review", "Review one"),
-    room("m", "awaiting_merge", "Merge one"),
-  ]);
-
-  const text = container.textContent ?? "";
-  expect(text).toContain("Draft");
-  expect(text).toContain("Pending");
-  expect(text).toContain("Review");
-  expect(text).toContain("Awaiting merge");
+  expect(row.querySelector(".room-row-id-label")?.textContent).toBe("linkedin-bulk-capture");
+  expect(row.textContent, "the long title is not repeated in the compact nav").not.toContain(
+    "Bulk capture campaign",
+  );
+  expect(
+    row.textContent,
+    "status is redundant with the section grouping and is dropped",
+  ).not.toContain("In progress");
 });

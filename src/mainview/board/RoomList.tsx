@@ -4,9 +4,7 @@ import { Dialog } from "../components/Dialog";
 import { Input } from "../components/Input";
 import { Select } from "../components/Select";
 import { Tooltip } from "../components/Tooltip";
-import { Badge } from "../components/ui";
 import { Button } from "../components/ui";
-import { statusLabel, statusTone } from "./lifecycle";
 import { relativeTime, SECTION_LABELS, SECTION_TONES, sectionRooms, type RoomView } from "./rooms";
 
 export function RoomList({
@@ -177,16 +175,8 @@ export function RoomList({
                   data-testid={`room-${room.spec.id}`}
                   aria-current={selectedId === room.spec.id ? "page" : undefined}
                 >
-                  <span className="room-row-main">
-                    <span className={`room-row-title${room.unread ? " is-unread" : ""}`}>
-                      {room.spec.title}
-                    </span>
-                    <span className="room-row-meta">
-                      <span className="room-row-id">{room.spec.id}</span>
-                      <Badge tone={statusTone(room.spec.status)}>
-                        {statusLabel(room.spec.status)}
-                      </Badge>
-                    </span>
+                  <span className={`room-row-id-label${room.unread ? " is-unread" : ""}`}>
+                    {room.spec.id}
                   </span>
                   {workingIds.has(room.spec.id) && (
                     <span className="room-working-dot" aria-label="Agent working" />
