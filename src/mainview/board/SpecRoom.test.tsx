@@ -420,6 +420,10 @@ describe("SpecRoom", () => {
       "Bulk capture campaign",
     );
     expect(beginning?.textContent).toContain("the beginning of");
+    expect(
+      beginning?.textContent,
+      "an empty room invites the first message with guidance text",
+    ).toContain("land here as the work moves");
     expect(beginning?.querySelector(".room-beginning-id")?.textContent).toBe("s1");
   });
 
@@ -431,10 +435,16 @@ describe("SpecRoom", () => {
     enterMessage("first message");
     await settle();
 
+    const beginning = container.querySelector(".room-beginning");
     expect(
-      container.querySelector(".room-beginning"),
+      beginning,
       "the beginning marker is the room's start; it must stay above the conversation, not vanish",
     ).not.toBeNull();
+    expect(beginning?.textContent).toContain("the beginning of");
+    expect(
+      beginning?.textContent,
+      "the empty-room guidance is dropped once the conversation has started",
+    ).not.toContain("land here as the work moves");
     expect(container.textContent).toContain("first message");
   });
 

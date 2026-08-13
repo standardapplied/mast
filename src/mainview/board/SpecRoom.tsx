@@ -573,8 +573,9 @@ export function SpecRoom({
               <h2 className="room-beginning-title">{specTitle ?? specId}</h2>
               <p className="room-beginning-sub">
                 This is the beginning of the{" "}
-                <strong>{specTitle ?? specId}</strong> room. Messages you post and the
-                spec's lifecycle activity land here as the work moves.
+                <strong>{specTitle ?? specId}</strong> room.
+                {groups.length === 0 &&
+                  " Messages you post and the spec's lifecycle activity land here as the work moves."}
               </p>
               <p className="room-beginning-id">{specId}</p>
             </div>
