@@ -227,6 +227,7 @@ export function SpecRoom({
     buffered: [],
   });
   const [loading, setLoading] = useState(true);
+  const [enriched, setEnriched] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [hasEarlier, setHasEarlier] = useState(false);
   const [draft, setDraft] = useState("");
@@ -255,15 +256,13 @@ export function SpecRoom({
   );
 
   const loadRoom = useCallback(async (version: number) => {
-    const [messages, recent, reviews, runs] = await Promise.all([
+    const [messages, recent, runs] = await Promise.all([
       gateway.listSpecMessages(specId, undefined, PAGE_SIZE),
       gateway.recentEvents(PAGE_SIZE),
-      gateway.specReviews(specId),
       gateway.listRuns(specId),
     ]);
-    const reviewDetails = reviews.ok ? await loadReviewDetails(reviews.value.reviews) : [];
     if (version !== loadVersion.current) return;
-    const next: Sources = {
+    const base: Sources = {
       messages: messages.ok
         ? mergeMessages(messages.value.messages, sources.current.messages)
         : sources.current.messages,
@@ -273,13 +272,22 @@ export function SpecRoom({
             sources.current.events,
           )
         : sources.current.events,
-      reviews: reviews.ok ? reviewDetails : sources.current.reviews,
+      reviews: sources.current.reviews,
       runs: runs.ok ? runs.value.runs : sources.current.runs,
       decisions: sources.current.decisions,
     };
     setHasEarlier(messages.ok && messages.value.messages.length === PAGE_SIZE);
-    applySources(next, "replace");
+    applySources(base, "replace");
     setLoading(false);
+
+    const reviews = await gateway.specReviews(specId);
+    if (version !== loadVersion.current) return;
+    if (reviews.ok) {
+      const details = await loadReviewDetails(reviews.value.reviews);
+      if (version !== loadVersion.current) return;
+      applySources({ ...sources.current, reviews: details }, "replace");
+    }
+    setEnriched(true);
   }, [applySources, gateway, loadReviewDetails, specId]);
 
   useEffect(() => {
@@ -287,6 +295,7 @@ export function SpecRoom({
     sources.current = EMPTY_SOURCES;
     setTail({ visible: [], buffered: [] });
     setLoading(true);
+    setEnriched(false);
     void loadRoom(version);
     return () => {
       if (loadVersion.current === version) loadVersion.current++;
@@ -557,7 +566,7 @@ export function SpecRoom({
               <LoadingMark label="Loading room" />
             </div>
           )}
-          {!loading && tail.visible.length === 0 && (
+          {!loading && enriched && tail.visible.length === 0 && (
             <p className="room-empty">No conversation yet. Lifecycle activity will appear here.</p>
           )}
           {groups.map((item, index) => {
