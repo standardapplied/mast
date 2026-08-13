@@ -179,7 +179,7 @@ async function settle() {
   await act(async () => {});
 }
 
-async function mount(gateway: Gateway, specStatus?: string) {
+async function mount(gateway: Gateway, specStatus?: string, specTitle?: string) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -190,6 +190,7 @@ async function mount(gateway: Gateway, specStatus?: string) {
           gateway={gateway}
           specId="s1"
           specStatus={specStatus}
+          specTitle={specTitle}
           canWrite
           currentUser="uday"
           onOpenLog={() => {}}
@@ -407,6 +408,19 @@ describe("SpecRoom", () => {
       container.querySelector('[data-testid="review-row-review-1"]'),
       "reviews fill in behind the conversation once their round-trips complete",
     ).not.toBeNull();
+  });
+
+  test("an empty room shows the beginning block with the room title and id", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, "in_progress", "Bulk capture campaign");
+
+    const beginning = container.querySelector(".room-beginning");
+    expect(beginning, "an empty room shows a beginning block, not a bare sentence").not.toBeNull();
+    expect(beginning?.querySelector(".room-beginning-title")?.textContent).toBe(
+      "Bulk capture campaign",
+    );
+    expect(beginning?.textContent).toContain("the beginning of");
+    expect(beginning?.querySelector(".room-beginning-id")?.textContent).toBe("s1");
   });
 
   test("separates the timeline by day with one separator per calendar day", async () => {

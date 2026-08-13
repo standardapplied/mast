@@ -278,13 +278,13 @@ describe("SpecDetail anti-flicker", () => {
 
     expect(text()).toContain("s1");
     expect(container.querySelector('[data-testid="blocked-banner"]')).toBeNull();
-    expect(text()).not.toContain("No conversation yet.");
+    expect(text()).not.toContain("the beginning of");
 
     await act(async () => gate.resolve());
     await settle();
 
     expect(container.querySelector('[data-testid="blocked-banner"]')).toBeNull();
-    expect(text()).toContain("No conversation yet.");
+    expect(text()).toContain("the beginning of");
     expect(text()).toContain("rev 1");
   });
 
