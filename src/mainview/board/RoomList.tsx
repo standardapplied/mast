@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CaretDown, CaretRight, Plus } from "../components/icons";
+import { Dialog } from "../components/Dialog";
 import { Input } from "../components/Input";
 import { Select } from "../components/Select";
 import { Tooltip } from "../components/Tooltip";
@@ -49,6 +50,11 @@ export function RoomList({
     if (newRoom) titleRef.current?.focus();
   }, [newRoom]);
 
+  const closeCreate = () => {
+    setNewRoom(false);
+    setTitle("");
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const created = await onCreate(title, project || newProject);
@@ -82,8 +88,34 @@ export function RoomList({
         </Tooltip>
       </div>
 
-      {newRoom && (
-        <form className="room-new" onSubmit={(event) => void submit(event)}>
+      <Dialog
+        isOpen={newRoom}
+        onClose={closeCreate}
+        size="sm"
+        title="Create a room"
+        footer={
+          <>
+            <Button variant="ghost" disabled={creating} onClick={closeCreate}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="create-room-form"
+              disabled={creating || !title.trim() || !(project || newProject)}
+            >
+              {creating ? "Creating…" : "Create"}
+            </Button>
+          </>
+        }
+      >
+        <form
+          id="create-room-form"
+          className="room-create-form"
+          onSubmit={(event) => void submit(event)}
+        >
+          <p className="room-create-hint">
+            A room is a spec's conversation. Give it a title — its details can take shape inside.
+          </p>
           {!project && (
             projects.length > 0 ? (
               <Select
@@ -110,23 +142,8 @@ export function RoomList({
             aria-label="Room title"
             disabled={creating}
           />
-          <div className="room-new-actions">
-            <Button type="submit" disabled={creating || !title.trim() || !(project || newProject)}>
-              {creating ? "Creating…" : "Create"}
-            </Button>
-            <Button
-              variant="ghost"
-              disabled={creating}
-              onClick={() => {
-                setNewRoom(false);
-                setTitle("");
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
         </form>
-      )}
+      </Dialog>
 
       <div className="room-list-scroll">
         {sectionRooms(rooms).map(({ section, rooms: grouped }) => (
