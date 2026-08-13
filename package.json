@@ -9,7 +9,8 @@
     "build:tauri-web": "bun run scripts/build-tauri-web.ts",
     "tauri": "tauri",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "preview": "bun run scripts/preview.ts"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",

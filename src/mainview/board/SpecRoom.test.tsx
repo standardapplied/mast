@@ -423,6 +423,21 @@ describe("SpecRoom", () => {
     expect(beginning?.querySelector(".room-beginning-id")?.textContent).toBe("s1");
   });
 
+  test("the beginning marker persists at the top after the first message", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, "in_progress", "Bulk capture campaign");
+    expect(container.querySelector(".room-beginning")).not.toBeNull();
+
+    enterMessage("first message");
+    await settle();
+
+    expect(
+      container.querySelector(".room-beginning"),
+      "the beginning marker is the room's start; it must stay above the conversation, not vanish",
+    ).not.toBeNull();
+    expect(container.textContent).toContain("first message");
+  });
+
   test("separates the timeline by day with one separator per calendar day", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);

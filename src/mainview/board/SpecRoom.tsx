@@ -229,7 +229,6 @@ export function SpecRoom({
     buffered: [],
   });
   const [loading, setLoading] = useState(true);
-  const [enriched, setEnriched] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [hasEarlier, setHasEarlier] = useState(false);
   const [draft, setDraft] = useState("");
@@ -289,7 +288,6 @@ export function SpecRoom({
       if (version !== loadVersion.current) return;
       applySources({ ...sources.current, reviews: details }, "replace");
     }
-    setEnriched(true);
   }, [applySources, gateway, loadReviewDetails, specId]);
 
   useEffect(() => {
@@ -297,7 +295,6 @@ export function SpecRoom({
     sources.current = EMPTY_SOURCES;
     setTail({ visible: [], buffered: [] });
     setLoading(true);
-    setEnriched(false);
     void loadRoom(version);
     return () => {
       if (loadVersion.current === version) loadVersion.current++;
@@ -568,7 +565,7 @@ export function SpecRoom({
               <LoadingMark label="Loading room" />
             </div>
           )}
-          {!loading && enriched && tail.visible.length === 0 && (
+          {!loading && !hasEarlier && (
             <div className="room-beginning">
               <div className="room-beginning-badge">
                 <Logo size={26} />

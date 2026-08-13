@@ -270,7 +270,7 @@ describe("SpecDetail anti-flicker", () => {
     expect(container.querySelector(".room-details-drawer")).toBeNull();
   });
 
-  test("readiness and empty-states wait for enrichment instead of guessing", async () => {
+  test("the beginning marker shows on load; review enrichment fills in after", async () => {
     const fake = makeGateway();
     const gate = deferred<void>();
     fake.setEnrichGate(gate.promise);
@@ -278,13 +278,16 @@ describe("SpecDetail anti-flicker", () => {
 
     expect(text()).toContain("s1");
     expect(container.querySelector('[data-testid="blocked-banner"]')).toBeNull();
-    expect(text()).not.toContain("the beginning of");
+    expect(
+      text(),
+      "the beginning marker is the room's start — always valid, shown as soon as it loads",
+    ).toContain("the beginning of");
+    expect(text(), "review data waits for enrichment, never guessed").not.toContain("rev 1");
 
     await act(async () => gate.resolve());
     await settle();
 
     expect(container.querySelector('[data-testid="blocked-banner"]')).toBeNull();
-    expect(text()).toContain("the beginning of");
     expect(text()).toContain("rev 1");
   });
 
