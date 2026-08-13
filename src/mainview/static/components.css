@@ -4633,6 +4633,50 @@ button.room-section-head:hover {
   display: block;
 }
 
+/* Agent presence chip ------------------------------------------------------------ */
+
+.presence-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font: 600 10px/1.4 var(--font-mono);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.presence-chip .presence-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.presence-chip.is-working {
+  color: var(--success);
+}
+.presence-chip.is-working .presence-dot {
+  animation: presence-pulse 2s ease-in-out infinite;
+}
+.presence-chip.is-quiet {
+  color: var(--warning);
+}
+@keyframes presence-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .presence-chip.is-working .presence-dot {
+    animation: none;
+  }
+}
+
 /* Live agent log drawer ---------------------------------------------------------- */
 
 .spec-card-live {

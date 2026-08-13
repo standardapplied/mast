@@ -382,7 +382,8 @@ export function createTauriGateway(): Gateway {
     listProjects: () => read("GET", "/v1/projects"),
     listFdes: () => read("GET", "/v1/fdes"),
 
-    listRuns: (specId) => listSpecRuns(specId),
+    listRuns: (specId) =>
+      specId ? listSpecRuns(specId) : read<RunListResponse>("GET", "/v1/runs"),
     stopRun: (runId) => read("POST", `/v1/runs/${encodeURIComponent(runId)}/stop`),
     agentLogSnapshot: async (specId, role, tail) => {
       const run = await latestSpecRun(specId, role);

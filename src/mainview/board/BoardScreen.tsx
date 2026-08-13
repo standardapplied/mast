@@ -6,6 +6,7 @@ import { DropdownPanel } from "../components/DropdownPanel";
 import { Input } from "../components/Input";
 import { LoadingMark } from "../components/Loading";
 import { DispatchDialog } from "./DispatchDialog";
+import { PresenceChip } from "./PresenceChip";
 import { Funnel, Magnifier } from "../components/icons";
 import { Select } from "../components/Select";
 import { useToast } from "../components/Toast";
@@ -168,6 +169,9 @@ function SpecCard({
           {spec.agent && `${spec.agent}${spec.model ? ` · ${spec.model}` : ""}`}
         </span>
         {spec.priority > 0 && <span className="spec-card-priority">P{spec.priority}</span>}
+        {(spec.status === "in_progress" || spec.status === "review") && (
+          <PresenceChip specId={spec.id} />
+        )}
         {(spec.status === "in_progress" || spec.status === "review") && (
           // A nested <button> is invalid; a span with a button role opens the
           // live log without triggering the card's drag or its open-on-click.

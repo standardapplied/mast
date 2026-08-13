@@ -25,6 +25,7 @@ import { Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
 import { DispatchDialog } from "./DispatchDialog";
+import { PresenceChip } from "./PresenceChip";
 import { LiveLog } from "./LiveLog";
 import { SpecRoom } from "./SpecRoom";
 import { canLaunchAgents, STATUS_LABEL, statusGuidance, statusLabel, statusTone } from "./lifecycle";
@@ -390,6 +391,7 @@ export function SpecDetail({
         status={statusLabel(spec.status)}
         statusTone={statusTone(spec.status)}
         guidance={statusGuidance(spec.status)}
+        presence={<PresenceChip specId={specId} />}
         drawerOpen={drawerOpen}
         onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
         onBack={embedded ? undefined : onBack}

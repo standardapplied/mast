@@ -19,9 +19,17 @@ import { latestRun, type AgentLogState } from "../tauri/agentLogStream";
 
 const MAX_LINES = 3000;
 const SNAPSHOT_TAIL = 200;
-const STATUS_POLL_MS = 5000;
 const LIFECYCLE_TYPES = new Set(["agent_failed", "spec_stranded"]);
 const RESTART_TYPES = new Set(["agent_session_started", "spec_dispatched"]);
+const RUN_CHANGE_TYPES = new Set([
+  "spec_dispatched",
+  "spec_restarted",
+  "agent_session_started",
+  "agent_session_stopped",
+  "agent_session_completed",
+  "agent_cancelled",
+  "agent_failed",
+]);
 
 export type LogLine = { key: number; raw: string; rendered: string };
 export type Lifecycle = { type: string; detail?: string };
@@ -72,18 +80,19 @@ export function useAgentLog(
 
   // The header is run-scoped like the log itself: this spec's runs, never the
   // container's current session (which may belong to a sibling spec in the
-  // same project).
+  // same project). Loaded once and refreshed on run-lifecycle events — badge
+  // state is the presence store's job, so there is no status poll.
+  const loadRuns = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
-    const poll = () =>
+    loadRuns.current = () =>
       void gateway.listRuns(specId).then((r) => {
         if (alive && r.ok && Array.isArray(r.value.runs)) setRuns(r.value.runs);
       });
-    poll();
-    const timer = setInterval(poll, STATUS_POLL_MS);
+    loadRuns.current();
     return () => {
       alive = false;
-      clearInterval(timer);
+      loadRuns.current = () => {};
     };
   }, [gateway, specId]);
 
@@ -98,8 +107,11 @@ export function useAgentLog(
       } else if (RESTART_TYPES.has(event.type)) {
         setLifecycle(null);
       }
+      if (RUN_CHANGE_TYPES.has(event.type) && (!event.spec || event.spec === specId)) {
+        loadRuns.current();
+      }
     });
-  }, [gateway, project]);
+  }, [gateway, project, specId]);
 
   useEffect(() => {
     if (!project) return;

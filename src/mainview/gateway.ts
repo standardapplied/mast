@@ -95,8 +95,9 @@ export type Gateway = {
   listProjects(): Promise<SailResult<ProjectListResponse>>;
   /** The org's FDE roster — the assignee candidates for a spec. */
   listFdes(): Promise<SailResult<FdeListResponse>>;
-  /** The spec's execution history (GET /v1/runs?spec=) — the log panel's header. */
-  listRuns(specId: string): Promise<SailResult<RunListResponse>>;
+  /** Execution history (GET /v1/runs?spec=), or every run when no spec is
+   *  given — the log panel's header and the presence store's seed. */
+  listRuns(specId?: string): Promise<SailResult<RunListResponse>>;
   /** Clean-stop a running run (POST /v1/runs/{id}/stop) — sail ≥ v0.13.172. */
   stopRun(runId: string): Promise<SailResult<StopRunResponse>>;
   /** A `tail -n` snapshot of the spec's newest run log, for instant content on open. */
@@ -443,26 +444,34 @@ export function createDemoGateway(): DemoGateway {
     },
 
     async listRuns(specId) {
+      const runsFor = (spec: DemoSpec) => {
+        const active = spec.status === "in_progress" || spec.status === "review";
+        const run = (role: "build" | "review", status: string) => ({
+          id: `demo-run-${spec.id}-${role}`,
+          project: spec.project,
+          spec_id: spec.id,
+          node: "demo",
+          role,
+          agent: "claude-code",
+          branch: spec.branch ?? `agent/${spec.id}`,
+          status,
+          started_at: role === "build" ? "2026-07-08T11:30:00Z" : "2026-07-08T12:10:00Z",
+          ...(status === "completed" ? { completed_at: "2026-07-08T12:05:00Z", exit_code: 0 } : {}),
+          ...(status === "running"
+            ? { last_activity_at: new Date().toISOString(), presence: "working" as const }
+            : {}),
+        });
+        return !active
+          ? []
+          : spec.status === "in_progress"
+            ? [run("build", "running")]
+            : [run("build", "completed"), run("review", "running")];
+      };
+      if (!specId) {
+        return ok({ runs: specs.flatMap(runsFor) });
+      }
       const spec = find(specId);
-      const active = spec && (spec.status === "in_progress" || spec.status === "review");
-      const run = (role: "build" | "review", status: string) => ({
-        id: `demo-run-${specId}-${role}`,
-        project: spec!.project,
-        spec_id: specId,
-        node: "demo",
-        role,
-        agent: "claude-code",
-        branch: spec!.branch ?? `agent/${specId}`,
-        status,
-        started_at: role === "build" ? "2026-07-08T11:30:00Z" : "2026-07-08T12:10:00Z",
-        ...(status === "completed" ? { completed_at: "2026-07-08T12:05:00Z", exit_code: 0 } : {}),
-      });
-      const runs = !active
-        ? []
-        : spec.status === "in_progress"
-          ? [run("build", "running")]
-          : [run("build", "completed"), run("review", "running")];
-      return ok({ spec: specId, runs });
+      return ok({ spec: specId, runs: spec ? runsFor(spec) : [] });
     },
 
     async stopRun(runId) {

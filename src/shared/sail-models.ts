@@ -142,6 +142,9 @@ export type AgentLogResponse = {
   error?: string | null;
 };
 
+/** A running run's read-time liveness; absent for terminal or never-stamped runs. */
+export type RunPresence = "working" | "quiet";
+
 /** One execution of an agent (RunView in ApiModels.java). */
 export type RunView = {
   id: string;
@@ -159,6 +162,9 @@ export type RunView = {
   log_path?: string;
   principal?: string;
   owner?: string;
+  /** When the agent last showed progress; absent on pre-0.21.3 servers and unstamped rows. */
+  last_activity_at?: string;
+  presence?: RunPresence;
 };
 
 /**

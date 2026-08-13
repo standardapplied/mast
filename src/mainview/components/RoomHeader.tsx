@@ -8,6 +8,7 @@ export function RoomHeader({
   status,
   statusTone,
   guidance,
+  presence,
   drawerOpen,
   onToggleDrawer,
   onBack,
@@ -18,6 +19,8 @@ export function RoomHeader({
   status: string;
   statusTone: BadgeTone;
   guidance?: string;
+  /** Liveness chip for the spec's running agent, rendered beside the status. */
+  presence?: ReactNode;
   drawerOpen: boolean;
   onToggleDrawer: () => void;
   onBack?: () => void;
@@ -42,6 +45,7 @@ export function RoomHeader({
           <h1 className="room-header-title detail-title">{title}</h1>
           <div className="room-header-status">
             <Badge tone={statusTone}>{status}</Badge>
+            {presence}
             {guidance && <span className="room-header-guidance">{guidance}</span>}
           </div>
         </div>
