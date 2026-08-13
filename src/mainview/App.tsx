@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ConnectionStatus, WhoAmI } from "../shared/sail-models";
 import { BoardScreen } from "./board/BoardScreen";
-import { presenceStore } from "./board/presenceStore";
+import { connectPresence, presenceStore } from "./board/presenceStore";
 import { RoomsScreen } from "./board/RoomsScreen";
 import { SpecDetail } from "./board/SpecDetail";
 import { Diagnostics } from "./components/Diagnostics";
@@ -137,10 +137,7 @@ export function App({
   // that, progress and agent_presence events keep the store live.
   useEffect(() => {
     if (!ready) return;
-    void gateway.listRuns().then((r) => {
-      if (r.ok && Array.isArray(r.value.runs)) presenceStore.noteRuns(r.value.runs);
-    });
-    return gateway.onEvent((event) => presenceStore.noteEvent(event));
+    return connectPresence(gateway, presenceStore);
   }, [gateway, ready]);
 
   useEffect(() => {

@@ -1,4 +1,5 @@
 import type { RunPresence, RunView, SailEvent } from "../../shared/sail-models";
+import type { Gateway } from "../gateway";
 
 /**
  * Per-spec agent presence, derived — never stored durably — from two feeds:
@@ -83,12 +84,19 @@ export class PresenceStore {
     }
     let changed = false;
     for (const [specId, run] of newest) {
-      if (run.status !== "running") {
+      // Only a run that actually carries presence seeds an entry: a live stamp,
+      // or the server's own quiet verdict. A running run with neither — a review
+      // or fix run, which is event-silent by design (no SAIL_SPEC_ID, so its
+      // hooks never stamp) — has no presence and no lifecycle event will ever
+      // clear it, so it must not leave a lingering entry here.
+      const stamp = parseTs(run.last_activity_at);
+      const hasPresence = stamp !== null || run.presence === "quiet";
+      if (run.status !== "running" || !hasPresence) {
         changed = this.entries.delete(specId) || changed;
         continue;
       }
       this.entries.set(specId, {
-        lastActivityAt: parseTs(run.last_activity_at),
+        lastActivityAt: stamp,
         role: run.role,
         quiet: run.presence === "quiet",
       });
@@ -157,3 +165,29 @@ export class PresenceStore {
 
 /** The app-wide instance; wired to the gateway's event stream in App. */
 export const presenceStore = new PresenceStore();
+
+/**
+ * Seeds `store` from one runs snapshot, then lets the live stream drive it.
+ * Subscribing is synchronous but the snapshot fetch is not, so a lifecycle
+ * event that lands mid-fetch is buffered and replayed *after* the seed — a run
+ * that goes terminal while the snapshot is in flight is never resurrected by
+ * the stale run rows it was read before. Returns the unsubscribe.
+ */
+export function connectPresence(
+  gateway: Pick<Gateway, "listRuns" | "onEvent">,
+  store: PresenceStore,
+): () => void {
+  let seeded = false;
+  const pending: SailEvent[] = [];
+  const unsubscribe = gateway.onEvent((event) => {
+    if (seeded) store.noteEvent(event);
+    else pending.push(event);
+  });
+  void gateway.listRuns().then((result) => {
+    if (result.ok && Array.isArray(result.value.runs)) store.noteRuns(result.value.runs);
+    seeded = true;
+    for (const event of pending) store.noteEvent(event);
+    pending.length = 0;
+  });
+  return unsubscribe;
+}

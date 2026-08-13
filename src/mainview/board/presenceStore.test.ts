@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { RunView, SailEvent } from "../../shared/sail-models";
-import { PRESENCE_THRESHOLD_MS, PresenceStore } from "./presenceStore";
+import type { RunListResponse, RunView, SailEvent } from "../../shared/sail-models";
+import type { SailResult } from "../../shared/types";
+import { connectPresence, PRESENCE_THRESHOLD_MS, PresenceStore } from "./presenceStore";
 
 const T0 = Date.parse("2026-08-13T12:00:00Z");
 
@@ -111,6 +112,33 @@ describe("load derivation", () => {
     ]);
     expect(store.version).toBe(0);
   });
+
+  test("a running run with no presence signal leaves no lingering entry", () => {
+    // A review/fix run is event-silent (no SAIL_SPEC_ID), so it never carries a
+    // stamp and no lifecycle event will ever clear it. It must not seed an entry.
+    const store = new PresenceStore();
+    store.noteRuns([run({ id: "r1", spec_id: "spec-a", status: "running", role: "review" })]);
+    expect(store.presenceOf("spec-a", T0)).toBeNull();
+    expect(store.version).toBe(0);
+  });
+
+  test("a stampless newest run clears a stale entry a prior snapshot left", () => {
+    const store = new PresenceStore();
+    store.noteRuns([
+      run({ id: "r1", spec_id: "spec-a", status: "running", last_activity_at: new Date(T0).toISOString() }),
+    ]);
+    expect(store.presenceOf("spec-a", T0)?.state).toBe("working");
+    store.noteRuns([
+      run({
+        id: "r2",
+        spec_id: "spec-a",
+        status: "running",
+        role: "review",
+        started_at: "2026-08-13T11:30:00Z",
+      }),
+    ]);
+    expect(store.presenceOf("spec-a", T0)).toBeNull();
+  });
 });
 
 describe("SSE updates", () => {
@@ -196,6 +224,47 @@ describe("role labeling", () => {
       event({ type: "agent_presence", data: { presence: "working", run_role: "review" } }),
     );
     expect(store.presenceOf("spec-a", T0)?.role).toBe("review");
+  });
+});
+
+describe("connect ordering", () => {
+  test("a terminal event racing the initial snapshot is not clobbered by stale rows", async () => {
+    const store = new PresenceStore();
+    let resolveRuns!: (r: SailResult<RunListResponse>) => void;
+    const runs = new Promise<SailResult<RunListResponse>>((resolve) => {
+      resolveRuns = resolve;
+    });
+    let emit: (event: SailEvent) => void = () => {};
+    const gateway = {
+      listRuns: () => runs,
+      onEvent: (listener: (event: SailEvent) => void) => {
+        emit = listener;
+        return () => {};
+      },
+    };
+
+    connectPresence(gateway, store);
+    // The run goes terminal while the snapshot — read a moment earlier, still
+    // showing it running with a fresh stamp — is in flight.
+    emit(event({ type: "agent_session_stopped", spec: "spec-a" }));
+    resolveRuns({
+      ok: true,
+      value: {
+        spec: "",
+        runs: [
+          run({
+            id: "r1",
+            spec_id: "spec-a",
+            status: "running",
+            last_activity_at: new Date(T0).toISOString(),
+          }),
+        ],
+      },
+    });
+    await runs;
+    await Promise.resolve();
+
+    expect(store.presenceOf("spec-a", T0)).toBeNull();
   });
 });
 
