@@ -458,6 +458,7 @@ export function SpecDetail({
             gateway={gateway}
             specId={spec.id}
             specStatus={spec.status}
+            specTitle={spec.title}
             canWrite={
               role.canWrite &&
               spec.status !== "done" &&

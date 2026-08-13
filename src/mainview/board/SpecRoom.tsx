@@ -15,7 +15,7 @@ import type {
   SailEvent,
 } from "../../shared/sail-models";
 import { Avatar } from "../components/Avatar";
-import { Send } from "../components/icons";
+import { Logo, Send } from "../components/icons";
 import { LoadingMark } from "../components/Loading";
 import { Textarea } from "../components/Textarea";
 import { Tooltip } from "../components/Tooltip";
@@ -211,6 +211,7 @@ export function SpecRoom({
   gateway,
   specId,
   specStatus,
+  specTitle,
   canWrite,
   currentUser,
   onOpenLog,
@@ -218,6 +219,7 @@ export function SpecRoom({
   gateway: Gateway;
   specId: string;
   specStatus?: string;
+  specTitle?: string;
   canWrite: boolean;
   currentUser?: string;
   onOpenLog: () => void;
@@ -567,7 +569,18 @@ export function SpecRoom({
             </div>
           )}
           {!loading && enriched && tail.visible.length === 0 && (
-            <p className="room-empty">No conversation yet. Lifecycle activity will appear here.</p>
+            <div className="room-beginning">
+              <div className="room-beginning-badge">
+                <Logo size={26} />
+              </div>
+              <h2 className="room-beginning-title">{specTitle ?? specId}</h2>
+              <p className="room-beginning-sub">
+                This is the beginning of the{" "}
+                <strong>{specTitle ?? specId}</strong> room. Messages you post and the
+                spec's lifecycle activity land here as the work moves.
+              </p>
+              <p className="room-beginning-id">{specId}</p>
+            </div>
           )}
           {groups.map((item, index) => {
             const previous = groups[index - 1];
