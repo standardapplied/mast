@@ -2015,18 +2015,6 @@ span.checkbox {
   line-height: 0;
 }
 
-.room-new {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.room-new-actions {
-  display: flex;
-  gap: 8px;
-}
-
 .room-list-scroll {
   display: flex;
   flex: 1;
@@ -2194,6 +2182,18 @@ button.room-section-head:hover {
   font-size: 10px;
 }
 
+
+.room-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.room-create-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
 
 .room-empty-state {
   display: grid;

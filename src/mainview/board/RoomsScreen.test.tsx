@@ -109,9 +109,14 @@ describe("RoomsScreen", () => {
 
   test("creates a draft room from only a title and opens it", async () => {
     const gateway = await render();
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
     act(() => {
       container.querySelector<HTMLButtonElement>('[aria-label="New room"]')?.click();
     });
+    expect(
+      container.querySelector('[role="dialog"]'),
+      "creating a room opens a modal (bottom sheet on narrow viewports), not an inline form",
+    ).not.toBeNull();
     const input = container.querySelector<HTMLInputElement>('[aria-label="Room title"]')!;
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
     act(() => {
