@@ -1,6 +1,6 @@
 [package]
 name = "mast"
-version = "0.1.28"
+version = "0.1.29"
 description = "Mast — the SAIL agentic cockpit"
 authors = ["Standard Applied"]
 edition = "2021"
