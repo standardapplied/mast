@@ -114,8 +114,9 @@ describe("load derivation", () => {
   });
 
   test("a running run with no presence signal leaves no lingering entry", () => {
-    // A review/fix run is event-silent (no SAIL_SPEC_ID), so it never carries a
-    // stamp and no lifecycle event will ever clear it. It must not seed an entry.
+    // A run with no stamp yet — brand-new, or a pre-upgrade row — has no presence.
+    // It must not seed an entry that no later event would clear. (Review/fix runs
+    // do stamp once they emit progress; this is the stampless case, any role.)
     const store = new PresenceStore();
     store.noteRuns([run({ id: "r1", spec_id: "spec-a", status: "running", role: "review" })]);
     expect(store.presenceOf("spec-a", T0)).toBeNull();
