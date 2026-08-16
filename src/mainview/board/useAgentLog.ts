@@ -3,6 +3,7 @@ import type { AgentLogRole, RunView, SailEvent } from "../../shared/sail-models"
 import { renderAgentLine } from "../agentLog";
 import type { Gateway } from "../gateway";
 import { latestRun, type AgentLogState } from "../tauri/agentLogStream";
+import { LIFECYCLE_TYPES, RESTART_TYPES, RUN_CHANGE_TYPES } from "./notifyPolicy";
 
 /**
  * Follows one spec's live agent log for the desktop panel: an instant
@@ -19,17 +20,6 @@ import { latestRun, type AgentLogState } from "../tauri/agentLogStream";
 
 const MAX_LINES = 3000;
 const SNAPSHOT_TAIL = 200;
-const LIFECYCLE_TYPES = new Set(["agent_failed", "spec_stranded"]);
-const RESTART_TYPES = new Set(["agent_session_started", "spec_dispatched"]);
-const RUN_CHANGE_TYPES = new Set([
-  "spec_dispatched",
-  "spec_restarted",
-  "agent_session_started",
-  "agent_session_stopped",
-  "agent_session_completed",
-  "agent_cancelled",
-  "agent_failed",
-]);
 
 export type LogLine = { key: number; raw: string; rendered: string };
 export type Lifecycle = { type: string; detail?: string };

@@ -4677,6 +4677,54 @@ button.room-section-head:hover {
   }
 }
 
+/* Needs-reply: the one state that pages a human — louder than presence ------------ */
+
+.needs-reply-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--error);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  font: 700 10px/1.4 var(--font-mono);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--error);
+}
+
+.room-needs-reply {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--error);
+  color: var(--background);
+  font: 700 10px/1 var(--font-mono);
+}
+
+.room-message-question {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 1px 7px;
+  margin-bottom: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--error);
+  font: 700 10px/1.4 var(--font-mono);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--error);
+}
+
+.room-message-body.is-question {
+  border-left: 2px solid var(--error);
+  padding-left: 10px;
+}
+
 /* Live agent log drawer ---------------------------------------------------------- */
 
 .spec-card-live {

@@ -610,9 +610,17 @@ export function SpecRoom({
                         {item.messages.map((entry) => (
                           <div
                             key={entry.id}
-                            className={`room-message-body${entry.message.delivery ? ` is-${entry.message.delivery}` : ""}`}
+                            className={`room-message-body${entry.message.delivery ? ` is-${entry.message.delivery}` : ""}${entry.message.question ? " is-question" : ""}`}
                             data-testid={`room-message-${entry.message.id}`}
                           >
+                            {entry.message.question && (
+                              <span
+                                className="room-message-question"
+                                data-testid={`question-${entry.message.id}`}
+                              >
+                                Question
+                              </span>
+                            )}
                             <Markdown source={entry.message.body} />
                             {entry.message.delivery === "pending" && (
                               <span className="room-message-delivery">Sending…</span>

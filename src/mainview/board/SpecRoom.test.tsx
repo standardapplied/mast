@@ -246,6 +246,25 @@ describe("SpecRoom", () => {
     expect(container.textContent).toContain("codex (for uday)");
   });
 
+  test("a question message renders with the marker, answered prose stays plain", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+
+    fake.receive({ ...remoteMessage("m-question", "Which auth flow?"), question: true });
+    await settle();
+    fake.receive(remoteMessage("m-plain", "Continuing with PKCE."));
+    await settle();
+
+    const question = container.querySelector('[data-testid="room-message-m-question"]')!;
+    expect(question.classList.contains("is-question")).toBe(true);
+    expect(question.querySelector('[data-testid="question-m-question"]')?.textContent).toBe(
+      "Question",
+    );
+    const plain = container.querySelector('[data-testid="room-message-m-plain"]')!;
+    expect(plain.classList.contains("is-question")).toBe(false);
+    expect(plain.querySelector('[data-testid^="question-"]')).toBeNull();
+  });
+
   test("renders consecutive agent reports as one visual group", async () => {
     const fake = makeGateway();
     for (let index = 0; index < 4; index++) {

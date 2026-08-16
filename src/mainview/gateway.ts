@@ -237,6 +237,8 @@ export function createDemoGateway(): DemoGateway {
       agent: "claude-code",
       model: "claude-fable-5",
       priority: 90,
+      needs_reply: true,
+      question_message_id: "demo-question-1",
     }),
     demoSpec({ id: "mast-api-client", project: "sail-mast", title: "Typed control-plane client", status: "done" }),
     demoSpec({ id: "mast-design-system", project: "sail-mast", title: "The SAIL theme", status: "done" }),
@@ -631,6 +633,7 @@ export function createDemoGateway(): DemoGateway {
         body: request.body,
         created_at: new Date().toISOString(),
         ...(request.reply_to ? { reply_to: request.reply_to } : {}),
+        ...(request.question ? { question: true } : {}),
       };
       messages.set(id, [...(messages.get(id) ?? []), message]);
       emit({
@@ -642,7 +645,11 @@ export function createDemoGateway(): DemoGateway {
         type: "spec_message_posted",
         agent: message.author,
         host: "demo",
-        data: { message_id: message.id, preview: message.body.slice(0, 160) },
+        data: {
+          message_id: message.id,
+          preview: message.body.slice(0, 160),
+          ...(message.question ? { question: true } : {}),
+        },
       });
       return ok({ message });
     },

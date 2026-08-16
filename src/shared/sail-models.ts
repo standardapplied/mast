@@ -33,6 +33,10 @@ export type GlobalSpecView = {
   updated_by?: string;
   /** max(updated_at, latest room message); absent on pre-0.17.2 servers. */
   last_activity_at?: string;
+  /** An agent question awaits a human reply; absent unless true (0.22.1+). */
+  needs_reply?: boolean;
+  /** The unanswered question's message id, present with needs_reply. */
+  question_message_id?: string;
 };
 
 export type SpecView = {
@@ -364,6 +368,8 @@ export type SpecMessage = {
   body: string;
   created_at: string;
   reply_to?: string;
+  /** Marked as a question needing a reply; absent unless true. */
+  question?: boolean;
 };
 
 export type SpecMessageListResponse = {
@@ -375,6 +381,7 @@ export type SpecMessageListResponse = {
 export type SpecMessagePostRequest = {
   body: string;
   reply_to?: string;
+  question?: boolean;
 };
 
 export type SpecMessagePostResponse = {

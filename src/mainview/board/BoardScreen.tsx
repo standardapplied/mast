@@ -169,6 +169,15 @@ function SpecCard({
           {spec.agent && `${spec.agent}${spec.model ? ` · ${spec.model}` : ""}`}
         </span>
         {spec.priority > 0 && <span className="spec-card-priority">P{spec.priority}</span>}
+        {spec.needs_reply && (
+          <span
+            className="needs-reply-chip"
+            data-testid={`needs-reply-${spec.id}`}
+            title="The agent asked a question and is waiting on you"
+          >
+            Needs reply
+          </span>
+        )}
         {(spec.status === "in_progress" || spec.status === "review") && (
           <PresenceChip specId={spec.id} />
         )}

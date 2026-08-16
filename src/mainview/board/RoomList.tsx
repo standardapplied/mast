@@ -178,6 +178,15 @@ export function RoomList({
                   <span className={`room-row-id-label${room.unread ? " is-unread" : ""}`}>
                     {room.spec.id}
                   </span>
+                  {room.needsReply && (
+                    <span
+                      className="room-needs-reply"
+                      data-testid={`needs-reply-${room.spec.id}`}
+                      aria-label="Needs your reply"
+                    >
+                      ?
+                    </span>
+                  )}
                   {workingIds.has(room.spec.id) && (
                     <span className="room-working-dot" aria-label="Agent working" />
                   )}
