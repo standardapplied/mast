@@ -82,6 +82,7 @@ export const EVENT_REGISTRY: Readonly<Record<string, EventRule>> = {
   review_stage_failed: { mode: "row", kind: "lifecycle", label: "Review stage failed" },
   review_iteration_started: { mode: "row", kind: "lifecycle", label: "Fix iteration started" },
   guardrail_triggered: { mode: "row", kind: "lifecycle", label: "Guardrail triggered" },
+  snapshot_created: { mode: "row", kind: "lifecycle", label: "Snapshot" },
   agent_stop_nudged: { mode: "row", kind: "lifecycle", label: "Agent nudged" },
   review_errored: { mode: "row", kind: "lifecycle", label: "Review errored" },
   review_escalated: { mode: "row", kind: "lifecycle", label: "Review escalated" },
@@ -152,7 +153,7 @@ const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
  * (guardrail, stop nudge). Empty string when the event carries none of them.
  */
 export function eventNarration(event: SailEvent): string {
-  const { detail, findings, reason, action } = event.data ?? {};
+  const { detail, findings, reason, action, label } = event.data ?? {};
   const counts =
     findings && typeof findings === "object"
       ? SEVERITY_ORDER.filter(
@@ -162,6 +163,7 @@ export function eventNarration(event: SailEvent): string {
           .join(", ")
       : "";
   return [
+    typeof label === "string" && label,
     typeof detail === "string" && detail,
     counts,
     typeof reason === "string" && reason,

@@ -444,6 +444,41 @@ export type FdeListResponse = {
   fdes: FdeView[];
 };
 
+/** One invite mode an agent does or does not support (GET /v1/agents). */
+export type AgentModeView = {
+  mode: "read_only" | "full";
+  supported: boolean;
+  /** The seam-declared reason when unsupported — rendered verbatim, never guessed. */
+  reason?: string;
+};
+
+/** One installable agent CLI and its invite-mode support (GET /v1/agents). */
+export type AgentView = {
+  name: string;
+  display_name: string;
+  modes: AgentModeView[];
+};
+
+export type AgentListResponse = {
+  agents: AgentView[];
+};
+
+/** Body of POST /v1/specs/{id}/invite: the agent to invite and the one mode choice. */
+export type InviteRequest = {
+  agent: string;
+  model?: string;
+  full?: boolean;
+};
+
+/** Response of POST /v1/specs/{id}/invite: the launched invite run. */
+export type InviteResponse = {
+  run_id: string;
+  principal: string;
+  mode: "read_only" | "full";
+  /** The pre-launch snapshot label a full invite paid with; empty for read only. */
+  snapshot: string;
+};
+
 export type WhoAmI = {
   fde?: string;
   name: string;
