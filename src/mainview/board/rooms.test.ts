@@ -140,6 +140,12 @@ describe("room ordering and unread state", () => {
     expect(visibleRooms(rooms, true)).toHaveLength(8);
   });
 
+  test("needsReply derives from the spec's server flag and defaults off", () => {
+    const asking = { ...spec("s1"), needs_reply: true };
+    expect(assembleRooms([asking], [], {})[0]!.needsReply).toBe(true);
+    expect(assembleRooms([spec("s2")], [], {})[0]!.needsReply).toBe(false);
+  });
+
   test("visiting persists both the activity watermark and per-project selection", () => {
     const storage = memoryStorage();
     const room = assembleRooms([spec("s1")], [], {})[0]!;

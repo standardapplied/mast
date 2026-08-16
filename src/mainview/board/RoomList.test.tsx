@@ -24,7 +24,12 @@ function spec(id: string, status: string, title: string): GlobalSpecView {
 }
 
 function room(id: string, status: string, title: string): RoomView {
-  return { spec: spec(id, status, title), activityAt: "2026-08-01T00:00:00Z", unread: false };
+  return {
+    spec: spec(id, status, title),
+    activityAt: "2026-08-01T00:00:00Z",
+    unread: false,
+    needsReply: false,
+  };
 }
 
 function mount(rooms: RoomView[]) {
@@ -52,6 +57,20 @@ function mount(rooms: RoomView[]) {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+});
+
+test("a room awaiting a reply shows the needs-reply mark", () => {
+  const asking = { ...room("stuck-spec", "in_progress", "Stuck"), needsReply: true };
+  mount([asking, room("quiet-spec", "in_progress", "Quiet")]);
+
+  expect(
+    container.querySelector('[data-testid="needs-reply-stuck-spec"]'),
+    "the flagged room wears the mark",
+  ).not.toBeNull();
+  expect(
+    container.querySelector('[data-testid="needs-reply-quiet-spec"]'),
+    "a room with no open question stays unmarked",
+  ).toBeNull();
 });
 
 test("a room row shows only the spec id — no title, no status", () => {

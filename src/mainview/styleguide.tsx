@@ -129,6 +129,7 @@ const ROOM_DEMO: RoomView[] = [
     },
     activityAt: "2026-07-28T09:00:00Z",
     unread: true,
+    needsReply: true,
   },
   {
     spec: {
@@ -142,6 +143,7 @@ const ROOM_DEMO: RoomView[] = [
     },
     activityAt: "2026-07-27T09:00:00Z",
     unread: false,
+    needsReply: false,
   },
 ];
 

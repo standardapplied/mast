@@ -9,6 +9,8 @@ export type RoomView = {
   spec: GlobalSpecView;
   activityAt: string;
   unread: boolean;
+  /** The spec's agent asked a question no human has answered yet. */
+  needsReply: boolean;
 };
 
 const ARCHIVE_STATUSES = new Set<SpecStatus>(["done", "cancelled", "archived"]);
@@ -72,6 +74,7 @@ export function assembleRooms(
         spec,
         activityAt,
         unread: !watermark || timestamp(activityAt) > timestamp(watermark),
+        needsReply: spec.needs_reply === true,
       };
     })
     .sort(

@@ -1,18 +1,18 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ConnectionStatus, WhoAmI } from "../shared/sail-models";
 import { BoardScreen } from "./board/BoardScreen";
+import { notification } from "./board/notifyPolicy";
 import { connectPresence, presenceStore } from "./board/presenceStore";
 import { RoomsScreen } from "./board/RoomsScreen";
 import { SpecDetail } from "./board/SpecDetail";
 import { Diagnostics } from "./components/Diagnostics";
 import { Logo } from "./components/icons";
 import { LoadingMark } from "./components/Loading";
-import { ToastProvider } from "./components/Toast";
+import { ToastProvider, useToast } from "./components/Toast";
 import { ToggleButton } from "./components/ToggleButton";
 import { Button, Eyebrow } from "./components/ui";
 import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
-import { onPush } from "./push";
 import type { ThemeController } from "./theme";
 import type { Updater } from "./updater";
 
@@ -81,6 +81,29 @@ function specIdFromHash(hash: string): string | null {
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
+/**
+ * Bridges the event stream to toasts through the pure notification policy:
+ * needs-reply and run-endings page the human, the focused room stays quiet.
+ */
+function Notifier({
+  gateway,
+  focusedSpecId,
+}: {
+  gateway: Gateway;
+  focusedSpecId: string | null;
+}) {
+  const { showToast } = useToast();
+  useEffect(
+    () =>
+      gateway.onEvent((event) => {
+        const decision = notification(event, focusedSpecId);
+        if (decision) showToast(decision.tone, decision.message);
+      }),
+    [gateway, focusedSpecId, showToast],
+  );
+  return null;
+}
+
 export function App({
   gateway,
   theme,
@@ -105,6 +128,7 @@ export function App({
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [identity, setIdentity] = useState<WhoAmI | null>(null);
+  const [roomFocus, setRoomFocus] = useState<string | null>(null);
 
   useEffect(
     () =>
@@ -191,6 +215,9 @@ export function App({
 
   const pillView = status ? pill(status) : { label: "Connecting…", state: "connecting" };
 
+  const focusedSpecId =
+    view === "rooms" ? roomFocus : view === "board" ? specId : null;
+
   // The workspace renders once we've ever been ready — transient degradation keeps the
   // last view (pill carries the truth) instead of yanking it to a full-screen
   // error. Only a genuinely unusable state takes over the whole surface:
@@ -217,6 +244,7 @@ export function App({
 
   return (
     <ToastProvider>
+      {ready && <Notifier gateway={gateway} focusedSpecId={focusedSpecId} />}
       <div className="cockpit">
         <header className="toolbar cockpit-toolbar">
           <button
@@ -266,7 +294,7 @@ export function App({
             {!showWorkspace ? (
               view === "rooms" && connectGate
             ) : (
-              <RoomsScreen gateway={gateway} />
+              <RoomsScreen gateway={gateway} onFocus={setRoomFocus} />
             )}
           </section>
           <section

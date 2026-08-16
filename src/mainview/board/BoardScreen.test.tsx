@@ -82,6 +82,19 @@ describe("BoardScreen cancelled lane", () => {
     expect(lane!.querySelector('[data-testid="card-chorus-invoice-ui"]')).not.toBeNull();
   });
 
+  test("a spec awaiting a reply wears the needs-reply chip, quiet specs stay bare", async () => {
+    const gateway = createDemoGateway();
+    await render(gateway);
+
+    const asking = container.querySelector('[data-testid="card-mast-kanban-board"]')!;
+    const chip = asking.querySelector('[data-testid="needs-reply-mast-kanban-board"]');
+    expect(chip, "the flagged card pages the human").not.toBeNull();
+    expect(chip!.textContent).toBe("Needs reply");
+
+    const quiet = container.querySelector('[data-testid="card-chorus-billing-export"]')!;
+    expect(quiet.querySelector('[data-testid^="needs-reply-"]')).toBeNull();
+  });
+
   test("a status this client doesn't know never crashes the board", async () => {
     const gateway = createDemoGateway();
     await gateway.updateSpec("chorus-invoice-ui", {

@@ -25,9 +25,12 @@ function storedWidth(storage: StorageLike): number {
 export function RoomsScreen({
   gateway,
   storage = localStorage,
+  onFocus,
 }: {
   gateway: Gateway;
   storage?: StorageLike;
+  /** Reports the focused room's spec id so app-level notifications can suppress it. */
+  onFocus?: (specId: string | null) => void;
 }) {
   const { data, open, create } = useRooms(gateway, storage);
   const [project, setProject] = useState("");
@@ -91,6 +94,10 @@ export function RoomsScreen({
   };
 
   const selected = data.rooms.find((room) => room.spec.id === selectedId);
+
+  useEffect(() => {
+    onFocus?.(selectedId ?? null);
+  }, [onFocus, selectedId]);
 
   return (
     <div className="rooms">
