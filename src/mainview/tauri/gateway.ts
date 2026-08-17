@@ -381,6 +381,9 @@ export function createTauriGateway(): Gateway {
     whoami: () => read("GET", "/v1/whoami"),
     listProjects: () => read("GET", "/v1/projects"),
     listFdes: () => read("GET", "/v1/fdes"),
+    listAgents: () => read("GET", "/v1/agents"),
+    invite: (id, request) =>
+      read("POST", `/v1/specs/${encodeURIComponent(id)}/invite`, { body: request }),
 
     listRuns: (specId) =>
       specId ? listSpecRuns(specId) : read<RunListResponse>("GET", "/v1/runs"),

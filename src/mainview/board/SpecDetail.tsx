@@ -25,6 +25,7 @@ import { Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
 import { DispatchDialog } from "./DispatchDialog";
+import { InviteDialog } from "./InviteDialog";
 import { PresenceChip } from "./PresenceChip";
 import { LiveLog } from "./LiveLog";
 import { SpecRoom } from "./SpecRoom";
@@ -124,6 +125,7 @@ export function SpecDetail({
   const [restoring, setRestoring] = useState<number | null>(null);
   const [stopTarget, setStopTarget] = useState<RunView | null>(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(() => storedDrawerOpen(embedded));
@@ -381,6 +383,7 @@ export function SpecDetail({
           label: restart ? "Re-dispatch…" : "Dispatch…",
           onSelect: () => setDispatchOpen(true),
         }]),
+    { kind: "item", label: "Invite…", onSelect: () => setInviteOpen(true) },
     { kind: "item", label: "Edit", onSelect: startEdit },
   ];
 
@@ -440,6 +443,13 @@ export function SpecDetail({
                 {restart ? "Re-dispatch" : "Dispatch"}
               </Button>
             )}
+            <Button
+              variant="ghost"
+              onClick={() => setInviteOpen(true)}
+              data-testid="detail-invite"
+            >
+              Invite
+            </Button>
             <Button variant="ghost" onClick={startEdit}>Edit</Button>
           </>
         }
@@ -758,6 +768,19 @@ export function SpecDetail({
           onResult={(message, ok) => {
             showToast(ok ? "success" : "error", message);
             if (ok) void load();
+          }}
+        />
+      )}
+
+      {inviteOpen && (
+        <InviteDialog
+          gateway={gateway}
+          spec={spec}
+          canDispatch={role.canDispatch}
+          roleKnown={role.known}
+          onClose={() => setInviteOpen(false)}
+          onResult={(message, ok) => {
+            showToast(ok ? "success" : "error", message);
           }}
         />
       )}

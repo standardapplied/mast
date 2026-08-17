@@ -278,4 +278,26 @@ describe("eventNarration", () => {
   test("renders nothing for an event without narration data", () => {
     expect(eventNarration(event(1, "agent_stopped", "2026-07-28T10:00:00Z"))).toBe("");
   });
+
+  test("renders the snapshot label so rollback is one visible step", () => {
+    const narration = eventNarration(
+      event(1, "snapshot_created", "2026-08-16T10:00:00Z", {
+        label: "invite-run-7",
+        run_id: "run-7",
+      }),
+    );
+    expect(narration).toBe("invite-run-7");
+  });
+});
+
+test("a snapshot_created event renders as a lifecycle row in the timeline", () => {
+  const timeline = assembleTimeline({
+    messages: [],
+    events: [event(1, "snapshot_created", "2026-08-16T10:00:00Z", { label: "invite-run-7" })],
+    reviews: [],
+    runs: [],
+  });
+
+  expect(timeline.map((item) => item.kind)).toEqual(["lifecycle"]);
+  expect(timeline[0]?.kind === "lifecycle" && timeline[0].label).toBe("Snapshot");
 });

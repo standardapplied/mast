@@ -1,10 +1,13 @@
 import type {
+  AgentListResponse,
   AgentLogResponse,
   AgentLogRole,
   ConnectionStatus,
   DispatchRequest,
   DispatchResponse,
   FdeListResponse,
+  InviteRequest,
+  InviteResponse,
   GlobalBoardResponse,
   GlobalSpecContentResponse,
   GlobalSpecDetailResponse,
@@ -95,6 +98,10 @@ export type Gateway = {
   listProjects(): Promise<SailResult<ProjectListResponse>>;
   /** The org's FDE roster — the assignee candidates for a spec. */
   listFdes(): Promise<SailResult<FdeListResponse>>;
+  /** The installable agents and their invite-mode support (GET /v1/agents) — sail ≥ 0.23. */
+  listAgents(): Promise<SailResult<AgentListResponse>>;
+  /** Invite an agent into a spec's room (POST /v1/specs/{id}/invite): read only or full. */
+  invite(id: string, request: InviteRequest): Promise<SailResult<InviteResponse>>;
   /** Execution history (GET /v1/runs?spec=), or every run when no spec is
    *  given — the log panel's header and the presence store's seed. */
   listRuns(specId?: string): Promise<SailResult<RunListResponse>>;
@@ -428,6 +435,80 @@ export function createDemoGateway(): DemoGateway {
           { handle: "sumesh", display_name: "Sumesh P", role: "member" },
           { handle: "uday", display_name: "Uday K", role: "admin" },
         ],
+      });
+    },
+
+    async listAgents() {
+      // Faithful to the control plane: mode support is declared at the server's
+      // agent seam, and the refusal reason travels so the dialog greys honestly.
+      return ok({
+        agents: [
+          {
+            name: "claude-code",
+            display_name: "Claude Code",
+            modes: [
+              { mode: "read_only" as const, supported: true },
+              { mode: "full" as const, supported: true },
+            ],
+          },
+          {
+            name: "codex",
+            display_name: "Codex CLI",
+            modes: [
+              {
+                mode: "read_only" as const,
+                supported: false,
+                reason:
+                  "Codex CLI has no harness-enforced read-only session inside a sail container." +
+                  " Invite it with full access instead.",
+              },
+              { mode: "full" as const, supported: true },
+            ],
+          },
+        ],
+      });
+    },
+
+    async invite(id, request) {
+      const spec = find(id);
+      if (!spec) {
+        return {
+          ok: false,
+          error: { status: 404, code: "spec_not_found", message: `Spec '${id}' was not found.` },
+        };
+      }
+      if (!request.full && request.agent === "codex") {
+        return {
+          ok: false,
+          error: {
+            status: 400,
+            code: "bad_request",
+            message:
+              "Codex CLI has no harness-enforced read-only session inside a sail container.",
+            action: "Invite codex with full access, or invite claude-code read-only.",
+          },
+        };
+      }
+      const runId = `run-${++eventId}`;
+      const family = request.agent.split("-")[0];
+      if (request.full) {
+        emit({
+          v: 1,
+          id: ++eventId,
+          ts: new Date().toISOString(),
+          project: spec.project,
+          spec: spec.id,
+          type: "snapshot_created",
+          agent: "sail",
+          host: "demo",
+          data: { label: `invite-${runId}`, run_id: runId },
+        });
+      }
+      return ok({
+        run_id: runId,
+        principal: `${family}/invite-${runId}`,
+        mode: request.full ? ("full" as const) : ("read_only" as const),
+        snapshot: request.full ? `invite-${runId}` : "",
       });
     },
 

@@ -169,6 +169,9 @@ function makeGateway({
         }),
       );
     },
+    emit(event: SailEvent) {
+      listeners.forEach((listener) => listener(event));
+    },
   };
 }
 
@@ -244,6 +247,31 @@ describe("SpecRoom", () => {
 
     expect(container.textContent).toContain("Full body from the server");
     expect(container.textContent).toContain("codex (for uday)");
+  });
+
+  test("a live snapshot_created event renders as a system row naming the label", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+
+    act(() =>
+      fake.emit({
+        v: 1,
+        id: 42,
+        ts: "2026-08-16T10:00:00Z",
+        project: "mast",
+        spec: "s1",
+        type: "snapshot_created",
+        agent: "sail",
+        host: "devbox",
+        data: { label: "invite-run-7", run_id: "run-7" },
+      }),
+    );
+    await settle();
+
+    const rows = Array.from(container.querySelectorAll(".room-system-row"));
+    const snapshot = rows.find((row) => /snapshot/i.test(row.textContent ?? ""));
+    expect(snapshot).not.toBeUndefined();
+    expect(snapshot?.textContent).toContain("invite-run-7");
   });
 
   test("a question message renders with the marker, answered prose stays plain", async () => {
