@@ -161,6 +161,28 @@ describe("SnapshotsPanel", () => {
     expect(text('[data-testid="snapshot-refusal"]')).toContain("would discard its live work");
   });
 
+  test("a completion event that outruns the accepted response still resolves the row", async () => {
+    const { gateway, emit } = makeGateway();
+    (gateway as unknown as Record<string, unknown>).restoreSnapshot = async (
+      _project: string,
+      name: string,
+    ) => {
+      emit(snapshotEvent("snapshot_restored", name));
+      return { ok: true, value: { project: "acme", name, action: "restore", status: "accepted" } };
+    };
+    mount(gateway);
+    await settle();
+
+    await act(async () => row("invite-run-3")!.querySelectorAll("button")[0]!.click());
+    await act(async () => confirmButton("restore", "Restore")!.click());
+    await settle();
+
+    expect(container.querySelector('[data-testid="snapshot-busy"]')).toBeNull();
+    expect(text('[data-testid="snapshot-notice"]')).toContain("Restored 'invite-run-3'.");
+    const buttons = [...row("invite-run-3")!.querySelectorAll("button")];
+    expect(buttons.every((b) => !b.disabled)).toBe(true);
+  });
+
   test("an accepted restore resolves in-progress state on its event, or surfaces its error", async () => {
     const { gateway, calls, emit } = makeGateway();
     mount(gateway);

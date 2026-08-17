@@ -15,10 +15,12 @@ import {
 /**
  * The per-project snapshots panel: the list with source badges and ages,
  * delete behind a confirm, restore behind a consequence-naming confirm.
- * Mutations are accepted asynchronously by the server, so a row shows its
- * in-progress state from the 202 and resolves on the matching
- * snapshot_restored / snapshot_deleted event; a server refusal (a live run,
- * a mutation already in flight) is rendered verbatim.
+ * Mutations are accepted asynchronously by the server, so a row registers its
+ * in-progress state before the request leaves — the server publishes completion
+ * from an independent worker, and a fast snapshot_restored / snapshot_deleted
+ * event must find the pending mutation even when it outruns the 202 response.
+ * A refused request clears that optimistic state (unless an event already
+ * resolved it) and renders the server's refusal verbatim.
  */
 
 type Confirm = { action: "restore" | "delete"; name: string };
@@ -60,6 +62,7 @@ export function SnapshotsPanel({
       const outcome = snapshotEventOutcome(event, project, pendingRef.current);
       if (!outcome) return;
       if (outcome.kind === "resolved") {
+        pendingRef.current = null;
         setPending(null);
         if (outcome.error) {
           setRefusal(outcome.error);
@@ -79,13 +82,16 @@ export function SnapshotsPanel({
     setConfirm(null);
     setRefusal(null);
     setNotice(null);
+    const mutation: SnapshotMutation = { name: request.name, action: request.action };
+    pendingRef.current = mutation;
+    setPending(mutation);
     const result =
       request.action === "restore"
         ? await gateway.restoreSnapshot(project, request.name)
         : await gateway.deleteSnapshot(project, request.name);
-    if (result.ok) {
-      setPending({ name: request.name, action: request.action });
-    } else {
+    if (!result.ok && pendingRef.current === mutation) {
+      pendingRef.current = null;
+      setPending(null);
       setRefusal(refusalDetail(result.error));
     }
   };
