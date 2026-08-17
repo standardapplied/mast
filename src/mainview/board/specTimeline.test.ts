@@ -301,3 +301,36 @@ test("a snapshot_created event renders as a lifecycle row in the timeline", () =
   expect(timeline.map((item) => item.kind)).toEqual(["lifecycle"]);
   expect(timeline[0]?.kind === "lifecycle" && timeline[0].label).toBe("Snapshot");
 });
+
+test("a failed snapshot mutation is labeled as a failure, never as a success", () => {
+  const timeline = assembleTimeline({
+    messages: [],
+    events: [
+      event(1, "snapshot_restored", "2026-08-17T10:00:00Z", {
+        label: "my-checkpoint",
+        error: "incus restore failed: boom",
+      }),
+      event(2, "snapshot_deleted", "2026-08-17T10:01:00Z", {
+        label: "invite-run-7",
+        error: "storage error",
+      }),
+      event(3, "snapshot_restored", "2026-08-17T10:02:00Z", { label: "my-checkpoint" }),
+    ],
+    reviews: [],
+    runs: [],
+  });
+
+  expect(
+    timeline.map((item) => (item.kind === "lifecycle" ? item.label : "")),
+  ).toEqual(["Snapshot restore failed", "Snapshot delete failed", "Snapshot restored"]);
+});
+
+test("a failed snapshot mutation's narration carries the error reason", () => {
+  const narration = eventNarration(
+    event(1, "snapshot_restored", "2026-08-17T10:00:00Z", {
+      label: "my-checkpoint",
+      error: "incus restore failed: boom",
+    }),
+  );
+  expect(narration).toBe("my-checkpoint · incus restore failed: boom");
+});

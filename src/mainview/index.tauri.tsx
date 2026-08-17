@@ -45,7 +45,7 @@ createRoot(container).render(
       <App
         gateway={gateway}
         theme={theme}
-        terminal={<TerminalWorkspace sources={rosterSources} />}
+        terminal={<TerminalWorkspace sources={rosterSources} gateway={gateway} />}
         updater={createTauriUpdater()}
       />
     )}

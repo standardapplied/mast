@@ -83,6 +83,8 @@ export const EVENT_REGISTRY: Readonly<Record<string, EventRule>> = {
   review_iteration_started: { mode: "row", kind: "lifecycle", label: "Fix iteration started" },
   guardrail_triggered: { mode: "row", kind: "lifecycle", label: "Guardrail triggered" },
   snapshot_created: { mode: "row", kind: "lifecycle", label: "Snapshot" },
+  snapshot_restored: { mode: "row", kind: "lifecycle", label: "Snapshot restored" },
+  snapshot_deleted: { mode: "row", kind: "lifecycle", label: "Snapshot deleted" },
   agent_stop_nudged: { mode: "row", kind: "lifecycle", label: "Agent nudged" },
   review_errored: { mode: "row", kind: "lifecycle", label: "Review errored" },
   review_escalated: { mode: "row", kind: "lifecycle", label: "Review escalated" },
@@ -99,6 +101,22 @@ function dataString(event: SailEvent, ...keys: string[]): string | undefined {
     if (typeof value === "string") return value;
   }
   return undefined;
+}
+
+const FAILURE_LABELS: Readonly<Record<string, string>> = {
+  snapshot_restored: "Snapshot restore failed",
+  snapshot_deleted: "Snapshot delete failed",
+};
+
+/**
+ * Sail reports an asynchronous snapshot-mutation failure on the same event type
+ * as its success, with `data.error` carrying the reason — so the row label must
+ * come from the event, not the registry alone, or a failed restore reads as
+ * "Snapshot restored".
+ */
+function rowLabel(event: SailEvent, label: string): string {
+  const failure = FAILURE_LABELS[event.type];
+  return failure && dataString(event, "error") ? failure : label;
 }
 
 function eventId(event: SailEvent): string {
@@ -149,11 +167,12 @@ const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
 
 /**
  * The event's narration for a timeline row: the sail loop events carry their story in
- * `detail` (stage name, escalation reason), `findings` (severity counts), and `reason`/`action`
- * (guardrail, stop nudge). Empty string when the event carries none of them.
+ * `detail` (stage name, escalation reason), `findings` (severity counts), `reason`/`action`
+ * (guardrail, stop nudge), and `error` (a failed async snapshot mutation). Empty string when
+ * the event carries none of them.
  */
 export function eventNarration(event: SailEvent): string {
-  const { detail, findings, reason, action, label } = event.data ?? {};
+  const { detail, findings, reason, action, label, error } = event.data ?? {};
   const counts =
     findings && typeof findings === "object"
       ? SEVERITY_ORDER.filter(
@@ -168,6 +187,7 @@ export function eventNarration(event: SailEvent): string {
     counts,
     typeof reason === "string" && reason,
     typeof action === "string" && action,
+    typeof error === "string" && error,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -294,7 +314,7 @@ export function assembleTimeline({
       id: eventId(event),
       occurredAt: event.ts,
       event,
-      label: rule.label,
+      label: rowLabel(event, rule.label),
       ...(runId && runById.has(runId) ? { run: runById.get(runId) } : {}),
     });
   }
