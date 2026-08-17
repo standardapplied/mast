@@ -184,6 +184,30 @@ export type StopRunResponse = {
   spec_cancelled: boolean;
 };
 
+/** One container snapshot; `source` is derived server-side from the name's prefix. */
+export type SnapshotView = {
+  name: string;
+  created_at: string;
+  source: string;
+};
+
+/** GET /v1/projects/{p}/snapshots — sail ≥ 0.24. */
+export type SnapshotListResponse = {
+  snapshots: SnapshotView[];
+  total: number;
+};
+
+/**
+ * The 202 receipt for an async snapshot mutation: the mutation completes later
+ * and reports through the matching snapshot_restored / snapshot_deleted event.
+ */
+export type SnapshotActionResponse = {
+  project: string;
+  name: string;
+  action: string;
+  status: string;
+};
+
 /** GET /v1/runs?project=&spec= — execution history, newest first. */
 export type RunListResponse = {
   project?: string;

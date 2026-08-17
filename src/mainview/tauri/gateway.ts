@@ -388,6 +388,18 @@ export function createTauriGateway(): Gateway {
     listRuns: (specId) =>
       specId ? listSpecRuns(specId) : read<RunListResponse>("GET", "/v1/runs"),
     stopRun: (runId) => read("POST", `/v1/runs/${encodeURIComponent(runId)}/stop`),
+    listSnapshots: (project) =>
+      read("GET", `/v1/projects/${encodeURIComponent(project)}/snapshots`),
+    restoreSnapshot: (project, name) =>
+      read(
+        "POST",
+        `/v1/projects/${encodeURIComponent(project)}/snapshots/${encodeURIComponent(name)}/restore`,
+      ),
+    deleteSnapshot: (project, name) =>
+      read(
+        "DELETE",
+        `/v1/projects/${encodeURIComponent(project)}/snapshots/${encodeURIComponent(name)}`,
+      ),
     agentLogSnapshot: async (specId, role, tail) => {
       const run = await latestSpecRun(specId, role);
       if (!run) {

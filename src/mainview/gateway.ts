@@ -22,6 +22,9 @@ import type {
   FindingDismissResponse,
   RunListResponse,
   SailEvent,
+  SnapshotActionResponse,
+  SnapshotListResponse,
+  SnapshotView,
   SpecContentRequest,
   SpecCreateRequest,
   SpecFilter,
@@ -107,6 +110,12 @@ export type Gateway = {
   listRuns(specId?: string): Promise<SailResult<RunListResponse>>;
   /** Clean-stop a running run (POST /v1/runs/{id}/stop) — sail ≥ v0.13.172. */
   stopRun(runId: string): Promise<SailResult<StopRunResponse>>;
+  /** The project's container snapshots with prefix-derived sources — sail ≥ 0.24. */
+  listSnapshots(project: string): Promise<SailResult<SnapshotListResponse>>;
+  /** Accept an async restore; completion arrives as the snapshot_restored event. */
+  restoreSnapshot(project: string, name: string): Promise<SailResult<SnapshotActionResponse>>;
+  /** Accept an async delete; completion arrives as the snapshot_deleted event. */
+  deleteSnapshot(project: string, name: string): Promise<SailResult<SnapshotActionResponse>>;
   /** A `tail -n` snapshot of the spec's newest run log, for instant content on open. */
   agentLogSnapshot(
     specId: string,
@@ -267,6 +276,22 @@ export function createDemoGateway(): DemoGateway {
   const emit = (event: SailEvent) => {
     events.push(event);
     listeners.forEach((l) => l(event));
+  };
+
+  const snapshotStore = new Map<string, SnapshotView[]>();
+  const demoSnapshots = (project: string): SnapshotView[] => {
+    let list = snapshotStore.get(project);
+    if (!list) {
+      const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+      list = [
+        { name: "invite-run-3", created_at: at(35), source: "invite" },
+        { name: "guardrail-20260817-090000", created_at: at(300), source: "guardrail" },
+        { name: "snap-20260817-080000", created_at: at(540), source: "dispatch" },
+        { name: "pre-upgrade", created_at: at(2000), source: "manual" },
+      ];
+      snapshotStore.set(project, list);
+    }
+    return list;
   };
 
   const view = ({ body: _b, plan: _p, ...spec }: DemoSpec): GlobalSpecView => spec;
@@ -591,6 +616,54 @@ export function createDemoGateway(): DemoGateway {
         data: { from: previous, to: "cancelled" },
       });
       return ok({ run_id: runId, stopped: true, spec_cancelled: true });
+    },
+
+    async listSnapshots(project) {
+      return ok({ snapshots: demoSnapshots(project), total: demoSnapshots(project).length });
+    },
+
+    async restoreSnapshot(project, name) {
+      const snapshot = demoSnapshots(project).find((s) => s.name === name);
+      if (!snapshot) {
+        return {
+          ok: false,
+          error: { status: 404, code: "not_found", message: `Snapshot '${name}' does not exist for project '${project}'.` },
+        };
+      }
+      emit({
+        v: 1,
+        id: ++eventId,
+        ts: new Date().toISOString(),
+        project,
+        type: "snapshot_restored",
+        agent: "sail",
+        host: "demo",
+        data: { label: name },
+      });
+      return ok({ project, name, action: "restore", status: "accepted" });
+    },
+
+    async deleteSnapshot(project, name) {
+      const list = demoSnapshots(project);
+      const index = list.findIndex((s) => s.name === name);
+      if (index < 0) {
+        return {
+          ok: false,
+          error: { status: 404, code: "not_found", message: `Snapshot '${name}' does not exist for project '${project}'.` },
+        };
+      }
+      list.splice(index, 1);
+      emit({
+        v: 1,
+        id: ++eventId,
+        ts: new Date().toISOString(),
+        project,
+        type: "snapshot_deleted",
+        agent: "sail",
+        host: "demo",
+        data: { label: name },
+      });
+      return ok({ project, name, action: "delete", status: "accepted" });
     },
 
     async agentLogSnapshot(_specId, role, tail) {

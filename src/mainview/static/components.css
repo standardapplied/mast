@@ -3833,6 +3833,17 @@ button.room-section-head:hover {
 .term-tab__add.is-active {
   color: var(--primary);
 }
+.term-tab__tools {
+  margin-left: auto;
+  align-self: center;
+  margin-right: 8px;
+}
+.snapshots-panel .meta-value {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .term-workspace__body {
   flex: 1;
   min-height: 0;

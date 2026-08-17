@@ -23,6 +23,7 @@ import { useToast } from "../components/Toast";
 import { Badge, Button, type BadgeTone } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
+import { SnapshotsPanel } from "./SnapshotsPanel";
 import {
   assembleTimeline,
   eventNarration,
@@ -233,6 +234,7 @@ export function SpecRoom({
   const [hasEarlier, setHasEarlier] = useState(false);
   const [draft, setDraft] = useState("");
   const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
+  const [snapshotsProject, setSnapshotsProject] = useState<string | null>(null);
   const [acting, setActing] = useState<Set<string>>(new Set());
   const scroller = useRef<HTMLDivElement>(null);
   const sources = useRef<Sources>(EMPTY_SOURCES);
@@ -662,6 +664,15 @@ export function SpecRoom({
                         raw log
                       </button>
                     )}
+                    {item.event.type.startsWith("snapshot_") && (
+                      <button
+                        type="button"
+                        className="dep-chip"
+                        onClick={() => setSnapshotsProject(item.event.project)}
+                      >
+                        snapshots
+                      </button>
+                    )}
                   </div>
                 </Fragment>
               );
@@ -780,6 +791,13 @@ export function SpecRoom({
             ? `This room is ${specStatus} — read-only.`
             : "You don’t have write access."}
         </p>
+      )}
+      {snapshotsProject && (
+        <SnapshotsPanel
+          gateway={gateway}
+          project={snapshotsProject}
+          onClose={() => setSnapshotsProject(null)}
+        />
       )}
     </div>
   );

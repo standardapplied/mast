@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { SnapshotsPanel } from "../board/SnapshotsPanel";
 import { cx } from "../components/cx";
+import type { Gateway } from "../gateway";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
 import { addTab, nextActive, tabKey, type Tab } from "./terminalTabs";
@@ -12,10 +14,17 @@ import { TerminalSplit } from "./TerminalSplit";
  * switching is instant and never tears down / garbles a live session. "+" opens
  * the picker for another project.
  */
-export function TerminalWorkspace({ sources }: { sources: RosterSources }) {
+export function TerminalWorkspace({
+  sources,
+  gateway,
+}: {
+  sources: RosterSources;
+  gateway?: Gateway;
+}) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [snapshotsFor, setSnapshotsFor] = useState<string | null>(null);
 
   const open = (target: string | undefined, label: string) => {
     setTabs((prev) => addTab(prev, target, label));
@@ -28,6 +37,7 @@ export function TerminalWorkspace({ sources }: { sources: RosterSources }) {
   };
 
   const showPicker = tabs.length === 0 || adding;
+  const activeTarget = tabs.find((t) => t.key === activeKey)?.target;
 
   return (
     <div className="term-workspace">
@@ -64,6 +74,15 @@ export function TerminalWorkspace({ sources }: { sources: RosterSources }) {
           >
             ＋
           </button>
+          {gateway && activeTarget && !adding && (
+            <button
+              type="button"
+              className="dep-chip term-tab__tools"
+              onClick={() => setSnapshotsFor(activeTarget)}
+            >
+              Snapshots
+            </button>
+          )}
         </div>
       )}
 
@@ -92,6 +111,13 @@ export function TerminalWorkspace({ sources }: { sources: RosterSources }) {
           />
         )}
       </div>
+      {gateway && snapshotsFor && (
+        <SnapshotsPanel
+          gateway={gateway}
+          project={snapshotsFor}
+          onClose={() => setSnapshotsFor(null)}
+        />
+      )}
     </div>
   );
 }

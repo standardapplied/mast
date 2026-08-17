@@ -83,6 +83,8 @@ export const EVENT_REGISTRY: Readonly<Record<string, EventRule>> = {
   review_iteration_started: { mode: "row", kind: "lifecycle", label: "Fix iteration started" },
   guardrail_triggered: { mode: "row", kind: "lifecycle", label: "Guardrail triggered" },
   snapshot_created: { mode: "row", kind: "lifecycle", label: "Snapshot" },
+  snapshot_restored: { mode: "row", kind: "lifecycle", label: "Snapshot restored" },
+  snapshot_deleted: { mode: "row", kind: "lifecycle", label: "Snapshot deleted" },
   agent_stop_nudged: { mode: "row", kind: "lifecycle", label: "Agent nudged" },
   review_errored: { mode: "row", kind: "lifecycle", label: "Review errored" },
   review_escalated: { mode: "row", kind: "lifecycle", label: "Review escalated" },
