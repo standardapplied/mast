@@ -31,6 +31,7 @@ import type {
   SpecMessage,
   SpecMessageListResponse,
   SpecMessagePostRequest,
+  SpecEventsResponse,
   SpecMessagePostResponse,
   SpecStatus,
   SpecUpdateRequest,
@@ -95,6 +96,13 @@ export type Gateway = {
     findingId: string,
   ): Promise<SailResult<FindingDismissResponse>>;
   recentEvents(limit?: number): Promise<SailResult<RecentEventsResponse>>;
+  /** One spec's durable event history (GET /v1/events?spec=), oldest first —
+   *  the room's backfill; `since` is the exclusive event-id cursor for gap-fill
+   *  after a stream reconnect. */
+  specEvents(
+    id: string,
+    options?: { since?: number; limit?: number },
+  ): Promise<SailResult<SpecEventsResponse>>;
   dispatch(project: string, request: DispatchRequest): Promise<SailResult<DispatchResponse>>;
   whoami(): Promise<SailResult<WhoAmI>>;
   /** The full synced project roster — every catalogued project with its local container state. */
@@ -865,6 +873,23 @@ export function createDemoGateway(): DemoGateway {
     async recentEvents(limit = 100) {
       const page = events.slice(-limit);
       return ok({ limit, returned: page.length, events: page });
+    },
+
+    async specEvents(id, options = {}) {
+      const limit = options.limit ?? 100;
+      const scoped = events.filter(
+        (event) =>
+          event.spec === id &&
+          (options.since === undefined || (event.id ?? 0) > options.since),
+      );
+      const page = options.since === undefined ? scoped.slice(-limit) : scoped.slice(0, limit);
+      return ok({
+        spec: id,
+        ...(options.since !== undefined ? { since: options.since } : {}),
+        limit,
+        returned: page.length,
+        events: page,
+      });
     },
 
     async connection() {

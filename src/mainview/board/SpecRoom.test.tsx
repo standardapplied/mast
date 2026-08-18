@@ -23,6 +23,18 @@ const review: ReviewView = {
   stages: [],
 };
 
+const lifecycleEvent = (id: number, type: string, spec = "s1"): SailEvent => ({
+  v: 1,
+  id,
+  ts: `2026-07-28T09:00:0${id % 10}Z`,
+  project: "mast",
+  spec,
+  type,
+  agent: "sail",
+  host: "devbox",
+  data: {},
+});
+
 const remoteMessage = (id: string, body: string): SpecMessage => ({
   id,
   spec_id: "s1",
@@ -37,22 +49,42 @@ function makeGateway({
   withFindings = true,
   postError,
   reviewGate,
+  specEvents = [],
+  specEventsError = false,
+  globalEvents = [],
 }: {
   withReview?: boolean;
   reviewStatus?: string;
   withFindings?: boolean;
   postError?: string;
   reviewGate?: Promise<void>;
+  specEvents?: SailEvent[];
+  specEventsError?: boolean;
+  globalEvents?: SailEvent[];
 } = {}) {
   let messages: SpecMessage[] = [];
+  let history = specEvents;
   const listeners = new Set<(event: SailEvent) => void>();
-  const calls = { posts: [] as string[], approved: [] as string[], dismissed: [] as string[] };
+  const statusListeners = new Set<(status: { stream: string }) => void>();
+  const calls = {
+    posts: [] as string[],
+    approved: [] as string[],
+    dismissed: [] as string[],
+    specEvents: [] as { since?: number; limit?: number }[],
+    recent: 0,
+    messages: 0,
+    reviews: 0,
+    runs: 0,
+  };
   const selectedReview = { ...review, status: reviewStatus };
   const gateway = {
-    listSpecMessages: async () => ({
-      ok: true as const,
-      value: { spec_id: "s1", messages, total: messages.length },
-    }),
+    listSpecMessages: async () => {
+      calls.messages++;
+      return {
+        ok: true as const,
+        value: { spec_id: "s1", messages, total: messages.length },
+      };
+    },
     postSpecMessage: async (_specId: string, request: { body: string }) => {
       calls.posts.push(request.body);
       if (postError) {
@@ -84,11 +116,31 @@ function makeGateway({
       );
       return { ok: true as const, value: { message } };
     },
-    recentEvents: async () => ({
-      ok: true as const,
-      value: { limit: 100, returned: 0, events: [] },
-    }),
+    recentEvents: async () => {
+      calls.recent++;
+      return {
+        ok: true as const,
+        value: { limit: 100, returned: globalEvents.length, events: globalEvents },
+      };
+    },
+    specEvents: async (_id: string, options: { since?: number; limit?: number } = {}) => {
+      calls.specEvents.push(options);
+      if (specEventsError) {
+        return {
+          ok: false as const,
+          error: { status: 405, code: "method_not_allowed", message: "old sail" },
+        };
+      }
+      const scoped = history
+        .filter((event) => options.since === undefined || (event.id ?? 0) > options.since)
+        .slice(0, options.limit ?? 100);
+      return {
+        ok: true as const,
+        value: { spec: "s1", limit: options.limit ?? 100, returned: scoped.length, events: scoped },
+      };
+    },
     specReviews: async () => {
+      calls.reviews++;
       if (reviewGate) await reviewGate;
       return {
         ok: true as const,
@@ -117,26 +169,29 @@ function makeGateway({
           : [],
       },
     }),
-    listRuns: async () => ({
-      ok: true as const,
-      value: {
-        spec: "s1",
-        runs: [
-          {
-            id: "run-1",
-            project: "mast",
-            spec_id: "s1",
-            node: "devbox",
-            role: "build" as const,
-            agent: "codex",
-            status: "running",
-            started_at: "2026-07-28T10:00:00Z",
-            principal: "codex/run-1",
-            owner: "uday",
-          },
-        ],
-      },
-    }),
+    listRuns: async () => {
+      calls.runs++;
+      return {
+        ok: true as const,
+        value: {
+          spec: "s1",
+          runs: [
+            {
+              id: "run-1",
+              project: "mast",
+              spec_id: "s1",
+              node: "devbox",
+              role: "build" as const,
+              agent: "codex",
+              status: "running",
+              started_at: "2026-07-28T10:00:00Z",
+              principal: "codex/run-1",
+              owner: "uday",
+            },
+          ],
+        },
+      };
+    },
     approveReview: async (reviewId: string) => {
       calls.approved.push(reviewId);
       return { ok: true as const, value: { review_id: reviewId, approved: true } };
@@ -149,10 +204,20 @@ function makeGateway({
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onConnectionStatus: (listener: (status: { stream: string }) => void) => {
+      statusListeners.add(listener);
+      return () => statusListeners.delete(listener);
+    },
   };
   return {
     gateway: gateway as unknown as Gateway,
     calls,
+    setHistory(events: SailEvent[]) {
+      history = events;
+    },
+    setStream(stream: string) {
+      statusListeners.forEach((listener) => listener({ stream }));
+    },
     receive(message: SpecMessage) {
       messages = [...messages, message];
       listeners.forEach((listener) =>
@@ -567,6 +632,99 @@ describe("SpecRoom", () => {
     expect(container.querySelector('[aria-label="Send"]')).toBeNull();
     expect(container.querySelector(".room-readonly")?.textContent).toBe(
       "This room is done — read-only.",
+    );
+  });
+
+  test("backfills from the spec-scoped history so lifecycle rows survive a busy global stream", async () => {
+    const fake = makeGateway({ specEvents: [lifecycleEvent(1, "spec_dispatched")] });
+    await mount(fake.gateway);
+
+    expect(fake.calls.specEvents).toEqual([{ limit: 100 }]);
+    expect(fake.calls.recent).toBe(0);
+    const rows = [...container.querySelectorAll(".room-system-row")];
+    expect(rows.some((row) => /dispatched/i.test(row.textContent ?? ""))).toBe(true);
+  });
+
+  test("falls back to the filtered global window when the server predates ?spec=", async () => {
+    const fake = makeGateway({
+      specEventsError: true,
+      globalEvents: [
+        lifecycleEvent(1, "spec_dispatched"),
+        lifecycleEvent(2, "spec_dispatched", "other-spec"),
+      ],
+    });
+    await mount(fake.gateway);
+
+    expect(fake.calls.recent).toBe(1);
+    const rows = [...container.querySelectorAll(".room-system-row")];
+    expect(rows.filter((row) => /dispatched/i.test(row.textContent ?? "")).length).toBe(1);
+  });
+
+  test("gap-fills scoped from the last seen event id on reconnect, without duplicates", async () => {
+    const fake = makeGateway({ specEvents: [lifecycleEvent(5, "spec_dispatched")] });
+    await mount(fake.gateway);
+
+    fake.setHistory([lifecycleEvent(5, "spec_dispatched"), lifecycleEvent(6, "agent_session_stopped")]);
+    act(() => fake.setStream("connected"));
+    act(() => fake.setStream("reconnecting"));
+    act(() => fake.setStream("connected"));
+    await settle();
+
+    expect(fake.calls.specEvents).toEqual([{ limit: 100 }, { since: 5, limit: 100 }]);
+    const rows = [...container.querySelectorAll(".room-system-row")];
+    expect(rows.filter((row) => /dispatched/i.test(row.textContent ?? "")).length).toBe(1);
+    expect(rows.some((row) => /agent stopped/i.test(row.textContent ?? ""))).toBe(true);
+  });
+
+  test("gap-fill pages until the server is drained, not just the first 100", async () => {
+    const seed = lifecycleEvent(5, "spec_dispatched");
+    const fake = makeGateway({ specEvents: [seed] });
+    await mount(fake.gateway);
+
+    const many = Array.from({ length: 105 }, (_, i) =>
+      lifecycleEvent(6 + i, "agent_session_stopped"),
+    );
+    fake.setHistory([seed, ...many]);
+    act(() => fake.setStream("connected"));
+    act(() => fake.setStream("reconnecting"));
+    act(() => fake.setStream("connected"));
+    await settle();
+
+    expect(
+      fake.calls.specEvents.slice(1),
+      "gap-fill must keep paging past the first 100 events until the server returns a short page",
+    ).toEqual([
+      { since: 5, limit: 100 },
+      { since: 105, limit: 100 },
+    ]);
+  });
+
+  test("gap-fill refreshes the message list and review/run state, not just the timeline", async () => {
+    const seed = lifecycleEvent(5, "spec_dispatched");
+    const fake = makeGateway({ specEvents: [seed] });
+    await mount(fake.gateway);
+    const before = { ...fake.calls };
+
+    fake.setHistory([
+      seed,
+      lifecycleEvent(6, "spec_message_posted"),
+      lifecycleEvent(7, "agent_session_stopped"),
+    ]);
+    act(() => fake.setStream("connected"));
+    act(() => fake.setStream("reconnecting"));
+    act(() => fake.setStream("connected"));
+    await settle();
+
+    expect(
+      fake.calls.messages,
+      "a gap-filled message event must refresh the durable message list",
+    ).toBeGreaterThan(before.messages);
+    expect(
+      fake.calls.reviews,
+      "a gap-filled lifecycle event must refresh reviews",
+    ).toBeGreaterThan(before.reviews);
+    expect(fake.calls.runs, "a gap-filled lifecycle event must refresh runs").toBeGreaterThan(
+      before.runs,
     );
   });
 });
