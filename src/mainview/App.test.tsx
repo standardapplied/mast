@@ -402,22 +402,22 @@ describe("App cockpit", () => {
     act(() => {
       container.querySelector<HTMLButtonElement>('[data-testid="filter-trigger"]')?.click();
     });
-    expect(container.querySelector('[data-testid="filter-panel"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="filter-panel"]')).not.toBeNull();
 
     act(() => {
-      container
+      document
         .querySelector<HTMLButtonElement>('[data-testid="filter-lanes"] .select-trigger')
         ?.click();
     });
     const laneOption = (lane: string) =>
-      container.querySelector<HTMLButtonElement>(`[data-testid="option-${lane}"]`);
+      document.querySelector<HTMLButtonElement>(`[data-testid="option-${lane}"]`);
     expect(laneOption("done")?.querySelector(".checkbox.is-checked")).not.toBeNull();
 
     act(() => laneOption("done")?.click());
     expect(container.querySelectorAll(".kanban-column").length).toBe(6);
     expect(container.querySelector('[data-testid="column-done"]')).toBeNull();
     expect(JSON.parse(localStorage.getItem("mast.board.lanes")!)).not.toContain("done");
-    expect(container.querySelector('[data-testid="filter-panel"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="filter-panel"]')).not.toBeNull();
 
     for (const lane of ["draft", "pending", "review", "awaiting_merge", "cancelled"]) {
       act(() => laneOption(lane)?.click());
@@ -432,12 +432,12 @@ describe("App cockpit", () => {
       container.querySelector<HTMLButtonElement>('[data-testid="filter-trigger"]')?.click();
     });
     act(() => {
-      container
+      document
         .querySelector<HTMLButtonElement>('[data-testid="filter-repo"] .select-trigger')
         ?.click();
     });
     act(() => {
-      container.querySelector<HTMLButtonElement>('[data-testid="option-api"]')?.click();
+      document.querySelector<HTMLButtonElement>('[data-testid="option-api"]')?.click();
     });
     await flush();
 
@@ -450,7 +450,7 @@ describe("App cockpit", () => {
     act(() => {
       container.querySelector<HTMLButtonElement>('[data-testid="filter-trigger"]')?.click();
     });
-    const mine = container.querySelector<HTMLButtonElement>('[data-testid="filter-mine"] .checkbox');
+    const mine = document.querySelector<HTMLButtonElement>('[data-testid="filter-mine"] .checkbox');
     act(() => mine?.click());
     await flush();
 

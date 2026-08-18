@@ -1552,6 +1552,18 @@ html.is-dragging-active * {
   color: var(--muted-foreground);
 }
 
+.invite-progress {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.dispatch-hint {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+
 .dispatch-facts {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -5,6 +5,7 @@ import type {
   AgentListResponse,
   GlobalSpecView,
   InviteResponse,
+  SailEvent,
 } from "../../shared/sail-models";
 import type { SailResult } from "../../shared/types";
 import type { Gateway } from "../gateway";
@@ -75,16 +76,22 @@ function mount({
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
+  const listeners = new Set<(event: SailEvent) => void>();
   const calls = {
     closed: 0,
     results: [] as Array<{ message: string; ok: boolean }>,
     requests: [] as Array<Record<string, unknown>>,
+    emit: (event: SailEvent) => act(() => listeners.forEach((l) => l(event))),
   };
   const gateway = {
     listAgents: async () => agents,
     invite: async (_id: string, request: Record<string, unknown>) => {
       calls.requests.push(request);
       return invite;
+    },
+    onEvent: (listener: (event: SailEvent) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
   } as unknown as Gateway;
   act(() =>
@@ -113,6 +120,21 @@ const openSelect = () => {
 };
 const option = (value: string) =>
   document.querySelector<HTMLButtonElement>(`[data-testid="option-${value}"]`);
+const toggle = (label: string) =>
+  Array.from(container.querySelectorAll<HTMLButtonElement>('[role="radio"]')).find(
+    (b) => b.textContent?.trim() === label,
+  );
+const selectFull = () => act(() => toggle("Full")?.click());
+const snapshotEvent = (runId: string, label: string): SailEvent => ({
+  v: 1,
+  ts: "2026-08-18T00:00:00Z",
+  project: "chorus",
+  spec: "s1",
+  type: "snapshot_created",
+  agent: "sail",
+  host: "demo",
+  data: { run_id: runId, label },
+});
 
 afterEach(() => {
   act(() => root.unmount());
@@ -135,8 +157,7 @@ describe("InviteDialog", () => {
   test("checking Full lifts the codex greying — every agent supports the full lane", async () => {
     mount();
     await settle();
-    const checkbox = container.querySelector('[role="checkbox"]') as HTMLElement;
-    act(() => checkbox.click());
+    selectFull();
     openSelect();
 
     expect(option("codex")?.disabled).toBe(false);
@@ -164,7 +185,7 @@ describe("InviteDialog", () => {
     expect(calls.closed).toBe(1);
   });
 
-  test("a full invite's toast names the snapshot it paid with", async () => {
+  test("a full invite shows snapshot progress, then toasts when the snapshot event lands", async () => {
     const calls = mount({
       invite: {
         ok: true,
@@ -177,13 +198,90 @@ describe("InviteDialog", () => {
       },
     });
     await settle();
-    const checkbox = container.querySelector('[role="checkbox"]') as HTMLElement;
-    act(() => checkbox.click());
+    selectFull();
     act(() => go().click());
     await settle();
 
     expect(calls.requests).toEqual([{ agent: "claude-code", full: true }]);
+    expect(
+      container.querySelector('[data-testid="invite-snapshotting"]'),
+      "the dialog waits on the async snapshot rather than closing on the 202",
+    ).not.toBeNull();
+    expect(calls.results).toEqual([]);
+    expect(calls.closed).toBe(0);
+
+    calls.emit(snapshotEvent("run-2", "invite-run-2"));
+    await settle();
+
     expect(calls.results[0]?.message).toContain("snapshot invite-run-2");
+    expect(calls.closed).toBe(1);
+  });
+
+  test("a full invite whose snapshot fails renders the error and holds the dialog open", async () => {
+    const calls = mount({
+      invite: {
+        ok: true,
+        value: {
+          run_id: "run-3",
+          principal: "claude/invite-run-3",
+          mode: "full",
+          snapshot: "invite-run-3",
+        },
+      },
+    });
+    await settle();
+    selectFull();
+    act(() => go().click());
+    await settle();
+
+    calls.emit({
+      ...snapshotEvent("run-3", "invite-run-3"),
+      data: { run_id: "run-3", label: "invite-run-3", error: "host is out of snapshot capacity" },
+    });
+    await settle();
+
+    expect(container.querySelector('[data-testid="invite-refusal"]')?.textContent).toBe(
+      "host is out of snapshot capacity",
+    );
+    expect(calls.closed).toBe(0);
+    expect(calls.results).toEqual([]);
+  });
+
+  test("a full invite can skip the snapshot — it sends snapshot:false and settles on the 202", async () => {
+    const calls = mount({
+      invite: {
+        ok: true,
+        value: {
+          run_id: "run-4",
+          principal: "claude/invite-run-4",
+          mode: "full",
+          snapshot: "",
+        },
+      },
+    });
+    await settle();
+    selectFull();
+    expect(
+      container.querySelector('[data-testid="invite-snapshot-field"]'),
+      "the snapshot choice appears only for a full invite",
+    ).not.toBeNull();
+    act(() => toggle("Skip")?.click());
+    act(() => go().click());
+    await settle();
+
+    expect(calls.requests).toEqual([{ agent: "claude-code", full: true, snapshot: false }]);
+    expect(
+      container.querySelector('[data-testid="invite-snapshotting"]'),
+      "with no snapshot there is nothing to wait on",
+    ).toBeNull();
+    expect(calls.closed).toBe(1);
+    expect(calls.results[0]?.ok).toBe(true);
+  });
+
+  test("the snapshot choice is hidden for a read-only invite", async () => {
+    mount();
+    await settle();
+    expect(container.querySelector('[data-testid="invite-snapshot-field"]')).toBeNull();
   });
 
   test("a 409 reservation refusal renders verbatim inline and holds the dialog open", async () => {

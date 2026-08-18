@@ -504,6 +504,10 @@ export type InviteRequest = {
   agent: string;
   model?: string;
   full?: boolean;
+  /** Full invites snapshot the container first; pass false to skip it (no rollback
+   *  point, instant launch — the escape hatch on the slow dir backend). Ignored
+   *  for read only, which never snapshots. Defaults to true when omitted. */
+  snapshot?: boolean;
 };
 
 /** Response of POST /v1/specs/{id}/invite: the launched invite run. */
@@ -511,7 +515,8 @@ export type InviteResponse = {
   run_id: string;
   principal: string;
   mode: "read_only" | "full";
-  /** The pre-launch snapshot label a full invite paid with; empty for read only. */
+  /** The pre-launch snapshot label a full invite paid with; empty for read only
+   *  and for a full invite that skipped the snapshot. */
   snapshot: string;
 };
 
