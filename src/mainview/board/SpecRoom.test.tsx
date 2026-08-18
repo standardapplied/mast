@@ -71,18 +71,34 @@ function makeGateway({
     approved: [] as string[],
     dismissed: [] as string[],
     specEvents: [] as { since?: number; limit?: number }[],
+    messageOptions: [] as { before?: string; after?: string; limit?: number }[],
     recent: 0,
     messages: 0,
     reviews: 0,
+    details: 0,
     runs: 0,
   };
   const selectedReview = { ...review, status: reviewStatus };
   const gateway = {
-    listSpecMessages: async () => {
+    listSpecMessages: async (
+      _id: string,
+      options: { before?: string; after?: string; limit?: number } = {},
+    ) => {
       calls.messages++;
+      calls.messageOptions.push(options);
+      let page: SpecMessage[];
+      if (options.after) {
+        page = messages.slice(messages.findIndex((message) => message.id === options.after) + 1);
+        if (options.limit) page = page.slice(0, options.limit);
+      } else if (options.before) {
+        page = messages.slice(0, messages.findIndex((message) => message.id === options.before));
+        if (options.limit) page = page.slice(-options.limit);
+      } else {
+        page = options.limit ? messages.slice(-options.limit) : messages;
+      }
       return {
         ok: true as const,
-        value: { spec_id: "s1", messages, total: messages.length },
+        value: { spec_id: "s1", messages: page, total: page.length },
       };
     },
     postSpecMessage: async (_specId: string, request: { body: string }) => {
@@ -147,28 +163,31 @@ function makeGateway({
         value: { spec_id: "s1", reviews: withReview ? [selectedReview] : [] },
       };
     },
-    reviewDetail: async () => ({
-      ok: true as const,
-      value: {
-        review: selectedReview,
-        findings: withFindings
-          ? [
-              {
-                id: "finding-1",
-                severity: "HIGH" as const,
-                category: "correctness",
-                file: "src/room.ts",
-                line_start: 12,
-                line_end: 12,
-                title: "Lost message",
-                description: "The echo can race the response.",
-                confidence: 0.9,
-                resolution: "OPEN" as const,
-              },
-            ]
-          : [],
-      },
-    }),
+    reviewDetail: async () => {
+      calls.details++;
+      return {
+        ok: true as const,
+        value: {
+          review: selectedReview,
+          findings: withFindings
+            ? [
+                {
+                  id: "finding-1",
+                  severity: "HIGH" as const,
+                  category: "correctness",
+                  file: "src/room.ts",
+                  line_start: 12,
+                  line_end: 12,
+                  title: "Lost message",
+                  description: "The echo can race the response.",
+                  confidence: 0.9,
+                  resolution: "OPEN" as const,
+                },
+              ]
+            : [],
+        },
+      };
+    },
     listRuns: async () => {
       calls.runs++;
       return {
@@ -726,5 +745,172 @@ describe("SpecRoom", () => {
     expect(fake.calls.runs, "a gap-filled lifecycle event must refresh runs").toBeGreaterThan(
       before.runs,
     );
+  });
+
+  test("a remote message event costs one messages call carrying after, nothing else", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-seed", "Already here"));
+    await mount(fake.gateway);
+    const before = { ...fake.calls };
+
+    act(() => fake.receive(remoteMessage("message-new", "Fresh arrival")));
+    await settle();
+
+    expect(fake.calls.messages - before.messages).toBe(1);
+    expect(fake.calls.messageOptions.at(-1)).toEqual({ after: "message-seed", limit: 100 });
+    expect(fake.calls.reviews).toBe(before.reviews);
+    expect(fake.calls.details).toBe(before.details);
+    expect(fake.calls.runs).toBe(before.runs);
+    expect(container.textContent).toContain("Fresh arrival");
+  });
+
+  test("recovers an out-of-order message by anchoring the fallback, not refetching the latest page", async () => {
+    const fake = makeGateway();
+    for (let i = 0; i <= 100; i++) {
+      fake.receive(remoteMessage(`msg-${String(i).padStart(3, "0")}`, `Body ${i}`));
+    }
+    await mount(fake.gateway);
+    const seen = fake.calls.messageOptions.length;
+
+    // msg-000 fell below the newest page at load; its id is older than the after-cursor, so the
+    // forward fetch skips it. The recovery must reach back to its position, not the latest page.
+    act(() =>
+      fake.emit({
+        v: 1,
+        id: 200,
+        ts: "2026-07-28T10:02:00Z",
+        project: "mast",
+        spec: "s1",
+        type: "spec_message_posted",
+        agent: "codex/run-1",
+        host: "devbox",
+        data: { message_id: "msg-000", preview: "Body 0" },
+      }),
+    );
+    await settle();
+
+    expect(
+      fake.calls.messageOptions.slice(seen).at(-1),
+      "the recovery anchors before the missing message's successor, not the latest page",
+    ).toEqual({ before: "msg-001", limit: 100 });
+  });
+
+  test("a review stage event with a review id refreshes that detail only", async () => {
+    const fake = makeGateway({ withReview: true });
+    await mount(fake.gateway);
+    const before = { ...fake.calls };
+
+    act(() =>
+      fake.emit({
+        ...lifecycleEvent(21, "review_stage_passed"),
+        data: { review_id: "review-1", detail: "correctness" },
+      }),
+    );
+    await settle();
+
+    expect(fake.calls.details - before.details).toBe(1);
+    expect(fake.calls.reviews).toBe(before.reviews);
+    expect(fake.calls.runs).toBe(before.runs);
+    expect(fake.calls.messages).toBe(before.messages);
+  });
+
+  test("a review event without a review id falls back to the review list", async () => {
+    const fake = makeGateway({ withReview: true });
+    await mount(fake.gateway);
+    const before = { ...fake.calls };
+
+    act(() => fake.emit(lifecycleEvent(22, "review_stage_passed")));
+    await settle();
+
+    expect(fake.calls.reviews - before.reviews).toBe(1);
+    expect(fake.calls.runs).toBe(before.runs);
+    expect(fake.calls.messages).toBe(before.messages);
+  });
+
+  test("a run-lifecycle event refreshes runs only", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    const before = { ...fake.calls };
+
+    act(() => fake.emit(lifecycleEvent(23, "agent_session_stopped")));
+    await settle();
+
+    expect(fake.calls.runs - before.runs).toBe(1);
+    expect(fake.calls.reviews).toBe(before.reviews);
+    expect(fake.calls.details).toBe(before.details);
+    expect(fake.calls.messages).toBe(before.messages);
+  });
+
+  test("a live run's telemetry and presence stream costs zero fetches and zero rows", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    const before = { ...fake.calls };
+    const rowsBefore = container.querySelectorAll(".room-system-row").length;
+
+    act(() => {
+      for (let index = 0; index < 20; index++) {
+        const type = index % 2 === 0 ? "agent_tool_started" : "agent_tool_finished";
+        fake.emit({ ...lifecycleEvent(30 + index, type), data: { tool: "Bash" } });
+      }
+      fake.emit({ ...lifecycleEvent(50, "agent_presence"), data: { presence: "working" } });
+      fake.emit({ ...lifecycleEvent(51, "agent_presence"), data: { presence: "quiet" } });
+    });
+    await settle();
+
+    expect(fake.calls).toEqual(before);
+    expect(container.querySelectorAll(".room-system-row").length).toBe(rowsBefore);
+  });
+
+  test("a burst of mixed events coalesces into one fetch per kind", async () => {
+    const fake = makeGateway({ withReview: true });
+    fake.receive(remoteMessage("message-seed", "Already here"));
+    await mount(fake.gateway);
+    const before = { ...fake.calls };
+
+    act(() => {
+      fake.emit(lifecycleEvent(61, "agent_session_stopped"));
+      fake.emit(lifecycleEvent(62, "agent_failed"));
+      fake.emit({
+        ...lifecycleEvent(63, "review_stage_passed"),
+        data: { review_id: "review-1" },
+      });
+      fake.emit({
+        ...lifecycleEvent(64, "review_stage_failed"),
+        data: { review_id: "review-1" },
+      });
+      fake.receive(remoteMessage("message-burst", "Mid-burst message"));
+    });
+    await settle();
+
+    expect(fake.calls.runs - before.runs).toBe(1);
+    expect(fake.calls.details - before.details).toBe(1);
+    expect(fake.calls.messages - before.messages).toBe(1);
+    expect(fake.calls.reviews).toBe(before.reviews);
+  });
+
+  test("a status change renders its row without any fetch; unknown events stay conservative", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    const before = { ...fake.calls };
+
+    act(() =>
+      fake.emit({
+        ...lifecycleEvent(71, "spec_status_changed"),
+        data: { from: "in_progress", to: "review" },
+      }),
+    );
+    await settle();
+
+    expect(fake.calls).toEqual(before);
+    expect(container.textContent).toContain("status changed to review");
+
+    act(() => fake.emit(lifecycleEvent(72, "spec_reticulated")));
+    await settle();
+
+    expect(
+      fake.calls.reviews - before.reviews,
+      "an unrecognized spec event must keep the conservative refresh",
+    ).toBe(1);
+    expect(fake.calls.runs - before.runs).toBe(1);
   });
 });
