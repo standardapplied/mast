@@ -244,6 +244,15 @@ const settle = async () => {
 
 const text = () => container.textContent ?? "";
 
+const openActions = async () => {
+  act(() => container.querySelector<HTMLButtonElement>('[data-testid="detail-actions"]')?.click());
+  await settle();
+};
+const menuItem = (label: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find((b) =>
+    (b.textContent ?? "").startsWith(label),
+  );
+
 beforeEach(() => {
   localStorage.removeItem("mast.room.details.rooms.open");
   localStorage.removeItem("mast.room.details.board.open");
@@ -267,6 +276,10 @@ describe("SpecDetail anti-flicker", () => {
     expect(container.querySelector(".room-details-drawer")).toBeNull();
     expect(localStorage.getItem("mast.room.details.board.open")).toBe("false");
     expect(container.querySelector(".room-header-title")?.textContent).toBe("s1");
+    expect(
+      container.querySelector(".room-header-eyebrow")?.textContent,
+      "the stable spec id shows above the human title",
+    ).toBe("s1");
 
     act(() => root.unmount());
     container.remove();
@@ -321,8 +334,9 @@ describe("SpecDetail anti-flicker", () => {
     const fake = makeGateway("review");
     await mount(fake.gateway);
 
-    const action = container.querySelector<HTMLButtonElement>('[data-testid="detail-dispatch"]');
-    expect(action?.textContent).toBe("Re-dispatch");
+    await openActions();
+    const action = menuItem("Re-dispatch");
+    expect(action, "the review spec's Actions menu offers Re-dispatch").not.toBeUndefined();
 
     act(() => action?.click());
     await settle();
@@ -334,14 +348,17 @@ describe("SpecDetail anti-flicker", () => {
   test("a pending spec keeps the plain Dispatch action", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);
-    expect(container.querySelector('[data-testid="detail-dispatch"]')?.textContent).toBe("Dispatch");
+    await openActions();
+    expect(menuItem("Dispatch")?.textContent).toContain("Dispatch");
+    expect(menuItem("Re-dispatch"), "a pending spec dispatches, not re-dispatches").toBeUndefined();
   });
 
   test("a member's write credential dispatches from the detail — no local admin gate", async () => {
     const fake = makeGateway("pending", undefined, { capabilities: ["read", "write"] });
     await mount(fake.gateway);
 
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="detail-dispatch"]')?.click());
+    await openActions();
+    act(() => menuItem("Dispatch")?.click());
     await settle();
 
     expect(container.querySelector('[data-testid="dispatch-role"]')).toBeNull();
@@ -373,7 +390,8 @@ describe("SpecDetail assignee editing", () => {
     container.querySelector<HTMLButtonElement>(".prop-assignee .select-trigger");
 
   const startEditing = async () => {
-    act(() => buttonByText("Edit").click());
+    await openActions();
+    act(() => menuItem("Edit")?.click());
     await settle();
   };
 
@@ -531,13 +549,12 @@ describe("SpecDetail stop action", () => {
     expect(text()).toContain("stop it from that box");
   });
 
-  test("a cancelled spec renders its badge and offers Re-dispatch", async () => {
+  test("a cancelled spec renders its status and offers Re-dispatch", async () => {
     const fake = makeGateway("cancelled");
     await mount(fake.gateway);
     expect(text()).toContain("Cancelled");
-    expect(container.querySelector('[data-testid="detail-dispatch"]')?.textContent).toBe(
-      "Re-dispatch",
-    );
+    await openActions();
+    expect(menuItem("Re-dispatch")?.textContent).toContain("Re-dispatch");
   });
 
   test("an unknown status string from a newer sail still renders", async () => {

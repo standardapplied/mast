@@ -12,7 +12,7 @@ import type { SailWireError } from "../../shared/types";
 import { Dialog } from "../components/Dialog";
 import { DetailsDrawer } from "../components/DetailsDrawer";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
-import { CaretLeft, Info } from "../components/icons";
+import { CaretDown, CaretLeft, Info } from "../components/icons";
 import { Input } from "../components/Input";
 import { LoadingMark } from "../components/Loading";
 import { NumberStepper } from "../components/NumberStepper";
@@ -358,24 +358,9 @@ export function SpecDetail({
     </div>
   );
 
+  // Live log and Stop stay inline while an agent runs; the lifecycle actions —
+  // dispatch, invite, edit — collapse into this one Actions menu.
   const actionItems: MenuNode[] = [
-    ...((spec.status === "in_progress" || spec.status === "review")
-      ? [{
-          kind: "item" as const,
-          label: spec.status === "review" ? "Review log" : "Live log",
-          disabled: !!logsOwner,
-          hint: logsOwner ? `On ${logsOwner}'s box` : undefined,
-          onSelect: () => setLogOpen(true),
-        }]
-      : []),
-    ...(spec.status === "in_progress"
-      ? [{
-          kind: "item" as const,
-          label: "Stop",
-          danger: true,
-          onSelect: () => void beginStop(),
-        }]
-      : []),
     ...(spec.status === "draft"
       ? []
       : [{
@@ -387,10 +372,16 @@ export function SpecDetail({
     { kind: "item", label: "Edit", onSelect: startEdit },
   ];
 
+  const openActionsMenu = (event: React.MouseEvent) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setActionMenu({ x: rect.right, y: rect.bottom + 4 });
+  };
+
   return (
     <div className="detail room-detail">
       <RoomHeader
         title={spec.title}
+        eyebrow={spec.id}
         status={statusLabel(spec.status)}
         statusTone={statusTone(spec.status)}
         guidance={statusGuidance(spec.status)}
@@ -398,18 +389,6 @@ export function SpecDetail({
         drawerOpen={drawerOpen}
         onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
         onBack={embedded ? undefined : onBack}
-        compactActions={
-          <Button
-            variant="ghost"
-            onClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              setActionMenu({ x: rect.right, y: rect.bottom + 4 });
-            }}
-            aria-label="Room actions"
-          >
-            Actions
-          </Button>
-        }
         actions={
           <>
             {(spec.status === "in_progress" || spec.status === "review") && (
@@ -432,25 +411,17 @@ export function SpecDetail({
                 Stop
               </Button>
             )}
-            {spec.status === "draft" ? (
+            {spec.status === "draft" && (
               <span className="detail-draft-note">Draft — add details, then move to pending</span>
-            ) : (
-              <Button
-                variant="ghost"
-                onClick={() => setDispatchOpen(true)}
-                data-testid="detail-dispatch"
-              >
-                {restart ? "Re-dispatch" : "Dispatch"}
-              </Button>
             )}
             <Button
               variant="ghost"
-              onClick={() => setInviteOpen(true)}
-              data-testid="detail-invite"
+              onClick={openActionsMenu}
+              data-testid="detail-actions"
+              aria-haspopup="menu"
             >
-              Invite
+              Actions <CaretDown size={12} />
             </Button>
-            <Button variant="ghost" onClick={startEdit}>Edit</Button>
           </>
         }
       />

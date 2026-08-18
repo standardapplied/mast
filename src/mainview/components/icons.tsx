@@ -188,3 +188,31 @@ export function Logo({ size = 20 }: { size?: number }) {
 export function Spinner({ size = 16 }: { size?: number }) {
   return <span className="spinner" style={{ width: size, height: size }} aria-label="Loading" />;
 }
+
+export function Rooms(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M2 3h12v8H6l-3 2.5V11H2z" />
+    </svg>
+  );
+}
+
+export function Board(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="2" y="2.5" width="3" height="11" />
+      <rect x="6.5" y="2.5" width="3" height="7.5" />
+      <rect x="11" y="2.5" width="3" height="4.5" />
+    </svg>
+  );
+}
+
+export function Terminal(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="1.5" y="2.5" width="13" height="11" />
+      <path d="M4 6.5l2.2 1.7L4 10" />
+      <path d="M8.5 10.5h3.5" />
+    </svg>
+  );
+}
