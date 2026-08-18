@@ -267,6 +267,10 @@ describe("SpecDetail anti-flicker", () => {
     expect(container.querySelector(".room-details-drawer")).toBeNull();
     expect(localStorage.getItem("mast.room.details.board.open")).toBe("false");
     expect(container.querySelector(".room-header-title")?.textContent).toBe("s1");
+    expect(
+      container.querySelector(".room-header-eyebrow")?.textContent,
+      "the stable spec id shows above the human title",
+    ).toBe("s1");
 
     act(() => root.unmount());
     container.remove();

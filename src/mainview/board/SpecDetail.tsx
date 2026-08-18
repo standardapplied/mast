@@ -391,6 +391,7 @@ export function SpecDetail({
     <div className="detail room-detail">
       <RoomHeader
         title={spec.title}
+        eyebrow={spec.id}
         status={statusLabel(spec.status)}
         statusTone={statusTone(spec.status)}
         guidance={statusGuidance(spec.status)}

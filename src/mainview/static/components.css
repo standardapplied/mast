@@ -1199,6 +1199,7 @@
   flex: 1;
   min-height: 120px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   align-content: start;
 }
@@ -1235,6 +1236,7 @@
 .kanban-card {
   appearance: none;
   display: grid;
+  min-width: 0;
   gap: 8px;
   text-align: left;
   background: var(--surface);
@@ -1285,7 +1287,9 @@ html.is-dragging-active * {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
   font-size: 12px;
   color: var(--subtle-foreground);
 }
@@ -2670,18 +2674,35 @@ button.room-section-head:hover {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  height: 64px;
+  min-height: 64px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
   box-sizing: border-box;
 }
 
-.room-header-main,
+.room-header-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .room-header-copy {
   display: grid;
   min-width: 0;
   gap: 2px;
+}
+
+.room-header-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--subtle-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .room-header-status {
@@ -2713,10 +2734,6 @@ button.room-section-head:hover {
 
 .room-header-compact-actions {
   display: none;
-}
-
-.room-header-main {
-  flex: 1;
 }
 
 .room-header-actions {
@@ -2791,6 +2808,7 @@ button.room-section-head:hover {
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   box-sizing: border-box;
+  justify-content: flex-end;
 }
 
 .room-drawer-head h2,

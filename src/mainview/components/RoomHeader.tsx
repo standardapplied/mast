@@ -5,6 +5,7 @@ import { Badge, Button, type BadgeTone } from "./ui";
 
 export function RoomHeader({
   title,
+  eyebrow,
   status,
   statusTone,
   guidance,
@@ -16,6 +17,8 @@ export function RoomHeader({
   compactActions,
 }: {
   title: string;
+  /** Stable identifier (the spec id) shown small above the human title. */
+  eyebrow?: string;
   status: string;
   statusTone: BadgeTone;
   guidance?: string;
@@ -42,6 +45,7 @@ export function RoomHeader({
           </button>
         )}
         <div className="room-header-copy">
+          {eyebrow && <span className="room-header-eyebrow">{eyebrow}</span>}
           <h1 className="room-header-title detail-title">{title}</h1>
           <div className="room-header-status">
             <Badge tone={statusTone}>{status}</Badge>
