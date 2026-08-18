@@ -23,6 +23,7 @@ import { useToast } from "../components/Toast";
 import { Badge, Button, type BadgeTone } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
+import { coalesce, isTelemetryEvent, roomRefreshFor } from "./roomRouting";
 import { SnapshotsPanel } from "./SnapshotsPanel";
 import {
   assembleTimeline,
@@ -259,6 +260,7 @@ export function SpecRoom({
   const atLatest = useRef(true);
   const posting = useRef(false);
   const deferredMessageEvents = useRef<Set<string>>(new Set());
+  const expectedMessageEvents = useRef<Set<string>>(new Set());
   const loadVersion = useRef(0);
   const { showToast } = useToast();
 
@@ -285,7 +287,7 @@ export function SpecRoom({
 
   const loadRoom = useCallback(async (version: number) => {
     const [messages, events, runs] = await Promise.all([
-      gateway.listSpecMessages(specId, undefined, PAGE_SIZE),
+      gateway.listSpecMessages(specId, { limit: PAGE_SIZE }),
       loadEvents(),
       gateway.listRuns(specId),
     ]);
@@ -333,7 +335,7 @@ export function SpecRoom({
 
   const refreshMessages = useCallback(
     async (live: boolean) => {
-      const result = await gateway.listSpecMessages(specId, undefined, PAGE_SIZE);
+      const result = await gateway.listSpecMessages(specId, { limit: PAGE_SIZE });
       if (!result.ok) return;
       applySources(
         {
@@ -344,6 +346,74 @@ export function SpecRoom({
       );
     },
     [applySources, gateway, specId],
+  );
+
+  /**
+   * Live catch-up: asks only for messages past the newest confirmed one. If an
+   * announced message_id still isn't in the merge — a cross-node message can
+   * sync in with an id older than the cursor — one full latest-page fetch
+   * recovers it, so the cursor is an optimization, never a correctness bet.
+   */
+  const fetchNewMessages = useCallback(async () => {
+    const newest = sources.current.messages.findLast((message) => !message.delivery);
+    if (!newest) return refreshMessages(true);
+    const result = await gateway.listSpecMessages(specId, {
+      after: newest.id,
+      limit: PAGE_SIZE,
+    });
+    if (!result.ok) return;
+    applySources(
+      {
+        ...sources.current,
+        messages: mergeMessages(sources.current.messages, result.value.messages),
+      },
+      "live",
+    );
+    const expected = expectedMessageEvents.current;
+    expectedMessageEvents.current = new Set();
+    const missing = [...expected].some(
+      (id) => !sources.current.messages.some((message) => message.id === id),
+    );
+    if (missing) await refreshMessages(true);
+  }, [applySources, gateway, refreshMessages, specId]);
+
+  const refreshRuns = useCallback(
+    async (live: boolean) => {
+      const runs = await gateway.listRuns(specId);
+      if (!runs.ok) return;
+      applySources({ ...sources.current, runs: runs.value.runs }, live ? "live" : "replace");
+    },
+    [applySources, gateway, specId],
+  );
+
+  const refreshReviews = useCallback(
+    async (live: boolean) => {
+      const reviews = await gateway.specReviews(specId);
+      if (!reviews.ok) return;
+      const details = await loadReviewDetails(reviews.value.reviews);
+      applySources({ ...sources.current, reviews: details }, live ? "live" : "replace");
+    },
+    [applySources, gateway, loadReviewDetails, specId],
+  );
+
+  const refreshReviewDetail = useCallback(
+    async (reviewId: string) => {
+      if (!sources.current.reviews.some((detail) => detail.review.id === reviewId)) {
+        return refreshReviews(true);
+      }
+      const result = await gateway.reviewDetail(reviewId);
+      if (!result.ok) return;
+      applySources(
+        {
+          ...sources.current,
+          reviews: sources.current.reviews.map((detail) =>
+            detail.review.id === reviewId ? result.value : detail,
+          ),
+        },
+        "live",
+      );
+    },
+    [applySources, gateway, refreshReviews],
   );
 
   const refreshReviewsAndRuns = useCallback(
@@ -368,8 +438,24 @@ export function SpecRoom({
   );
 
   useEffect(() => {
+    const refreshers = {
+      messages: coalesce(fetchNewMessages),
+      reviews: coalesce(() => refreshReviews(true)),
+      runs: coalesce(() => refreshRuns(true)),
+      fallback: coalesce(() => refreshReviewsAndRuns(true)),
+    };
+    const detailRefreshers = new Map<string, () => void>();
+    const refreshDetail = (reviewId: string) => {
+      let kick = detailRefreshers.get(reviewId);
+      if (!kick) {
+        kick = coalesce(() => refreshReviewDetail(reviewId));
+        detailRefreshers.set(reviewId, kick);
+      }
+      kick();
+    };
     const off = gateway.onEvent((event) => {
       if (event.spec !== specId) return;
+      if (isTelemetryEvent(event.type)) return;
       if (event.type === "spec_message_posted") {
         const messageId =
           typeof event.data?.message_id === "string" ? event.data.message_id : undefined;
@@ -378,7 +464,8 @@ export function SpecRoom({
           deferredMessageEvents.current.add(messageId);
           return;
         }
-        void refreshMessages(true);
+        if (messageId) expectedMessageEvents.current.add(messageId);
+        refreshers.messages();
         return;
       }
       applySources(
@@ -389,10 +476,21 @@ export function SpecRoom({
         },
         "live",
       );
-      void refreshReviewsAndRuns(true);
+      const refresh = roomRefreshFor(event);
+      if (refresh.kind === "review-detail") refreshDetail(refresh.reviewId);
+      else if (refresh.kind !== "none") refreshers[refresh.kind]();
     });
     return off;
-  }, [applySources, gateway, refreshMessages, refreshReviewsAndRuns, specId]);
+  }, [
+    applySources,
+    fetchNewMessages,
+    gateway,
+    refreshReviewDetail,
+    refreshReviews,
+    refreshReviewsAndRuns,
+    refreshRuns,
+    specId,
+  ]);
 
   const gapFill = useCallback(async () => {
     const version = loadVersion.current;
@@ -475,7 +573,10 @@ export function SpecRoom({
     const oldest = sources.current.messages.find((message) => !message.delivery);
     if (!oldest) return;
     setLoadingEarlier(true);
-    const result = await gateway.listSpecMessages(specId, oldest.id, PAGE_SIZE);
+    const result = await gateway.listSpecMessages(specId, {
+      before: oldest.id,
+      limit: PAGE_SIZE,
+    });
     setLoadingEarlier(false);
     if (!result.ok) return showToast("error", result.error.message);
     setHasEarlier(result.value.messages.length === PAGE_SIZE);

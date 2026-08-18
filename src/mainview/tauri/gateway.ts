@@ -359,10 +359,10 @@ export function createTauriGateway(): Gateway {
     restoreSpec: (id, rev) =>
       read("POST", `/v1/specs/${encodeURIComponent(id)}/restore`, { body: { rev } }),
     specReviews: (id) => read("GET", `/v1/specs/${encodeURIComponent(id)}/reviews`),
-    listSpecMessages: (id, before, limit) =>
+    listSpecMessages: (id, options = {}) =>
       read(
         "GET",
-        `/v1/specs/${encodeURIComponent(id)}/messages${queryString({ before, limit })}`,
+        `/v1/specs/${encodeURIComponent(id)}/messages${queryString(options)}`,
       ),
     postSpecMessage: (id, request) =>
       read("POST", `/v1/specs/${encodeURIComponent(id)}/messages`, { body: request }),

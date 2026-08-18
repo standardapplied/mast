@@ -79,10 +79,11 @@ export type Gateway = {
   specHistory(id: string): Promise<SailResult<GlobalSpecHistoryResponse>>;
   restoreSpec(id: string, rev: number): Promise<SailResult<GlobalSpecDetailResponse>>;
   specReviews(id: string): Promise<SailResult<ReviewListResponse>>;
+  /** Room messages: `before` pages history backward, `after` is the server's
+   *  exclusive ascending cursor for scoped live catch-up; at most one of the two. */
   listSpecMessages(
     id: string,
-    before?: string,
-    limit?: number,
+    options?: { before?: string; after?: string; limit?: number },
   ): Promise<SailResult<SpecMessageListResponse>>;
   postSpecMessage(
     id: string,
@@ -777,9 +778,15 @@ export function createDemoGateway(): DemoGateway {
       return ok({ spec_id: id, reviews });
     },
 
-    async listSpecMessages(id, before, limit = 50) {
+    async listSpecMessages(id, options = {}) {
       if (!find(id)) return notFound(id);
+      const { before, after, limit = 50 } = options;
       const all = messages.get(id) ?? [];
+      if (after !== undefined) {
+        const start = all.findIndex((message) => message.id === after);
+        const page = all.slice(start + 1, start + 1 + limit);
+        return ok({ spec_id: id, messages: page, total: page.length });
+      }
       const end = before ? all.findIndex((message) => message.id === before) : all.length;
       const pageEnd = end < 0 ? all.length : end;
       const page = all.slice(Math.max(0, pageEnd - limit), pageEnd);

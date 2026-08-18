@@ -111,7 +111,8 @@ describe("Tauri gateway room wire", () => {
     });
     const gateway = createTauriGateway();
 
-    await gateway.listSpecMessages("spec 1", "message/1", 100);
+    await gateway.listSpecMessages("spec 1", { before: "message/1", limit: 100 });
+    await gateway.listSpecMessages("spec 1", { after: "message/2", limit: 100 });
     await gateway.postSpecMessage("spec 1", { body: "hello" });
 
     expect(calls).toEqual([
@@ -120,6 +121,15 @@ describe("Tauri gateway room wire", () => {
         args: {
           method: "GET",
           path: "/v1/specs/spec%201/messages?before=message%2F1&limit=100",
+          body: null,
+          ifMatch: null,
+        },
+      },
+      {
+        cmd: "sail_request",
+        args: {
+          method: "GET",
+          path: "/v1/specs/spec%201/messages?after=message%2F2&limit=100",
           body: null,
           ifMatch: null,
         },
