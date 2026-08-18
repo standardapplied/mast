@@ -86,9 +86,16 @@ function makeGateway({
     ) => {
       calls.messages++;
       calls.messageOptions.push(options);
-      const page = options.after
-        ? messages.slice(messages.findIndex((message) => message.id === options.after) + 1)
-        : messages;
+      let page: SpecMessage[];
+      if (options.after) {
+        page = messages.slice(messages.findIndex((message) => message.id === options.after) + 1);
+        if (options.limit) page = page.slice(0, options.limit);
+      } else if (options.before) {
+        page = messages.slice(0, messages.findIndex((message) => message.id === options.before));
+        if (options.limit) page = page.slice(-options.limit);
+      } else {
+        page = options.limit ? messages.slice(-options.limit) : messages;
+      }
       return {
         ok: true as const,
         value: { spec_id: "s1", messages: page, total: page.length },
@@ -755,6 +762,37 @@ describe("SpecRoom", () => {
     expect(fake.calls.details).toBe(before.details);
     expect(fake.calls.runs).toBe(before.runs);
     expect(container.textContent).toContain("Fresh arrival");
+  });
+
+  test("recovers an out-of-order message by anchoring the fallback, not refetching the latest page", async () => {
+    const fake = makeGateway();
+    for (let i = 0; i <= 100; i++) {
+      fake.receive(remoteMessage(`msg-${String(i).padStart(3, "0")}`, `Body ${i}`));
+    }
+    await mount(fake.gateway);
+    const seen = fake.calls.messageOptions.length;
+
+    // msg-000 fell below the newest page at load; its id is older than the after-cursor, so the
+    // forward fetch skips it. The recovery must reach back to its position, not the latest page.
+    act(() =>
+      fake.emit({
+        v: 1,
+        id: 200,
+        ts: "2026-07-28T10:02:00Z",
+        project: "mast",
+        spec: "s1",
+        type: "spec_message_posted",
+        agent: "codex/run-1",
+        host: "devbox",
+        data: { message_id: "msg-000", preview: "Body 0" },
+      }),
+    );
+    await settle();
+
+    expect(
+      fake.calls.messageOptions.slice(seen).at(-1),
+      "the recovery anchors before the missing message's successor, not the latest page",
+    ).toEqual({ before: "msg-001", limit: 100 });
   });
 
   test("a review stage event with a review id refreshes that detail only", async () => {

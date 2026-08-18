@@ -351,8 +351,10 @@ export function SpecRoom({
   /**
    * Live catch-up: asks only for messages past the newest confirmed one. If an
    * announced message_id still isn't in the merge — a cross-node message can
-   * sync in with an id older than the cursor — one full latest-page fetch
-   * recovers it, so the cursor is an optimization, never a correctness bet.
+   * sync in with an id older than the cursor — a recovery fetch anchored just
+   * above the missing id's position (its loaded successor) reaches back to it.
+   * The latest page would not: the missing message can sit below that window in
+   * a busy room. The cursor is an optimization, never a correctness bet.
    */
   const fetchNewMessages = useCallback(async () => {
     const newest = sources.current.messages.findLast((message) => !message.delivery);
@@ -371,10 +373,30 @@ export function SpecRoom({
     );
     const expected = expectedMessageEvents.current;
     expectedMessageEvents.current = new Set();
-    const missing = [...expected].some(
+    const stillMissing = [...expected].filter(
       (id) => !sources.current.messages.some((message) => message.id === id),
     );
-    if (missing) await refreshMessages(true);
+    if (stillMissing.length === 0) return;
+    const oldestMissing = stillMissing.reduce((min, id) => (id < min ? id : min));
+    const successor = sources.current.messages
+      .map((message) => message.id)
+      .filter((id) => id > oldestMissing)
+      .reduce<string | undefined>(
+        (min, id) => (min === undefined || id < min ? id : min),
+        undefined,
+      );
+    const recovery = await gateway.listSpecMessages(
+      specId,
+      successor === undefined ? { limit: PAGE_SIZE } : { before: successor, limit: PAGE_SIZE },
+    );
+    if (!recovery.ok) return;
+    applySources(
+      {
+        ...sources.current,
+        messages: mergeMessages(sources.current.messages, recovery.value.messages),
+      },
+      "live",
+    );
   }, [applySources, gateway, refreshMessages, specId]);
 
   const refreshRuns = useCallback(
