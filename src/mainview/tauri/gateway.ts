@@ -376,6 +376,11 @@ export function createTauriGateway(): Gateway {
       ),
     recentEvents: (limit) =>
       read("GET", `/v1/events/recent${queryString({ limit })}`),
+    specEvents: (id, options = {}) =>
+      read(
+        "GET",
+        `/v1/events${queryString({ spec: id, since: options.since, limit: options.limit })}`,
+      ),
     dispatch: (project, request) =>
       read("POST", `/v1/projects/${encodeURIComponent(project)}/dispatch`, { body: request }),
     whoami: () => read("GET", "/v1/whoami"),

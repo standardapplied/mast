@@ -149,6 +149,10 @@ function makeGateway(
       ok: true as const,
       value: { limit: 100, returned: 0, events: [] },
     }),
+    specEvents: async (id: string) => ({
+      ok: true as const,
+      value: { spec: id, limit: 100, returned: 0, events: [] },
+    }),
     reviewDetail: async (id: string) => ({
       ok: true as const,
       value: {

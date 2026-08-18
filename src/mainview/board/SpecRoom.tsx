@@ -258,10 +258,17 @@ export function SpecRoom({
     [gateway],
   );
 
+  const loadEvents = useCallback(async (): Promise<SailEvent[] | null> => {
+    const scoped = await gateway.specEvents(specId, { limit: PAGE_SIZE });
+    if (scoped.ok) return scoped.value.events;
+    const recent = await gateway.recentEvents(PAGE_SIZE);
+    return recent.ok ? recent.value.events.filter((event) => event.spec === specId) : null;
+  }, [gateway, specId]);
+
   const loadRoom = useCallback(async (version: number) => {
-    const [messages, recent, runs] = await Promise.all([
+    const [messages, events, runs] = await Promise.all([
       gateway.listSpecMessages(specId, undefined, PAGE_SIZE),
-      gateway.recentEvents(PAGE_SIZE),
+      loadEvents(),
       gateway.listRuns(specId),
     ]);
     if (version !== loadVersion.current) return;
@@ -269,12 +276,7 @@ export function SpecRoom({
       messages: messages.ok
         ? mergeMessages(messages.value.messages, sources.current.messages)
         : sources.current.messages,
-      events: recent.ok
-        ? mergeEvents(
-            recent.value.events.filter((event) => event.spec === specId),
-            sources.current.events,
-          )
-        : sources.current.events,
+      events: events ? mergeEvents(events, sources.current.events) : sources.current.events,
       reviews: sources.current.reviews,
       runs: runs.ok ? runs.value.runs : sources.current.runs,
       decisions: sources.current.decisions,
@@ -290,7 +292,7 @@ export function SpecRoom({
       if (version !== loadVersion.current) return;
       applySources({ ...sources.current, reviews: details }, "replace");
     }
-  }, [applySources, gateway, loadReviewDetails, specId]);
+  }, [applySources, gateway, loadEvents, loadReviewDetails, specId]);
 
   useEffect(() => {
     const version = ++loadVersion.current;
@@ -390,6 +392,34 @@ export function SpecRoom({
     });
     return off;
   }, [applySources, gateway, refreshMessages, refreshReviewsAndRuns, specId]);
+
+  const gapFill = useCallback(async () => {
+    const version = loadVersion.current;
+    const since = sources.current.events.reduce<number | undefined>(
+      (max, event) =>
+        event.id !== undefined && (max === undefined || event.id > max) ? event.id : max,
+      undefined,
+    );
+    const result = await gateway.specEvents(
+      specId,
+      since === undefined ? { limit: PAGE_SIZE } : { since },
+    );
+    if (!result.ok || version !== loadVersion.current) return;
+    applySources(
+      { ...sources.current, events: mergeEvents(sources.current.events, result.value.events) },
+      "live",
+    );
+  }, [applySources, gateway, specId]);
+
+  useEffect(() => {
+    let previous: string | undefined;
+    return gateway.onConnectionStatus((status) => {
+      const reconnected =
+        previous !== undefined && previous !== "connected" && status.stream === "connected";
+      previous = status.stream;
+      if (reconnected) void gapFill();
+    });
+  }, [gapFill, gateway]);
 
   const jumpToLatest = useCallback(() => {
     atLatest.current = true;

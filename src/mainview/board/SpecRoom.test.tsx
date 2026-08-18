@@ -23,6 +23,18 @@ const review: ReviewView = {
   stages: [],
 };
 
+const lifecycleEvent = (id: number, type: string, spec = "s1"): SailEvent => ({
+  v: 1,
+  id,
+  ts: `2026-07-28T09:00:0${id % 10}Z`,
+  project: "mast",
+  spec,
+  type,
+  agent: "sail",
+  host: "devbox",
+  data: {},
+});
+
 const remoteMessage = (id: string, body: string): SpecMessage => ({
   id,
   spec_id: "s1",
@@ -37,16 +49,30 @@ function makeGateway({
   withFindings = true,
   postError,
   reviewGate,
+  specEvents = [],
+  specEventsError = false,
+  globalEvents = [],
 }: {
   withReview?: boolean;
   reviewStatus?: string;
   withFindings?: boolean;
   postError?: string;
   reviewGate?: Promise<void>;
+  specEvents?: SailEvent[];
+  specEventsError?: boolean;
+  globalEvents?: SailEvent[];
 } = {}) {
   let messages: SpecMessage[] = [];
+  let history = specEvents;
   const listeners = new Set<(event: SailEvent) => void>();
-  const calls = { posts: [] as string[], approved: [] as string[], dismissed: [] as string[] };
+  const statusListeners = new Set<(status: { stream: string }) => void>();
+  const calls = {
+    posts: [] as string[],
+    approved: [] as string[],
+    dismissed: [] as string[],
+    specEvents: [] as { since?: number; limit?: number }[],
+    recent: 0,
+  };
   const selectedReview = { ...review, status: reviewStatus };
   const gateway = {
     listSpecMessages: async () => ({
@@ -84,10 +110,29 @@ function makeGateway({
       );
       return { ok: true as const, value: { message } };
     },
-    recentEvents: async () => ({
-      ok: true as const,
-      value: { limit: 100, returned: 0, events: [] },
-    }),
+    recentEvents: async () => {
+      calls.recent++;
+      return {
+        ok: true as const,
+        value: { limit: 100, returned: globalEvents.length, events: globalEvents },
+      };
+    },
+    specEvents: async (_id: string, options: { since?: number; limit?: number } = {}) => {
+      calls.specEvents.push(options);
+      if (specEventsError) {
+        return {
+          ok: false as const,
+          error: { status: 405, code: "method_not_allowed", message: "old sail" },
+        };
+      }
+      const scoped = history.filter(
+        (event) => options.since === undefined || (event.id ?? 0) > options.since,
+      );
+      return {
+        ok: true as const,
+        value: { spec: "s1", limit: options.limit ?? 100, returned: scoped.length, events: scoped },
+      };
+    },
     specReviews: async () => {
       if (reviewGate) await reviewGate;
       return {
@@ -149,10 +194,20 @@ function makeGateway({
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onConnectionStatus: (listener: (status: { stream: string }) => void) => {
+      statusListeners.add(listener);
+      return () => statusListeners.delete(listener);
+    },
   };
   return {
     gateway: gateway as unknown as Gateway,
     calls,
+    setHistory(events: SailEvent[]) {
+      history = events;
+    },
+    setStream(stream: string) {
+      statusListeners.forEach((listener) => listener({ stream }));
+    },
     receive(message: SpecMessage) {
       messages = [...messages, message];
       listeners.forEach((listener) =>
@@ -568,5 +623,46 @@ describe("SpecRoom", () => {
     expect(container.querySelector(".room-readonly")?.textContent).toBe(
       "This room is done — read-only.",
     );
+  });
+
+  test("backfills from the spec-scoped history so lifecycle rows survive a busy global stream", async () => {
+    const fake = makeGateway({ specEvents: [lifecycleEvent(1, "spec_dispatched")] });
+    await mount(fake.gateway);
+
+    expect(fake.calls.specEvents).toEqual([{ limit: 100 }]);
+    expect(fake.calls.recent).toBe(0);
+    const rows = [...container.querySelectorAll(".room-system-row")];
+    expect(rows.some((row) => /dispatched/i.test(row.textContent ?? ""))).toBe(true);
+  });
+
+  test("falls back to the filtered global window when the server predates ?spec=", async () => {
+    const fake = makeGateway({
+      specEventsError: true,
+      globalEvents: [
+        lifecycleEvent(1, "spec_dispatched"),
+        lifecycleEvent(2, "spec_dispatched", "other-spec"),
+      ],
+    });
+    await mount(fake.gateway);
+
+    expect(fake.calls.recent).toBe(1);
+    const rows = [...container.querySelectorAll(".room-system-row")];
+    expect(rows.filter((row) => /dispatched/i.test(row.textContent ?? "")).length).toBe(1);
+  });
+
+  test("gap-fills scoped from the last seen event id on reconnect, without duplicates", async () => {
+    const fake = makeGateway({ specEvents: [lifecycleEvent(5, "spec_dispatched")] });
+    await mount(fake.gateway);
+
+    fake.setHistory([lifecycleEvent(5, "spec_dispatched"), lifecycleEvent(6, "agent_session_stopped")]);
+    act(() => fake.setStream("connected"));
+    act(() => fake.setStream("reconnecting"));
+    act(() => fake.setStream("connected"));
+    await settle();
+
+    expect(fake.calls.specEvents).toEqual([{ limit: 100 }, { since: 5 }]);
+    const rows = [...container.querySelectorAll(".room-system-row")];
+    expect(rows.filter((row) => /dispatched/i.test(row.textContent ?? "")).length).toBe(1);
+    expect(rows.some((row) => /agent stopped/i.test(row.textContent ?? ""))).toBe(true);
   });
 });

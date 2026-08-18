@@ -431,6 +431,18 @@ export type RecentEventsResponse = {
   events: SailEvent[];
 };
 
+/** GET /v1/events?spec= — one spec's durable history from the box's audit store,
+ *  RECORD-class events only, oldest first. `since` echoes the exclusive event-id
+ *  cursor when the request carried one. The record is node-local: events from
+ *  another box never appear here (sail ≥ 0.26). */
+export type SpecEventsResponse = {
+  spec: string;
+  since?: number;
+  limit: number;
+  returned: number;
+  events: SailEvent[];
+};
+
 export type EventStreamState = "connecting" | "connected" | "reconnecting" | "disconnected";
 
 export type ConnectionPhase =

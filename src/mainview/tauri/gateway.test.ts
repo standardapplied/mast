@@ -150,4 +150,19 @@ describe("Tauri gateway room wire", () => {
       "/v1/events/recent?limit=100",
     ]);
   });
+
+  test("scopes spec event history to the spec with the exclusive since cursor", async () => {
+    const calls = stubInvoke({ status: 200, body: "{}" });
+    const gateway = createTauriGateway();
+
+    await gateway.specEvents("spec 1", { limit: 100 });
+    await gateway.specEvents("spec 1", { since: 42 });
+    await gateway.specEvents("spec 1");
+
+    expect(calls.map((call) => call.args.path)).toEqual([
+      "/v1/events?spec=spec+1&limit=100",
+      "/v1/events?spec=spec+1&since=42",
+      "/v1/events?spec=spec+1",
+    ]);
+  });
 });
