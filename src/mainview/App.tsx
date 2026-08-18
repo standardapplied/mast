@@ -6,21 +6,15 @@ import { connectPresence, presenceStore } from "./board/presenceStore";
 import { RoomsScreen } from "./board/RoomsScreen";
 import { SpecDetail } from "./board/SpecDetail";
 import { Diagnostics } from "./components/Diagnostics";
-import { Logo } from "./components/icons";
+import { cx } from "./components/cx";
+import { Board, Logo, Rooms, Terminal } from "./components/icons";
 import { LoadingMark } from "./components/Loading";
 import { ToastProvider, useToast } from "./components/Toast";
-import { ToggleButton } from "./components/ToggleButton";
-import { Button, Eyebrow } from "./components/ui";
+import { Button } from "./components/ui";
 import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
 import type { ThemeController } from "./theme";
 import type { Updater } from "./updater";
-
-const NAV_OPTIONS = [
-  { value: "rooms", label: "Rooms" },
-  { value: "board", label: "Board" },
-  { value: "terminal", label: "Terminal" },
-];
 
 type AppView = "rooms" | "board" | "terminal";
 
@@ -242,35 +236,45 @@ export function App({
       />
     );
 
+  const navItems = [
+    { value: "rooms" as const, label: "Rooms", Icon: Rooms, go: goRooms },
+    { value: "board" as const, label: "Board", Icon: Board, go: goBoard },
+    ...(terminal
+      ? [{ value: "terminal" as const, label: "Terminal", Icon: Terminal, go: goTerminal }]
+      : []),
+  ];
+
+  // The connection state earns UI only when it needs attention: a thin banner
+  // appears while the workspace is up but the link is degraded. A healthy link
+  // shows nothing — no standing indicator competing for the eye.
+  const degraded = showWorkspace && !!status && status.phase !== "ready";
+
   return (
     <ToastProvider>
       {ready && <Notifier gateway={gateway} focusedSpecId={focusedSpecId} />}
       <div className="cockpit">
-        <header className="toolbar cockpit-toolbar">
-          <button
-            type="button"
-            className="cockpit-brand"
-            onClick={goRooms}
-          >
-            <Logo size={20} />
-            <span className="cockpit-wordmark">Mast</span>
+        <nav className="rail" aria-label="Sections">
+          <button type="button" className="rail-brand" onClick={goRooms} aria-label="Mast — rooms">
+            <Logo size={22} />
           </button>
-          <span className="cockpit-nav">
-            <ToggleButton
-              options={terminal ? NAV_OPTIONS : NAV_OPTIONS.slice(0, 2)}
-              value={view}
-              onChange={(next) => {
-                if (next === "terminal") goTerminal();
-                else if (next === "board") goBoard();
-                else goRooms();
-              }}
-            />
-          </span>
-          <span className="cockpit-toolbar-spacer" />
-          <span className="stream-pill" data-state={pillView.state} title={status?.detail ?? "Connection"}>
-            {pillView.label}
-          </span>
-          <span>
+          <div className="rail-nav">
+            {navItems.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                className={cx("rail-item", view === item.value && "is-active")}
+                data-testid={`nav-${item.value}`}
+                aria-label={item.label}
+                aria-current={view === item.value ? "page" : undefined}
+                title={item.label}
+                onClick={item.go}
+              >
+                <item.Icon size={20} />
+              </button>
+            ))}
+          </div>
+          <div className="rail-spacer" />
+          <div className="rail-user">
             <UserMenu
               theme={theme}
               tokenKind={status?.tokenKind}
@@ -280,8 +284,8 @@ export function App({
               onLogout={() => void logout()}
               onDiagnostics={() => setShowDiagnostics(true)}
             />
-          </span>
-        </header>
+          </div>
+        </nav>
         {/* Workspace views stay mounted once ready and hide via display:none — the
             terminal's session-preserving pattern applied to rooms and board, so a
             tab switch never cold-boots the view it left. */}
@@ -321,6 +325,12 @@ export function App({
             </section>
           )}
         </main>
+        {degraded && (
+          <div className="connection-banner" role="status" data-state={pillView.state}>
+            {pillView.label}
+            {status?.detail ? ` — ${status.detail}` : ""}
+          </div>
+        )}
         {showDiagnostics && <Diagnostics gateway={gateway} onClose={() => setShowDiagnostics(false)} />}
       </div>
     </ToastProvider>

@@ -34,12 +34,16 @@ async function render(
   act(() => root.render(<App gateway={gateway} theme={theme} terminal={terminal} />));
   await flush();
   if (initialView === "board") {
-    const board = [...container.querySelectorAll<HTMLButtonElement>(".cockpit-nav .toggle-option")]
-      .find((button) => button.textContent === "Board");
-    await act(async () => board?.click());
+    await act(async () => navBtn("board")?.click());
     await flush();
   }
 }
+
+const navItems = () => [...container.querySelectorAll<HTMLButtonElement>(".rail-item")];
+const navBtn = (view: string) =>
+  container.querySelector<HTMLButtonElement>(`[data-testid="nav-${view}"]`);
+const activeNav = () =>
+  container.querySelector(".rail-item.is-active")?.getAttribute("aria-label");
 
 afterEach(() => {
   act(() => root.unmount());
@@ -49,15 +53,11 @@ afterEach(() => {
 describe("App cockpit", () => {
   test("lands on rooms and keeps the board one view away", async () => {
     await render(undefined, "rooms");
-    expect(container.querySelector(".cockpit-brand")?.textContent).toBe("Mast");
-    expect(container.querySelector(".cockpit-nav .toggle-option.is-selected")?.textContent).toBe(
-      "Rooms",
-    );
+    expect(container.querySelector(".rail-brand")).not.toBeNull();
+    expect(activeNav()).toBe("Rooms");
     expect(container.querySelector('[data-testid="room-chorus-invoice-ui"]')).not.toBeNull();
 
-    const board = [...container.querySelectorAll<HTMLButtonElement>(".cockpit-nav .toggle-option")]
-      .find((button) => button.textContent === "Board");
-    await act(async () => board?.click());
+    await act(async () => navBtn("board")?.click());
     expect(container.querySelectorAll(".kanban-column").length).toBe(7);
     expect(container.querySelector('[data-testid="card-mast-kanban-board"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="column-done"]')?.textContent).toContain(
@@ -67,32 +67,33 @@ describe("App cockpit", () => {
 
   test("Rooms/Board nav remains reachable when no terminal is injected", async () => {
     await render(undefined, "rooms");
-    const labels = [...container.querySelectorAll(".cockpit-nav .toggle-option")]
-      .map((button) => button.textContent);
+    const labels = navItems().map((button) => button.getAttribute("aria-label"));
     expect(labels).toEqual(["Rooms", "Board"]);
   });
 
   test("Rooms/Board/Terminal nav switches views and keeps the terminal mounted", async () => {
     await render(<div data-testid="term-stub">TERM</div>, "rooms");
-    const nav = () => [...container.querySelectorAll<HTMLButtonElement>(".cockpit-nav .toggle-option")];
-    const active = () => container.querySelector(".cockpit-nav .toggle-option.is-selected")?.textContent;
 
-    expect(nav().map((i) => i.textContent)).toEqual(["Rooms", "Board", "Terminal"]);
-    expect(active()).toBe("Rooms");
+    expect(navItems().map((i) => i.getAttribute("aria-label"))).toEqual([
+      "Rooms",
+      "Board",
+      "Terminal",
+    ]);
+    expect(activeNav()).toBe("Rooms");
     expect(container.querySelector('[data-testid="term-stub"]')).toBeNull();
 
-    await act(async () => nav()[2]!.click());
+    await act(async () => navBtn("terminal")!.click());
     const stub = container.querySelector('[data-testid="term-stub"]');
     expect(stub).not.toBeNull();
     expect((stub!.closest(".cockpit-view") as HTMLElement).style.display).toBe("flex");
-    expect(active()).toBe("Terminal");
+    expect(activeNav()).toBe("Terminal");
 
     // Back to the board: the terminal stays mounted (session preserved), just hidden.
-    await act(async () => nav()[1]!.click());
+    await act(async () => navBtn("board")!.click());
     const stillThere = container.querySelector('[data-testid="term-stub"]');
     expect(stillThere).not.toBeNull();
     expect((stillThere!.closest(".cockpit-view") as HTMLElement).style.display).toBe("none");
-    expect(active()).toBe("Board");
+    expect(activeNav()).toBe("Board");
   });
 
   test("leaving a view and returning never cold-boots it", async () => {
@@ -103,16 +104,15 @@ describe("App cockpit", () => {
       refetches++;
       return originalListSpecs(filter);
     };
-    const nav = () => [...container.querySelectorAll<HTMLButtonElement>(".cockpit-nav .toggle-option")];
     const roomsView = () => container.querySelector('[data-testid="view-rooms"]') as HTMLElement;
     expect(roomsView().querySelector(".rooms-sidebar")).not.toBeNull();
 
-    await act(async () => nav()[2]!.click());
+    await act(async () => navBtn("terminal")!.click());
     await flush();
     expect(roomsView().style.display).toBe("none");
     expect(roomsView().querySelector(".rooms-sidebar")).not.toBeNull();
 
-    await act(async () => nav()[0]!.click());
+    await act(async () => navBtn("rooms")!.click());
     await flush();
     expect(roomsView().style.display).toBe("flex");
     expect(roomsView().querySelector(".rooms-sidebar")).not.toBeNull();
@@ -337,9 +337,7 @@ describe("App cockpit", () => {
     act(() => root.render(<App gateway={gateway} theme={theme} />));
     await flush();
     await flush();
-    const board = [...container.querySelectorAll<HTMLButtonElement>(".cockpit-nav .toggle-option")]
-      .find((button) => button.textContent === "Board");
-    await act(async () => board?.click());
+    await act(async () => navBtn("board")?.click());
     await flush();
 
     const card = container.querySelector<HTMLElement>('[data-testid="card-chorus-billing-export"]');
