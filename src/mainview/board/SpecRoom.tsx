@@ -87,6 +87,24 @@ function mergeEvents(existing: SailEvent[], incoming: SailEvent[]): SailEvent[] 
   );
 }
 
+/**
+ * Drops the optimistic decision a server-confirmed {@code review_approved} / {@code
+ * finding_dismissed} event supersedes. Shared by the live handler and the reconnect gap-fill so a
+ * confirmation that lands during a disconnect clears the optimistic overlay just like a live one.
+ */
+function reconcileDecisions(decisions: TimelineDecision[], event: SailEvent): TimelineDecision[] {
+  if (event.type !== "review_approved" && event.type !== "finding_dismissed") return decisions;
+  const action = event.type === "review_approved" ? "approved" : "dismissed";
+  const reviewId = event.data?.review_id;
+  const findingId = event.data?.finding_id;
+  return decisions.filter(
+    (candidate) =>
+      candidate.action !== action ||
+      candidate.reviewId !== reviewId ||
+      candidate.findingId !== findingId,
+  );
+}
+
 function reconcileTimeline(
   previous: BufferedTail<TimelineItem>,
   next: TimelineItem[],
@@ -363,28 +381,11 @@ export function SpecRoom({
         void refreshMessages(true);
         return;
       }
-      const decision =
-        event.type === "review_approved"
-          ? { action: "approved" as const, reviewId: event.data?.review_id }
-          : event.type === "finding_dismissed"
-            ? {
-                action: "dismissed" as const,
-                reviewId: event.data?.review_id,
-                findingId: event.data?.finding_id,
-              }
-            : undefined;
       applySources(
         {
           ...sources.current,
           events: mergeEvents(sources.current.events, [event]),
-          decisions: decision
-            ? sources.current.decisions.filter(
-                (candidate) =>
-                  candidate.action !== decision.action ||
-                  candidate.reviewId !== decision.reviewId ||
-                  candidate.findingId !== decision.findingId,
-              )
-            : sources.current.decisions,
+          decisions: reconcileDecisions(sources.current.decisions, event),
         },
         "live",
       );
@@ -395,21 +396,49 @@ export function SpecRoom({
 
   const gapFill = useCallback(async () => {
     const version = loadVersion.current;
-    const since = sources.current.events.reduce<number | undefined>(
+    let since = sources.current.events.reduce<number | undefined>(
       (max, event) =>
         event.id !== undefined && (max === undefined || event.id > max) ? event.id : max,
       undefined,
     );
-    const result = await gateway.specEvents(
-      specId,
-      since === undefined ? { limit: PAGE_SIZE } : { since },
-    );
-    if (!result.ok || version !== loadVersion.current) return;
-    applySources(
-      { ...sources.current, events: mergeEvents(sources.current.events, result.value.events) },
-      "live",
-    );
-  }, [applySources, gateway, specId]);
+    let sawMessage = false;
+    let sawLifecycle = false;
+    // Page until the server returns a short page: a single request would silently drop every
+    // event past the first PAGE_SIZE of a long disconnect.
+    for (;;) {
+      const result = await gateway.specEvents(
+        specId,
+        since === undefined ? { limit: PAGE_SIZE } : { since, limit: PAGE_SIZE },
+      );
+      if (!result.ok || version !== loadVersion.current) return;
+      const batch = result.value.events;
+      if (batch.length === 0) break;
+      // Message events drive the message list, not the event timeline (as in the live handler);
+      // lifecycle events merge into the timeline and reconcile optimistic decisions.
+      let decisions = sources.current.decisions;
+      const lifecycle: SailEvent[] = [];
+      for (const event of batch) {
+        if (event.id !== undefined && (since === undefined || event.id > since)) since = event.id;
+        if (event.type === "spec_message_posted") {
+          sawMessage = true;
+          continue;
+        }
+        sawLifecycle = true;
+        lifecycle.push(event);
+        decisions = reconcileDecisions(decisions, event);
+      }
+      applySources(
+        { ...sources.current, events: mergeEvents(sources.current.events, lifecycle), decisions },
+        "live",
+      );
+      if (batch.length < PAGE_SIZE) break;
+    }
+    if (version !== loadVersion.current) return;
+    // Gap-filled events must trigger the same durable refreshes the live handler runs, or the
+    // message list, reviews, and runs stay stale until the next live event.
+    if (sawMessage) void refreshMessages(true);
+    if (sawLifecycle) void refreshReviewsAndRuns(true);
+  }, [applySources, gateway, refreshMessages, refreshReviewsAndRuns, specId]);
 
   useEffect(() => {
     let previous: string | undefined;

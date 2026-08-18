@@ -72,13 +72,19 @@ function makeGateway({
     dismissed: [] as string[],
     specEvents: [] as { since?: number; limit?: number }[],
     recent: 0,
+    messages: 0,
+    reviews: 0,
+    runs: 0,
   };
   const selectedReview = { ...review, status: reviewStatus };
   const gateway = {
-    listSpecMessages: async () => ({
-      ok: true as const,
-      value: { spec_id: "s1", messages, total: messages.length },
-    }),
+    listSpecMessages: async () => {
+      calls.messages++;
+      return {
+        ok: true as const,
+        value: { spec_id: "s1", messages, total: messages.length },
+      };
+    },
     postSpecMessage: async (_specId: string, request: { body: string }) => {
       calls.posts.push(request.body);
       if (postError) {
@@ -125,15 +131,16 @@ function makeGateway({
           error: { status: 405, code: "method_not_allowed", message: "old sail" },
         };
       }
-      const scoped = history.filter(
-        (event) => options.since === undefined || (event.id ?? 0) > options.since,
-      );
+      const scoped = history
+        .filter((event) => options.since === undefined || (event.id ?? 0) > options.since)
+        .slice(0, options.limit ?? 100);
       return {
         ok: true as const,
         value: { spec: "s1", limit: options.limit ?? 100, returned: scoped.length, events: scoped },
       };
     },
     specReviews: async () => {
+      calls.reviews++;
       if (reviewGate) await reviewGate;
       return {
         ok: true as const,
@@ -162,26 +169,29 @@ function makeGateway({
           : [],
       },
     }),
-    listRuns: async () => ({
-      ok: true as const,
-      value: {
-        spec: "s1",
-        runs: [
-          {
-            id: "run-1",
-            project: "mast",
-            spec_id: "s1",
-            node: "devbox",
-            role: "build" as const,
-            agent: "codex",
-            status: "running",
-            started_at: "2026-07-28T10:00:00Z",
-            principal: "codex/run-1",
-            owner: "uday",
-          },
-        ],
-      },
-    }),
+    listRuns: async () => {
+      calls.runs++;
+      return {
+        ok: true as const,
+        value: {
+          spec: "s1",
+          runs: [
+            {
+              id: "run-1",
+              project: "mast",
+              spec_id: "s1",
+              node: "devbox",
+              role: "build" as const,
+              agent: "codex",
+              status: "running",
+              started_at: "2026-07-28T10:00:00Z",
+              principal: "codex/run-1",
+              owner: "uday",
+            },
+          ],
+        },
+      };
+    },
     approveReview: async (reviewId: string) => {
       calls.approved.push(reviewId);
       return { ok: true as const, value: { review_id: reviewId, approved: true } };
@@ -660,9 +670,61 @@ describe("SpecRoom", () => {
     act(() => fake.setStream("connected"));
     await settle();
 
-    expect(fake.calls.specEvents).toEqual([{ limit: 100 }, { since: 5 }]);
+    expect(fake.calls.specEvents).toEqual([{ limit: 100 }, { since: 5, limit: 100 }]);
     const rows = [...container.querySelectorAll(".room-system-row")];
     expect(rows.filter((row) => /dispatched/i.test(row.textContent ?? "")).length).toBe(1);
     expect(rows.some((row) => /agent stopped/i.test(row.textContent ?? ""))).toBe(true);
+  });
+
+  test("gap-fill pages until the server is drained, not just the first 100", async () => {
+    const seed = lifecycleEvent(5, "spec_dispatched");
+    const fake = makeGateway({ specEvents: [seed] });
+    await mount(fake.gateway);
+
+    const many = Array.from({ length: 105 }, (_, i) =>
+      lifecycleEvent(6 + i, "agent_session_stopped"),
+    );
+    fake.setHistory([seed, ...many]);
+    act(() => fake.setStream("connected"));
+    act(() => fake.setStream("reconnecting"));
+    act(() => fake.setStream("connected"));
+    await settle();
+
+    expect(
+      fake.calls.specEvents.slice(1),
+      "gap-fill must keep paging past the first 100 events until the server returns a short page",
+    ).toEqual([
+      { since: 5, limit: 100 },
+      { since: 105, limit: 100 },
+    ]);
+  });
+
+  test("gap-fill refreshes the message list and review/run state, not just the timeline", async () => {
+    const seed = lifecycleEvent(5, "spec_dispatched");
+    const fake = makeGateway({ specEvents: [seed] });
+    await mount(fake.gateway);
+    const before = { ...fake.calls };
+
+    fake.setHistory([
+      seed,
+      lifecycleEvent(6, "spec_message_posted"),
+      lifecycleEvent(7, "agent_session_stopped"),
+    ]);
+    act(() => fake.setStream("connected"));
+    act(() => fake.setStream("reconnecting"));
+    act(() => fake.setStream("connected"));
+    await settle();
+
+    expect(
+      fake.calls.messages,
+      "a gap-filled message event must refresh the durable message list",
+    ).toBeGreaterThan(before.messages);
+    expect(
+      fake.calls.reviews,
+      "a gap-filled lifecycle event must refresh reviews",
+    ).toBeGreaterThan(before.reviews);
+    expect(fake.calls.runs, "a gap-filled lifecycle event must refresh runs").toBeGreaterThan(
+      before.runs,
+    );
   });
 });
