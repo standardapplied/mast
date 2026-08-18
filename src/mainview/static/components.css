@@ -2708,7 +2708,43 @@ button.room-section-head:hover {
 .room-header-status {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+}
+
+.room-header-statustext {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+.room-header-statustext::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: var(--tone-dot, var(--subtle-foreground));
+}
+
+.room-header-statustext[data-tone="error"] {
+  --tone-dot: var(--error);
+  color: var(--error);
+}
+.room-header-statustext[data-tone="warning"] {
+  --tone-dot: var(--warning);
+}
+.room-header-statustext[data-tone="success"] {
+  --tone-dot: var(--success);
+}
+.room-header-statustext[data-tone="info"] {
+  --tone-dot: var(--info);
+}
+.room-header-statustext[data-tone="accent"] {
+  --tone-dot: var(--primary);
 }
 
 .room-header-guidance {
@@ -2916,14 +2952,6 @@ button.room-section-head:hover {
 
   .room-header-actions {
     gap: 4px;
-  }
-
-  .room-header-inline-actions {
-    display: none;
-  }
-
-  .room-header-compact-actions {
-    display: block;
   }
 
   .room-header-actions .btn {
@@ -4681,7 +4709,7 @@ button.room-section-head:hover {
   align-items: center;
   gap: 5px;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   font: 600 10px/1.4 var(--font-mono);
   letter-spacing: var(--tracking-eyebrow);
@@ -4691,7 +4719,7 @@ button.room-section-head:hover {
 .presence-chip .presence-dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: var(--radius);
   background: currentColor;
 }
 .presence-chip.is-working {

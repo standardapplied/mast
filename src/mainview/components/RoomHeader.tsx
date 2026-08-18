@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { CaretLeft, PanelRight } from "./icons";
 import { Tooltip } from "./Tooltip";
-import { Badge, Button, type BadgeTone } from "./ui";
+import { Button, type BadgeTone } from "./ui";
 
 export function RoomHeader({
   title,
@@ -48,7 +48,9 @@ export function RoomHeader({
           {eyebrow && <span className="room-header-eyebrow">{eyebrow}</span>}
           <h1 className="room-header-title detail-title">{title}</h1>
           <div className="room-header-status">
-            <Badge tone={statusTone}>{status}</Badge>
+            <span className="room-header-statustext" data-tone={statusTone}>
+              {status}
+            </span>
             {presence}
             {guidance && <span className="room-header-guidance">{guidance}</span>}
           </div>
