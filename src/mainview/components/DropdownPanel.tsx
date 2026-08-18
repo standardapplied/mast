@@ -1,4 +1,5 @@
 import { useLayoutEffect, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { cx } from "./cx";
 
 /**
@@ -81,9 +82,13 @@ export function DropdownPanel({
 
   if (!isOpen || !style) return null;
 
-  return (
+  // Portal to the body so the fixed-position panel resolves against the viewport, not a
+  // transformed ancestor (a Dialog's transform would otherwise become its containing block and
+  // displace it — the coords are computed from the trigger's viewport rect).
+  return createPortal(
     <div style={style} className={cx("dropdown-panel", className)}>
       {children}
-    </div>
+    </div>,
+    document.body,
   );
 }

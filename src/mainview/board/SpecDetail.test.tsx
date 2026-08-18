@@ -385,10 +385,10 @@ describe("SpecDetail assignee editing", () => {
     expect(assigneeTrigger()?.textContent).toContain("uday");
     act(() => assigneeTrigger()!.click());
     await settle();
-    expect(container.querySelector('[data-testid="option-uday"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="option-uday"]')).not.toBeNull();
 
     act(() =>
-      container.querySelector<HTMLButtonElement>('[data-testid="option-sumesh"]')!.click(),
+      document.querySelector<HTMLButtonElement>('[data-testid="option-sumesh"]')!.click(),
     );
     await settle();
     act(() => buttonByText("Save").click());
@@ -404,7 +404,7 @@ describe("SpecDetail assignee editing", () => {
     expect(assigneeTrigger()?.textContent).toContain("ghost");
     act(() => assigneeTrigger()!.click());
     await settle();
-    expect(container.querySelector('[data-testid="option-ghost"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="option-ghost"]')).not.toBeNull();
   });
 
   test("a spec can be unassigned via the roster select", async () => {
@@ -414,7 +414,7 @@ describe("SpecDetail assignee editing", () => {
 
     act(() => assigneeTrigger()!.click());
     await settle();
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="option-"]')!.click());
+    act(() => document.querySelector<HTMLButtonElement>('[data-testid="option-"]')!.click());
     await settle();
     act(() => buttonByText("Save").click());
     await settle();

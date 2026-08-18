@@ -41,6 +41,18 @@ describe("Select", () => {
     expect(document.querySelector(".dropdown-panel")).toBeNull();
   });
 
+  test("portals the dropdown to document.body so a transformed dialog ancestor cannot displace it", () => {
+    render(<Select value="" onChange={() => {}} options={OPTIONS} />);
+    const trigger = container.querySelector<HTMLButtonElement>(".select-trigger");
+    act(() => trigger?.click());
+    const panel = document.querySelector(".dropdown-panel");
+    expect(panel, "the dropdown must render").not.toBeNull();
+    expect(
+      panel?.parentElement,
+      "the panel must be a direct child of body, not nested under the transformed dialog subtree",
+    ).toBe(document.body);
+  });
+
   test("shows the selected option's label and marks it selected", () => {
     render(<Select value="codex" onChange={() => {}} options={OPTIONS} />);
     const trigger = container.querySelector<HTMLButtonElement>(".select-trigger");
