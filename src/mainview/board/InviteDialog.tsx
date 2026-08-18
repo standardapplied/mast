@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
-import type { AgentView, GlobalSpecView } from "../../shared/sail-models";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { AgentView, GlobalSpecView, SailEvent } from "../../shared/sail-models";
 import { Checkbox } from "../components/Checkbox";
 import { Dialog } from "../components/Dialog";
+import { Spinner } from "../components/icons";
 import { Input } from "../components/Input";
 import { Select, type SelectOption } from "../components/Select";
 import { Button } from "../components/ui";
@@ -17,6 +18,14 @@ import { mapInviteOutcome } from "./inviteOutcome";
  * a policy refusal) render inline, verbatim, with the dialog held open. When
  * the agents endpoint is unavailable (an older sail), the agent field falls
  * back to free text and the server rules on submit.
+ *
+ * A full invite snapshots the container first, and on the dir backend that is a
+ * slow full copy — the server accepts the invite immediately (202) and does the
+ * snapshot off the request thread, so the call cannot time out or be force-killed
+ * mid-copy. The dialog then shows a snapshot-in-progress state and settles when
+ * the room's `snapshot_created` event lands for this run: success closes with a
+ * toast, an `error` on the event renders inline. A read-only invite pays no
+ * snapshot, so it settles on the 202 as before.
  */
 export function InviteDialog({
   gateway,
@@ -39,7 +48,10 @@ export function InviteDialog({
   const [model, setModel] = useState("");
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [snapshotting, setSnapshotting] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const pendingRef = useRef<{ runId: string; label: string; agent: string } | null>(null);
+  const bufferRef = useRef<SailEvent[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,22 +90,65 @@ export function InviteDialog({
   const selectedUnsupported = selected !== undefined && modeOf(selected)?.supported === false;
   const runnable = agent.trim() !== "" && !selectedUnsupported && canDispatch && !busy;
 
+  const settle = useCallback(
+    (event: SailEvent) => {
+      const pending = pendingRef.current;
+      if (!pending) return;
+      if (event.type !== "snapshot_created" || event.data?.run_id !== pending.runId) return;
+      pendingRef.current = null;
+      const error = event.data?.error;
+      if (error) {
+        setRefusal(String(error));
+        setSnapshotting(false);
+        setBusy(false);
+        return;
+      }
+      onResult(
+        `Invited ${pending.agent} (full access) into ${spec.id} — snapshot ${pending.label} taken, the agent is launching.`,
+        true,
+      );
+      onClose();
+    },
+    [onClose, onResult, spec.id],
+  );
+
+  useEffect(() => {
+    const unsubscribe = gateway.onEvent((event) => {
+      if (event.type !== "snapshot_created") return;
+      if (pendingRef.current) settle(event);
+      else bufferRef.current.push(event);
+    });
+    return unsubscribe;
+  }, [gateway, settle]);
+
   const run = async () => {
     setBusy(true);
     setRefusal(null);
+    const chosen = agent.trim();
     const result = await gateway.invite(spec.id, {
-      agent: agent.trim(),
+      agent: chosen,
       ...(model.trim() ? { model: model.trim() } : {}),
       full,
     });
-    const outcome = mapInviteOutcome(result, spec.id, agent.trim());
+    const outcome = mapInviteOutcome(result, spec.id, chosen);
     if (outcome.kind === "refused") {
       setRefusal(outcome.detail);
       setBusy(false);
       return;
     }
-    onResult(outcome.message, true);
-    onClose();
+    if (!result.ok || !full) {
+      onResult(outcome.message, true);
+      onClose();
+      return;
+    }
+    pendingRef.current = { runId: result.value.run_id, label: result.value.snapshot, agent: chosen };
+    setSnapshotting(true);
+    const buffered = bufferRef.current;
+    bufferRef.current = [];
+    for (const event of buffered) {
+      if (!pendingRef.current) break;
+      settle(event);
+    }
   };
 
   return (
@@ -105,15 +160,37 @@ export function InviteDialog({
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {snapshotting ? "Close" : "Cancel"}
           </Button>
-          <Button disabled={!runnable} onClick={() => void run()} data-testid="invite-go">
-            {busy ? "Inviting…" : "Invite"}
-          </Button>
+          {!snapshotting && (
+            <Button disabled={!runnable} onClick={() => void run()} data-testid="invite-go">
+              {busy ? "Inviting…" : "Invite"}
+            </Button>
+          )}
         </>
       }
     >
-      <div className="dispatch-body">
+      {snapshotting ? (
+        <div className="dispatch-body" data-testid="invite-snapshotting">
+          <div className="invite-progress">
+            <Spinner size={18} />
+            <div>
+              <p className="dispatch-summary">Snapshotting the container…</p>
+              <p className="dispatch-hint">
+                On the default storage this is a full copy and can take a few minutes on a large
+                workspace. You can close this — the agent joins the room the moment the snapshot
+                completes.
+              </p>
+            </div>
+          </div>
+          {refusal && (
+            <p className="dispatch-block" data-testid="invite-refusal">
+              {refusal}
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="dispatch-body">
         <p className="dispatch-summary">
           A second perspective in this room: chat and critique read only, or check Full to let it
           draft specs and change code — a container snapshot is taken first.
@@ -166,7 +243,8 @@ export function InviteDialog({
             {refusal}
           </p>
         )}
-      </div>
+        </div>
+      )}
     </Dialog>
   );
 }
