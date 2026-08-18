@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentView, GlobalSpecView, SailEvent } from "../../shared/sail-models";
-import { Checkbox } from "../components/Checkbox";
 import { Dialog } from "../components/Dialog";
 import { Spinner } from "../components/icons";
 import { Input } from "../components/Input";
 import { Select, type SelectOption } from "../components/Select";
+import { ToggleButton } from "../components/ToggleButton";
 import { Button } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { mapInviteOutcome } from "./inviteOutcome";
@@ -47,6 +47,7 @@ export function InviteDialog({
   const [agent, setAgent] = useState("");
   const [model, setModel] = useState("");
   const [full, setFull] = useState(false);
+  const [skipSnapshot, setSkipSnapshot] = useState(false);
   const [busy, setBusy] = useState(false);
   const [snapshotting, setSnapshotting] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -129,6 +130,7 @@ export function InviteDialog({
       agent: chosen,
       ...(model.trim() ? { model: model.trim() } : {}),
       full,
+      ...(full && skipSnapshot ? { snapshot: false } : {}),
     });
     const outcome = mapInviteOutcome(result, spec.id, chosen);
     if (outcome.kind === "refused") {
@@ -136,7 +138,7 @@ export function InviteDialog({
       setBusy(false);
       return;
     }
-    if (!result.ok || !full) {
+    if (!result.ok || !result.value.snapshot) {
       onResult(outcome.message, true);
       onClose();
       return;
@@ -192,8 +194,8 @@ export function InviteDialog({
       ) : (
         <div className="dispatch-body">
         <p className="dispatch-summary">
-          A second perspective in this room: chat and critique read only, or check Full to let it
-          draft specs and change code — a container snapshot is taken first.
+          A second perspective in this room: chat and critique read only, or grant Full access to
+          let it draft specs and change code.
         </p>
 
         {agentsUnavailable ? (
@@ -222,11 +224,36 @@ export function InviteDialog({
           data-testid="invite-model"
         />
 
-        <Checkbox
-          checked={full}
-          onChange={setFull}
-          label="Full — spec CLI writes and code changes, paid with a pre-launch snapshot"
-        />
+        <div className="field">
+          <span className="field-label">Access</span>
+          <ToggleButton
+            value={full ? "full" : "read_only"}
+            onChange={(value) => setFull(value === "full")}
+            options={[
+              { value: "read_only", label: "Read only" },
+              { value: "full", label: "Full" },
+            ]}
+          />
+        </div>
+
+        {full && (
+          <div className="field" data-testid="invite-snapshot-field">
+            <span className="field-label">Snapshot</span>
+            <ToggleButton
+              value={skipSnapshot ? "skip" : "snapshot"}
+              onChange={(value) => setSkipSnapshot(value === "skip")}
+              options={[
+                { value: "snapshot", label: "Snapshot first" },
+                { value: "skip", label: "Skip" },
+              ]}
+            />
+            <p className="dispatch-hint">
+              {skipSnapshot
+                ? "Launches immediately with no rollback point — undo any damage by hand."
+                : "A pre-launch rollback point. On the default storage this is a slow full copy."}
+            </p>
+          </div>
+        )}
 
         {selectedUnsupported && (
           <p className="dispatch-block" data-testid="invite-unsupported">

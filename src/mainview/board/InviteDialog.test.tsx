@@ -120,6 +120,11 @@ const openSelect = () => {
 };
 const option = (value: string) =>
   document.querySelector<HTMLButtonElement>(`[data-testid="option-${value}"]`);
+const toggle = (label: string) =>
+  Array.from(container.querySelectorAll<HTMLButtonElement>('[role="radio"]')).find(
+    (b) => b.textContent?.trim() === label,
+  );
+const selectFull = () => act(() => toggle("Full")?.click());
 const snapshotEvent = (runId: string, label: string): SailEvent => ({
   v: 1,
   ts: "2026-08-18T00:00:00Z",
@@ -152,8 +157,7 @@ describe("InviteDialog", () => {
   test("checking Full lifts the codex greying — every agent supports the full lane", async () => {
     mount();
     await settle();
-    const checkbox = container.querySelector('[role="checkbox"]') as HTMLElement;
-    act(() => checkbox.click());
+    selectFull();
     openSelect();
 
     expect(option("codex")?.disabled).toBe(false);
@@ -194,8 +198,7 @@ describe("InviteDialog", () => {
       },
     });
     await settle();
-    const checkbox = container.querySelector('[role="checkbox"]') as HTMLElement;
-    act(() => checkbox.click());
+    selectFull();
     act(() => go().click());
     await settle();
 
@@ -227,8 +230,7 @@ describe("InviteDialog", () => {
       },
     });
     await settle();
-    const checkbox = container.querySelector('[role="checkbox"]') as HTMLElement;
-    act(() => checkbox.click());
+    selectFull();
     act(() => go().click());
     await settle();
 
@@ -243,6 +245,43 @@ describe("InviteDialog", () => {
     );
     expect(calls.closed).toBe(0);
     expect(calls.results).toEqual([]);
+  });
+
+  test("a full invite can skip the snapshot — it sends snapshot:false and settles on the 202", async () => {
+    const calls = mount({
+      invite: {
+        ok: true,
+        value: {
+          run_id: "run-4",
+          principal: "claude/invite-run-4",
+          mode: "full",
+          snapshot: "",
+        },
+      },
+    });
+    await settle();
+    selectFull();
+    expect(
+      container.querySelector('[data-testid="invite-snapshot-field"]'),
+      "the snapshot choice appears only for a full invite",
+    ).not.toBeNull();
+    act(() => toggle("Skip")?.click());
+    act(() => go().click());
+    await settle();
+
+    expect(calls.requests).toEqual([{ agent: "claude-code", full: true, snapshot: false }]);
+    expect(
+      container.querySelector('[data-testid="invite-snapshotting"]'),
+      "with no snapshot there is nothing to wait on",
+    ).toBeNull();
+    expect(calls.closed).toBe(1);
+    expect(calls.results[0]?.ok).toBe(true);
+  });
+
+  test("the snapshot choice is hidden for a read-only invite", async () => {
+    mount();
+    await settle();
+    expect(container.querySelector('[data-testid="invite-snapshot-field"]')).toBeNull();
   });
 
   test("a 409 reservation refusal renders verbatim inline and holds the dialog open", async () => {

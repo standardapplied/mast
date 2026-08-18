@@ -525,7 +525,8 @@ export function createDemoGateway(): DemoGateway {
       }
       const runId = `run-${++eventId}`;
       const family = request.agent.split("-")[0];
-      if (request.full) {
+      const withSnapshot = request.full === true && request.snapshot !== false;
+      if (withSnapshot) {
         emit({
           v: 1,
           id: ++eventId,
@@ -542,7 +543,7 @@ export function createDemoGateway(): DemoGateway {
         run_id: runId,
         principal: `${family}/invite-${runId}`,
         mode: request.full ? ("full" as const) : ("read_only" as const),
-        snapshot: request.full ? `invite-${runId}` : "",
+        snapshot: withSnapshot ? `invite-${runId}` : "",
       });
     },
 
