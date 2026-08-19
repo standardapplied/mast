@@ -19,7 +19,7 @@ import type {
   SailEvent,
 } from "../../shared/sail-models";
 import { Avatar } from "../components/Avatar";
-import { Logo, Send } from "../components/icons";
+import { Logo, Send, Spinner } from "../components/icons";
 import { LoadingMark } from "../components/Loading";
 import { Textarea } from "../components/Textarea";
 import { Tooltip } from "../components/Tooltip";
@@ -248,7 +248,7 @@ export function SpecRoom({
   specTitle?: string;
   canWrite: boolean;
   currentUser?: string;
-  /** The room's standing agent, when one is engaged — drives the composer's truth line. */
+  /** The room's standing agent, when one is engaged; drives the typing indicator. */
   engagement?: EngagementView;
   onOpenLog: (role?: AgentLogRole) => void;
 }) {
@@ -333,13 +333,22 @@ export function SpecRoom({
     };
   }, [loadRoom]);
 
+  const presenceVersion = useSyncExternalStore(
+    (onChange) => presenceStore.subscribe(onChange),
+    () => presenceStore.version,
+  );
+  const typing = useMemo(
+    () => engagement !== undefined && presenceStore.chatPresenceOf(specId, Date.now()) !== null,
+    [engagement, specId, presenceVersion],
+  );
+
   useEffect(() => {
     if (!atLatest.current) return;
     requestAnimationFrame(() => {
       const element = scroller.current;
       if (element) element.scrollTop = element.scrollHeight;
     });
-  }, [tail.visible.length]);
+  }, [tail.visible.length, typing]);
 
   const refreshMessages = useCallback(
     async (live: boolean) => {
@@ -815,7 +824,10 @@ export function SpecRoom({
                             )}
                             <Markdown source={entry.message.body} />
                             {entry.message.delivery === "pending" && (
-                              <span className="room-message-delivery">Sending…</span>
+                              <span className="room-message-delivery">
+                                <Spinner size={12} />
+                                Sending…
+                              </span>
                             )}
                             {entry.message.delivery === "failed" && (
                               <div className="room-message-error">
@@ -918,7 +930,7 @@ export function SpecRoom({
                   {expanded && (
                     <div className="room-review-body">
                       {item.findings.length === 0 && (
-                        <p className="meta-value">No findings — a clean review.</p>
+                        <p className="meta-value">No findings. A clean review.</p>
                       )}
                       {item.findings.map((finding) => (
                         <FindingRow
@@ -946,6 +958,7 @@ export function SpecRoom({
               </Fragment>
             );
           })}
+          <TypingRow specId={specId} engagement={engagement} />
       </div>
       {tail.buffered.length > 0 && (
         <button type="button" className="room-new-pill" onClick={jumpToLatest}>
@@ -954,7 +967,6 @@ export function SpecRoom({
       )}
       {canWrite ? (
         <div className="room-composer">
-          <ComposerPresence specId={specId} engagement={engagement} />
           <Textarea
             value={draft}
             maxLength={65_536}
@@ -983,7 +995,7 @@ export function SpecRoom({
       ) : (
         <p className="room-readonly">
           {["done", "cancelled", "archived"].includes(specStatus ?? "")
-            ? `This room is ${specStatus} — read-only.`
+            ? `This room is ${specStatus} and read-only.`
             : "You don’t have write access."}
         </p>
       )}
@@ -998,12 +1010,6 @@ export function SpecRoom({
   );
 }
 
-/**
- * The composer's truth line: a swallowed message must never look like a slow
- * one. "Thinking…" while the engaged agent's chat turn runs; a quiet nudge to
- * add an agent when the room has nobody and nothing running; silence when the
- * agent is present-but-idle (the roster chip already says so).
- */
 /** The log lane a lifecycle row's run belongs to; undefined keeps the caller's default. */
 function logRoleOf(run: RunView | undefined): AgentLogRole | undefined {
   const role = run?.role;
@@ -1012,7 +1018,13 @@ function logRoleOf(run: RunView | undefined): AgentLogRole | undefined {
     : undefined;
 }
 
-function ComposerPresence({
+/**
+ * The iMessage-style typing indicator: the engaged agent's avatar and pulsing
+ * dots as the last row of the conversation while its chat turn runs. Derived
+ * from the presence store's chat-lane entry, so it appears when the turn
+ * starts and vanishes on its stop event with nothing to reconcile.
+ */
+function TypingRow({
   specId,
   engagement,
   store = presenceStore,
@@ -1029,23 +1041,20 @@ function ComposerPresence({
     () => store.chatPresenceOf(specId, Date.now()) !== null,
     [store, specId, version],
   );
-  const anyoneLive = useMemo(
-    () => store.presenceOf(specId, Date.now()) !== null,
-    [store, specId, version],
+  if (!engagement || !thinking) return null;
+  return (
+    <article className="room-message-group room-typing" data-testid={`typing-${specId}`}>
+      <Avatar author={engagement.agent + "/"} agent />
+      <div className="room-message-content">
+        <header className="room-message-head">
+          <strong>{engagement.agent}</strong>
+        </header>
+        <span className="typing-dots" aria-label={engagement.agent + " is typing"}>
+          <span />
+          <span />
+          <span />
+        </span>
+      </div>
+    </article>
   );
-  if (engagement && thinking) {
-    return (
-      <p className="room-composer-presence" data-testid="composer-thinking">
-        {engagement.agent} is thinking…
-      </p>
-    );
-  }
-  if (!engagement && !anyoneLive) {
-    return (
-      <p className="room-composer-presence is-empty" data-testid="composer-empty">
-        No agent in this room — add one from Actions to get answers.
-      </p>
-    );
-  }
-  return null;
 }

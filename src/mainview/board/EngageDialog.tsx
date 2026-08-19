@@ -93,7 +93,7 @@ export function EngageDialog({
       }
       if (event.type !== "spec_engaged") return;
       pendingRef.current = null;
-      onResult(`${pending.agent} joined ${specId} — it now answers every message here.`, true);
+      onResult(`${pending.agent} joined ${specId} and now answers every message here.`, true);
       onClose();
     },
     [onClose, onResult, specId],
@@ -126,7 +126,7 @@ export function EngageDialog({
     }
     if (!result.value.snapshot) {
       const mode = readOnly ? "read only" : "full access";
-      onResult(`${chosen} joined ${specId} (${mode}) — it answers every message here.`, true);
+      onResult(`${chosen} joined ${specId} (${mode}) and answers every message here.`, true);
       onClose();
       return;
     }
@@ -166,7 +166,7 @@ export function EngageDialog({
             <div>
               <p className="dispatch-summary">Snapshotting the container…</p>
               <p className="dispatch-hint">
-                Full access pays with one rollback point up front. You can close this — the agent
+                Full access takes its rollback point up front. You can close this; the agent
                 joins the room the moment the snapshot completes.
               </p>
             </div>
@@ -180,7 +180,7 @@ export function EngageDialog({
       ) : (
         <div className="dispatch-body">
           <p className="dispatch-summary">
-            The agent joins this room and answers every message until you dismiss it — chat,
+            The agent joins this room and answers every message until you dismiss it: chat,
             drafts, diagrams, code.
           </p>
 
@@ -223,7 +223,7 @@ export function EngageDialog({
             <p className="dispatch-hint">
               {readOnly
                 ? "Harness-enforced: it reads and answers, nothing more."
-                : "The default — it can draft specs and work in the workspace."}
+                : "It can draft specs and work in the workspace."}
             </p>
           </div>
 
@@ -237,7 +237,7 @@ export function EngageDialog({
               <p className="dispatch-hint">
                 {snapshot
                   ? "A rollback point before the agent joins. On the default storage this is a slow full copy."
-                  : "Joins immediately with no rollback point — undo any damage by hand."}
+                  : "The agent joins immediately. There is no rollback point, so undo any damage by hand."}
               </p>
             </div>
           )}
@@ -249,7 +249,7 @@ export function EngageDialog({
           )}
           {roleKnown && !canDispatch && (
             <p className="dispatch-block" data-testid="engage-role">
-              Your credential is read-only — adding agents needs write access.
+              Your credential is read-only. Adding agents needs write access.
             </p>
           )}
           {refusal && (

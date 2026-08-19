@@ -3397,6 +3397,10 @@ button.room-section-head:hover {
 }
 
 .room-message-delivery {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
   color: var(--subtle-foreground);
   font: 9px var(--font-mono);
 }
@@ -4898,4 +4902,54 @@ button.room-section-head:hover {
 }
 .live-log__jump:hover {
   background: var(--surface-hover);
+}
+
+/* ── Room typing indicator: the engaged agent's chat turn is live ── */
+
+.room-typing .room-message-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.typing-dots {
+  display: inline-flex;
+  gap: 5px;
+  padding: 6px 2px;
+}
+
+.typing-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted-foreground);
+  animation: typing-pulse 1.2s ease-in-out infinite;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing-pulse {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-dots span {
+    animation: none;
+    opacity: 0.6;
+  }
 }

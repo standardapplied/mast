@@ -124,6 +124,10 @@ export class PresenceStore {
       this.notePresence(specId, event);
       return;
     }
+    if (event.type === "agent_session_started") {
+      this.noteStarted(specId, event);
+      return;
+    }
     if (TERMINAL_EVENT_TYPES.has(event.type)) {
       const bySpec = this.entries.get(specId);
       if (!bySpec) return;
@@ -135,6 +139,24 @@ export class PresenceStore {
       if (bySpec.size === 0) this.entries.delete(specId);
       if (changed) this.emit();
     }
+  }
+
+  /**
+   * A launch is presence: the pill and the typing indicator must light when the
+   * run starts, not seconds later at its first tool call. Seeds a working entry
+   * keyed by the run, with the role sail stamps on the event (absent on
+   * pre-0.28.1 servers, when the entry works but reads as the headline lane).
+   */
+  private noteStarted(specId: string, event: SailEvent): void {
+    const bySpec = this.entries.get(specId) ?? new Map<string, Entry>();
+    const role = typeof event.data?.run_role === "string" ? event.data.run_role : undefined;
+    bySpec.set(this.runKey(event), {
+      lastActivityAt: parseTs(event.ts) ?? Date.now(),
+      role,
+      quiet: false,
+    });
+    this.entries.set(specId, bySpec);
+    this.emit();
   }
 
   private noteProgress(specId: string, event: SailEvent, at: number): void {
