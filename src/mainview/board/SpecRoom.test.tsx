@@ -652,7 +652,7 @@ describe("SpecRoom", () => {
     expect(container.querySelector('[aria-label="Message this room"]')).toBeNull();
     expect(container.querySelector('[aria-label="Send"]')).toBeNull();
     expect(container.querySelector(".room-readonly")?.textContent).toBe(
-      "This room is done — read-only.",
+      "This room is done and read-only.",
     );
   });
 
