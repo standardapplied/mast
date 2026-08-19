@@ -42,7 +42,7 @@ export function CaretRight(props: IconProps) {
 export function Folder(props: IconProps) {
   return (
     <svg {...base(props)} strokeLinejoin="round">
-      <path d="M2 4.5h4l1.5 1.5H14v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4.5z" />
+      <path d="M2 13V3.5h4.5L8 6h6v7z" />
     </svg>
   );
 }
