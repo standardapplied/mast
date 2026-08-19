@@ -20,20 +20,6 @@ const ROLE_OPTIONS = [
   { value: "review", label: "Review" },
 ];
 
-const STATE_LABEL: Record<AgentLogView["state"], string> = {
-  connecting: "Connecting…",
-  connected: "Live",
-  reconnecting: "Reconnecting…",
-  disconnected: "Off",
-};
-
-const STATE_DOT: Record<AgentLogView["state"], string> = {
-  connecting: "connecting",
-  connected: "connected",
-  reconnecting: "connecting",
-  disconnected: "off",
-};
-
 function formatElapsed(startedAt: string | undefined, now: number): string | null {
   if (!startedAt) return null;
   const start = Date.parse(startedAt);
@@ -83,7 +69,7 @@ export function LiveLog({
   onClose: () => void;
 }) {
   const view = useAgentLog(gateway, project, specId, initialRole);
-  const { role, setRole, raw, setRaw, lines, state, run } = view;
+  const { role, setRole, raw, setRaw, lines, run } = view;
 
   const bodyRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
@@ -131,10 +117,6 @@ export function LiveLog({
             <span className="eyebrow">Agent log</span>
             <span className="live-log__spec">{specId}</span>
           </div>
-          <span className="terminal-pane__conn live-log__conn" data-state={STATE_DOT[state]}>
-            <span className="terminal-pane__dot" />
-            {STATE_LABEL[state]}
-          </span>
           <button type="button" className="live-log__close" onClick={onClose} aria-label="Close agent log">
             <Cross size={16} />
           </button>

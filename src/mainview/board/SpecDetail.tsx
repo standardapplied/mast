@@ -29,7 +29,7 @@ import { InviteDialog } from "./InviteDialog";
 import { PresenceChip } from "./PresenceChip";
 import { LiveLog } from "./LiveLog";
 import { SpecRoom } from "./SpecRoom";
-import { canLaunchAgents, STATUS_LABEL, statusGuidance, statusLabel, statusTone } from "./lifecycle";
+import { canLaunchAgents, STATUS_LABEL, statusLabel } from "./lifecycle";
 import { mapStopOutcome, noRunningRunMessage, runningBuildRun } from "./stopRun";
 import { dependentsOf, logsElsewhere, unmetDependencies } from "./useBoard";
 
@@ -382,10 +382,7 @@ export function SpecDetail({
       <RoomHeader
         title={spec.title}
         eyebrow={spec.id}
-        status={statusLabel(spec.status)}
-        statusTone={statusTone(spec.status)}
-        guidance={statusGuidance(spec.status)}
-        presence={<PresenceChip specId={specId} />}
+        presence={<PresenceChip specId={specId} verbose />}
         drawerOpen={drawerOpen}
         onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
         onBack={embedded ? undefined : onBack}
@@ -417,7 +414,8 @@ export function SpecDetail({
               data-testid="detail-actions"
               aria-haspopup="menu"
             >
-              Actions <CaretDown size={12} />
+              Actions
+              <CaretDown size={12} />
             </Button>
           </>
         }

@@ -129,18 +129,27 @@ describe("BoardScreen cancelled lane", () => {
 });
 
 describe("BoardScreen live-log gating", () => {
-  const liveControl = (id: string) =>
-    container.querySelector<HTMLElement>(`[data-testid="card-live-${id}"]`)!;
+  const openMenu = (id: string) => {
+    const card = container.querySelector<HTMLElement>(`[data-testid="card-${id}"]`)!;
+    act(() =>
+      card.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })),
+    );
+  };
+  const menuItem = (label: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find((b) =>
+      (b.textContent ?? "").startsWith(label),
+    );
 
-  test("own spec: the Live control opens the log drawer", async () => {
+  test("own spec: the Live log menu item opens the log drawer", async () => {
     await render(createDemoGateway());
-    const live = liveControl("chorus-invoice-ui");
-    expect(live.getAttribute("aria-disabled")).not.toBe("true");
-    await act(async () => live.click());
+    openMenu("chorus-invoice-ui");
+    const item = menuItem("Live log");
+    expect(item?.disabled).toBe(false);
+    await act(async () => item!.click());
     expect(container.querySelector('[data-testid="live-log"]')).not.toBeNull();
   });
 
-  test("foreign spec: the Live control is disabled with an explanation and never opens", async () => {
+  test("foreign spec: the Live log menu item is disabled and names whose box has the logs", async () => {
     const gateway = createDemoGateway();
     const whoami = gateway.whoami.bind(gateway);
     gateway.whoami = async () => {
@@ -149,10 +158,9 @@ describe("BoardScreen live-log gating", () => {
     };
     await render(gateway);
 
-    const live = liveControl("chorus-invoice-ui");
-    expect(live.getAttribute("aria-disabled")).toBe("true");
-    expect(live.title).toContain("uday");
-    await act(async () => live.click());
-    expect(container.querySelector('[data-testid="live-log"]')).toBeNull();
+    openMenu("chorus-invoice-ui");
+    const item = menuItem("Live log");
+    expect(item?.disabled).toBe(true);
+    expect(item?.textContent).toContain("uday");
   });
 });

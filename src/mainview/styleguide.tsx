@@ -175,8 +175,7 @@ function RoomConversationDemo() {
     <div className="room-detail room-components-demo">
       <RoomHeader
         title="The room reads like a conversation"
-        status="In progress"
-        statusTone="accent"
+        eyebrow="chorus-invoice-ui"
         drawerOpen={drawerOpen}
         onToggleDrawer={() => setDrawerOpen((open) => !open)}
         actions={<Button variant="ghost">Edit</Button>}

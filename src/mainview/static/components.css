@@ -19,6 +19,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 7px;
   box-sizing: border-box;
   height: var(--control-height);
   border: 1px solid transparent;
@@ -487,6 +488,7 @@
   content: "";
   width: 6px;
   height: 6px;
+  border-radius: 50%;
   background: var(--badge-dot, var(--subtle-foreground));
 }
 
@@ -1516,6 +1518,15 @@ html.is-dragging-active * {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* The account menu now lives at the rail's bottom-left, so its panel must open
+   upward and to the right instead of the old top-right anchor's down-left. */
+.rail-user .user-menu-panel {
+  top: auto;
+  right: auto;
+  bottom: 0;
+  left: calc(100% + 8px);
 }
 
 /* Only shown while the workspace is up but the link is degraded — a thin strip
@@ -2728,55 +2739,6 @@ button.room-section-head:hover {
   align-items: center;
   gap: 10px;
   min-width: 0;
-}
-
-.room-header-status .room-header-guidance {
-  min-width: 0;
-  flex: 0 1 auto;
-}
-
-.room-header-statustext {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted-foreground);
-  white-space: nowrap;
-}
-
-.room-header-statustext::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  background: var(--tone-dot, var(--subtle-foreground));
-}
-
-.room-header-statustext[data-tone="error"] {
-  --tone-dot: var(--error);
-  color: var(--error);
-}
-.room-header-statustext[data-tone="warning"] {
-  --tone-dot: var(--warning);
-}
-.room-header-statustext[data-tone="success"] {
-  --tone-dot: var(--success);
-}
-.room-header-statustext[data-tone="info"] {
-  --tone-dot: var(--info);
-}
-.room-header-statustext[data-tone="accent"] {
-  --tone-dot: var(--primary);
-}
-
-.room-header-guidance {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--subtle-foreground);
-  font-size: 12px;
 }
 
 .room-header-actions {
@@ -4727,8 +4689,8 @@ button.room-section-head:hover {
 .presence-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 1px 7px;
+  gap: 6px;
+  padding: 3px 9px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   font: 600 10px/1.4 var(--font-mono);
@@ -4736,10 +4698,16 @@ button.room-section-head:hover {
   text-transform: uppercase;
   white-space: nowrap;
 }
+
+.presence-chip__elapsed {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--subtle-foreground);
+}
 .presence-chip .presence-dot {
   width: 6px;
   height: 6px;
-  border-radius: var(--radius);
+  border-radius: 50%;
   background: currentColor;
 }
 .presence-chip.is-working {
@@ -4771,8 +4739,8 @@ button.room-section-head:hover {
 .needs-reply-chip {
   display: inline-flex;
   align-items: center;
-  padding: 1px 7px;
-  border-radius: 999px;
+  padding: 3px 9px;
+  border-radius: var(--radius);
   border: 1px solid var(--error);
   background: color-mix(in srgb, var(--error) 12%, transparent);
   font: 700 10px/1.4 var(--font-mono);
@@ -4816,28 +4784,6 @@ button.room-section-head:hover {
 
 /* Live agent log drawer ---------------------------------------------------------- */
 
-.spec-card-live {
-  margin-left: auto;
-  padding: 1px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border-strong);
-  font: 600 10px/1.4 var(--font-mono);
-  letter-spacing: var(--tracking-eyebrow);
-  text-transform: uppercase;
-  color: var(--primary);
-  cursor: pointer;
-}
-.spec-card-live:hover {
-  background: var(--surface-hover);
-}
-.spec-card-live.is-disabled {
-  color: var(--muted-foreground);
-  border-color: var(--border);
-  cursor: default;
-}
-.spec-card-live.is-disabled:hover {
-  background: transparent;
-}
 
 .live-log-scrim {
   position: fixed;
@@ -4877,13 +4823,8 @@ button.room-section-head:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.live-log__conn {
-  margin-left: auto;
-  font: 500 11px/1 var(--font-mono);
-  letter-spacing: var(--tracking-eyebrow);
-  text-transform: uppercase;
-}
 .live-log__close {
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
