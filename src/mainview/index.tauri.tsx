@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
@@ -22,7 +23,25 @@ const rosterSources: RosterSources = {
   listProjects: () => gateway.listProjects(),
   listTargets: () => invoke<string[]>("list_targets"),
 };
-const theme = createThemeController(browserThemeDeps(() => {}));
+// Keep the native window chrome (title bar, traffic lights) in step with the
+// theme selector: an explicit choice forces the window; "system" resets it to
+// null so the window — and thus the webview's prefers-color-scheme, which the
+// controller reads — tracks the OS. Without this the window was pinned dark, so
+// "system" could never resolve to light.
+const win = getCurrentWindow();
+const themeBase = createThemeController(browserThemeDeps(() => {}));
+const syncWindowChrome = () => {
+  const mode = themeBase.mode();
+  void win.setTheme(mode === "system" ? null : mode);
+};
+syncWindowChrome();
+const theme = {
+  ...themeBase,
+  setMode: (next: Parameters<typeof themeBase.setMode>[0]) => {
+    themeBase.setMode(next);
+    syncWindowChrome();
+  },
+};
 
 const container = document.getElementById("root");
 if (!container) throw new Error("Missing #root element");

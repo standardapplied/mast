@@ -112,7 +112,7 @@ export function RoomList({
           onSubmit={(event) => void submit(event)}
         >
           <p className="room-create-hint">
-            A room is a spec's conversation. Give it a title — its details can take shape inside.
+            Give the room a title to start. You can add the details later.
           </p>
           {!project && (
             projects.length > 0 ? (

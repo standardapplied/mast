@@ -261,11 +261,12 @@ describe("InviteDialog", () => {
     });
     await settle();
     selectFull();
-    expect(
-      container.querySelector('[data-testid="invite-snapshot-field"]'),
-      "the snapshot choice appears only for a full invite",
-    ).not.toBeNull();
-    act(() => toggle("Skip")?.click());
+    const snapshotBox = container.querySelector<HTMLButtonElement>(
+      '[data-testid="invite-snapshot-field"] [role="checkbox"]',
+    );
+    expect(snapshotBox, "the snapshot choice appears only for a full invite").not.toBeNull();
+    expect(snapshotBox?.getAttribute("aria-checked"), "snapshot is on by default").toBe("true");
+    act(() => snapshotBox?.click());
     act(() => go().click());
     await settle();
 

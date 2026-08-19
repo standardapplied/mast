@@ -160,7 +160,7 @@ export function RoomsScreen({
           <div className="room-empty-state">
             <Eyebrow>{project || "Your project"}</Eyebrow>
             <h1>Start the conversation</h1>
-            <p>Create a room with a title. Its spec details can take shape inside.</p>
+            <p>Give the room a title to start. You can add the details later.</p>
           </div>
         )}
       </section>
