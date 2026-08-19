@@ -1,14 +1,11 @@
 import type { ReactNode } from "react";
 import { CaretLeft, PanelRight } from "./icons";
 import { Tooltip } from "./Tooltip";
-import { Button, type BadgeTone } from "./ui";
+import { Button } from "./ui";
 
 export function RoomHeader({
   title,
   eyebrow,
-  status,
-  statusTone,
-  guidance,
   presence,
   drawerOpen,
   onToggleDrawer,
@@ -16,12 +13,9 @@ export function RoomHeader({
   actions,
 }: {
   title: string;
-  /** Stable identifier (the spec id) shown small above the human title. */
+  /** Stable identifier (the spec id), shown small beside the presence. */
   eyebrow?: string;
-  status: string;
-  statusTone: BadgeTone;
-  guidance?: string;
-  /** Liveness chip for the spec's running agent, rendered beside the status. */
+  /** Liveness chip for the spec's running agent — the header's only status cue. */
   presence?: ReactNode;
   drawerOpen: boolean;
   onToggleDrawer: () => void;
@@ -43,14 +37,10 @@ export function RoomHeader({
           </button>
         )}
         <div className="room-header-copy">
-          {eyebrow && <span className="room-header-eyebrow">{eyebrow}</span>}
           <h1 className="room-header-title detail-title">{title}</h1>
           <div className="room-header-status">
-            <span className="room-header-statustext" data-tone={statusTone}>
-              {status}
-            </span>
+            {eyebrow && <span className="room-header-id">{eyebrow}</span>}
             {presence}
-            {guidance && <span className="room-header-guidance">{guidance}</span>}
           </div>
         </div>
       </div>

@@ -29,7 +29,7 @@ import { InviteDialog } from "./InviteDialog";
 import { PresenceChip } from "./PresenceChip";
 import { LiveLog } from "./LiveLog";
 import { SpecRoom } from "./SpecRoom";
-import { canLaunchAgents, STATUS_LABEL, statusGuidance, statusLabel, statusTone } from "./lifecycle";
+import { canLaunchAgents, STATUS_LABEL, statusLabel } from "./lifecycle";
 import { mapStopOutcome, noRunningRunMessage, runningBuildRun } from "./stopRun";
 import { dependentsOf, logsElsewhere, unmetDependencies } from "./useBoard";
 
@@ -365,10 +365,10 @@ export function SpecDetail({
       ? []
       : [{
           kind: "item" as const,
-          label: restart ? "Re-dispatch…" : "Dispatch…",
+          label: restart ? "Re-dispatch" : "Dispatch",
           onSelect: () => setDispatchOpen(true),
         }]),
-    { kind: "item", label: "Invite…", onSelect: () => setInviteOpen(true) },
+    { kind: "item", label: "Invite", onSelect: () => setInviteOpen(true) },
     { kind: "item", label: "Edit", onSelect: startEdit },
   ];
 
@@ -382,10 +382,7 @@ export function SpecDetail({
       <RoomHeader
         title={spec.title}
         eyebrow={spec.id}
-        status={statusLabel(spec.status)}
-        statusTone={statusTone(spec.status)}
-        guidance={statusGuidance(spec.status)}
-        presence={<PresenceChip specId={specId} />}
+        presence={<PresenceChip specId={specId} verbose />}
         drawerOpen={drawerOpen}
         onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
         onBack={embedded ? undefined : onBack}
@@ -411,16 +408,14 @@ export function SpecDetail({
                 Stop
               </Button>
             )}
-            {spec.status === "draft" && (
-              <span className="detail-draft-note">Draft — add details, then move to pending</span>
-            )}
             <Button
               variant="ghost"
               onClick={openActionsMenu}
               data-testid="detail-actions"
               aria-haspopup="menu"
             >
-              Actions <CaretDown size={12} />
+              Actions
+              <CaretDown size={12} />
             </Button>
           </>
         }

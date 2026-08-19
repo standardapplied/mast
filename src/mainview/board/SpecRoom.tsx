@@ -953,7 +953,7 @@ export function SpecRoom({
             onKeyDown={onComposerKeyDown}
           />
           <div className="room-composer-row">
-            <span className="room-composer-hint">⏎ to send</span>
+            <span className="room-composer-hint">shift + enter for new line</span>
             <Tooltip content="Send">
               <button
                 type="button"

@@ -20,20 +20,6 @@ const ROLE_OPTIONS = [
   { value: "review", label: "Review" },
 ];
 
-const STATE_LABEL: Record<AgentLogView["state"], string> = {
-  connecting: "Connecting…",
-  connected: "Live",
-  reconnecting: "Reconnecting…",
-  disconnected: "Off",
-};
-
-const STATE_DOT: Record<AgentLogView["state"], string> = {
-  connecting: "connecting",
-  connected: "connected",
-  reconnecting: "connecting",
-  disconnected: "off",
-};
-
 function formatElapsed(startedAt: string | undefined, now: number): string | null {
   if (!startedAt) return null;
   const start = Date.parse(startedAt);
@@ -83,7 +69,7 @@ export function LiveLog({
   onClose: () => void;
 }) {
   const view = useAgentLog(gateway, project, specId, initialRole);
-  const { role, setRole, raw, setRaw, lines, state, run } = view;
+  const { role, setRole, raw, setRaw, lines, run } = view;
 
   const bodyRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
@@ -122,6 +108,9 @@ export function LiveLog({
 
   const sess = session(view);
   const elapsed = run?.status === "running" ? formatElapsed(run.started_at, now) : null;
+  // Running is the obvious case while the panel is open, so its pill is noise;
+  // only surface the status when it's an exceptional one (failed, stranded, …).
+  const showStatus = run?.status !== "running" || sess.label !== "Running";
 
   return (
     <div className="live-log-scrim" onClick={onClose} data-testid="live-log">
@@ -131,31 +120,29 @@ export function LiveLog({
             <span className="eyebrow">Agent log</span>
             <span className="live-log__spec">{specId}</span>
           </div>
-          <span className="terminal-pane__conn live-log__conn" data-state={STATE_DOT[state]}>
-            <span className="terminal-pane__dot" />
-            {STATE_LABEL[state]}
-          </span>
           <button type="button" className="live-log__close" onClick={onClose} aria-label="Close agent log">
             <Cross size={16} />
           </button>
         </header>
 
-        <div className="live-log__status" data-testid="live-log-status">
-          <Badge tone={sess.tone}>{sess.label}</Badge>
-          {elapsed && <span className="live-log__meta">{elapsed}</span>}
-          {run?.branch && <span className="live-log__meta">{run.branch}</span>}
-          {sess.detail && <span className="live-log__detail">{sess.detail}</span>}
-        </div>
-
-        <div className="live-log__controls">
-          <ToggleButton
-            options={ROLE_OPTIONS}
-            value={role}
-            onChange={(v) => setRole(v as AgentLogRole)}
-          />
-          <label className="live-log__raw">
-            <Checkbox checked={raw} onChange={setRaw} label="Raw" />
-          </label>
+        <div className="live-log__controls" data-testid="live-log-status">
+          <div className="live-log__controls-group">
+            <ToggleButton
+              options={ROLE_OPTIONS}
+              value={role}
+              onChange={(v) => setRole(v as AgentLogRole)}
+            />
+            <label className="live-log__raw">
+              <Checkbox checked={raw} onChange={setRaw} label="Raw" />
+            </label>
+          </div>
+          {(showStatus || elapsed || run?.branch) && (
+            <div className="live-log__runmeta">
+              {showStatus && <Badge tone={sess.tone}>{sess.label}</Badge>}
+              {elapsed && <span className="live-log__meta">{elapsed}</span>}
+              {run?.branch && <span className="live-log__meta">{run.branch}</span>}
+            </div>
+          )}
         </div>
 
         <div className="live-log__body" ref={bodyRef} onScroll={onScroll} data-testid="live-log-body">

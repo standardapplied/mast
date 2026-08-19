@@ -134,7 +134,7 @@ describe("RoomsScreen", () => {
 
     expect(container.querySelector('[data-testid="room-fresh-planning-room"]')).not.toBeNull();
     expect(container.querySelector(".detail-title")?.textContent).toBe("Fresh planning room");
-    expect(container.querySelector(".detail-draft-note")?.textContent).toContain("Draft");
+    expect(container.querySelector(".room-header-id")?.textContent).toBe("fresh-planning-room");
 
     const listed = await gateway.listSpecs({ project: "chorus" });
     expect(listed.ok && listed.value.specs.some((spec) => spec.id === "fresh-planning-room")).toBe(
@@ -177,7 +177,6 @@ describe("RoomsScreen", () => {
         .querySelector('[data-testid="archive-section"]')
         ?.getAttribute("aria-expanded"),
     ).toBe("false");
-    expect(container.querySelector(".room-header")?.textContent).toContain("Cancelled");
     expect(container.querySelector(".room-system-row")?.textContent).toContain(
       "status changed to cancelled",
     );

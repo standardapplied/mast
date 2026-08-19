@@ -122,9 +122,13 @@ export function Select({
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
+      const target = event.target as HTMLElement;
+      // The option list portals to document.body, so a click on an option is
+      // outside containerRef; closing on that mousedown would swallow the click
+      // before it selects. Treat any click inside the floating panel as inside.
+      if (containerRef.current?.contains(target)) return;
+      if (target.closest?.(".dropdown-panel")) return;
+      setIsOpen(false);
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => {

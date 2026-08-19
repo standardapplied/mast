@@ -2,15 +2,23 @@ import type { SVGProps } from "react";
 
 type IconProps = SVGProps<SVGSVGElement> & { size?: number };
 
+/**
+ * Icon set: Iconoir (https://iconoir.com), MIT-licensed, vendored as inline SVG
+ * (no runtime dependency). Iconoir draws on a 24×24 grid with round caps/joins;
+ * the stroke is nudged a touch heavier than Iconoir's 1.5 so the glyphs keep
+ * their presence at the 13–20px sizes this app renders them at. Logo and Spinner
+ * are ours, not Iconoir.
+ */
 function base({ size = 16, ...rest }: IconProps) {
   return {
     width: size,
     height: size,
-    viewBox: "0 0 16 16",
+    viewBox: "0 0 24 24",
     fill: "none",
     stroke: "currentColor",
-    strokeWidth: 1.5,
-    strokeLinecap: "square" as const,
+    strokeWidth: 1.75,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
     ...rest,
   };
 }
@@ -18,7 +26,7 @@ function base({ size = 16, ...rest }: IconProps) {
 export function CaretDown(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <path d="M3 6l5 5 5-5" />
+      <path d="M6 9L12 15L18 9" />
     </svg>
   );
 }
@@ -26,7 +34,7 @@ export function CaretDown(props: IconProps) {
 export function CaretLeft(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <path d="M10 3L5 8l5 5" />
+      <path d="M15 6L9 12L15 18" />
     </svg>
   );
 }
@@ -34,15 +42,15 @@ export function CaretLeft(props: IconProps) {
 export function CaretRight(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <path d="M6 3l5 5-5 5" />
+      <path d="M9 6L15 12L9 18" />
     </svg>
   );
 }
 
 export function Folder(props: IconProps) {
   return (
-    <svg {...base(props)} strokeLinejoin="round">
-      <path d="M2 4.5h4l1.5 1.5H14v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4.5z" />
+    <svg {...base(props)}>
+      <path d="M2 11V4.6C2 4.26863 2.26863 4 2.6 4H8.77805C8.92127 4 9.05977 4.05124 9.16852 4.14445L12.3315 6.85555C12.4402 6.94876 12.5787 7 12.722 7H21.4C21.7314 7 22 7.26863 22 7.6V11M2 11V19.4C2 19.7314 2.26863 20 2.6 20H21.4C21.7314 20 22 19.7314 22 19.4V11M2 11H22" />
     </svg>
   );
 }
@@ -50,7 +58,7 @@ export function Folder(props: IconProps) {
 export function Cross(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <path d="M4 4l8 8M12 4l-8 8" />
+      <path d="M6.75827 17.2426L12.0009 12M17.2435 6.75736L12.0009 12M12.0009 12L6.75827 6.75736M12.0009 12L17.2435 17.2426" />
     </svg>
   );
 }
@@ -58,17 +66,19 @@ export function Cross(props: IconProps) {
 export function CalendarDot(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <rect x="2.5" y="3.5" width="11" height="10" />
-      <path d="M2.5 6.5h11M5.5 1.5v3M10.5 1.5v3" />
-      <rect x="7.25" y="9.25" width="1.5" height="1.5" fill="currentColor" stroke="none" />
+      <path d="M15 4V2M15 4V6M15 4H10.5M3 10V19C3 20.1046 3.89543 21 5 21H19C20.1046 21 21 20.1046 21 19V10H3Z" />
+      <path d="M3 10V6C3 4.89543 3.89543 4 5 4H7" />
+      <path d="M7 2V6" />
+      <path d="M21 10V6C21 4.89543 20.1046 4 19 4H18.5" />
+      <rect x="11" y="14.5" width="2" height="2" fill="currentColor" stroke="none" />
     </svg>
   );
 }
 
 export function StatusDot({ size = 16, ...rest }: IconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" {...rest}>
-      <rect x="5" y="5" width="6" height="6" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" {...rest}>
+      <rect x="9" y="9" width="6" height="6" />
     </svg>
   );
 }
@@ -76,8 +86,15 @@ export function StatusDot({ size = 16, ...rest }: IconProps) {
 export function Sun(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <circle cx="8" cy="8" r="3" />
-      <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" />
+      <path d="M12 18C15.3137 18 18 15.3137 18 12C18 8.68629 15.3137 6 12 6C8.68629 6 6 8.68629 6 12C6 15.3137 8.68629 18 12 18Z" />
+      <path d="M22 12L23 12" />
+      <path d="M12 2V1" />
+      <path d="M12 23V22" />
+      <path d="M20 20L19 19" />
+      <path d="M20 4L19 5" />
+      <path d="M4 20L5 19" />
+      <path d="M4 4L5 5" />
+      <path d="M1 12L2 12" />
     </svg>
   );
 }
@@ -85,7 +102,7 @@ export function Sun(props: IconProps) {
 export function Moon(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <path d="M13 9.5A5.5 5.5 0 1 1 6.5 3 4.5 4.5 0 0 0 13 9.5z" />
+      <path d="M3 11.5066C3 16.7497 7.25034 21 12.4934 21C16.2209 21 19.4466 18.8518 21 15.7259C12.4934 15.7259 8.27411 11.5066 8.27411 3C5.14821 4.55344 3 7.77915 3 11.5066Z" />
     </svg>
   );
 }
@@ -93,16 +110,16 @@ export function Moon(props: IconProps) {
 export function Person(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <circle cx="8" cy="5" r="2.75" />
-      <path d="M2.75 14c.6-3 2.7-4.5 5.25-4.5s4.65 1.5 5.25 4.5" />
+      <path d="M5 20V19C5 15.134 8.13401 12 12 12C15.866 12 19 15.134 19 19V20" />
+      <path d="M12 12C14.2091 12 16 10.2091 16 8C16 5.79086 14.2091 4 12 4C9.79086 4 8 5.79086 8 8C8 10.2091 9.79086 12 12 12Z" />
     </svg>
   );
 }
 
 export function Check(props: IconProps) {
   return (
-    <svg {...base(props)} strokeWidth={2}>
-      <path d="M3 8.5l3.2 3.2L13 5" />
+    <svg {...base(props)}>
+      <path d="M5 13L9 17L19 7" />
     </svg>
   );
 }
@@ -110,23 +127,23 @@ export function Check(props: IconProps) {
 export function Funnel(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <path d="M2 3h12L9.5 8.5V13l-3 1.5V8.5L2 3z" />
+      <path d="M3.99961 3H19.9997C20.552 3 20.9997 3.44764 20.9997 3.99987L20.9999 5.58569C21 5.85097 20.8946 6.10538 20.707 6.29295L14.2925 12.7071C14.105 12.8946 13.9996 13.149 13.9996 13.4142V19.7192C13.9996 20.3698 13.3882 20.8472 12.7571 20.6894L10.7571 20.1894C10.3119 20.0781 9.99961 19.6781 9.99961 19.2192V13.4142C9.99961 13.149 9.89425 12.8946 9.70672 12.7071L3.2925 6.29289C3.10496 6.10536 2.99961 5.851 2.99961 5.58579V4C2.99961 3.44772 3.44732 3 3.99961 3Z" />
     </svg>
   );
 }
 
 export function Minus(props: IconProps) {
   return (
-    <svg {...base(props)} strokeWidth={2}>
-      <path d="M3 8h10" />
+    <svg {...base(props)}>
+      <path d="M6 12H18" />
     </svg>
   );
 }
 
 export function Plus(props: IconProps) {
   return (
-    <svg {...base(props)} strokeWidth={2}>
-      <path d="M8 3v10M3 8h10" />
+    <svg {...base(props)}>
+      <path d="M6 12H12M18 12H12M12 12V6M12 12V18" />
     </svg>
   );
 }
@@ -134,8 +151,8 @@ export function Plus(props: IconProps) {
 export function Send(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <path d="M14 2L2 6.5l4.5 2L8.5 13 14 2z" />
-      <path d="M14 2L6.5 8.5" />
+      <path d="M22.1525 3.55321L11.1772 21.0044L9.50686 12.4078L2.00002 7.89795L22.1525 3.55321Z" />
+      <path d="M9.45557 12.4436L22.1524 3.55321" />
     </svg>
   );
 }
@@ -143,8 +160,8 @@ export function Send(props: IconProps) {
 export function PanelRight(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <rect x="2" y="3" width="12" height="10" />
-      <path d="M10 3v10" />
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M15 3V21" />
     </svg>
   );
 }
@@ -152,9 +169,9 @@ export function PanelRight(props: IconProps) {
 export function Info(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <circle cx="8" cy="8" r="6.5" />
-      <path d="M8 7.5v3.5" />
-      <rect x="7.4" y="4.6" width="1.2" height="1.2" fill="currentColor" stroke="none" />
+      <path d="M12 11.5V16.5" />
+      <path d="M12 7.51L12.01 7.49889" />
+      <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" />
     </svg>
   );
 }
@@ -162,8 +179,8 @@ export function Info(props: IconProps) {
 export function Magnifier(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <circle cx="7" cy="7" r="4.5" />
-      <path d="M10.5 10.5L14 14" />
+      <path d="M17 17L21 21" />
+      <path d="M3 11C3 15.4183 6.58172 19 11 19C13.213 19 15.2161 18.1015 16.6644 16.6493C18.1077 15.2022 19 13.2053 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11Z" />
     </svg>
   );
 }
@@ -192,7 +209,8 @@ export function Spinner({ size = 16 }: { size?: number }) {
 export function Rooms(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <path d="M2 3h12v8H6l-3 2.5V11H2z" />
+      <path d="M7.5 22C10.5376 22 13 19.5376 13 16.5C13 13.4624 10.5376 11 7.5 11C4.46243 11 2 13.4624 2 16.5C2 17.5018 2.26783 18.441 2.7358 19.25L2.275 21.725L4.75 21.2642C5.55898 21.7322 6.49821 22 7.5 22Z" />
+      <path d="M15.2824 17.8978C16.2587 17.7405 17.1758 17.4065 18 16.9297L21.6 17.6L20.9297 14C21.6104 12.8233 22 11.4571 22 10C22 5.58172 18.4183 2 14 2C9.97262 2 6.64032 4.97598 6.08221 8.84884" />
     </svg>
   );
 }
@@ -200,9 +218,11 @@ export function Rooms(props: IconProps) {
 export function Board(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <rect x="2" y="2.5" width="3" height="11" />
-      <rect x="6.5" y="2.5" width="3" height="7.5" />
-      <rect x="11" y="2.5" width="3" height="4.5" />
+      <path d="M3 3.6V20.4C3 20.7314 3.26863 21 3.6 21H20.4C20.7314 21 21 20.7314 21 20.4V3.6C21 3.26863 20.7314 3 20.4 3H3.6C3.26863 3 3 3.26863 3 3.6Z" />
+      <path d="M6 6L6 16" />
+      <path d="M10 6V9" />
+      <path d="M14 6V13" />
+      <path d="M18 6V11" />
     </svg>
   );
 }
@@ -210,9 +230,8 @@ export function Board(props: IconProps) {
 export function Terminal(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <rect x="1.5" y="2.5" width="13" height="11" />
-      <path d="M4 6.5l2.2 1.7L4 10" />
-      <path d="M8.5 10.5h3.5" />
+      <path d="M13 17H20" />
+      <path d="M5 7L10 12L5 17" />
     </svg>
   );
 }

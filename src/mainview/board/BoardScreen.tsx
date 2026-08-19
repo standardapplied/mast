@@ -53,9 +53,13 @@ function FilterMenu({
   useEffect(() => {
     if (!isOpen) return;
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
+      const target = event.target as HTMLElement;
+      // The panel and the Selects inside it portal to document.body, so a click
+      // there is outside containerRef but must not close the filter. Any click
+      // within a floating dropdown (this one or a nested Select) keeps it open.
+      if (containerRef.current?.contains(target)) return;
+      if (target.closest?.(".dropdown-panel")) return;
+      setIsOpen(false);
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
@@ -129,19 +133,14 @@ function SpecCard({
   spec,
   blockedBy,
   lifted,
-  logsOwner,
   onOpen,
-  onOpenLog,
   onPointerDown,
   onContextMenu,
 }: {
   spec: GlobalSpecView;
   blockedBy: string[];
   lifted: boolean;
-  /** Set when the spec's run logs live on another FDE's box — disables Live. */
-  logsOwner?: string;
   onOpen: () => void;
-  onOpenLog: () => void;
   onPointerDown: (event: React.PointerEvent) => void;
   onContextMenu: (event: React.MouseEvent) => void;
 }) {
@@ -180,40 +179,6 @@ function SpecCard({
         )}
         {(spec.status === "in_progress" || spec.status === "review") && (
           <PresenceChip specId={spec.id} />
-        )}
-        {(spec.status === "in_progress" || spec.status === "review") && (
-          // A nested <button> is invalid; a span with a button role opens the
-          // live log without triggering the card's drag or its open-on-click.
-          // A foreign assignee means the run executes on their box — the logs
-          // aren't here, so the control is disabled rather than showing the
-          // wrong run or a server refusal.
-          <span
-            role="button"
-            tabIndex={logsOwner ? -1 : 0}
-            aria-disabled={logsOwner ? "true" : undefined}
-            className={logsOwner ? "spec-card-live is-disabled" : "spec-card-live"}
-            data-testid={`card-live-${spec.id}`}
-            title={
-              logsOwner
-                ? `Assigned to ${logsOwner} — logs live on their box.`
-                : spec.status === "review"
-                  ? "Follow the review log"
-                  : "Follow the agent log"
-            }
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (!logsOwner) onOpenLog();
-            }}
-            onKeyDown={(e) => {
-              if (!logsOwner && (e.key === "Enter" || e.key === " ")) {
-                e.preventDefault();
-                onOpenLog();
-              }
-            }}
-          >
-            Live
-          </span>
         )}
       </span>
     </button>
@@ -410,10 +375,15 @@ export function BoardScreen({
 
     update();
     canvas.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update);
+    // The board mounts while its view is display:none (views stay mounted and
+    // toggle visibility), so the canvas has no size until it's shown. A
+    // ResizeObserver re-measures on that hidden→visible flip, so the minimap
+    // appears immediately instead of only after the first scroll.
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => update()) : null;
+    ro?.observe(canvas);
     return () => {
       canvas.removeEventListener("scroll", update);
-      window.removeEventListener("resize", update);
+      ro?.disconnect();
     };
   }, [visibleLanes, data.specs]);
 
@@ -633,12 +603,10 @@ export function BoardScreen({
                         spec={spec}
                         blockedBy={unmetDependencies(spec, data.specs)}
                         lifted={dragging?.id === spec.id}
-                        logsOwner={logsElsewhere(spec, role.fde)}
                         onOpen={() => {
                           if (draggedRef.current) return; // a drag just ended, not a click
                           onOpenSpec(spec.id);
                         }}
-                        onOpenLog={() => setLogSpec(spec)}
                         onPointerDown={beginDrag(spec)}
                         onContextMenu={(e) => {
                           e.preventDefault();

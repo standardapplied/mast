@@ -19,6 +19,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 7px;
   box-sizing: border-box;
   height: var(--control-height);
   border: 1px solid transparent;
@@ -1436,6 +1437,10 @@ html.is-dragging-active * {
   /* dvh tracks the *visible* viewport as the mobile URL bar / on-screen keyboard
      move, so the shell isn't clipped behind them; 100vh is the fallback. */
   height: 100dvh;
+  /* The rail is fixed-width; the content column owns the rest. Clip here so a wide
+     view (board lanes, terminal) scrolls inside its own container instead of
+     pushing the whole shell sideways. */
+  overflow: hidden;
 }
 
 /* Slack/Gmail-style section rail: brand, the destinations as icon buttons
@@ -1448,7 +1453,7 @@ html.is-dragging-active * {
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: calc(12px + env(safe-area-inset-top)) 0 max(12px, env(safe-area-inset-bottom));
+  padding: calc(10px + env(safe-area-inset-top)) 0 max(12px, env(safe-area-inset-bottom));
   background: var(--surface);
   border-right: 1px solid var(--border);
 }
@@ -1512,6 +1517,15 @@ html.is-dragging-active * {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* The account menu sits at the rail's bottom-left, so its panel opens straight
+   up from the trigger (left edges aligned) rather than the old down-left. */
+.rail-user .user-menu-panel {
+  top: auto;
+  right: auto;
+  left: 0;
+  bottom: calc(100% + 8px);
 }
 
 /* Only shown while the workspace is up but the link is degraded — a thin strip
@@ -2003,6 +2017,7 @@ span.checkbox {
 
 .cockpit-main {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2295,13 +2310,6 @@ button.room-section-head:hover {
   color: var(--muted-foreground);
 }
 
-.detail-draft-note {
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
 
 @media (max-width: 760px) {
   .rooms-sidebar {
@@ -2589,11 +2597,6 @@ button.room-section-head:hover {
   padding: 1px 5px;
 }
 
-/* In the desktop shell the window's traffic lights sit at the top-left — right
-   over the rail. Drop the brand below them so the lockup stays clear. */
-.in-shell .rail {
-  padding-top: calc(30px + env(safe-area-inset-top));
-}
 
 .board-canvas {
   flex: 1;
@@ -2696,7 +2699,7 @@ button.room-section-head:hover {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 64px;
+  height: 64px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
@@ -2717,13 +2720,11 @@ button.room-section-head:hover {
   gap: 2px;
 }
 
-.room-header-eyebrow {
+.room-header-id {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.02em;
   color: var(--subtle-foreground);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -2731,50 +2732,7 @@ button.room-section-head:hover {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-
-.room-header-statustext {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted-foreground);
-  white-space: nowrap;
-}
-
-.room-header-statustext::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  background: var(--tone-dot, var(--subtle-foreground));
-}
-
-.room-header-statustext[data-tone="error"] {
-  --tone-dot: var(--error);
-  color: var(--error);
-}
-.room-header-statustext[data-tone="warning"] {
-  --tone-dot: var(--warning);
-}
-.room-header-statustext[data-tone="success"] {
-  --tone-dot: var(--success);
-}
-.room-header-statustext[data-tone="info"] {
-  --tone-dot: var(--info);
-}
-.room-header-statustext[data-tone="accent"] {
-  --tone-dot: var(--primary);
-}
-
-.room-header-guidance {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--subtle-foreground);
-  font-size: 12px;
+  min-width: 0;
 }
 
 .room-header-actions {
@@ -2858,7 +2816,7 @@ button.room-section-head:hover {
 }
 
 .room-drawer-head {
-  min-height: 52px;
+  height: 64px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   box-sizing: border-box;
@@ -4725,14 +4683,20 @@ button.room-section-head:hover {
 .presence-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 1px 7px;
+  gap: 6px;
+  padding: 3px 9px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   font: 600 10px/1.4 var(--font-mono);
   letter-spacing: var(--tracking-eyebrow);
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.presence-chip__elapsed {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--subtle-foreground);
 }
 .presence-chip .presence-dot {
   width: 6px;
@@ -4769,8 +4733,8 @@ button.room-section-head:hover {
 .needs-reply-chip {
   display: inline-flex;
   align-items: center;
-  padding: 1px 7px;
-  border-radius: 999px;
+  padding: 3px 9px;
+  border-radius: var(--radius);
   border: 1px solid var(--error);
   background: color-mix(in srgb, var(--error) 12%, transparent);
   font: 700 10px/1.4 var(--font-mono);
@@ -4814,28 +4778,6 @@ button.room-section-head:hover {
 
 /* Live agent log drawer ---------------------------------------------------------- */
 
-.spec-card-live {
-  margin-left: auto;
-  padding: 1px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border-strong);
-  font: 600 10px/1.4 var(--font-mono);
-  letter-spacing: var(--tracking-eyebrow);
-  text-transform: uppercase;
-  color: var(--primary);
-  cursor: pointer;
-}
-.spec-card-live:hover {
-  background: var(--surface-hover);
-}
-.spec-card-live.is-disabled {
-  color: var(--muted-foreground);
-  border-color: var(--border);
-  cursor: default;
-}
-.spec-card-live.is-disabled:hover {
-  background: transparent;
-}
 
 .live-log-scrim {
   position: fixed;
@@ -4875,13 +4817,8 @@ button.room-section-head:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.live-log__conn {
-  margin-left: auto;
-  font: 500 11px/1 var(--font-mono);
-  letter-spacing: var(--tracking-eyebrow);
-  text-transform: uppercase;
-}
 .live-log__close {
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4897,31 +4834,32 @@ button.room-section-head:hover {
   background: var(--surface-hover);
   color: var(--foreground);
 }
-.live-log__status {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  flex-shrink: 0;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
 .live-log__meta {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
-.live-log__detail {
-  color: var(--subtle-foreground);
-}
 .live-log__controls {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 14px;
   flex-shrink: 0;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
+}
+
+.live-log__controls-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.live-log__runmeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--subtle-foreground);
 }
 .live-log__raw {
   display: inline-flex;
