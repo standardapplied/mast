@@ -37,6 +37,11 @@ export type SpecPresence = {
   role?: string;
 };
 
+/** Chat lanes: an engaged agent's turn or a wake, either mode. */
+export function chatLaneRole(role: string | undefined): boolean {
+  return role === "room" || role === "room-full";
+}
+
 type Entry = {
   lastActivityAt: number | null;
   role?: string;
@@ -44,6 +49,11 @@ type Entry = {
    *  the server judged staleness against its own stamp, ours may be skewed. */
   quiet: boolean;
 };
+
+/** Entries keyed by run id ("?" for events that carry none) so two concurrent
+ *  runs — a build and a chat turn — never collapse into one chip and one run's
+ *  exit never wipes the other's presence. */
+type SpecEntries = Map<string, Entry>;
 
 function parseTs(value: unknown): number | null {
   if (typeof value !== "string") return null;
@@ -55,7 +65,7 @@ export class PresenceStore {
   /** Bumped on every observable change so `useSyncExternalStore` can read it. */
   version = 0;
 
-  private entries = new Map<string, Entry>();
+  private entries = new Map<string, SpecEntries>();
   private listeners = new Set<() => void>();
 
   subscribe(listener: () => void): () => void {
@@ -74,16 +84,10 @@ export class PresenceStore {
    * spec (ad-hoc sessions) have no card or room and are ignored.
    */
   noteRuns(runs: readonly RunView[]): void {
-    const newest = new Map<string, RunView>();
+    const before = this.entries.size;
+    this.entries = new Map();
     for (const run of runs) {
       if (!run.spec_id) continue;
-      const current = newest.get(run.spec_id);
-      if (!current || run.started_at.localeCompare(current.started_at) > 0) {
-        newest.set(run.spec_id, run);
-      }
-    }
-    let changed = false;
-    for (const [specId, run] of newest) {
       // Only a run that actually carries presence seeds an entry: a live stamp,
       // or the server's own quiet verdict. A running run with neither — a review
       // or fix run, which is event-silent by design (no SAIL_SPEC_ID, so its
@@ -91,18 +95,21 @@ export class PresenceStore {
       // clear it, so it must not leave a lingering entry here.
       const stamp = parseTs(run.last_activity_at);
       const hasPresence = stamp !== null || run.presence === "quiet";
-      if (run.status !== "running" || !hasPresence) {
-        changed = this.entries.delete(specId) || changed;
-        continue;
-      }
-      this.entries.set(specId, {
+      if (run.status !== "running" || !hasPresence) continue;
+      const bySpec = this.entries.get(run.spec_id) ?? new Map<string, Entry>();
+      bySpec.set(run.id, {
         lastActivityAt: stamp,
         role: run.role,
         quiet: run.presence === "quiet",
       });
-      changed = true;
+      this.entries.set(run.spec_id, bySpec);
     }
-    if (changed) this.emit();
+    if (before > 0 || this.entries.size > 0) this.emit();
+  }
+
+  private runKey(event: SailEvent): string {
+    const runId = event.data?.run_id;
+    return typeof runId === "string" && runId ? runId : "?";
   }
 
   /** Folds one SSE event in; anything without a spec or outside the vocabulary is ignored. */
@@ -110,27 +117,38 @@ export class PresenceStore {
     const specId = event.spec;
     if (!specId) return;
     if (PROGRESS_EVENT_TYPES.has(event.type)) {
-      this.noteProgress(specId, parseTs(event.ts) ?? Date.now());
+      this.noteProgress(specId, event, parseTs(event.ts) ?? Date.now());
       return;
     }
     if (event.type === "agent_presence") {
       this.notePresence(specId, event);
       return;
     }
-    if (TERMINAL_EVENT_TYPES.has(event.type) && this.entries.delete(specId)) {
-      this.emit();
+    if (TERMINAL_EVENT_TYPES.has(event.type)) {
+      const bySpec = this.entries.get(specId);
+      if (!bySpec) return;
+      const key = this.runKey(event);
+      // A terminal event addressing a known run clears exactly that run; a
+      // role-less legacy stop (no run_id) keeps the old clear-the-spec behavior.
+      const changed = key === "?" ? bySpec.size > 0 : bySpec.delete(key);
+      if (key === "?") bySpec.clear();
+      if (bySpec.size === 0) this.entries.delete(specId);
+      if (changed) this.emit();
     }
   }
 
-  private noteProgress(specId: string, at: number): void {
-    const entry = this.entries.get(specId);
+  private noteProgress(specId: string, event: SailEvent, at: number): void {
+    const bySpec = this.entries.get(specId) ?? new Map<string, Entry>();
+    const key = this.runKey(event);
+    const entry = bySpec.get(key);
     if (entry && !entry.quiet) {
       const fresh =
         entry.lastActivityAt !== null && at - entry.lastActivityAt < PRESENCE_THRESHOLD_MS;
       entry.lastActivityAt = Math.max(entry.lastActivityAt ?? at, at);
       if (fresh) return;
     } else {
-      this.entries.set(specId, { lastActivityAt: at, role: entry?.role, quiet: false });
+      bySpec.set(key, { lastActivityAt: at, role: entry?.role, quiet: false });
+      this.entries.set(specId, bySpec);
     }
     this.emit();
   }
@@ -138,19 +156,19 @@ export class PresenceStore {
   private notePresence(specId: string, event: SailEvent): void {
     const state = event.data?.presence;
     if (state !== "working" && state !== "quiet") return;
-    const entry = this.entries.get(specId);
+    const bySpec = this.entries.get(specId) ?? new Map<string, Entry>();
+    const key = this.runKey(event);
+    const entry = bySpec.get(key);
     const role = typeof event.data?.run_role === "string" ? event.data.run_role : entry?.role;
     const at =
       parseTs(event.data?.last_activity_at) ??
       (state === "working" ? parseTs(event.ts) : entry?.lastActivityAt ?? null);
-    this.entries.set(specId, { lastActivityAt: at, role, quiet: state === "quiet" });
+    bySpec.set(key, { lastActivityAt: at, role, quiet: state === "quiet" });
+    this.entries.set(specId, bySpec);
     this.emit();
   }
 
-  /** The spec's presence against `now`, or null when its live run has none. */
-  presenceOf(specId: string, now: number): SpecPresence | null {
-    const entry = this.entries.get(specId);
-    if (!entry) return null;
+  private presence(entry: Entry, now: number): SpecPresence | null {
     if (entry.quiet) {
       return { state: "quiet", lastActivityAt: entry.lastActivityAt, role: entry.role };
     }
@@ -160,6 +178,35 @@ export class PresenceStore {
       lastActivityAt: entry.lastActivityAt,
       role: entry.role,
     };
+  }
+
+  /**
+   * The spec's headline presence against `now` — the working lane when one is
+   * live (the board's semantics), else the chat lane's. Null when nothing is.
+   */
+  presenceOf(specId: string, now: number): SpecPresence | null {
+    const bySpec = this.entries.get(specId);
+    if (!bySpec) return null;
+    let chat: SpecPresence | null = null;
+    for (const entry of bySpec.values()) {
+      const presence = this.presence(entry, now);
+      if (!presence) continue;
+      if (!chatLaneRole(entry.role)) return presence;
+      chat = chat ?? presence;
+    }
+    return chat;
+  }
+
+  /** The engaged agent's own presence: the chat-lane entry, when one is live. */
+  chatPresenceOf(specId: string, now: number): SpecPresence | null {
+    const bySpec = this.entries.get(specId);
+    if (!bySpec) return null;
+    for (const entry of bySpec.values()) {
+      if (!chatLaneRole(entry.role)) continue;
+      const presence = this.presence(entry, now);
+      if (presence) return presence;
+    }
+    return null;
   }
 }
 

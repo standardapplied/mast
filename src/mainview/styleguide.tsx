@@ -152,6 +152,7 @@ function RoomListDemo() {
   return (
     <div style={{ width: 340, height: 360, border: "1px solid var(--border-strong)" }}>
       <RoomList
+        gateway={{ listAgents: async () => ({ ok: true as const, value: { agents: [] } }) }}
         rooms={ROOM_DEMO}
         projects={["mast", "sail"]}
         project="mast"

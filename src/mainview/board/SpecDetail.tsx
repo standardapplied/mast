@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type {
+import type { AgentLogRole,
   FdeView,
   GlobalSpecDetailResponse,
   GlobalSpecView,
@@ -25,7 +25,9 @@ import { Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
 import { DispatchDialog } from "./DispatchDialog";
+import { EngageDialog } from "./EngageDialog";
 import { InviteDialog } from "./InviteDialog";
+import { RosterChip } from "./RosterChip";
 import { PresenceChip } from "./PresenceChip";
 import { LiveLog } from "./LiveLog";
 import { SpecRoom } from "./SpecRoom";
@@ -126,7 +128,10 @@ export function SpecDetail({
   const [stopTarget, setStopTarget] = useState<RunView | null>(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [engageOpen, setEngageOpen] = useState(false);
+  const [dismissConfirm, setDismissConfirm] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [logRole, setLogRole] = useState<AgentLogRole | null>(null);
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(() => storedDrawerOpen(embedded));
   const [drawerWidth, setDrawerWidth] = useState(storedDrawerWidth);
@@ -368,9 +373,27 @@ export function SpecDetail({
           label: restart ? "Re-dispatch" : "Dispatch",
           onSelect: () => setDispatchOpen(true),
         }]),
-    { kind: "item", label: "Invite", onSelect: () => setInviteOpen(true) },
+    ...(spec.engagement
+      ? []
+      : [{
+          kind: "item" as const,
+          label: "Add agent",
+          onSelect: () => setEngageOpen(true),
+        }]),
+    { kind: "item", label: "Run a task", onSelect: () => setInviteOpen(true) },
     { kind: "item", label: "Edit", onSelect: startEdit },
   ];
+
+  const dismissAgent = async () => {
+    setDismissConfirm(false);
+    const result = await gateway.disengage(spec.id);
+    if (!result.ok) {
+      showToast("error", result.error.message);
+      return;
+    }
+    showToast("info", result.value.agent ? `Dismissed ${result.value.agent} from ${spec.id}.` : "Nobody was engaged.");
+    void load();
+  };
 
   const openActionsMenu = (event: React.MouseEvent) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -382,7 +405,16 @@ export function SpecDetail({
       <RoomHeader
         title={spec.title}
         eyebrow={spec.id}
-        presence={<PresenceChip specId={specId} verbose />}
+        presence={
+          <>
+            <RosterChip
+              specId={specId}
+              engagement={spec.engagement}
+              onDismiss={role.canWrite ? () => setDismissConfirm(true) : undefined}
+            />
+            <PresenceChip specId={specId} verbose />
+          </>
+        }
         drawerOpen={drawerOpen}
         onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
         onBack={embedded ? undefined : onBack}
@@ -434,6 +466,7 @@ export function SpecDetail({
         <main className="room-conversation">
           <SpecRoom
             gateway={gateway}
+            engagement={spec.engagement}
             specId={spec.id}
             specStatus={spec.status}
             specTitle={spec.title}
@@ -444,7 +477,10 @@ export function SpecDetail({
               spec.status !== "archived"
             }
             currentUser={role.fde}
-            onOpenLog={() => setLogOpen(true)}
+            onOpenLog={(role) => {
+              setLogRole(role ?? null);
+              setLogOpen(true);
+            }}
           />
         </main>
 
@@ -751,13 +787,53 @@ export function SpecDetail({
         />
       )}
 
+      {engageOpen && (
+        <EngageDialog
+          gateway={gateway}
+          specId={spec.id}
+          canDispatch={role.canDispatch}
+          roleKnown={role.known}
+          onClose={() => setEngageOpen(false)}
+          onResult={(message, ok) => {
+            showToast(ok ? "success" : "error", message);
+            if (ok) void load();
+          }}
+        />
+      )}
+
+      <Dialog
+        isOpen={dismissConfirm}
+        onClose={() => setDismissConfirm(false)}
+        title="Dismiss this agent?"
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDismissConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="btn-danger"
+              onClick={() => void dismissAgent()}
+              data-testid="confirm-dismiss"
+            >
+              Dismiss
+            </Button>
+          </>
+        }
+      >
+        <p className="meta-value">
+          {spec.engagement?.agent ?? "The agent"} leaves the room and stops answering messages.
+          The conversation history stays.
+        </p>
+      </Dialog>
+
       {logOpen && (
         <LiveLog
           gateway={gateway}
           project={spec.project}
           specId={spec.id}
-          initialRole={spec.status === "review" ? "review" : "build"}
-          onClose={() => setLogOpen(false)}
+          initialRole={logRole ?? (spec.status === "review" ? "review" : "build")}
+          onClose={() => { setLogOpen(false); setLogRole(null); }}
         />
       )}
     </div>

@@ -79,9 +79,9 @@ export function RoomsScreen({
     open(room);
   };
 
-  const createRoom = async (title: string, targetProject: string) => {
+  const createRoom = async (title: string, targetProject: string, agent?: string) => {
     setCreating(true);
-    const result = await create(title, targetProject);
+    const result = await create(title, targetProject, agent);
     setCreating(false);
     if (!result.ok) {
       showToast("error", result.error.message);
@@ -89,7 +89,11 @@ export function RoomsScreen({
     }
     setProject(result.value.spec.project);
     setSelectedId(result.value.spec.id);
-    showToast("success", `Created ${result.value.spec.id}.`);
+    if ("engageError" in result && result.engageError) {
+      showToast("error", `Created ${result.value.spec.id}, but the agent could not join: ${result.engageError}`);
+    } else {
+      showToast("success", `Created ${result.value.spec.id}.`);
+    }
     return true;
   };
 
@@ -103,6 +107,7 @@ export function RoomsScreen({
     <div className="rooms">
       <div className="rooms-sidebar" style={{ width: sidebarWidth }}>
         <RoomList
+          gateway={gateway}
           rooms={projectRooms}
           projects={data.projects}
           project={project}

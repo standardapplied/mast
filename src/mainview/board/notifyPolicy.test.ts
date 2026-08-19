@@ -86,3 +86,57 @@ describe("notification policy", () => {
     expect(notification(event("agent_session_completed", { spec: undefined }), null)).toBeNull();
   });
 });
+
+describe("engaged rooms", () => {
+  const engaged = (id: string) => id === "chat-room";
+
+  test("an agent's plain reply notifies in an engaged room and nowhere else", () => {
+    const reply = {
+      v: 1,
+      ts: "t",
+      project: "acme",
+      spec: "chat-room",
+      type: "spec_message_posted",
+      agent: "claude/room-1",
+      host: "h",
+      data: {},
+    } as SailEvent;
+    expect(notification(reply, null, engaged)?.kind).toBe("agent-reply");
+    expect(notification(reply, "chat-room", engaged)).toBeNull();
+    expect(notification({ ...reply, spec: "other" }, null, engaged)).toBeNull();
+  });
+
+  test("a human's message never notifies even in an engaged room", () => {
+    const human = {
+      v: 1,
+      ts: "t",
+      project: "acme",
+      spec: "chat-room",
+      type: "spec_message_posted",
+      agent: "uday",
+      host: "h",
+      data: {},
+    } as SailEvent;
+    expect(notification(human, null, engaged)).toBeNull();
+  });
+
+  test("a clean chat-turn stop is silent; its failure and a build stop are not", () => {
+    const stop = (role: string, exit: number) =>
+      ({
+        v: 1,
+        ts: "t",
+        project: "acme",
+        spec: "chat-room",
+        type: "agent_session_stopped",
+        agent: "claude-code",
+        host: "h",
+        data: { run_role: role, exit_code: exit },
+      }) as SailEvent;
+    expect(notification(stop("room", 0), null, engaged)).toBeNull();
+    expect(notification(stop("room-full", 0), null, engaged)).toBeNull();
+    expect(notification(stop("invite-full", 0), null, engaged)).toBeNull();
+    expect(notification(stop("room", 137), null, engaged)?.kind).toBe("run-ended");
+    expect(notification(stop("build", 0), null, engaged)?.kind).toBe("run-ended");
+  });
+});
+

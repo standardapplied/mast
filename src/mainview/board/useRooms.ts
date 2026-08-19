@@ -134,7 +134,7 @@ export function useRooms(
     setWatermarks(visitRoom(storage, room));
   }, [storage]);
 
-  const create = useCallback(async (title: string, project: string) => {
+  const create = useCallback(async (title: string, project: string, agent?: string) => {
     const trimmed = title.trim();
     if (!trimmed) {
       return {
@@ -167,8 +167,13 @@ export function useRooms(
         body: "",
       });
       if (result.ok) {
+        let engageError: string | undefined;
+        if (agent) {
+          const engaged = await gateway.engage(id, { agent });
+          if (!engaged.ok) engageError = engaged.error.message;
+        }
         await refresh();
-        return result;
+        return engageError ? { ...result, engageError } : result;
       }
       if (result.error.status !== 409 || result.error.code !== "spec_exists") return result;
       existingIds.add(id);

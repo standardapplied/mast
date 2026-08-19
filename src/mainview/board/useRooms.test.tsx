@@ -131,6 +131,39 @@ describe("useRooms", () => {
     );
   });
 
+  test("creating with an agent engages the room and reports an engage failure honestly", async () => {
+    const { gateway, handle } = await render();
+
+    let result: Awaited<ReturnType<Handle["create"]>> | undefined;
+    await act(async () => {
+      result = await handle().create("Chat room", "chorus", "claude-code");
+    });
+    await act(async () => {});
+    expect(result?.ok).toBe(true);
+    const created = await gateway.listSpecs({ project: "chorus" });
+    const room = created.ok
+      ? created.value.specs.find((spec) => spec.id === "chat-room")
+      : undefined;
+    expect(room?.engagement?.agent).toBe("claude-code");
+    expect(room?.engagement?.mode).toBe("full");
+
+    const engage = gateway.engage;
+    gateway.engage = async () => ({
+      ok: false,
+      error: { status: 400, code: "bad_request", message: "no such agent" },
+    });
+    let failed: Awaited<ReturnType<Handle["create"]>> | undefined;
+    await act(async () => {
+      failed = await handle().create("Lonely room", "chorus", "hal9000");
+    });
+    await act(async () => {});
+    gateway.engage = engage;
+    expect(failed?.ok).toBe(true);
+    expect(failed && "engageError" in failed ? failed.engageError : undefined).toBe(
+      "no such agent",
+    );
+  });
+
   test("retries with a suffixed id when another creator wins the race", async () => {
     const { gateway, handle } = await render();
     const createSpec = gateway.createSpec;

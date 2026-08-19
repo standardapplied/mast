@@ -1,4 +1,7 @@
 import type {
+  DisengageResponse,
+  EngageRequest,
+  EngageResponse,
   AgentListResponse,
   AgentLogResponse,
   AgentLogRole,
@@ -114,6 +117,10 @@ export type Gateway = {
   listAgents(): Promise<SailResult<AgentListResponse>>;
   /** Invite an agent into a spec's room (POST /v1/specs/{id}/invite): read only or full. */
   invite(id: string, request: InviteRequest): Promise<SailResult<InviteResponse>>;
+  /** Put an agent in a spec's room until dismissed (POST /v1/specs/{id}/engage) — sail ≥ 0.28. */
+  engage(id: string, request: EngageRequest): Promise<SailResult<EngageResponse>>;
+  /** Dismiss the room's engaged agent (POST /v1/specs/{id}/disengage). */
+  disengage(id: string): Promise<SailResult<DisengageResponse>>;
   /** Execution history (GET /v1/runs?spec=), or every run when no spec is
    *  given — the log panel's header and the presence store's seed. */
   listRuns(specId?: string): Promise<SailResult<RunListResponse>>;
@@ -545,6 +552,87 @@ export function createDemoGateway(): DemoGateway {
         mode: request.full ? ("full" as const) : ("read_only" as const),
         snapshot: withSnapshot ? `invite-${runId}` : "",
       });
+    },
+
+    async engage(id, request) {
+      const spec = find(id);
+      if (!spec) {
+        return {
+          ok: false,
+          error: { status: 404, code: "spec_not_found", message: `Spec '${id}' was not found.` },
+        };
+      }
+      const mode = request.mode ?? "full";
+      if (mode === "read-only" && request.agent === "codex") {
+        return {
+          ok: false,
+          error: {
+            status: 400,
+            code: "bad_request",
+            message:
+              "Codex CLI has no harness-enforced read-only session inside a sail container.",
+            action: "Engage codex with full access instead.",
+          },
+        };
+      }
+      spec.engagement = {
+        agent: request.agent,
+        mode,
+        ...(request.model ? { model: request.model } : {}),
+        engaged_at: new Date().toISOString(),
+      };
+      const label = mode === "full" ? `engage-${++eventId}` : "";
+      if (label) {
+        emit({
+          v: 1,
+          id: ++eventId,
+          ts: new Date().toISOString(),
+          project: spec.project,
+          spec: spec.id,
+          type: "snapshot_created",
+          agent: "sail",
+          host: "demo",
+          data: { label },
+        });
+      }
+      emit({
+        v: 1,
+        id: ++eventId,
+        ts: new Date().toISOString(),
+        project: spec.project,
+        spec: spec.id,
+        type: "spec_engaged",
+        agent: "sail",
+        host: "demo",
+        data: { agent: request.agent, mode, ...(label ? { label } : {}) },
+      });
+      return ok({ agent: request.agent, mode, ...(label ? { snapshot: label } : {}) });
+    },
+
+    async disengage(id) {
+      const spec = find(id);
+      if (!spec) {
+        return {
+          ok: false,
+          error: { status: 404, code: "spec_not_found", message: `Spec '${id}' was not found.` },
+        };
+      }
+      const agent = spec.engagement?.agent;
+      spec.engagement = undefined;
+      if (agent) {
+        emit({
+          v: 1,
+          id: ++eventId,
+          ts: new Date().toISOString(),
+          project: spec.project,
+          spec: spec.id,
+          type: "spec_disengaged",
+          agent: "sail",
+          host: "demo",
+          data: { agent },
+        });
+      }
+      return ok({ ...(agent ? { agent } : {}), disengaged: agent !== undefined });
     },
 
     async whoami() {

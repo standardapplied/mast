@@ -389,6 +389,9 @@ export function createTauriGateway(): Gateway {
     listAgents: () => read("GET", "/v1/agents"),
     invite: (id, request) =>
       read("POST", `/v1/specs/${encodeURIComponent(id)}/invite`, { body: request }),
+    engage: (id, request) =>
+      read("POST", `/v1/specs/${encodeURIComponent(id)}/engage`, { body: request }),
+    disengage: (id) => read("POST", `/v1/specs/${encodeURIComponent(id)}/disengage`, { body: {} }),
 
     listRuns: (specId) =>
       specId ? listSpecRuns(specId) : read<RunListResponse>("GET", "/v1/runs"),

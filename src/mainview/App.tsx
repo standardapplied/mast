@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode, useRef } from "react";
 import type { ConnectionStatus, WhoAmI } from "../shared/sail-models";
 import { BoardScreen } from "./board/BoardScreen";
 import { notification } from "./board/notifyPolicy";
@@ -88,10 +88,21 @@ function Notifier({
   focusedSpecId: string | null;
 }) {
   const { showToast } = useToast();
+  const engaged = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    void gateway.listSpecs({}).then((result) => {
+      if (!result.ok) return;
+      for (const spec of result.value.specs) {
+        if (spec.engagement) engaged.current.add(spec.id);
+      }
+    });
+  }, [gateway]);
   useEffect(
     () =>
       gateway.onEvent((event) => {
-        const decision = notification(event, focusedSpecId);
+        if (event.spec && event.type === "spec_engaged") engaged.current.add(event.spec);
+        if (event.spec && event.type === "spec_disengaged") engaged.current.delete(event.spec);
+        const decision = notification(event, focusedSpecId, (id) => engaged.current.has(id));
         if (decision) showToast(decision.tone, decision.message);
       }),
     [gateway, focusedSpecId, showToast],

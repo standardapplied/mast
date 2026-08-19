@@ -1,3 +1,4 @@
+import type { AgentView } from "../../shared/sail-models";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CaretDown, CaretRight, Plus } from "../components/icons";
 import { Dialog } from "../components/Dialog";
@@ -5,6 +6,7 @@ import { Input } from "../components/Input";
 import { Select } from "../components/Select";
 import { Tooltip } from "../components/Tooltip";
 import { Button } from "../components/ui";
+import type { Gateway } from "../gateway";
 import { relativeTime, SECTION_LABELS, SECTION_TONES, sectionRooms, type RoomView } from "./rooms";
 
 export function RoomList({
@@ -14,6 +16,7 @@ export function RoomList({
   selectedId,
   showArchive,
   creating,
+  gateway,
   now = Date.now(),
   workingIds = new Set(),
   onProject,
@@ -21,6 +24,7 @@ export function RoomList({
   onShowArchive,
   onCreate,
 }: {
+  gateway: Pick<Gateway, "listAgents">;
   rooms: readonly RoomView[];
   projects: readonly string[];
   project: string;
@@ -33,12 +37,27 @@ export function RoomList({
   onProject: (project: string) => void;
   onSelect: (room: RoomView) => void;
   onShowArchive: (show: boolean) => void;
-  onCreate: (title: string, project: string) => Promise<boolean>;
+  onCreate: (title: string, project: string, agent?: string) => Promise<boolean>;
 }) {
   const [newRoom, setNewRoom] = useState(false);
   const [title, setTitle] = useState("");
   const [newProject, setNewProject] = useState(project);
+  const [agent, setAgent] = useState("claude-code");
+  const [agents, setAgents] = useState<AgentView[]>([]);
   const titleRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!newRoom) return;
+    let cancelled = false;
+    void gateway.listAgents().then((result) => {
+      if (cancelled || !result.ok) return;
+      setAgents(result.value.agents);
+      setAgent((current) => current || result.value.agents[0]?.name || "");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [gateway, newRoom]);
 
   useEffect(() => {
     if (!newRoom) setNewProject(project);
@@ -55,7 +74,7 @@ export function RoomList({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const created = await onCreate(title, project || newProject);
+    const created = await onCreate(title, project || newProject, agent || undefined);
     if (!created) return;
     setTitle("");
     setNewRoom(false);
@@ -140,6 +159,23 @@ export function RoomList({
             aria-label="Room title"
             disabled={creating}
           />
+          <Select
+            value={agent}
+            options={[
+              { value: "", label: "No agent" },
+              ...agents.map((candidate) => ({
+                value: candidate.name,
+                label: candidate.display_name,
+              })),
+            ]}
+            onChange={setAgent}
+            placeholder="Agent"
+            aria-label="Agent"
+          />
+          <p className="room-create-hint">
+            The agent joins the room with full access and answers every message. Dismiss it any
+            time.
+          </p>
         </form>
       </Dialog>
 

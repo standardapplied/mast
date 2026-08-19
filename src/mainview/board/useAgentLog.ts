@@ -65,6 +65,8 @@ export function useAgentLog(
   const buffers = useRef<Record<AgentLogRole, RoleBuffer>>({
     build: { lines: [], cursor: undefined, loaded: false },
     review: { lines: [], cursor: undefined, loaded: false },
+    room: { lines: [], cursor: undefined, loaded: false },
+    "room-full": { lines: [], cursor: undefined, loaded: false },
   });
   const keyRef = useRef(0);
 

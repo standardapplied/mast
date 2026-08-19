@@ -77,7 +77,7 @@ describe("load derivation", () => {
     expect(store.presenceOf("spec-a", T0)).toBeNull();
   });
 
-  test("the newest run decides: a terminal newest clears presence", () => {
+  test("a terminal run seeds nothing while a running sibling keeps its own presence", () => {
     const store = new PresenceStore();
     store.noteRuns([
       run({
@@ -102,7 +102,7 @@ describe("load derivation", () => {
         last_activity_at: new Date(T0).toISOString(),
       }),
     ]);
-    expect(store.presenceOf("spec-a", T0)).toBeNull();
+    expect(store.presenceOf("spec-a", T0)?.state).toBe("working");
   });
 
   test("runs without a spec are ignored", () => {
@@ -123,7 +123,7 @@ describe("load derivation", () => {
     expect(store.version).toBe(0);
   });
 
-  test("a stampless newest run clears a stale entry a prior snapshot left", () => {
+  test("a snapshot is authoritative: entries for runs it no longer lists are gone", () => {
     const store = new PresenceStore();
     store.noteRuns([
       run({ id: "r1", spec_id: "spec-a", status: "running", last_activity_at: new Date(T0).toISOString() }),
@@ -139,6 +139,70 @@ describe("load derivation", () => {
       }),
     ]);
     expect(store.presenceOf("spec-a", T0)).toBeNull();
+  });
+});
+
+describe("two concurrent runs", () => {
+  test("a build and a chat turn are tracked independently and one exit never wipes the other", () => {
+    const store = new PresenceStore();
+    store.noteRuns([
+      run({
+        id: "build-1",
+        spec_id: "spec-a",
+        status: "running",
+        role: "build",
+        last_activity_at: new Date(T0).toISOString(),
+      }),
+      run({
+        id: "chat-1",
+        spec_id: "spec-a",
+        status: "running",
+        role: "room",
+        started_at: "2026-08-13T11:31:00Z",
+        last_activity_at: new Date(T0).toISOString(),
+      }),
+    ]);
+    expect(store.presenceOf("spec-a", T0)?.role).toBe("build");
+    expect(store.chatPresenceOf("spec-a", T0)?.role).toBe("room");
+
+    store.noteEvent(
+      event({ type: "agent_session_stopped", data: { run_id: "chat-1", run_role: "room" } }),
+    );
+    expect(store.chatPresenceOf("spec-a", T0)).toBeNull();
+    expect(store.presenceOf("spec-a", T0)?.role).toBe("build");
+
+    store.noteEvent(event({ type: "agent_session_completed", data: { run_id: "build-1" } }));
+    expect(store.presenceOf("spec-a", T0)).toBeNull();
+  });
+
+  test("a run-id-less terminal event keeps the legacy clear-the-spec behavior", () => {
+    const store = new PresenceStore();
+    store.noteRuns([
+      run({
+        id: "build-1",
+        spec_id: "spec-a",
+        status: "running",
+        last_activity_at: new Date(T0).toISOString(),
+      }),
+    ]);
+    store.noteEvent(event({ type: "agent_session_stopped" }));
+    expect(store.presenceOf("spec-a", T0)).toBeNull();
+  });
+
+  test("chatPresenceOf sees room-full turns and ignores working lanes", () => {
+    const store = new PresenceStore();
+    store.noteRuns([
+      run({
+        id: "chat-2",
+        spec_id: "spec-a",
+        status: "running",
+        role: "room-full",
+        last_activity_at: new Date(T0).toISOString(),
+      }),
+    ]);
+    expect(store.chatPresenceOf("spec-a", T0)?.state).toBe("working");
+    expect(store.presenceOf("spec-a", T0)?.role).toBe("room-full");
+    expect(store.chatPresenceOf("spec-b", T0)).toBeNull();
   });
 });
 
