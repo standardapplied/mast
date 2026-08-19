@@ -10,6 +10,7 @@ import { cx } from "./components/cx";
 import { Board, Logo, Rooms, Terminal } from "./components/icons";
 import { LoadingMark } from "./components/Loading";
 import { ToastProvider, useToast } from "./components/Toast";
+import { Tooltip } from "./components/Tooltip";
 import { Button } from "./components/ui";
 import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
@@ -259,18 +260,18 @@ export function App({
           </button>
           <div className="rail-nav">
             {navItems.map((item) => (
-              <button
-                key={item.value}
-                type="button"
-                className={cx("rail-item", view === item.value && "is-active")}
-                data-testid={`nav-${item.value}`}
-                aria-label={item.label}
-                aria-current={view === item.value ? "page" : undefined}
-                title={item.label}
-                onClick={item.go}
-              >
-                <item.Icon size={20} />
-              </button>
+              <Tooltip key={item.value} content={item.label} side="right">
+                <button
+                  type="button"
+                  className={cx("rail-item", view === item.value && "is-active")}
+                  data-testid={`nav-${item.value}`}
+                  aria-label={item.label}
+                  aria-current={view === item.value ? "page" : undefined}
+                  onClick={item.go}
+                >
+                  <item.Icon size={20} />
+                </button>
+              </Tooltip>
             ))}
           </div>
           <div className="rail-spacer" />

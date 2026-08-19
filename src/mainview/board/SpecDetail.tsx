@@ -411,9 +411,6 @@ export function SpecDetail({
                 Stop
               </Button>
             )}
-            {spec.status === "draft" && (
-              <span className="detail-draft-note">Draft — add details, then move to pending</span>
-            )}
             <Button
               variant="ghost"
               onClick={openActionsMenu}

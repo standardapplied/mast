@@ -43,9 +43,9 @@ export function RoomHeader({
           </button>
         )}
         <div className="room-header-copy">
-          {eyebrow && <span className="room-header-eyebrow">{eyebrow}</span>}
           <h1 className="room-header-title detail-title">{title}</h1>
           <div className="room-header-status">
+            {eyebrow && <span className="room-header-id">{eyebrow}</span>}
             <span className="room-header-statustext" data-tone={statusTone}>
               {status}
             </span>

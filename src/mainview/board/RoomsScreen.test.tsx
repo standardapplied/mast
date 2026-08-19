@@ -134,7 +134,7 @@ describe("RoomsScreen", () => {
 
     expect(container.querySelector('[data-testid="room-fresh-planning-room"]')).not.toBeNull();
     expect(container.querySelector(".detail-title")?.textContent).toBe("Fresh planning room");
-    expect(container.querySelector(".detail-draft-note")?.textContent).toContain("Draft");
+    expect(container.querySelector(".room-header-statustext")?.textContent).toContain("Draft");
 
     const listed = await gateway.listSpecs({ project: "chorus" });
     expect(listed.ok && listed.value.specs.some((spec) => spec.id === "fresh-planning-room")).toBe(

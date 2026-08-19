@@ -1436,6 +1436,10 @@ html.is-dragging-active * {
   /* dvh tracks the *visible* viewport as the mobile URL bar / on-screen keyboard
      move, so the shell isn't clipped behind them; 100vh is the fallback. */
   height: 100dvh;
+  /* The rail is fixed-width; the content column owns the rest. Clip here so a wide
+     view (board lanes, terminal) scrolls inside its own container instead of
+     pushing the whole shell sideways. */
+  overflow: hidden;
 }
 
 /* Slack/Gmail-style section rail: brand, the destinations as icon buttons
@@ -2003,6 +2007,7 @@ span.checkbox {
 
 .cockpit-main {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2295,13 +2300,6 @@ button.room-section-head:hover {
   color: var(--muted-foreground);
 }
 
-.detail-draft-note {
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
 
 @media (max-width: 760px) {
   .rooms-sidebar {
@@ -2696,7 +2694,7 @@ button.room-section-head:hover {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 64px;
+  height: 64px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
@@ -2717,13 +2715,11 @@ button.room-section-head:hover {
   gap: 2px;
 }
 
-.room-header-eyebrow {
+.room-header-id {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.02em;
   color: var(--subtle-foreground);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -2731,6 +2727,12 @@ button.room-section-head:hover {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+}
+
+.room-header-status .room-header-guidance {
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .room-header-statustext {
@@ -2858,7 +2860,7 @@ button.room-section-head:hover {
 }
 
 .room-drawer-head {
-  min-height: 52px;
+  height: 64px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   box-sizing: border-box;
