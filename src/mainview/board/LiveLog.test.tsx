@@ -70,7 +70,6 @@ describe("LiveLog", () => {
     mount();
     await settle();
     const status = container.querySelector('[data-testid="live-log-status"]')?.textContent ?? "";
-    expect(status).toContain("Running");
     expect(status).toContain("agent/chorus-invoice-ui");
     // The old container-scoped "running a different spec" heuristic is gone —
     // the log and the header are both pinned to the clicked spec's run.

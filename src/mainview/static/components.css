@@ -488,7 +488,6 @@
   content: "";
   width: 6px;
   height: 6px;
-  border-radius: 50%;
   background: var(--badge-dot, var(--subtle-foreground));
 }
 
@@ -1520,13 +1519,13 @@ html.is-dragging-active * {
   justify-content: center;
 }
 
-/* The account menu now lives at the rail's bottom-left, so its panel must open
-   upward and to the right instead of the old top-right anchor's down-left. */
+/* The account menu sits at the rail's bottom-left, so its panel opens straight
+   up from the trigger (left edges aligned) rather than the old down-left. */
 .rail-user .user-menu-panel {
   top: auto;
   right: auto;
-  bottom: 0;
-  left: calc(100% + 8px);
+  left: 0;
+  bottom: calc(100% + 8px);
 }
 
 /* Only shown while the workspace is up but the link is degraded — a thin strip
@@ -4707,7 +4706,7 @@ button.room-section-head:hover {
 .presence-chip .presence-dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: var(--radius);
   background: currentColor;
 }
 .presence-chip.is-working {
@@ -4840,31 +4839,32 @@ button.room-section-head:hover {
   background: var(--surface-hover);
   color: var(--foreground);
 }
-.live-log__status {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  flex-shrink: 0;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
 .live-log__meta {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
-.live-log__detail {
-  color: var(--subtle-foreground);
-}
 .live-log__controls {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 14px;
   flex-shrink: 0;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
+}
+
+.live-log__controls-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.live-log__runmeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--subtle-foreground);
 }
 .live-log__raw {
   display: inline-flex;

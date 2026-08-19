@@ -365,10 +365,10 @@ export function SpecDetail({
       ? []
       : [{
           kind: "item" as const,
-          label: restart ? "Re-dispatch…" : "Dispatch…",
+          label: restart ? "Re-dispatch" : "Dispatch",
           onSelect: () => setDispatchOpen(true),
         }]),
-    { kind: "item", label: "Invite…", onSelect: () => setInviteOpen(true) },
+    { kind: "item", label: "Invite", onSelect: () => setInviteOpen(true) },
     { kind: "item", label: "Edit", onSelect: startEdit },
   ];
 

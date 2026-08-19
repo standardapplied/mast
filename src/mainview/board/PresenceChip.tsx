@@ -50,8 +50,8 @@ export function PresenceChip({
       : null;
   const label = verbose
     ? presence.state === "working"
-      ? "An agent is on it"
-      : "Idle"
+      ? "Agent working"
+      : "Agent idle"
     : roleLabel
       ? `${roleLabel} ${presence.state}`
       : presence.state;

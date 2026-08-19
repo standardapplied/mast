@@ -607,7 +607,9 @@ describe("SpecRoom", () => {
     expect(sendButton).not.toBeNull();
     expect(sendButton.textContent).toBe("");
     expect(sendButton.disabled).toBe(true);
-    expect(container.querySelector(".room-composer-hint")?.textContent).toBe("⏎ to send");
+    expect(container.querySelector(".room-composer-hint")?.textContent).toBe(
+      "shift + enter for new line",
+    );
 
     const textarea = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Message this room"]',

@@ -108,6 +108,9 @@ export function LiveLog({
 
   const sess = session(view);
   const elapsed = run?.status === "running" ? formatElapsed(run.started_at, now) : null;
+  // Running is the obvious case while the panel is open, so its pill is noise;
+  // only surface the status when it's an exceptional one (failed, stranded, …).
+  const showStatus = run?.status !== "running" || sess.label !== "Running";
 
   return (
     <div className="live-log-scrim" onClick={onClose} data-testid="live-log">
@@ -122,22 +125,24 @@ export function LiveLog({
           </button>
         </header>
 
-        <div className="live-log__status" data-testid="live-log-status">
-          <Badge tone={sess.tone}>{sess.label}</Badge>
-          {elapsed && <span className="live-log__meta">{elapsed}</span>}
-          {run?.branch && <span className="live-log__meta">{run.branch}</span>}
-          {sess.detail && <span className="live-log__detail">{sess.detail}</span>}
-        </div>
-
-        <div className="live-log__controls">
-          <ToggleButton
-            options={ROLE_OPTIONS}
-            value={role}
-            onChange={(v) => setRole(v as AgentLogRole)}
-          />
-          <label className="live-log__raw">
-            <Checkbox checked={raw} onChange={setRaw} label="Raw" />
-          </label>
+        <div className="live-log__controls" data-testid="live-log-status">
+          <div className="live-log__controls-group">
+            <ToggleButton
+              options={ROLE_OPTIONS}
+              value={role}
+              onChange={(v) => setRole(v as AgentLogRole)}
+            />
+            <label className="live-log__raw">
+              <Checkbox checked={raw} onChange={setRaw} label="Raw" />
+            </label>
+          </div>
+          {(showStatus || elapsed || run?.branch) && (
+            <div className="live-log__runmeta">
+              {showStatus && <Badge tone={sess.tone}>{sess.label}</Badge>}
+              {elapsed && <span className="live-log__meta">{elapsed}</span>}
+              {run?.branch && <span className="live-log__meta">{run.branch}</span>}
+            </div>
+          )}
         </div>
 
         <div className="live-log__body" ref={bodyRef} onScroll={onScroll} data-testid="live-log-body">

@@ -375,10 +375,15 @@ export function BoardScreen({
 
     update();
     canvas.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update);
+    // The board mounts while its view is display:none (views stay mounted and
+    // toggle visibility), so the canvas has no size until it's shown. A
+    // ResizeObserver re-measures on that hidden→visible flip, so the minimap
+    // appears immediately instead of only after the first scroll.
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => update()) : null;
+    ro?.observe(canvas);
     return () => {
       canvas.removeEventListener("scroll", update);
-      window.removeEventListener("resize", update);
+      ro?.disconnect();
     };
   }, [visibleLanes, data.specs]);
 
