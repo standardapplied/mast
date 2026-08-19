@@ -1453,7 +1453,7 @@ html.is-dragging-active * {
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: calc(12px + env(safe-area-inset-top)) 0 max(12px, env(safe-area-inset-bottom));
+  padding: calc(10px + env(safe-area-inset-top)) 0 max(12px, env(safe-area-inset-bottom));
   background: var(--surface);
   border-right: 1px solid var(--border);
 }
@@ -2597,11 +2597,6 @@ button.room-section-head:hover {
   padding: 1px 5px;
 }
 
-/* In the desktop shell the window's traffic lights sit at the top-left — right
-   over the rail. Drop the brand below them so the lockup stays clear. */
-.in-shell .rail {
-  padding-top: calc(30px + env(safe-area-inset-top));
-}
 
 .board-canvas {
   flex: 1;
