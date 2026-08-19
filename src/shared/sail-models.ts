@@ -527,6 +527,9 @@ export type EngageRequest = {
   /** Defaults to "full" — conversations produce artifacts; read-only is the narrow choice. */
   mode?: "full" | "read-only";
   model?: string;
+  /** Full mode may take a rollback snapshot before the engagement takes effect.
+   *  Off by default: on the dir backend a snapshot is a slow full copy. */
+  snapshot?: boolean;
 };
 
 /** Response of POST /v1/specs/{id}/engage: the recorded (or snapshot-pending) engagement. */

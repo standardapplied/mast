@@ -42,6 +42,11 @@ const AGENTS: SailResult<AgentListResponse> = {
 
 const FULL: SailResult<EngageResponse> = {
   ok: true,
+  value: { agent: "claude-code", mode: "full" },
+};
+
+const FULL_WITH_SNAPSHOT: SailResult<EngageResponse> = {
+  ok: true,
   value: { agent: "claude-code", mode: "full", snapshot: "engage-1" },
 };
 
@@ -114,27 +119,43 @@ const engagedEvent = (type: string, data: Record<string, unknown>): SailEvent =>
   data,
 });
 
+const snapshotCheckbox = () =>
+  container.querySelector<HTMLElement>('[data-testid="engage-snapshot-field"] [role="checkbox"]');
+
 describe("EngageDialog", () => {
-  test("full is the default and the dialog settles on spec_engaged", async () => {
+  test("full with no snapshot is the default and settles immediately", async () => {
     const calls = mount();
     await settle();
     act(() => go().click());
     await settle();
 
     expect(calls.requests[0]).toEqual({ agent: "claude-code", mode: "full" });
+    expect(calls.closed).toBe(1);
+    expect(calls.results[0]?.ok).toBe(true);
+    expect(calls.results[0]?.message).toContain("full access");
+  });
+
+  test("opting into the snapshot waits for spec_engaged", async () => {
+    const calls = mount({ engage: FULL_WITH_SNAPSHOT });
+    await settle();
+    act(() => snapshotCheckbox()?.click());
+    act(() => go().click());
+    await settle();
+
+    expect(calls.requests[0]).toEqual({ agent: "claude-code", mode: "full", snapshot: true });
     expect(container.querySelector('[data-testid="engage-snapshotting"]')).not.toBeNull();
     expect(calls.closed).toBe(0);
 
     calls.emit(engagedEvent("spec_engaged", { agent: "claude-code", mode: "full" }));
     await settle();
     expect(calls.closed).toBe(1);
-    expect(calls.results[0]?.ok).toBe(true);
     expect(calls.results[0]?.message).toContain("joined s1");
   });
 
   test("a failed engage snapshot renders the error and keeps the dialog open", async () => {
-    const calls = mount();
+    const calls = mount({ engage: FULL_WITH_SNAPSHOT });
     await settle();
+    act(() => snapshotCheckbox()?.click());
     act(() => go().click());
     await settle();
 

@@ -581,7 +581,7 @@ export function createDemoGateway(): DemoGateway {
         ...(request.model ? { model: request.model } : {}),
         engaged_at: new Date().toISOString(),
       };
-      const label = mode === "full" ? `engage-${++eventId}` : "";
+      const label = mode === "full" && request.snapshot === true ? `engage-${++eventId}` : "";
       if (label) {
         emit({
           v: 1,

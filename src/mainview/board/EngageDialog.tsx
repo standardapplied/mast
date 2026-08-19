@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentView, SailEvent } from "../../shared/sail-models";
+import { Checkbox } from "../components/Checkbox";
 import { Dialog } from "../components/Dialog";
 import { Spinner } from "../components/icons";
 import { Input } from "../components/Input";
@@ -11,11 +12,12 @@ import type { Gateway } from "../gateway";
 /**
  * Add an agent to this room: it joins the conversation and answers every human
  * message until dismissed. Full access is the default — conversations produce
- * artifacts (diagrams, drafts, files) — and pays with one engage-time container
- * snapshot; Read only is the explicit narrow choice, greyed with the server's
- * own reason where the harness cannot enforce it. A full engagement takes
- * effect only when its snapshot completes, so the dialog shows the pending
- * state and settles on the room's `spec_engaged` / `spec_engage_failed` event.
+ * artifacts (diagrams, drafts, files). A rollback snapshot is opt-in and off by
+ * default (a dir-backend snapshot is a slow full copy); when taken, the
+ * engagement takes effect only after it completes, so the dialog shows the
+ * pending state and settles on `spec_engaged` / `spec_engage_failed`. Read only
+ * is the explicit narrow choice, greyed with the server's own reason where the
+ * harness cannot enforce it.
  */
 export function EngageDialog({
   gateway,
@@ -37,6 +39,7 @@ export function EngageDialog({
   const [agent, setAgent] = useState("");
   const [model, setModel] = useState("");
   const [readOnly, setReadOnly] = useState(false);
+  const [snapshot, setSnapshot] = useState(false);
   const [busy, setBusy] = useState(false);
   const [snapshotting, setSnapshotting] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -113,6 +116,7 @@ export function EngageDialog({
       agent: chosen,
       mode: readOnly ? "read-only" : "full",
       ...(model.trim() ? { model: model.trim() } : {}),
+      ...(!readOnly && snapshot ? { snapshot: true } : {}),
     });
     if (!result.ok) {
       const action = result.error.action ? ` ${result.error.action}` : "";
@@ -121,7 +125,8 @@ export function EngageDialog({
       return;
     }
     if (!result.value.snapshot) {
-      onResult(`${chosen} joined ${specId} (read only) — it answers every message here.`, true);
+      const mode = readOnly ? "read only" : "full access";
+      onResult(`${chosen} joined ${specId} (${mode}) — it answers every message here.`, true);
       onClose();
       return;
     }
@@ -218,9 +223,24 @@ export function EngageDialog({
             <p className="dispatch-hint">
               {readOnly
                 ? "Harness-enforced: it reads and answers, nothing more."
-                : "The default — it can draft specs and work in the workspace; a container snapshot is taken first as the rollback point."}
+                : "The default — it can draft specs and work in the workspace."}
             </p>
           </div>
+
+          {!readOnly && (
+            <div className="field" data-testid="engage-snapshot-field">
+              <Checkbox
+                checked={snapshot}
+                onChange={setSnapshot}
+                label="Snapshot the container first"
+              />
+              <p className="dispatch-hint">
+                {snapshot
+                  ? "A rollback point before the agent joins. On the default storage this is a slow full copy."
+                  : "Joins immediately with no rollback point — undo any damage by hand."}
+              </p>
+            </div>
+          )}
 
           {selectedUnsupported && (
             <p className="dispatch-block" data-testid="engage-unsupported">
