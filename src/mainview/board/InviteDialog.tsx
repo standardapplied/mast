@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentView, GlobalSpecView, SailEvent } from "../../shared/sail-models";
+import { Checkbox } from "../components/Checkbox";
 import { Dialog } from "../components/Dialog";
 import { Spinner } from "../components/icons";
 import { Input } from "../components/Input";
@@ -238,14 +239,10 @@ export function InviteDialog({
 
         {full && (
           <div className="field" data-testid="invite-snapshot-field">
-            <span className="field-label">Snapshot</span>
-            <ToggleButton
-              value={skipSnapshot ? "skip" : "snapshot"}
-              onChange={(value) => setSkipSnapshot(value === "skip")}
-              options={[
-                { value: "snapshot", label: "Snapshot first" },
-                { value: "skip", label: "Skip" },
-              ]}
+            <Checkbox
+              checked={!skipSnapshot}
+              onChange={(checked) => setSkipSnapshot(!checked)}
+              label="Snapshot the container first"
             />
             <p className="dispatch-hint">
               {skipSnapshot
