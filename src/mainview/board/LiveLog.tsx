@@ -15,10 +15,15 @@ import { useAgentLog, type AgentLogView } from "./useAgentLog";
  * shows a read-only status header. It never stops, steers, or intervenes.
  */
 
-const ROLE_OPTIONS = [
-  { value: "build", label: "Build" },
-  { value: "review", label: "Review" },
-];
+const CHAT_ROLES = new Set(["room", "room-full"]);
+
+function roleOptions(active: AgentLogRole) {
+  const base = [
+    { value: "build", label: "Build" },
+    { value: "review", label: "Review" },
+  ];
+  return CHAT_ROLES.has(active) ? [...base, { value: active, label: "Chat" }] : base;
+}
 
 function formatElapsed(startedAt: string | undefined, now: number): string | null {
   if (!startedAt) return null;
@@ -128,7 +133,7 @@ export function LiveLog({
         <div className="live-log__controls" data-testid="live-log-status">
           <div className="live-log__controls-group">
             <ToggleButton
-              options={ROLE_OPTIONS}
+              options={roleOptions(role)}
               value={role}
               onChange={(v) => setRole(v as AgentLogRole)}
             />

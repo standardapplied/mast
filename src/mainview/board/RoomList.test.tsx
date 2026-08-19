@@ -39,6 +39,7 @@ function mount(rooms: RoomView[]) {
   act(() =>
     root.render(
       <RoomList
+        gateway={{ listAgents: async () => ({ ok: true as const, value: { agents: [] } }) }}
         rooms={rooms}
         projects={["acme"]}
         project="acme"

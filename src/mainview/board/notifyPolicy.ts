@@ -32,7 +32,7 @@ const RUN_END_LABELS: Record<string, string> = {
 };
 
 export type Notification = {
-  kind: "needs-reply" | "run-ended";
+  kind: "needs-reply" | "run-ended" | "agent-reply";
   tone: "info" | "error";
   specId: string;
   message: string;
@@ -43,23 +43,46 @@ function agentAuthor(author: string): boolean {
   return author.includes("/");
 }
 
+const CHAT_LANES = new Set(["room", "room-full", "invite", "invite-full"]);
+
+/** A chat or invite turn that ended cleanly is plumbing, not news — the reply
+ *  itself is the notification. Failures stay loud whatever the lane. */
+function cleanChatStop(event: SailEvent): boolean {
+  if (event.type === "agent_failed") return false;
+  const role = event.data?.run_role;
+  if (typeof role !== "string" || !CHAT_LANES.has(role)) return false;
+  const exit = event.data?.exit_code;
+  return exit === undefined || exit === null || exit === 0 || exit === "0";
+}
+
 export function notification(
   event: SailEvent,
   focusedSpecId: string | null,
+  isEngaged: (specId: string) => boolean = () => false,
 ): Notification | null {
   const specId = event.spec;
   if (!specId || specId === focusedSpecId) return null;
   if (event.type === "spec_message_posted") {
-    if (event.data?.question !== true || !agentAuthor(event.agent)) return null;
+    if (!agentAuthor(event.agent)) return null;
+    if (event.data?.question === true) {
+      return {
+        kind: "needs-reply",
+        tone: "info",
+        specId,
+        message: `${specId} needs your reply`,
+      };
+    }
+    if (!isEngaged(specId)) return null;
+    const agent = event.agent.split("/")[0];
     return {
-      kind: "needs-reply",
+      kind: "agent-reply",
       tone: "info",
       specId,
-      message: `${specId} needs your reply`,
+      message: `${agent} replied · ${specId}`,
     };
   }
   const label = RUN_END_LABELS[event.type];
-  if (!label) return null;
+  if (!label || cleanChatStop(event)) return null;
   return {
     kind: "run-ended",
     tone: event.type === "agent_failed" ? "error" : "info",

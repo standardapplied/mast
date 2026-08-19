@@ -86,6 +86,9 @@ export const EVENT_REGISTRY: Readonly<Record<string, EventRule>> = {
   snapshot_restored: { mode: "row", kind: "lifecycle", label: "Snapshot restored" },
   snapshot_deleted: { mode: "row", kind: "lifecycle", label: "Snapshot deleted" },
   agent_stop_nudged: { mode: "row", kind: "lifecycle", label: "Agent nudged" },
+  spec_engaged: { mode: "row", kind: "lifecycle", label: "Agent joined the room" },
+  spec_disengaged: { mode: "row", kind: "lifecycle", label: "Agent left the room" },
+  spec_engage_failed: { mode: "row", kind: "lifecycle", label: "Engage failed" },
   review_errored: { mode: "row", kind: "lifecycle", label: "Review errored" },
   review_escalated: { mode: "row", kind: "lifecycle", label: "Review escalated" },
   review_pipeline_error: { mode: "row", kind: "lifecycle", label: "Review pipeline error" },
@@ -117,6 +120,21 @@ const FAILURE_LABELS: Readonly<Record<string, string>> = {
 function rowLabel(event: SailEvent, label: string): string {
   const failure = FAILURE_LABELS[event.type];
   return failure && dataString(event, "error") ? failure : label;
+}
+
+const CHAT_LANES = new Set(["room", "room-full", "invite", "invite-full"]);
+
+/**
+ * A chat or invite turn's clean exit is turn plumbing, not conversation — the
+ * agent's reply is already in the room, so "agent stopped · exit 0" after every
+ * turn manufactures the "it left" feeling. Failures render, loud.
+ */
+function cleanChatTurnStop(event: SailEvent): boolean {
+  if (event.type !== "agent_session_stopped") return false;
+  const role = event.data?.run_role;
+  if (typeof role !== "string" || !CHAT_LANES.has(role)) return false;
+  const exit = event.data?.exit_code;
+  return exit === undefined || exit === null || exit === 0 || exit === "0";
 }
 
 function eventId(event: SailEvent): string {
@@ -172,7 +190,7 @@ const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
  * the event carries none of them.
  */
 export function eventNarration(event: SailEvent): string {
-  const { detail, findings, reason, action, label, error } = event.data ?? {};
+  const { detail, findings, reason, action, label, error, agent, mode } = event.data ?? {};
   const counts =
     findings && typeof findings === "object"
       ? SEVERITY_ORDER.filter(
@@ -182,6 +200,8 @@ export function eventNarration(event: SailEvent): string {
           .join(", ")
       : "";
   return [
+    typeof agent === "string" && agent,
+    typeof mode === "string" && mode,
     typeof label === "string" && label,
     typeof detail === "string" && detail,
     counts,
@@ -298,6 +318,7 @@ export function assembleTimeline({
       continue;
     }
     if (rule.mode !== "row") continue;
+    if (cleanChatTurnStop(event)) continue;
     if (rule.kind === "decision") {
       const decision = eventDecision(event);
       items.push({

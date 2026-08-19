@@ -37,6 +37,16 @@ export type GlobalSpecView = {
   needs_reply?: boolean;
   /** The unanswered question's message id, present with needs_reply. */
   question_message_id?: string;
+  /** The room's standing agent; absent when nobody is engaged (sail ≥ 0.28). */
+  engagement?: EngagementView;
+};
+
+/** A room's engaged agent: who is in the room, with what access, since when. */
+export type EngagementView = {
+  agent: string;
+  mode: "full" | "read-only";
+  model?: string;
+  engaged_at: string;
 };
 
 export type SpecView = {
@@ -125,8 +135,8 @@ export type GlobalSpecHistoryResponse = {
   total: number;
 };
 
-/** Which log an agent-follow session tails, mirroring the CLI's `--review`. */
-export type AgentLogRole = "build" | "review";
+/** Which log an agent-follow session tails: the CLI's build/review lanes, or a chat turn's. */
+export type AgentLogRole = "build" | "review" | "room" | "room-full";
 
 /** GET /v1/projects/{p}/agent — the live build session's snapshot status. */
 export type AgentStatusResponse = {
@@ -155,7 +165,8 @@ export type RunView = {
   project: string;
   spec_id?: string;
   node: string;
-  role: AgentLogRole;
+  /** build | review | adhoc | room | room-full | invite | invite-full. */
+  role: string;
   agent: string;
   branch?: string;
   pid?: number;
@@ -508,6 +519,31 @@ export type InviteRequest = {
    *  point, instant launch — the escape hatch on the slow dir backend). Ignored
    *  for read only, which never snapshots. Defaults to true when omitted. */
   snapshot?: boolean;
+};
+
+/** Body of POST /v1/specs/{id}/engage: who joins the room and with what access. */
+export type EngageRequest = {
+  agent: string;
+  /** Defaults to "full" — conversations produce artifacts; read-only is the narrow choice. */
+  mode?: "full" | "read-only";
+  model?: string;
+  /** Full mode may take a rollback snapshot before the engagement takes effect.
+   *  Off by default: on the dir backend a snapshot is a slow full copy. */
+  snapshot?: boolean;
+};
+
+/** Response of POST /v1/specs/{id}/engage: the recorded (or snapshot-pending) engagement. */
+export type EngageResponse = {
+  agent: string;
+  mode: "full" | "read-only";
+  /** The engage-time snapshot label a full engagement pays with; absent for read-only. */
+  snapshot?: string;
+};
+
+/** Response of POST /v1/specs/{id}/disengage. */
+export type DisengageResponse = {
+  agent?: string;
+  disengaged: boolean;
 };
 
 /** Response of POST /v1/specs/{id}/invite: the launched invite run. */

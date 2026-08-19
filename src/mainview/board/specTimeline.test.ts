@@ -334,3 +334,76 @@ test("a failed snapshot mutation's narration carries the error reason", () => {
   );
   expect(narration).toBe("my-checkpoint · incus restore failed: boom");
 });
+
+describe("engagement rows", () => {
+  const base = { v: 1, ts: "2026-08-18T10:00:00Z", project: "acme", spec: "chat", host: "h" };
+
+  test("joins and leaves render as rows; a clean chat-turn stop does not", () => {
+    const items = assembleTimeline({
+      messages: [],
+      events: [
+        { ...base, id: 1, type: "spec_engaged", agent: "sail", data: { agent: "claude-code", mode: "full" } },
+        {
+          ...base,
+          id: 2,
+          ts: "2026-08-18T10:05:00Z",
+          type: "agent_session_stopped",
+          agent: "claude-code",
+          data: { run_role: "room-full", exit_code: 0 },
+        },
+        { ...base, id: 3, ts: "2026-08-18T10:06:00Z", type: "spec_disengaged", agent: "sail", data: { agent: "claude-code" } },
+      ] as SailEvent[],
+      reviews: [],
+      runs: [],
+    });
+    const labels = items.filter((item) => item.kind === "lifecycle").map((item) => item.label);
+    expect(labels).toEqual(["Agent joined the room", "Agent left the room"]);
+  });
+
+  test("a chat turn that died renders loud, and build stops are untouched", () => {
+    const items = assembleTimeline({
+      messages: [],
+      events: [
+        {
+          ...base,
+          id: 1,
+          type: "agent_session_stopped",
+          agent: "claude-code",
+          data: { run_role: "room", exit_code: 137 },
+        },
+        {
+          ...base,
+          id: 2,
+          ts: "2026-08-18T10:01:00Z",
+          type: "agent_session_stopped",
+          agent: "claude-code",
+          data: { run_role: "build", exit_code: 0, source: "watcher" },
+        },
+      ] as SailEvent[],
+      reviews: [],
+      runs: [],
+    });
+    expect(items).toHaveLength(2);
+  });
+
+  test("an engage failure renders with its narration", () => {
+    const items = assembleTimeline({
+      messages: [],
+      events: [
+        {
+          ...base,
+          id: 1,
+          type: "spec_engage_failed",
+          agent: "sail",
+          data: { agent: "codex", error: "no space left" },
+        },
+      ] as SailEvent[],
+      reviews: [],
+      runs: [],
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]!.kind).toBe("lifecycle");
+    expect(eventNarration((items[0] as { event: SailEvent }).event)).toContain("no space left");
+  });
+});
+

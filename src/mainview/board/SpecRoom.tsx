@@ -2,12 +2,16 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent,
   type UIEvent,
 } from "react";
 import type {
+  AgentLogRole,
+  EngagementView,
   Finding,
   ReviewDetailResponse,
   ReviewView,
@@ -22,6 +26,7 @@ import { Tooltip } from "../components/Tooltip";
 import { useToast } from "../components/Toast";
 import { Badge, Button, type BadgeTone } from "../components/ui";
 import type { Gateway } from "../gateway";
+import { presenceStore, type PresenceStore } from "./presenceStore";
 import { Markdown } from "../markdown";
 import { coalesce, isTelemetryEvent, roomRefreshFor } from "./roomRouting";
 import { SnapshotsPanel } from "./SnapshotsPanel";
@@ -234,6 +239,7 @@ export function SpecRoom({
   specTitle,
   canWrite,
   currentUser,
+  engagement,
   onOpenLog,
 }: {
   gateway: Gateway;
@@ -242,7 +248,9 @@ export function SpecRoom({
   specTitle?: string;
   canWrite: boolean;
   currentUser?: string;
-  onOpenLog: () => void;
+  /** The room's standing agent, when one is engaged — drives the composer's truth line. */
+  engagement?: EngagementView;
+  onOpenLog: (role?: AgentLogRole) => void;
 }) {
   const [tail, setTail] = useState<BufferedTail<TimelineItem>>({
     visible: [],
@@ -842,7 +850,11 @@ export function SpecRoom({
                     <span>·</span>
                     <time dateTime={item.occurredAt}>{dateTime(item.occurredAt)}</time>
                     {item.run && (
-                      <button type="button" className="dep-chip" onClick={onOpenLog}>
+                      <button
+                        type="button"
+                        className="dep-chip"
+                        onClick={() => onOpenLog(logRoleOf(item.run))}
+                      >
                         raw log
                       </button>
                     )}
@@ -942,6 +954,7 @@ export function SpecRoom({
       )}
       {canWrite ? (
         <div className="room-composer">
+          <ComposerPresence specId={specId} engagement={engagement} />
           <Textarea
             value={draft}
             maxLength={65_536}
@@ -983,4 +996,56 @@ export function SpecRoom({
       )}
     </div>
   );
+}
+
+/**
+ * The composer's truth line: a swallowed message must never look like a slow
+ * one. "Thinking…" while the engaged agent's chat turn runs; a quiet nudge to
+ * add an agent when the room has nobody and nothing running; silence when the
+ * agent is present-but-idle (the roster chip already says so).
+ */
+/** The log lane a lifecycle row's run belongs to; undefined keeps the caller's default. */
+function logRoleOf(run: RunView | undefined): AgentLogRole | undefined {
+  const role = run?.role;
+  return role === "build" || role === "review" || role === "room" || role === "room-full"
+    ? role
+    : undefined;
+}
+
+function ComposerPresence({
+  specId,
+  engagement,
+  store = presenceStore,
+}: {
+  specId: string;
+  engagement?: EngagementView;
+  store?: PresenceStore;
+}) {
+  const version = useSyncExternalStore(
+    (onChange) => store.subscribe(onChange),
+    () => store.version,
+  );
+  const thinking = useMemo(
+    () => store.chatPresenceOf(specId, Date.now()) !== null,
+    [store, specId, version],
+  );
+  const anyoneLive = useMemo(
+    () => store.presenceOf(specId, Date.now()) !== null,
+    [store, specId, version],
+  );
+  if (engagement && thinking) {
+    return (
+      <p className="room-composer-presence" data-testid="composer-thinking">
+        {engagement.agent} is thinking…
+      </p>
+    );
+  }
+  if (!engagement && !anyoneLive) {
+    return (
+      <p className="room-composer-presence is-empty" data-testid="composer-empty">
+        No agent in this room — add one from Actions to get answers.
+      </p>
+    );
+  }
+  return null;
 }
