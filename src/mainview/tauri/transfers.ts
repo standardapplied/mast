@@ -28,6 +28,31 @@ export function duplicateDownloadName(names: string[]): string | null {
   return null;
 }
 
+/**
+ * Collapse every in-flight delete into a single synthetic row, so removing N
+ * files reads as one "N items" progress entry instead of N separate rows.
+ * Uploads/downloads stay per-transfer. Returns null when nothing is deleting.
+ */
+export function aggregateDeletes(list: Transfer[]): Transfer | null {
+  const deletes = list.filter((t) => t.kind === "delete");
+  if (deletes.length === 0) return null;
+  const failed = deletes.filter((t) => t.status === "error").length;
+  const settled = deletes.filter((t) => t.status !== "active").length;
+  const active = settled < deletes.length;
+  const total = deletes.length;
+  return {
+    id: "delete-batch",
+    kind: "delete",
+    label: total === 1 ? deletes[0].label : `${total} items`,
+    filesDone: settled,
+    filesTotal: total,
+    bytesDone: 0,
+    bytesTotal: 0,
+    status: active ? "active" : failed > 0 ? "error" : "done",
+    detail: failed > 0 ? `${failed} failed` : undefined,
+  };
+}
+
 /** Replace the entry with the same id, or append — preserving order. */
 export function upsertTransfer(list: Transfer[], t: Transfer): Transfer[] {
   const index = list.findIndex((x) => x.id === t.id);

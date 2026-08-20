@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
-import { Folder } from "../components/icons";
+import { Folder, FolderPlus, PagePlus } from "../components/icons";
 import { parentDir } from "./dropTarget";
 import type { FileEntry, FileTreeStore } from "./fileTreeStore";
 import { clearSelection, click, EMPTY_SELECTION, rangeTo, toggle } from "./selection";
@@ -371,7 +371,7 @@ export function FileTree({
                 aria-label="New file"
                 title="New file in the selected folder"
               >
-                ＋
+                <PagePlus size={15} />
               </button>
               <button
                 type="button"
@@ -383,7 +383,7 @@ export function FileTree({
                 aria-label="New folder"
                 title="New folder in the selected folder"
               >
-                ⊞
+                <FolderPlus size={15} />
               </button>
             </>
           )}
