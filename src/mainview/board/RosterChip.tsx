@@ -39,7 +39,6 @@ export function RosterChip({
       data-testid={`roster-${specId}`}
       title={`${engagement.agent} is in this room (${mode}) and answers every message.`}
     >
-      <span className="presence-dot" />
       <span className="presence-chip__label">
         {engagement.agent} · {mode} · {thinking ? "thinking…" : "in the room"}
       </span>

@@ -333,13 +333,27 @@ export function SpecRoom({
     };
   }, [loadRoom]);
 
+  const lastAgentReplyAt = useMemo(() => {
+    if (!engagement) return null;
+    const prefix = engagement.agent + "/";
+    let newest: number | null = null;
+    for (const item of [...tail.visible, ...tail.buffered]) {
+      if (item.kind !== "message" || !item.message.author.startsWith(prefix)) continue;
+      const at = Date.parse(item.occurredAt);
+      if (!Number.isNaN(at) && (newest === null || at > newest)) newest = at;
+    }
+    return newest;
+  }, [engagement, tail]);
+
   const presenceVersion = useSyncExternalStore(
     (onChange) => presenceStore.subscribe(onChange),
     () => presenceStore.version,
   );
   const typing = useMemo(
-    () => engagement !== undefined && presenceStore.chatPresenceOf(specId, Date.now()) !== null,
-    [engagement, specId, presenceVersion],
+    () =>
+      engagement !== undefined &&
+      typingVisible(presenceStore.chatPresenceOf(specId, Date.now()), lastAgentReplyAt),
+    [engagement, specId, presenceVersion, lastAgentReplyAt],
   );
 
   useEffect(() => {
@@ -958,7 +972,11 @@ export function SpecRoom({
               </Fragment>
             );
           })}
-          <TypingRow specId={specId} engagement={engagement} />
+          <TypingRow
+            specId={specId}
+            engagement={engagement}
+            lastAgentReplyAt={lastAgentReplyAt}
+          />
       </div>
       {tail.buffered.length > 0 && (
         <button type="button" className="room-new-pill" onClick={jumpToLatest}>
@@ -1020,17 +1038,34 @@ function logRoleOf(run: RunView | undefined): AgentLogRole | undefined {
 
 /**
  * The iMessage-style typing indicator: the engaged agent's avatar and pulsing
- * dots as the last row of the conversation while its chat turn runs. Derived
- * from the presence store's chat-lane entry, so it appears when the turn
- * starts and vanishes on its stop event with nothing to reconcile.
+ * dots as the last row of the conversation while its chat turn runs. "Typing"
+ * means composing something you haven't seen yet, so the dots disappear the
+ * moment the agent's reply lands for this turn and stay gone through the
+ * turn's tail (the stop-gate checks and teardown that would otherwise read as
+ * "more is coming"). Derived from the presence store's chat-lane entry plus
+ * the newest agent message; the stop event clears the rest.
  */
+export function typingVisible(
+  presence: { startedAt?: number | null } | null,
+  lastAgentReplyAt: number | null,
+): boolean {
+  if (!presence) return false;
+  if (lastAgentReplyAt === null) return true;
+  const startedAt = presence.startedAt ?? null;
+  if (startedAt === null) return true;
+  return lastAgentReplyAt < startedAt;
+}
+
 function TypingRow({
   specId,
   engagement,
+  lastAgentReplyAt,
   store = presenceStore,
 }: {
   specId: string;
   engagement?: EngagementView;
+  /** Epoch ms of the engaged agent's newest room message, or null. */
+  lastAgentReplyAt: number | null;
   store?: PresenceStore;
 }) {
   const version = useSyncExternalStore(
@@ -1038,8 +1073,8 @@ function TypingRow({
     () => store.version,
   );
   const thinking = useMemo(
-    () => store.chatPresenceOf(specId, Date.now()) !== null,
-    [store, specId, version],
+    () => typingVisible(store.chatPresenceOf(specId, Date.now()), lastAgentReplyAt),
+    [store, specId, version, lastAgentReplyAt],
   );
   if (!engagement || !thinking) return null;
   return (

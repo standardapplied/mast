@@ -35,6 +35,9 @@ export type SpecPresence = {
   lastActivityAt: number | null;
   /** The live run's role when known ("build", "review", …); undefined from bare progress events. */
   role?: string;
+  /** Epoch ms the run started, when known — lets the room tell whether an agent
+   *  message belongs to this turn (reply landed, stop showing "typing"). */
+  startedAt?: number | null;
 };
 
 /** Chat lanes: an engaged agent's turn or a wake, either mode. */
@@ -45,6 +48,7 @@ export function chatLaneRole(role: string | undefined): boolean {
 type Entry = {
   lastActivityAt: number | null;
   role?: string;
+  startedAt?: number | null;
   /** A server-declared quiet overrides the local clock until activity resumes —
    *  the server judged staleness against its own stamp, ours may be skewed. */
   quiet: boolean;
@@ -100,6 +104,7 @@ export class PresenceStore {
       bySpec.set(run.id, {
         lastActivityAt: stamp,
         role: run.role,
+        startedAt: parseTs(run.started_at),
         quiet: run.presence === "quiet",
       });
       this.entries.set(run.spec_id, bySpec);
@@ -150,9 +155,11 @@ export class PresenceStore {
   private noteStarted(specId: string, event: SailEvent): void {
     const bySpec = this.entries.get(specId) ?? new Map<string, Entry>();
     const role = typeof event.data?.run_role === "string" ? event.data.run_role : undefined;
+    const at = parseTs(event.ts) ?? Date.now();
     bySpec.set(this.runKey(event), {
-      lastActivityAt: parseTs(event.ts) ?? Date.now(),
+      lastActivityAt: at,
       role,
+      startedAt: at,
       quiet: false,
     });
     this.entries.set(specId, bySpec);
@@ -169,7 +176,12 @@ export class PresenceStore {
       entry.lastActivityAt = Math.max(entry.lastActivityAt ?? at, at);
       if (fresh) return;
     } else {
-      bySpec.set(key, { lastActivityAt: at, role: entry?.role, quiet: false });
+      bySpec.set(key, {
+        lastActivityAt: at,
+        role: entry?.role,
+        startedAt: entry?.startedAt,
+        quiet: false,
+      });
       this.entries.set(specId, bySpec);
     }
     this.emit();
@@ -185,20 +197,31 @@ export class PresenceStore {
     const at =
       parseTs(event.data?.last_activity_at) ??
       (state === "working" ? parseTs(event.ts) : entry?.lastActivityAt ?? null);
-    bySpec.set(key, { lastActivityAt: at, role, quiet: state === "quiet" });
+    bySpec.set(key, {
+      lastActivityAt: at,
+      role,
+      startedAt: entry?.startedAt,
+      quiet: state === "quiet",
+    });
     this.entries.set(specId, bySpec);
     this.emit();
   }
 
   private presence(entry: Entry, now: number): SpecPresence | null {
     if (entry.quiet) {
-      return { state: "quiet", lastActivityAt: entry.lastActivityAt, role: entry.role };
+      return {
+        state: "quiet",
+        lastActivityAt: entry.lastActivityAt,
+        role: entry.role,
+        startedAt: entry.startedAt,
+      };
     }
     if (entry.lastActivityAt === null) return null;
     return {
       state: now - entry.lastActivityAt > PRESENCE_THRESHOLD_MS ? "quiet" : "working",
       lastActivityAt: entry.lastActivityAt,
       role: entry.role,
+      startedAt: entry.startedAt,
     };
   }
 
