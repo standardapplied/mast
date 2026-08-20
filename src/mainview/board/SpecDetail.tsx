@@ -406,14 +406,19 @@ export function SpecDetail({
         title={spec.title}
         eyebrow={spec.id}
         presence={
-          <>
+          spec.engagement ? (
+            // An invited agent owns the room's liveness: the roster chip already
+            // says who's here and whether they're thinking. The generic
+            // run-presence pill is for the other case — a dispatched agent
+            // working autonomously with nobody engaged in the room.
             <RosterChip
               specId={specId}
               engagement={spec.engagement}
               onDismiss={role.canWrite ? () => setDismissConfirm(true) : undefined}
             />
+          ) : (
             <PresenceChip specId={specId} verbose />
-          </>
+          )
         }
         drawerOpen={drawerOpen}
         onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
