@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { duplicateDownloadName, humanBytes, transferPercent, upsertTransfer, type Transfer } from "./transfers";
+import {
+  aggregateDeletes,
+  duplicateDownloadName,
+  humanBytes,
+  transferPercent,
+  upsertTransfer,
+  type Transfer,
+} from "./transfers";
 
 const t = (over: Partial<Transfer>): Transfer => ({
   id: "1",
@@ -22,6 +29,42 @@ describe("upsertTransfer", () => {
     const list = upsertTransfer([t({ id: "a", bytesDone: 0 }), t({ id: "b" })], t({ id: "a", bytesDone: 99 }));
     expect(list.map((x) => x.id)).toEqual(["a", "b"]);
     expect(list[0]!.bytesDone).toBe(99);
+  });
+});
+
+describe("aggregateDeletes", () => {
+  test("is null when nothing is deleting", () => {
+    expect(aggregateDeletes([t({ kind: "upload" })])).toBeNull();
+  });
+  test("collapses many deletes into one N-items row with a settled count", () => {
+    const agg = aggregateDeletes([
+      t({ id: "a", kind: "delete", status: "done" }),
+      t({ id: "b", kind: "delete", status: "active" }),
+      t({ id: "c", kind: "delete", status: "done" }),
+    ]);
+    expect(agg?.label).toBe("3 items");
+    expect(agg?.filesTotal).toBe(3);
+    expect(agg?.filesDone).toBe(2);
+    expect(agg?.status).toBe("active");
+  });
+  test("a single delete keeps its own label", () => {
+    const agg = aggregateDeletes([t({ kind: "delete", label: "notes.md", status: "active" })]);
+    expect(agg?.label).toBe("notes.md");
+    expect(agg?.filesTotal).toBe(1);
+  });
+  test("settles to done when all succeed, error (with count) when any fail", () => {
+    expect(
+      aggregateDeletes([
+        t({ id: "a", kind: "delete", status: "done" }),
+        t({ id: "b", kind: "delete", status: "done" }),
+      ])?.status,
+    ).toBe("done");
+    const failed = aggregateDeletes([
+      t({ id: "a", kind: "delete", status: "done" }),
+      t({ id: "b", kind: "delete", status: "error" }),
+    ]);
+    expect(failed?.status).toBe("error");
+    expect(failed?.detail).toBe("1 failed");
   });
 });
 
