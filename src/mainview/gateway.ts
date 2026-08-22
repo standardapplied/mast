@@ -563,7 +563,7 @@ export function createDemoGateway(): DemoGateway {
         };
       }
       const mode = request.mode ?? "full";
-      if (mode === "read-only" && request.agent === "codex") {
+      if (mode === "read_only" && request.agent === "codex") {
         return {
           ok: false,
           error: {

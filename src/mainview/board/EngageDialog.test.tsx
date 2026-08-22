@@ -169,14 +169,14 @@ describe("EngageDialog", () => {
 
   test("read only settles immediately with no snapshot wait", async () => {
     const calls = mount({
-      engage: { ok: true, value: { agent: "claude-code", mode: "read-only" } },
+      engage: { ok: true, value: { agent: "claude-code", mode: "read_only" } },
     });
     await settle();
     act(() => toggle("Read only")?.click());
     act(() => go().click());
     await settle();
 
-    expect(calls.requests[0]).toEqual({ agent: "claude-code", mode: "read-only" });
+    expect(calls.requests[0]).toEqual({ agent: "claude-code", mode: "read_only" });
     expect(calls.closed).toBe(1);
     expect(calls.results[0]?.message).toContain("read only");
   });

@@ -44,7 +44,7 @@ export type GlobalSpecView = {
 /** A room's engaged agent: who is in the room, with what access, since when. */
 export type EngagementView = {
   agent: string;
-  mode: "full" | "read-only";
+  mode: "full" | "read_only";
   model?: string;
   engaged_at: string;
 };
@@ -525,7 +525,7 @@ export type InviteRequest = {
 export type EngageRequest = {
   agent: string;
   /** Defaults to "full" — conversations produce artifacts; read-only is the narrow choice. */
-  mode?: "full" | "read-only";
+  mode?: "full" | "read_only";
   model?: string;
   /** Full mode may take a rollback snapshot before the engagement takes effect.
    *  Off by default: on the dir backend a snapshot is a slow full copy. */
@@ -535,7 +535,7 @@ export type EngageRequest = {
 /** Response of POST /v1/specs/{id}/engage: the recorded (or snapshot-pending) engagement. */
 export type EngageResponse = {
   agent: string;
-  mode: "full" | "read-only";
+  mode: "full" | "read_only";
   /** The engage-time snapshot label a full engagement pays with; absent for read-only. */
   snapshot?: string;
 };
