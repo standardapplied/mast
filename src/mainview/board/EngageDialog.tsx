@@ -114,7 +114,7 @@ export function EngageDialog({
     const chosen = agent.trim();
     const result = await gateway.engage(specId, {
       agent: chosen,
-      mode: readOnly ? "read-only" : "full",
+      mode: readOnly ? "read_only" : "full",
       ...(model.trim() ? { model: model.trim() } : {}),
       ...(!readOnly && snapshot ? { snapshot: true } : {}),
     });
@@ -213,11 +213,11 @@ export function EngageDialog({
           <div className="field">
             <span className="field-label">Access</span>
             <ToggleButton
-              value={readOnly ? "read-only" : "full"}
-              onChange={(value) => setReadOnly(value === "read-only")}
+              value={readOnly ? "read_only" : "full"}
+              onChange={(value) => setReadOnly(value === "read_only")}
               options={[
                 { value: "full", label: "Full" },
-                { value: "read-only", label: "Read only" },
+                { value: "read_only", label: "Read only" },
               ]}
             />
             <p className="dispatch-hint">
