@@ -5,6 +5,7 @@ import { useToast } from "../components/Toast";
 import { Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { RoomList } from "./RoomList";
+import { ChatRoomPane } from "./ChatRoomPane";
 import { SpecDetail } from "./SpecDetail";
 import {
   selectedRoom,
@@ -42,7 +43,7 @@ export function RoomsScreen({
 
   useEffect(() => {
     if (project || data.rooms.length === 0) return;
-    setProject(data.rooms[0]!.spec.project);
+    setProject(data.rooms[0]!.room.project);
   }, [data.rooms, project]);
 
   useEffect(() => {
@@ -52,7 +53,7 @@ export function RoomsScreen({
   }, [data.projects, data.rooms.length, project]);
 
   const projectRooms = useMemo(
-    () => data.rooms.filter((room) => room.spec.project === project),
+    () => data.rooms.filter((room) => room.room.project === project),
     [data.rooms, project],
   );
   const shownRooms = useMemo(
@@ -61,7 +62,7 @@ export function RoomsScreen({
   );
 
   useEffect(() => {
-    const current = projectRooms.find((room) => room.spec.id === selectedId);
+    const current = projectRooms.find((room) => room.room.id === selectedId);
     if (current) {
       if (current.unread) open(current);
       return;
@@ -69,13 +70,13 @@ export function RoomsScreen({
     // Remembered selections are honored only within the active filter — a room
     // that has since been archived must not drag the archive into view.
     const remembered = selectedRoom(storage, project);
-    const next = shownRooms.find((room) => room.spec.id === remembered) ?? shownRooms[0];
-    setSelectedId(next?.spec.id);
+    const next = shownRooms.find((room) => room.room.id === remembered) ?? shownRooms[0];
+    setSelectedId(next?.room.id);
     if (next) open(next);
   }, [open, project, projectRooms, selectedId, shownRooms, storage]);
 
   const select = (room: RoomView) => {
-    setSelectedId(room.spec.id);
+    setSelectedId(room.room.id);
     open(room);
   };
 
@@ -87,17 +88,17 @@ export function RoomsScreen({
       showToast("error", result.error.message);
       return false;
     }
-    setProject(result.value.spec.project);
-    setSelectedId(result.value.spec.id);
+    setProject(result.value.project);
+    setSelectedId(result.value.id);
     if ("engageError" in result && result.engageError) {
-      showToast("error", `Created ${result.value.spec.id}, but the agent could not join: ${result.engageError}`);
+      showToast("error", `Created ${result.value.id}, but the agent could not join: ${result.engageError}`);
     } else {
-      showToast("success", `Created ${result.value.spec.id}.`);
+      showToast("success", `Created ${result.value.id}.`);
     }
     return true;
   };
 
-  const selected = data.rooms.find((room) => room.spec.id === selectedId);
+  const selected = data.rooms.find((room) => room.room.id === selectedId);
 
   useEffect(() => {
     onFocus?.(selectedId ?? null);
@@ -145,15 +146,15 @@ export function RoomsScreen({
             <p>{data.error.message}</p>
             <Button variant="ghost" onClick={() => location.reload()}>Retry</Button>
           </div>
-        ) : selected ? (
+        ) : selected?.spec ? (
           <SpecDetail
             key={selected.spec.id}
             gateway={gateway}
             specId={selected.spec.id}
             onOpenSpec={(id) => {
-              const room = data.rooms.find((candidate) => candidate.spec.id === id);
+              const room = data.rooms.find((candidate) => candidate.room.id === id);
               if (room) {
-                setProject(room.spec.project);
+                setProject(room.room.project);
                 select(room);
               }
             }}
@@ -161,6 +162,8 @@ export function RoomsScreen({
             embedded
             eventDebounceMs={0}
           />
+        ) : selected ? (
+          <ChatRoomPane key={selected.room.id} gateway={gateway} room={selected.room} />
         ) : (
           <div className="room-empty-state">
             <Eyebrow>{project || "Your project"}</Eyebrow>

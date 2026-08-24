@@ -39,6 +39,54 @@ export type GlobalSpecView = {
   question_message_id?: string;
   /** The room's standing agent; absent when nobody is engaged (sail ≥ 0.28). */
   engagement?: EngagementView;
+  /** The room this spec lives in; its own id before rooms decoupled (sail ≥ 0.32). */
+  room_id?: string;
+};
+
+/** One seated agent member of a room's roster (sail ≥ 0.33). */
+export type RoomMemberView = {
+  agent: string;
+  mode: "full" | "read_only";
+  model?: string;
+  engaged_at: string;
+};
+
+/** One room as GET /v1/rooms renders it: identity, members, attachments, activity. */
+export type ServerRoomView = {
+  id: string;
+  project: string;
+  title: string;
+  assignee?: string;
+  wake?: string;
+  members: RoomMemberView[];
+  spec_ids: string[];
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+  updated_by?: string;
+  last_activity_at?: string;
+  needs_reply?: boolean;
+  question_message_id?: string;
+};
+
+/** Response of GET /v1/rooms. */
+export type RoomsListResponse = {
+  rooms: ServerRoomView[];
+  count: number;
+};
+
+/** Request of POST /v1/rooms — a room is born with no spec. */
+export type RoomCreateRequest = {
+  id: string;
+  project: string;
+  title: string;
+  wake?: string;
+};
+
+/** Response of DELETE /v1/rooms/{id}. */
+export type RoomDeletedResponse = {
+  id: string;
+  deleted: boolean;
 };
 
 /** A room's engaged agent: who is in the room, with what access, since when. */

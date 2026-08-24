@@ -235,6 +235,7 @@ function FindingRow({
 export function SpecRoom({
   gateway,
   specId,
+  roomId = specId,
   specStatus,
   specTitle,
   canWrite,
@@ -244,6 +245,8 @@ export function SpecRoom({
 }: {
   gateway: Gateway;
   specId: string;
+  /** The conversation's room; defaults to the spec id for pre-decouple identity rooms. */
+  roomId?: string;
   specStatus?: string;
   specTitle?: string;
   canWrite: boolean;
@@ -295,7 +298,7 @@ export function SpecRoom({
 
   const loadRoom = useCallback(async (version: number) => {
     const [messages, events, runs] = await Promise.all([
-      gateway.listSpecMessages(specId, { limit: PAGE_SIZE }),
+      gateway.listSpecMessages(roomId, { limit: PAGE_SIZE }),
       loadEvents(),
       gateway.listRuns(specId),
     ]);
@@ -366,7 +369,7 @@ export function SpecRoom({
 
   const refreshMessages = useCallback(
     async (live: boolean) => {
-      const result = await gateway.listSpecMessages(specId, { limit: PAGE_SIZE });
+      const result = await gateway.listSpecMessages(roomId, { limit: PAGE_SIZE });
       if (!result.ok) return;
       applySources(
         {
@@ -390,7 +393,7 @@ export function SpecRoom({
   const fetchNewMessages = useCallback(async () => {
     const newest = sources.current.messages.findLast((message) => !message.delivery);
     if (!newest) return refreshMessages(true);
-    const result = await gateway.listSpecMessages(specId, {
+    const result = await gateway.listSpecMessages(roomId, {
       after: newest.id,
       limit: PAGE_SIZE,
     });
@@ -626,7 +629,7 @@ export function SpecRoom({
     const oldest = sources.current.messages.find((message) => !message.delivery);
     if (!oldest) return;
     setLoadingEarlier(true);
-    const result = await gateway.listSpecMessages(specId, {
+    const result = await gateway.listSpecMessages(roomId, {
       before: oldest.id,
       limit: PAGE_SIZE,
     });
@@ -658,7 +661,7 @@ export function SpecRoom({
   const submitMessage = async (message: RoomMessage) => {
     replaceMessage(message.id, { ...message, delivery: "pending", error: undefined });
     posting.current = true;
-    const result = await gateway.postSpecMessage(specId, { body: message.body });
+    const result = await gateway.postSpecMessage(roomId, { body: message.body });
     posting.current = false;
     if (!result.ok) {
       const failed = { ...message, delivery: "failed" as const, error: result.error.message };

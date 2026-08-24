@@ -25,6 +25,15 @@ function spec(id: string, status: string, title: string): GlobalSpecView {
 
 function room(id: string, status: string, title: string): RoomView {
   return {
+    room: {
+      id,
+      project: "acme",
+      title,
+      members: [],
+      spec_ids: [id],
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+    },
     spec: spec(id, status, title),
     activityAt: "2026-08-01T00:00:00Z",
     unread: false,

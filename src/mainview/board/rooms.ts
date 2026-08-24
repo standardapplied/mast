@@ -1,4 +1,9 @@
-import type { GlobalSpecView, SailEvent, SpecStatus } from "../../shared/sail-models";
+import type {
+  GlobalSpecView,
+  SailEvent,
+  ServerRoomView,
+  SpecStatus,
+} from "../../shared/sail-models";
 
 export const ROOM_WATERMARKS_KEY = "mast.rooms.watermarks";
 export const ROOM_SELECTIONS_KEY = "mast.rooms.selections";
@@ -6,10 +11,12 @@ export const ROOM_SELECTIONS_KEY = "mast.rooms.selections";
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
 export type RoomView = {
-  spec: GlobalSpecView;
+  room: ServerRoomView;
+  /** The room's attached spec, when one exists — chat-only rooms carry none. */
+  spec?: GlobalSpecView;
   activityAt: string;
   unread: boolean;
-  /** The spec's agent asked a question no human has answered yet. */
+  /** The room's agent asked a question no human has answered yet. */
   needsReply: boolean;
 };
 
@@ -45,7 +52,8 @@ export function isRoomActivityEvent(event: SailEvent): boolean {
 }
 
 export function assembleRooms(
-  specs: GlobalSpecView[],
+  serverRooms: readonly ServerRoomView[],
+  specs: readonly GlobalSpecView[],
   events: readonly SailEvent[],
   watermarks: Readonly<Record<string, string>>,
 ): RoomView[] {
@@ -57,36 +65,44 @@ export function assembleRooms(
       eventActivity.set(event.spec!, event.ts);
     }
   }
+  const specsById = new Map(specs.map((spec) => [spec.id, spec]));
 
-  return specs
-    .map((spec) => {
+  return serverRooms
+    .map((room) => {
+      const spec = room.spec_ids
+        .map((id) => specsById.get(id))
+        .find((candidate): candidate is GlobalSpecView => Boolean(candidate));
       const candidates = [
-        spec.created_at,
-        spec.updated_at,
-        spec.last_activity_at,
-        eventActivity.get(spec.id),
+        room.created_at,
+        room.updated_at,
+        room.last_activity_at,
+        spec?.updated_at,
+        spec?.last_activity_at,
+        eventActivity.get(room.id),
       ].filter((value): value is string => Boolean(value));
       const activityAt = candidates.sort(
         (left, right) => timestamp(right) - timestamp(left) || right.localeCompare(left),
-      )[0] ?? spec.created_at;
-      const watermark = watermarks[spec.id];
+      )[0] ?? room.created_at;
+      const watermark = watermarks[room.id];
       return {
+        room,
         spec,
         activityAt,
         unread: !watermark || timestamp(activityAt) > timestamp(watermark),
-        needsReply: spec.needs_reply === true,
+        needsReply: room.needs_reply === true || spec?.needs_reply === true,
       };
     })
     .sort(
       (left, right) =>
         timestamp(right.activityAt) - timestamp(left.activityAt) ||
-        left.spec.id.localeCompare(right.spec.id),
+        left.room.id.localeCompare(right.room.id),
     );
 }
 
-export type RoomSection = "inflight" | "ready" | "drafts" | "archive";
+export type RoomSection = "chats" | "inflight" | "ready" | "drafts" | "archive";
 
 export const SECTION_LABELS: Record<RoomSection, string> = {
+  chats: "Conversations",
   inflight: "In flight",
   ready: "Ready",
   drafts: "Drafts",
@@ -95,13 +111,14 @@ export const SECTION_LABELS: Record<RoomSection, string> = {
 
 /** Section marks speak the badge's tone vocabulary — same squares, same tokens. */
 export const SECTION_TONES: Record<RoomSection, string> = {
+  chats: "info",
   inflight: "accent",
   ready: "info",
   drafts: "neutral",
   archive: "success",
 };
 
-const SECTION_ORDER: RoomSection[] = ["inflight", "ready", "drafts", "archive"];
+const SECTION_ORDER: RoomSection[] = ["chats", "inflight", "ready", "drafts", "archive"];
 
 /** Unknown statuses from a newer sail are treated as active work, never silently hidden. */
 export function sectionOf(status: SpecStatus | string): RoomSection {
@@ -109,6 +126,11 @@ export function sectionOf(status: SpecStatus | string): RoomSection {
   if (status === "draft") return "drafts";
   if (status === "pending") return "ready";
   return "inflight";
+}
+
+/** A chat-only room has no lifecycle — it lives in the conversations section. */
+export function sectionOfRoom(room: RoomView): RoomSection {
+  return room.spec ? sectionOf(room.spec.status) : "chats";
 }
 
 export type SectionedRooms = { section: RoomSection; rooms: RoomView[] };
@@ -123,7 +145,7 @@ export function sectionRooms(rooms: readonly RoomView[]): SectionedRooms[] {
     SECTION_ORDER.map((section) => [section, []]),
   );
   for (const room of rooms) {
-    buckets.get(sectionOf(room.spec.status))!.push(room);
+    buckets.get(sectionOfRoom(room))!.push(room);
   }
   return SECTION_ORDER.flatMap((section) => {
     const bucket = buckets.get(section)!;
@@ -132,7 +154,9 @@ export function sectionRooms(rooms: readonly RoomView[]): SectionedRooms[] {
 }
 
 export function visibleRooms(rooms: readonly RoomView[], showArchive: boolean): RoomView[] {
-  return rooms.filter((room) => showArchive || !ARCHIVE_STATUSES.has(room.spec.status));
+  return rooms.filter(
+    (room) => showArchive || !room.spec || !ARCHIVE_STATUSES.has(room.spec.status),
+  );
 }
 
 export function isArchivedRoom(status: SpecStatus): boolean {
@@ -144,7 +168,7 @@ export function readRoomWatermarks(storage: StorageLike): Record<string, string>
 }
 
 export function visitRoom(storage: StorageLike, room: RoomView): Record<string, string> {
-  const next = { ...readRoomWatermarks(storage), [room.spec.id]: room.activityAt };
+  const next = { ...readRoomWatermarks(storage), [room.room.id]: room.activityAt };
   try {
     storage.setItem(ROOM_WATERMARKS_KEY, JSON.stringify(next));
   } catch {}
@@ -152,7 +176,7 @@ export function visitRoom(storage: StorageLike, room: RoomView): Record<string, 
   try {
     storage.setItem(
       ROOM_SELECTIONS_KEY,
-      JSON.stringify({ ...selections, [room.spec.project]: room.spec.id }),
+      JSON.stringify({ ...selections, [room.room.project]: room.room.id }),
     );
   } catch {}
   return next;
@@ -180,7 +204,7 @@ export function relativeTime(value: string, now: number): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(parsed);
 }
 
-export function specIdFromTitle(title: string, existingIds: ReadonlySet<string>): string {
+export function roomIdFromTitle(title: string, existingIds: ReadonlySet<string>): string {
   const base = title
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")

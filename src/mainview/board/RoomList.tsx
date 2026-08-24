@@ -205,25 +205,25 @@ export function RoomList({
               grouped.map((room) => (
                 <button
                   type="button"
-                  key={room.spec.id}
-                  className={`room-row${selectedId === room.spec.id ? " is-selected" : ""}`}
+                  key={room.room.id}
+                  className={`room-row${selectedId === room.room.id ? " is-selected" : ""}`}
                   onClick={() => onSelect(room)}
-                  data-testid={`room-${room.spec.id}`}
-                  aria-current={selectedId === room.spec.id ? "page" : undefined}
+                  data-testid={`room-${room.room.id}`}
+                  aria-current={selectedId === room.room.id ? "page" : undefined}
                 >
                   <span className={`room-row-id-label${room.unread ? " is-unread" : ""}`}>
-                    {room.spec.id}
+                    {room.room.id}
                   </span>
                   {room.needsReply && (
                     <span
                       className="room-needs-reply"
-                      data-testid={`needs-reply-${room.spec.id}`}
+                      data-testid={`needs-reply-${room.room.id}`}
                       aria-label="Needs your reply"
                     >
                       ?
                     </span>
                   )}
-                  {workingIds.has(room.spec.id) && (
+                  {workingIds.has(room.room.id) && (
                     <span className="room-working-dot" aria-label="Agent working" />
                   )}
                   <time className="room-row-time">{relativeTime(room.activityAt, now)}</time>

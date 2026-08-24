@@ -104,7 +104,7 @@ describe("Tauri gateway room wire", () => {
     ]);
   });
 
-  test("lists and posts messages with encoded spec ids and pagination", async () => {
+  test("lists and posts messages through the room door with encoded ids", async () => {
     const calls = stubInvoke({
       status: 200,
       body: JSON.stringify({ spec_id: "spec 1", messages: [], total: 0 }),
@@ -120,7 +120,7 @@ describe("Tauri gateway room wire", () => {
         cmd: "sail_request",
         args: {
           method: "GET",
-          path: "/v1/specs/spec%201/messages?before=message%2F1&limit=100",
+          path: "/v1/rooms/spec%201/messages?before=message%2F1&limit=100",
           body: null,
           ifMatch: null,
         },
@@ -129,7 +129,7 @@ describe("Tauri gateway room wire", () => {
         cmd: "sail_request",
         args: {
           method: "GET",
-          path: "/v1/specs/spec%201/messages?after=message%2F2&limit=100",
+          path: "/v1/rooms/spec%201/messages?after=message%2F2&limit=100",
           body: null,
           ifMatch: null,
         },
@@ -138,11 +138,34 @@ describe("Tauri gateway room wire", () => {
         cmd: "sail_request",
         args: {
           method: "POST",
-          path: "/v1/specs/spec%201/messages",
+          path: "/v1/rooms/spec%201/messages",
           body: JSON.stringify({ body: "hello" }),
           ifMatch: null,
         },
       },
+    ]);
+  });
+
+  test("rooms are their own resource with membership on the room door", async () => {
+    const calls = stubInvoke({ status: 200, body: "{}" });
+    const gateway = createTauriGateway();
+
+    await gateway.listRooms();
+    await gateway.listRooms("chorus");
+    await gateway.createRoom({ id: "room 1", project: "chorus", title: "Room 1" });
+    await gateway.getRoom("room 1");
+    await gateway.deleteRoom("room 1");
+    await gateway.engage("room 1", { agent: "claude-code" });
+    await gateway.disengage("room 1");
+
+    expect(calls.map((call) => [call.args.method, call.args.path])).toEqual([
+      ["GET", "/v1/rooms"],
+      ["GET", "/v1/rooms?project=chorus"],
+      ["POST", "/v1/rooms"],
+      ["GET", "/v1/rooms/room%201"],
+      ["DELETE", "/v1/rooms/room%201"],
+      ["POST", "/v1/rooms/room%201/members"],
+      ["DELETE", "/v1/rooms/room%201/members"],
     ]);
   });
 

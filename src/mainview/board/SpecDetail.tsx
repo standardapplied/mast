@@ -386,7 +386,7 @@ export function SpecDetail({
 
   const dismissAgent = async () => {
     setDismissConfirm(false);
-    const result = await gateway.disengage(spec.id);
+    const result = await gateway.disengage(spec.room_id ?? spec.id);
     if (!result.ok) {
       showToast("error", result.error.message);
       return;
@@ -473,6 +473,7 @@ export function SpecDetail({
             gateway={gateway}
             engagement={spec.engagement}
             specId={spec.id}
+            roomId={spec.room_id ?? spec.id}
             specStatus={spec.status}
             specTitle={spec.title}
             canWrite={

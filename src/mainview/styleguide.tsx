@@ -118,6 +118,15 @@ function SplitterDemo() {
 
 const ROOM_DEMO: RoomView[] = [
   {
+    room: {
+      id: "mast-rooms",
+      project: "mast",
+      title: "Rooms are the front door",
+      members: [],
+      spec_ids: ["mast-rooms"],
+      created_at: "2026-07-28T08:00:00Z",
+      updated_at: "2026-07-28T09:00:00Z",
+    },
     spec: {
       id: "mast-rooms",
       project: "mast",
@@ -132,6 +141,15 @@ const ROOM_DEMO: RoomView[] = [
     needsReply: true,
   },
   {
+    room: {
+      id: "mast-spec-room",
+      project: "mast",
+      title: "Spec room timeline",
+      members: [],
+      spec_ids: ["mast-spec-room"],
+      created_at: "2026-07-27T08:00:00Z",
+      updated_at: "2026-07-27T09:00:00Z",
+    },
     spec: {
       id: "mast-spec-room",
       project: "mast",
@@ -161,7 +179,7 @@ function RoomListDemo() {
         creating={false}
         workingIds={new Set(["mast-rooms"])}
         onProject={() => {}}
-        onSelect={(room) => setSelected(room.spec.id)}
+        onSelect={(room) => setSelected(room.room.id)}
         onShowArchive={() => {}}
         onCreate={async () => true}
       />
