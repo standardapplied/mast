@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type {
   GlobalSpecView,
   SailEvent,
-  SpecMessage,
+  ServerRoomView,
   SpecStatus,
 } from "../../shared/sail-models";
 import {
@@ -12,7 +12,7 @@ import {
   relativeTime,
   sectionRooms,
   selectedRoom,
-  specIdFromTitle,
+  roomIdFromTitle,
   visibleRooms,
   visitRoom,
   type StorageLike,
@@ -31,7 +31,38 @@ function spec(
     priority: 0,
     created_at: createdAt,
     updated_at: createdAt,
+    room_id: id,
   };
+}
+
+function serverRoom(
+  id: string,
+  specIds: string[] = [id],
+  createdAt = "2026-07-28T10:00:00Z",
+): ServerRoomView {
+  return {
+    id,
+    project: "mast",
+    title: id,
+    members: [],
+    spec_ids: specIds,
+    created_at: createdAt,
+    updated_at: createdAt,
+  };
+}
+
+/** The 1:1 fixture most tests want: each spec with its identity room, assembled. */
+function identityRooms(
+  entries: [string, SpecStatus?][],
+  events: readonly SailEvent[] = [],
+  watermarks: Record<string, string> = {},
+) {
+  return assembleRooms(
+    entries.map(([id]) => serverRoom(id)),
+    entries.map(([id, status]) => spec(id, status)),
+    events,
+    watermarks,
+  );
 }
 
 function event(id: number, specId: string, type: string, ts: string): SailEvent {
@@ -47,16 +78,6 @@ function event(id: number, specId: string, type: string, ts: string): SailEvent 
   };
 }
 
-function message(specId: string, createdAt: string): SpecMessage {
-  return {
-    id: `message-${specId}`,
-    spec_id: specId,
-    author: "uday",
-    body: "hello",
-    created_at: createdAt,
-  };
-}
-
 function memoryStorage(initial: Record<string, string> = {}): StorageLike {
   const values = new Map(Object.entries(initial));
   return {
@@ -67,17 +88,16 @@ function memoryStorage(initial: Record<string, string> = {}): StorageLike {
 
 describe("room ordering and unread state", () => {
   test("orders by message or record activity with a stable id tie-break", () => {
-    const rooms = assembleRooms(
-      [spec("alpha"), spec("beta"), spec("gamma")],
+    const rooms = identityRooms(
+      [["alpha"], ["beta"], ["gamma"]],
       [
         event(1, "alpha", "spec_status_changed", "2026-07-28T13:00:00Z"),
         event(2, "beta", "spec_message_posted", "2026-07-28T12:00:00Z"),
         event(3, "gamma", "agent_tool_started", "2026-07-28T14:00:00Z"),
       ],
-      {},
     );
 
-    expect(rooms.map((room) => room.spec.id)).toEqual(["alpha", "beta", "gamma"]);
+    expect(rooms.map((room) => room.room.id)).toEqual(["alpha", "beta", "gamma"]);
     expect(rooms.map((room) => room.activityAt)).toEqual([
       "2026-07-28T13:00:00Z",
       "2026-07-28T12:00:00Z",
@@ -96,8 +116,8 @@ describe("room ordering and unread state", () => {
       isRoomActivityEvent(event(3, "s1", "spec_message_posted", "2026-07-28T12:00:00Z")),
     ).toBe(true);
 
-    const rooms = assembleRooms(
-      [spec("s1")],
+    const rooms = identityRooms(
+      [["s1"]],
       [event(1, "s1", "agent_tool_started", "2026-07-28T12:00:00Z")],
       { s1: "2026-07-28T10:00:00Z" },
     );
@@ -109,28 +129,29 @@ describe("room ordering and unread state", () => {
       ...spec("s1", "pending", "2026-01-01T00:00:00Z"),
       updated_at: "2026-07-29T00:00:00Z",
     };
-    const rooms = assembleRooms([updated], [], { s1: "2026-07-28T00:00:00Z" });
+    const rooms = assembleRooms(
+      [serverRoom("s1", ["s1"], "2026-01-01T00:00:00Z")],
+      [updated],
+      [],
+      { s1: "2026-07-28T00:00:00Z" },
+    );
 
     expect(rooms[0]?.activityAt).toBe(updated.updated_at);
     expect(rooms[0]?.unread).toBe(true);
   });
 
   test("archive filtering hides terminal states but keeps all active states", () => {
-    const rooms = assembleRooms(
-      [
-        spec("draft", "draft"),
-        spec("pending"),
-        spec("working", "in_progress"),
-        spec("review", "review"),
-        spec("merge", "awaiting_merge"),
-        spec("done", "done"),
-        spec("cancelled", "cancelled"),
-        spec("archived", "archived"),
-      ],
-      [],
-      {},
-    );
-    expect(visibleRooms(rooms, false).map((room) => room.spec.id).sort()).toEqual([
+    const rooms = identityRooms([
+      ["draft", "draft"],
+      ["pending"],
+      ["working", "in_progress"],
+      ["review", "review"],
+      ["merge", "awaiting_merge"],
+      ["done", "done"],
+      ["cancelled", "cancelled"],
+      ["archived", "archived"],
+    ]);
+    expect(visibleRooms(rooms, false).map((room) => room.room.id).sort()).toEqual([
       "draft",
       "merge",
       "pending",
@@ -142,13 +163,13 @@ describe("room ordering and unread state", () => {
 
   test("needsReply derives from the spec's server flag and defaults off", () => {
     const asking = { ...spec("s1"), needs_reply: true };
-    expect(assembleRooms([asking], [], {})[0]!.needsReply).toBe(true);
-    expect(assembleRooms([spec("s2")], [], {})[0]!.needsReply).toBe(false);
+    expect(assembleRooms([serverRoom("s1")], [asking], [], {})[0]!.needsReply).toBe(true);
+    expect(identityRooms([["s2"]])[0]!.needsReply).toBe(false);
   });
 
   test("visiting persists both the activity watermark and per-project selection", () => {
     const storage = memoryStorage();
-    const room = assembleRooms([spec("s1")], [], {})[0]!;
+    const room = identityRooms([["s1"]])[0]!;
     const watermarks = visitRoom(storage, room);
 
     expect(watermarks).toEqual({ s1: room.activityAt });
@@ -163,20 +184,57 @@ describe("room ordering and unread state", () => {
         throw new DOMException("blocked", "SecurityError");
       },
     };
-    const room = assembleRooms([spec("s1")], [], {})[0]!;
+    const room = identityRooms([["s1"]])[0]!;
 
     expect(visitRoom(storage, room)).toEqual({ s1: room.activityAt });
   });
 });
 
+describe("chat-only rooms", () => {
+  test("a room with no attached spec leads the sidebar as a conversation", () => {
+    const rooms = assembleRooms(
+      [serverRoom("notes", []), serverRoom("s1")],
+      [spec("s1")],
+      [],
+      {},
+    );
+    const sections = sectionRooms(rooms);
+
+    expect(sections.map((section) => section.section)).toEqual(["chats", "ready", "archive"]);
+    expect(sections[0]!.rooms.map((room) => room.room.id)).toEqual(["notes"]);
+    expect(rooms.find((room) => room.room.id === "notes")?.spec).toBeUndefined();
+  });
+
+  test("chat rooms carry their own decoration and are never archived away", () => {
+    const decorated = {
+      ...serverRoom("notes", []),
+      needs_reply: true,
+      last_activity_at: "2026-07-29T09:00:00Z",
+    };
+    const rooms = assembleRooms([decorated], [], [], { notes: "2026-07-28T00:00:00Z" });
+
+    expect(rooms[0]?.needsReply).toBe(true);
+    expect(rooms[0]?.activityAt).toBe("2026-07-29T09:00:00Z");
+    expect(rooms[0]?.unread).toBe(true);
+    expect(visibleRooms(rooms, false)).toHaveLength(1);
+  });
+
+  test("a room attaches its spec through spec_ids, not id identity", () => {
+    const rooms = assembleRooms([serverRoom("room-x", ["s1"])], [spec("s1")], [], {});
+
+    expect(rooms[0]?.spec?.id).toBe("s1");
+    expect(rooms[0]?.room.id).toBe("room-x");
+  });
+});
+
 describe("new room ids", () => {
   test("derives a safe id and resolves collisions without another form field", () => {
-    expect(specIdFromTitle("  Café billing & tax  ", new Set())).toBe("cafe-billing-tax");
-    expect(specIdFromTitle("Billing", new Set(["billing", "billing-2"]))).toBe("billing-3");
+    expect(roomIdFromTitle("  Café billing & tax  ", new Set())).toBe("cafe-billing-tax");
+    expect(roomIdFromTitle("Billing", new Set(["billing", "billing-2"]))).toBe("billing-3");
   });
 
   test("rejects a title with no usable id", () => {
-    expect(() => specIdFromTitle("✨", new Set())).toThrow("letter or number");
+    expect(() => roomIdFromTitle("✨", new Set())).toThrow("letter or number");
   });
 });
 
@@ -197,7 +255,12 @@ describe("relative time and server activity", () => {
       updated_at: "2026-01-02T00:00:00Z",
       last_activity_at: "2026-07-29T09:00:00Z",
     };
-    const rooms = assembleRooms([withServerActivity], [], {});
+    const rooms = assembleRooms(
+      [serverRoom("s1", ["s1"], "2026-01-01T00:00:00Z")],
+      [withServerActivity],
+      [],
+      {},
+    );
 
     expect(rooms[0]?.activityAt).toBe("2026-07-29T09:00:00Z");
     expect(rooms[0]?.unread).toBe(true);
@@ -206,24 +269,20 @@ describe("relative time and server activity", () => {
 
 describe("sidebar sections", () => {
   test("groups rooms into lifecycle sections preserving activity order", () => {
-    const rooms = assembleRooms(
-      [
-        spec("building", "in_progress"),
-        spec("reviewing", "review"),
-        spec("merging", "awaiting_merge"),
-        spec("queued", "pending"),
-        spec("sketch", "draft"),
-        spec("shipped", "done"),
-        spec("dropped", "cancelled"),
-        spec("mystery", "someday_new_status" as never),
-      ],
-      [],
-      {},
-    );
+    const rooms = identityRooms([
+      ["building", "in_progress"],
+      ["reviewing", "review"],
+      ["merging", "awaiting_merge"],
+      ["queued", "pending"],
+      ["sketch", "draft"],
+      ["shipped", "done"],
+      ["dropped", "cancelled"],
+      ["mystery", "someday_new_status" as never],
+    ]);
 
     const sections = sectionRooms(rooms);
     const byId = Object.fromEntries(
-      sections.map((section) => [section.section, section.rooms.map((room) => room.spec.id)]),
+      sections.map((section) => [section.section, section.rooms.map((room) => room.room.id)]),
     );
     expect(byId["inflight"]).toEqual(["building", "merging", "mystery", "reviewing"]);
     expect(byId["ready"]).toEqual(["queued"]);
@@ -232,7 +291,7 @@ describe("sidebar sections", () => {
   });
 
   test("empty sections are omitted except the archive anchor", () => {
-    const sections = sectionRooms(assembleRooms([spec("sketch", "draft")], [], {}));
+    const sections = sectionRooms(identityRooms([["sketch", "draft"]]));
     expect(sections.map((section) => section.section)).toEqual(["drafts", "archive"]);
   });
 });

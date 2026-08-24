@@ -17,8 +17,9 @@ export function RoomHeader({
   eyebrow?: string;
   /** Liveness chip for the spec's running agent — the header's only status cue. */
   presence?: ReactNode;
-  drawerOpen: boolean;
-  onToggleDrawer: () => void;
+  drawerOpen?: boolean;
+  /** Omit to render a header without a details drawer at all (chat-only rooms). */
+  onToggleDrawer?: () => void;
   onBack?: () => void;
   actions?: ReactNode;
 }) {
@@ -46,19 +47,21 @@ export function RoomHeader({
       </div>
       <div className="room-header-actions detail-header-actions">
         {actions && <div className="room-header-inline-actions">{actions}</div>}
-        <Tooltip content={drawerOpen ? "Hide details" : "Details"}>
-          <Button
-            variant="ghost"
-            icon
-            aria-label={drawerOpen ? "Hide details" : "Details"}
-            aria-expanded={drawerOpen}
-            aria-controls="room-details-drawer"
-            onClick={onToggleDrawer}
-            data-testid="details-toggle"
-          >
-            <PanelRight size={16} />
-          </Button>
-        </Tooltip>
+        {onToggleDrawer && (
+          <Tooltip content={drawerOpen ? "Hide details" : "Details"}>
+            <Button
+              variant="ghost"
+              icon
+              aria-label={drawerOpen ? "Hide details" : "Details"}
+              aria-expanded={drawerOpen ?? false}
+              aria-controls="room-details-drawer"
+              onClick={onToggleDrawer}
+              data-testid="details-toggle"
+            >
+              <PanelRight size={16} />
+            </Button>
+          </Tooltip>
+        )}
       </div>
     </header>
   );

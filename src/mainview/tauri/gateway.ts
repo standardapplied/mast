@@ -359,13 +359,17 @@ export function createTauriGateway(): Gateway {
     restoreSpec: (id, rev) =>
       read("POST", `/v1/specs/${encodeURIComponent(id)}/restore`, { body: { rev } }),
     specReviews: (id) => read("GET", `/v1/specs/${encodeURIComponent(id)}/reviews`),
+    listRooms: (project) => read("GET", `/v1/rooms${queryString({ project })}`),
+    createRoom: (request) => read("POST", "/v1/rooms", { body: request }),
+    getRoom: (id) => read("GET", `/v1/rooms/${encodeURIComponent(id)}`),
+    deleteRoom: (id) => read("DELETE", `/v1/rooms/${encodeURIComponent(id)}`),
     listSpecMessages: (id, options = {}) =>
       read(
         "GET",
-        `/v1/specs/${encodeURIComponent(id)}/messages${queryString(options)}`,
+        `/v1/rooms/${encodeURIComponent(id)}/messages${queryString(options)}`,
       ),
     postSpecMessage: (id, request) =>
-      read("POST", `/v1/specs/${encodeURIComponent(id)}/messages`, { body: request }),
+      read("POST", `/v1/rooms/${encodeURIComponent(id)}/messages`, { body: request }),
     reviewDetail: (reviewId) => read("GET", `/v1/reviews/${encodeURIComponent(reviewId)}`),
     approveReview: (reviewId) =>
       read("POST", `/v1/reviews/${encodeURIComponent(reviewId)}/approve`),
@@ -390,8 +394,8 @@ export function createTauriGateway(): Gateway {
     invite: (id, request) =>
       read("POST", `/v1/specs/${encodeURIComponent(id)}/invite`, { body: request }),
     engage: (id, request) =>
-      read("POST", `/v1/specs/${encodeURIComponent(id)}/engage`, { body: request }),
-    disengage: (id) => read("POST", `/v1/specs/${encodeURIComponent(id)}/disengage`, { body: {} }),
+      read("POST", `/v1/rooms/${encodeURIComponent(id)}/members`, { body: request }),
+    disengage: (id) => read("DELETE", `/v1/rooms/${encodeURIComponent(id)}/members`),
 
     listRuns: (specId) =>
       specId ? listSpecRuns(specId) : read<RunListResponse>("GET", "/v1/runs"),

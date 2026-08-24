@@ -17,6 +17,10 @@ import type {
   GlobalSpecHistoryResponse,
   GlobalSpecsListResponse,
   GlobalSpecView,
+  RoomCreateRequest,
+  RoomDeletedResponse,
+  RoomsListResponse,
+  ServerRoomView,
   ProjectListResponse,
   RecentEventsResponse,
   ReviewDetailResponse,
@@ -65,6 +69,13 @@ export type AgentLogHandle = {
  */
 export type Gateway = {
   listSpecs(filter?: SpecFilter): Promise<SailResult<GlobalSpecsListResponse>>;
+  /** Every room (optionally a project's), decorated with activity (GET /v1/rooms). */
+  listRooms(project?: string): Promise<SailResult<RoomsListResponse>>;
+  /** Create a chat room — no spec is minted (POST /v1/rooms, sail ≥ 0.33). */
+  createRoom(request: RoomCreateRequest): Promise<SailResult<ServerRoomView>>;
+  getRoom(id: string): Promise<SailResult<ServerRoomView>>;
+  /** Delete a room with no attached specs (DELETE /v1/rooms/{id}). */
+  deleteRoom(id: string): Promise<SailResult<RoomDeletedResponse>>;
   board(project?: string): Promise<SailResult<GlobalBoardResponse>>;
   getSpec(id: string): Promise<SailResult<GlobalSpecDetailResponse>>;
   createSpec(request: SpecCreateRequest): Promise<SailResult<GlobalSpecDetailResponse>>;
@@ -279,6 +290,32 @@ export function createDemoGateway(): DemoGateway {
   const listeners = new Set<(event: SailEvent) => void>();
   const events: SailEvent[] = [];
   const messages = new Map<string, SpecMessage[]>();
+  const chatRooms: ServerRoomView[] = [];
+  const roomOfSpec = (s: DemoSpec): ServerRoomView => ({
+    id: s.id,
+    project: s.project,
+    title: s.title,
+    members: s.engagement
+      ? [
+          {
+            agent: s.engagement.agent,
+            mode: s.engagement.mode,
+            ...(s.engagement.model ? { model: s.engagement.model } : {}),
+            engaged_at: s.engagement.engaged_at,
+          },
+        ]
+      : [],
+    spec_ids: [s.id],
+    created_at: s.created_at,
+    updated_at: s.updated_at,
+    ...(s.last_activity_at ? { last_activity_at: s.last_activity_at } : {}),
+    ...(s.needs_reply ? { needs_reply: true } : {}),
+    ...(s.question_message_id ? { question_message_id: s.question_message_id } : {}),
+  });
+  const roomNotFound = (id: string) => ({
+    ok: false as const,
+    error: { status: 404, code: "room_not_found", message: `Room '${id}' was not found.` },
+  });
   let eventId = 100;
 
   const ok = <T>(value: T, etag?: string): SailResult<T> => ({ ok: true, value, etag });
@@ -313,6 +350,56 @@ export function createDemoGateway(): DemoGateway {
   const view = ({ body: _b, plan: _p, ...spec }: DemoSpec): GlobalSpecView => spec;
 
   return {
+    async listRooms(project) {
+      const scoped = [
+        ...specs
+          .filter((s) => !project || s.project === project)
+          .map((s) => roomOfSpec(s)),
+        ...chatRooms.filter((room) => !project || room.project === project),
+      ];
+      return ok({ rooms: scoped, count: scoped.length });
+    },
+
+    async createRoom(request) {
+      if (find(request.id) || chatRooms.some((room) => room.id === request.id)) {
+        return {
+          ok: false,
+          error: {
+            status: 409,
+            code: "conflict",
+            message: `Room '${request.id}' already exists.`,
+          },
+        };
+      }
+      const now = new Date().toISOString();
+      const room: ServerRoomView = {
+        id: request.id,
+        project: request.project,
+        title: request.title,
+        members: [],
+        spec_ids: [],
+        created_at: now,
+        updated_at: now,
+      };
+      chatRooms.push(room);
+      return ok(room);
+    },
+
+    async getRoom(id) {
+      const chat = chatRooms.find((room) => room.id === id);
+      if (chat) return ok(chat);
+      const spec = find(id);
+      if (!spec) return roomNotFound(id);
+      return ok(roomOfSpec(spec));
+    },
+
+    async deleteRoom(id) {
+      const index = chatRooms.findIndex((room) => room.id === id);
+      if (index < 0) return roomNotFound(id);
+      chatRooms.splice(index, 1);
+      return ok({ id, deleted: true });
+    },
+
     async listSpecs(filter = {}) {
       const assignee = filter.assignee === "me" ? "uday" : filter.assignee;
       const matched = specs.filter(
@@ -555,13 +642,27 @@ export function createDemoGateway(): DemoGateway {
     },
 
     async engage(id, request) {
+      const chat = chatRooms.find((room) => room.id === id);
       const spec = find(id);
-      if (!spec) {
+      if (!spec && !chat) {
         return {
           ok: false,
-          error: { status: 404, code: "spec_not_found", message: `Spec '${id}' was not found.` },
+          error: { status: 404, code: "room_not_found", message: `Room '${id}' was not found.` },
         };
       }
+      if (chat && !spec) {
+        const mode = request.mode ?? "full";
+        chat.members = [
+          {
+            agent: request.agent,
+            mode: mode === "read_only" ? "read_only" : "full",
+            ...(request.model ? { model: request.model } : {}),
+            engaged_at: new Date().toISOString(),
+          },
+        ];
+        return ok({ agent: request.agent, mode });
+      }
+      if (!spec) return roomNotFound(id);
       const mode = request.mode ?? "full";
       if (mode === "read_only" && request.agent === "codex") {
         return {
@@ -610,13 +711,14 @@ export function createDemoGateway(): DemoGateway {
     },
 
     async disengage(id) {
-      const spec = find(id);
-      if (!spec) {
-        return {
-          ok: false,
-          error: { status: 404, code: "spec_not_found", message: `Spec '${id}' was not found.` },
-        };
+      const chat = chatRooms.find((room) => room.id === id);
+      if (chat) {
+        const agent = chat.members[0]?.agent;
+        chat.members = [];
+        return ok({ ...(agent ? { agent } : {}), disengaged: agent !== undefined });
       }
+      const spec = find(id);
+      if (!spec) return roomNotFound(id);
       const agent = spec.engagement?.agent;
       spec.engagement = undefined;
       if (agent) {

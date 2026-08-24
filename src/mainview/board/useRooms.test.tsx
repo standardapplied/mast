@@ -66,9 +66,9 @@ describe("useRooms", () => {
     expect(handle().data.projects).toEqual(["chorus", "nautilus", "sail-mast"]);
     expect(handle().data.rooms.length).toBeGreaterThan(7);
 
-    const opened = handle().data.rooms.find((room) => room.spec.id === "chorus-auth-flow")!;
+    const opened = handle().data.rooms.find((room) => room.room.id === "chorus-auth-flow")!;
     act(() => handle().open(opened));
-    expect(handle().data.rooms.find((room) => room.spec.id === opened.spec.id)?.unread).toBe(false);
+    expect(handle().data.rooms.find((room) => room.room.id === opened.room.id)?.unread).toBe(false);
 
     await act(async () => {
       await gateway.postSpecMessage("chorus-billing-export", { body: "Needs your attention" });
@@ -77,10 +77,10 @@ describe("useRooms", () => {
     await act(async () => {});
 
     const incoming = handle().data.rooms.find(
-      (room) => room.spec.id === "chorus-billing-export",
+      (room) => room.room.id === "chorus-billing-export",
     );
     expect(incoming?.unread).toBe(true);
-    expect(handle().data.rooms[0]?.spec.id).toBe("chorus-billing-export");
+    expect(handle().data.rooms[0]?.room.id).toBe("chorus-billing-export");
   });
 
   test("paints rooms from the spec list even when recent events never arrive", async () => {
@@ -110,7 +110,7 @@ describe("useRooms", () => {
     expect(latest!.data.rooms.length).toBeGreaterThan(0);
   });
 
-  test("creates a collision-safe draft and refreshes it into the room list", async () => {
+  test("creates a chat room and refreshes it into the room list", async () => {
     const { gateway, handle } = await render();
 
     let result: Awaited<ReturnType<Handle["create"]>> | undefined;
@@ -121,12 +121,14 @@ describe("useRooms", () => {
 
     expect(result?.ok).toBe(true);
     if (!result?.ok) return;
-    expect(result.value.spec.id).toBe("passkey-auth-flow");
-    expect(result.value.spec.status).toBe("draft");
-    expect(handle().data.rooms.some((room) => room.spec.id === "passkey-auth-flow")).toBe(true);
+    expect(result.value.id).toBe("passkey-auth-flow");
+    expect(result.value.spec_ids).toEqual([]);
+    const created = handle().data.rooms.find((room) => room.room.id === "passkey-auth-flow");
+    expect(created).toBeDefined();
+    expect(created?.spec).toBeUndefined();
 
-    const listed = await gateway.listSpecs({ project: "chorus" });
-    expect(listed.ok && listed.value.specs.some((spec) => spec.id === "passkey-auth-flow")).toBe(
+    const listed = await gateway.listRooms("chorus");
+    expect(listed.ok && listed.value.rooms.some((room) => room.id === "passkey-auth-flow")).toBe(
       true,
     );
   });
@@ -140,12 +142,9 @@ describe("useRooms", () => {
     });
     await act(async () => {});
     expect(result?.ok).toBe(true);
-    const created = await gateway.listSpecs({ project: "chorus" });
-    const room = created.ok
-      ? created.value.specs.find((spec) => spec.id === "chat-room")
-      : undefined;
-    expect(room?.engagement?.agent).toBe("claude-code");
-    expect(room?.engagement?.mode).toBe("full");
+    const created = await gateway.getRoom("chat-room");
+    expect(created.ok && created.value.members[0]?.agent).toBe("claude-code");
+    expect(created.ok && created.value.members[0]?.mode).toBe("full");
 
     const engage = gateway.engage;
     gateway.engage = async () => ({
@@ -166,14 +165,14 @@ describe("useRooms", () => {
 
   test("retries with a suffixed id when another creator wins the race", async () => {
     const { gateway, handle } = await render();
-    const createSpec = gateway.createSpec;
+    const createRoom = gateway.createRoom;
     let raced = false;
-    gateway.createSpec = async (request) => {
+    gateway.createRoom = async (request) => {
       if (!raced && request.id === "passkey-auth") {
         raced = true;
-        await createSpec(request);
+        await createRoom(request);
       }
-      return createSpec(request);
+      return createRoom(request);
     };
 
     let result: Awaited<ReturnType<Handle["create"]>> | undefined;
@@ -184,7 +183,7 @@ describe("useRooms", () => {
 
     expect(result?.ok).toBe(true);
     if (!result?.ok) return;
-    expect(result.value.spec.id).toBe("passkey-auth-2");
+    expect(result.value.id).toBe("passkey-auth-2");
   });
 
   test("an externally created spec arrives through SSE without polling", async () => {
@@ -201,6 +200,6 @@ describe("useRooms", () => {
     await act(async () => {});
     await act(async () => {});
 
-    expect(handle().data.rooms.some((room) => room.spec.id === "from-cli")).toBe(true);
+    expect(handle().data.rooms.some((room) => room.room.id === "from-cli")).toBe(true);
   });
 });

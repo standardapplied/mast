@@ -6,7 +6,7 @@ import {
   assembleRooms,
   isRoomActivityEvent,
   readRoomWatermarks,
-  specIdFromTitle,
+  roomIdFromTitle,
   visitRoom,
   type RoomView,
   type StorageLike,
@@ -66,9 +66,13 @@ export function useRooms(
     const current = ++generation.current;
     const recentPromise = gateway.recentEvents(500).catch(() => null);
     const catalogPromise = projectNames(gateway);
+    let roomsResult;
     let specsResult;
     try {
-      specsResult = await gateway.listSpecs({});
+      [roomsResult, specsResult] = await Promise.all([
+        gateway.listRooms(),
+        gateway.listSpecs({}),
+      ]);
     } catch (error) {
       if (current !== generation.current) return;
       setData((previous) => ({
@@ -79,15 +83,20 @@ export function useRooms(
       return;
     }
     if (current !== generation.current) return;
+    if (!roomsResult.ok) {
+      setData((previous) => ({ ...previous, loading: false, error: roomsResult.error }));
+      return;
+    }
     if (!specsResult.ok) {
       setData((previous) => ({ ...previous, loading: false, error: specsResult.error }));
       return;
     }
 
+    const serverRooms = roomsResult.value.rooms;
     const specs = specsResult.value.specs;
     setData({
-      rooms: assembleRooms(specs, [], watermarksRef.current),
-      projects: [...new Set(specs.map((spec: GlobalSpecView) => spec.project))].sort(),
+      rooms: assembleRooms(serverRooms, specs, [], watermarksRef.current),
+      projects: [...new Set(serverRooms.map((room) => room.project))].sort(),
       loading: false,
       error: null,
     });
@@ -95,10 +104,11 @@ export function useRooms(
     const [recentResult, catalog] = await Promise.all([recentPromise, catalogPromise]);
     if (current !== generation.current) return;
     const projects = [
-      ...new Set([...catalog, ...specs.map((spec: GlobalSpecView) => spec.project)]),
+      ...new Set([...catalog, ...serverRooms.map((room) => room.project)]),
     ].sort();
     setData({
       rooms: assembleRooms(
+        serverRooms,
         specs,
         recentResult?.ok ? mergeEvents(recentResult.value.events) : [],
         watermarksRef.current,
@@ -148,10 +158,10 @@ export function useRooms(
         error: { status: 0, code: "invalid_project", message: "Choose a project." },
       };
     }
-    const existingIds = new Set(data.rooms.map((room) => room.spec.id));
+    const existingIds = new Set(data.rooms.map((room) => room.room.id));
     let id: string;
     try {
-      id = specIdFromTitle(trimmed, existingIds);
+      id = roomIdFromTitle(trimmed, existingIds);
     } catch (error) {
       return {
         ok: false as const,
@@ -159,13 +169,7 @@ export function useRooms(
       };
     }
     for (let attempt = 0; attempt < 10; attempt++) {
-      const result = await gateway.createSpec({
-        id,
-        project,
-        title: trimmed,
-        status: "draft",
-        body: "",
-      });
+      const result = await gateway.createRoom({ id, project, title: trimmed });
       if (result.ok) {
         let engageError: string | undefined;
         if (agent) {
@@ -175,15 +179,15 @@ export function useRooms(
         await refresh();
         return engageError ? { ...result, engageError } : result;
       }
-      if (result.error.status !== 409 || result.error.code !== "spec_exists") return result;
+      if (result.error.status !== 409) return result;
       existingIds.add(id);
-      id = specIdFromTitle(trimmed, existingIds);
+      id = roomIdFromTitle(trimmed, existingIds);
     }
     return {
       ok: false as const,
       error: {
         status: 409,
-        code: "spec_exists",
+        code: "conflict",
         message: "Could not allocate a unique room ID. Try again.",
       },
     };
@@ -192,7 +196,7 @@ export function useRooms(
   const rooms = useMemo(
     () => data.rooms.map((room) => ({
       ...room,
-      unread: room.unread && watermarks[room.spec.id] !== room.activityAt,
+      unread: room.unread && watermarks[room.room.id] !== room.activityAt,
     })),
     [data.rooms, watermarks],
   );

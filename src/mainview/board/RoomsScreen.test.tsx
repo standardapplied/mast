@@ -107,7 +107,7 @@ describe("RoomsScreen", () => {
     );
   });
 
-  test("creates a draft room from only a title and opens it", async () => {
+  test("creates a chat room from only a title and opens it", async () => {
     const gateway = await render();
     expect(container.querySelector('[role="dialog"]')).toBeNull();
     act(() => {
@@ -135,10 +135,20 @@ describe("RoomsScreen", () => {
     expect(container.querySelector('[data-testid="room-fresh-planning-room"]')).not.toBeNull();
     expect(container.querySelector(".detail-title")?.textContent).toBe("Fresh planning room");
     expect(container.querySelector(".room-header-id")?.textContent).toBe("fresh-planning-room");
+    expect(
+      container.querySelector('[data-testid="details-toggle"]'),
+      "a chat room has no work-item, so no details drawer",
+    ).toBeNull();
 
-    const listed = await gateway.listSpecs({ project: "chorus" });
-    expect(listed.ok && listed.value.specs.some((spec) => spec.id === "fresh-planning-room")).toBe(
-      true,
+    const listed = await gateway.listRooms("chorus");
+    const created = listed.ok
+      ? listed.value.rooms.find((room) => room.id === "fresh-planning-room")
+      : undefined;
+    expect(created?.spec_ids).toEqual([]);
+
+    const specs = await gateway.listSpecs({ project: "chorus" });
+    expect(specs.ok && specs.value.specs.some((spec) => spec.id === "fresh-planning-room")).toBe(
+      false,
     );
   });
 
