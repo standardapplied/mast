@@ -157,6 +157,7 @@ describe("Tauri gateway room wire", () => {
     await gateway.deleteRoom("room 1");
     await gateway.engage("room 1", { agent: "claude-code" });
     await gateway.disengage("room 1");
+    await gateway.invite("room 1", { agent: "claude-code" });
 
     expect(calls.map((call) => [call.args.method, call.args.path])).toEqual([
       ["GET", "/v1/rooms"],
@@ -166,6 +167,7 @@ describe("Tauri gateway room wire", () => {
       ["DELETE", "/v1/rooms/room%201"],
       ["POST", "/v1/rooms/room%201/members"],
       ["DELETE", "/v1/rooms/room%201/members"],
+      ["POST", "/v1/rooms/room%201/invite"],
     ]);
   });
 

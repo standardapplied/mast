@@ -392,7 +392,7 @@ export function createTauriGateway(): Gateway {
     listFdes: () => read("GET", "/v1/fdes"),
     listAgents: () => read("GET", "/v1/agents"),
     invite: (id, request) =>
-      read("POST", `/v1/specs/${encodeURIComponent(id)}/invite`, { body: request }),
+      read("POST", `/v1/rooms/${encodeURIComponent(id)}/invite`, { body: request }),
     engage: (id, request) =>
       read("POST", `/v1/rooms/${encodeURIComponent(id)}/members`, { body: request }),
     disengage: (id) => read("DELETE", `/v1/rooms/${encodeURIComponent(id)}/members`),
