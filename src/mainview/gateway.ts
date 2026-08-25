@@ -126,7 +126,7 @@ export type Gateway = {
   listFdes(): Promise<SailResult<FdeListResponse>>;
   /** The installable agents and their invite-mode support (GET /v1/agents) — sail ≥ 0.23. */
   listAgents(): Promise<SailResult<AgentListResponse>>;
-  /** Invite an agent into a spec's room (POST /v1/specs/{id}/invite): read only or full. */
+  /** Invite an agent for one turn on the room's spec (POST /v1/rooms/{id}/invite, sail >= 0.34). */
   invite(id: string, request: InviteRequest): Promise<SailResult<InviteResponse>>;
   /** Put an agent in a spec's room until dismissed (POST /v1/specs/{id}/engage) — sail ≥ 0.28. */
   engage(id: string, request: EngageRequest): Promise<SailResult<EngageResponse>>;
