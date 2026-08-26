@@ -327,6 +327,201 @@ impl<'a> Cursor<'a> {
     }
 }
 
+use std::io;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::mpsc;
+
+/// Writes one framed message to a stream and flushes it (SSH channels stream on flush).
+pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, frame: &Frame) -> io::Result<()> {
+    w.write_all(&encode(frame)).await?;
+    w.flush().await
+}
+
+/// Reads one framed message, enforcing the frame cap so a garbled length can never allocate wildly.
+pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Frame> {
+    let mut len_buf = [0u8; 4];
+    r.read_exact(&mut len_buf).await?;
+    let len = i32::from_be_bytes(len_buf);
+    if len < 1 || len as usize > MAX_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("refusing a pty frame of {len} bytes"),
+        ));
+    }
+    let mut payload = vec![0u8; len as usize];
+    r.read_exact(&mut payload).await?;
+    decode(&payload).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.0))
+}
+
+/// The magic handshake: send ours, require the peer's back. Symmetric, so both ends call it.
+pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> io::Result<()> {
+    s.write_all(MAGIC).await?;
+    s.flush().await?;
+    let mut peer = [0u8; 8];
+    s.read_exact(&mut peer).await?;
+    if &peer != MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "peer is not speaking sail pty protocol v1",
+        ));
+    }
+    Ok(())
+}
+
+/// What the terminal widget sends toward a session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionCmd {
+    Input(Vec<u8>),
+    Resize { cols: u32, rows: u32 },
+    Detach,
+}
+
+/// What a session emits toward the widget — the wire frames, mapped to intent (no `Frame` leaks
+/// past the driver, so the UI never couples to the protocol encoding).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionEvent {
+    Replaying { safe: bool },
+    ReplayDone,
+    Output(Vec<u8>),
+    Paused,
+    Continued,
+    WriterChanged(String),
+    Resized { cols: u32, rows: u32 },
+    Ended(String),
+}
+
+/// A session to create before attaching (a fresh named shell); absent means attach to an existing one.
+#[derive(Debug, Clone)]
+pub struct CreateSpec {
+    pub command: Vec<String>,
+    pub cwd: String,
+    pub project: String,
+    pub cols: u32,
+    pub rows: u32,
+}
+
+/// Everything needed to reach a session: the FDE token (empty = the box owner), the session name,
+/// whether to hold the write token, and an optional create-then-attach.
+#[derive(Debug, Clone)]
+pub struct AttachRequest {
+    pub token: String,
+    pub session: String,
+    pub write: bool,
+    pub create: Option<CreateSpec>,
+}
+
+/// Drives one attached session over {@code stream} until the session ends or a detach is commanded.
+///
+/// The transport is abstract (`AsyncRead + AsyncWrite`), so this same logic runs over an SSH
+/// direct-streamlocal channel in production and a `tokio::io::duplex` in tests. Input frames carry a
+/// monotonic sequence — the enabler for client-side predictive echo — echoed back on output.
+pub async fn drive<S, F>(
+    mut stream: S,
+    req: AttachRequest,
+    mut cmds: mpsc::Receiver<SessionCmd>,
+    mut on_event: F,
+) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    F: FnMut(SessionEvent),
+{
+    handshake(&mut stream).await?;
+    write_frame(&mut stream, &Frame::Hello(req.token.clone())).await?;
+    expect_ok(&mut stream, "hello").await?;
+
+    if let Some(spec) = &req.create {
+        write_frame(
+            &mut stream,
+            &Frame::Create {
+                session: req.session.clone(),
+                command: spec.command.clone(),
+                cwd: spec.cwd.clone(),
+                project: spec.project.clone(),
+                cols: spec.cols,
+                rows: spec.rows,
+            },
+        )
+        .await?;
+        expect_ok(&mut stream, "create").await?;
+    }
+
+    write_frame(
+        &mut stream,
+        &Frame::Attach {
+            session: req.session.clone(),
+            write: req.write,
+        },
+    )
+    .await?;
+    expect_ok(&mut stream, "attach").await?;
+
+    let mut seq: i64 = 0;
+    loop {
+        tokio::select! {
+            frame = read_frame(&mut stream) => {
+                match frame? {
+                    Frame::Output { bytes, .. } => on_event(SessionEvent::Output(bytes)),
+                    Frame::ReplayBegin { safe } => on_event(SessionEvent::Replaying { safe }),
+                    Frame::ReplayEnd => on_event(SessionEvent::ReplayDone),
+                    Frame::Paused => on_event(SessionEvent::Paused),
+                    Frame::Continued => on_event(SessionEvent::Continued),
+                    Frame::WriterChanged(fde) => on_event(SessionEvent::WriterChanged(fde)),
+                    Frame::Resized { cols, rows } => on_event(SessionEvent::Resized { cols, rows }),
+                    Frame::SessionEnded(reason) => {
+                        on_event(SessionEvent::Ended(reason));
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+            cmd = cmds.recv() => match cmd {
+                Some(SessionCmd::Input(bytes)) => {
+                    seq += 1;
+                    write_frame(&mut stream, &Frame::Input { seq, bytes }).await?;
+                }
+                Some(SessionCmd::Resize { cols, rows }) => {
+                    write_frame(&mut stream, &Frame::Resize { cols, rows }).await?;
+                }
+                Some(SessionCmd::Detach) | None => {
+                    let _ = write_frame(&mut stream, &Frame::Detach).await;
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+/// Reads one control reply that must be `Ok`, turning `Err`/unexpected frames into an I/O error
+/// carrying the host's own message — so a refusal (bad token, foreign session) surfaces verbatim.
+async fn expect_ok<S: AsyncRead + Unpin>(s: &mut S, verb: &str) -> io::Result<()> {
+    match read_frame(s).await? {
+        Frame::Ok => Ok(()),
+        Frame::Err(message) => Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("{verb}: {message}"),
+        )),
+        other => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{verb}: unexpected reply {other:?}"),
+        )),
+    }
+}
+
+/// Opens a short-lived control connection, identifies, sends one request, and returns its reply —
+/// the list/kill/create-without-attach path. The caller supplies the stream (an SSH channel in
+/// production, a duplex in tests).
+pub async fn control<S: AsyncRead + AsyncWrite + Unpin>(
+    mut stream: S,
+    token: &str,
+    request: Frame,
+) -> io::Result<Frame> {
+    handshake(&mut stream).await?;
+    write_frame(&mut stream, &Frame::Hello(token.to_string())).await?;
+    expect_ok(&mut stream, "hello").await?;
+    write_frame(&mut stream, &request).await?;
+    read_frame(&mut stream).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +624,188 @@ mod tests {
     fn an_unknown_type_is_refused() {
         let err = decode(&[99]).unwrap_err();
         assert!(err.0.contains("99"));
+    }
+}
+
+
+#[cfg(test)]
+mod async_tests {
+    use super::*;
+    use tokio::io::duplex;
+    use tokio::sync::mpsc;
+
+    /// A minimal host that speaks the server side of the protocol, for driving the client headlessly.
+    async fn host_handshake_hello<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> Frame {
+        handshake(s).await.unwrap();
+        let hello = read_frame(s).await.unwrap();
+        write_frame(s, &Frame::Ok).await.unwrap();
+        hello
+    }
+
+    #[tokio::test]
+    async fn frames_round_trip_over_a_stream() {
+        let (mut a, mut b) = duplex(1024);
+        for frame in [
+            Frame::Hello("t".into()),
+            Frame::Input { seq: 5, bytes: b"xy".to_vec() },
+            Frame::Output { last_input_seq: 5, bytes: b"z".to_vec() },
+            Frame::SessionEnded("bye".into()),
+        ] {
+            write_frame(&mut a, &frame).await.unwrap();
+            assert_eq!(read_frame(&mut b).await.unwrap(), frame);
+        }
+    }
+
+    #[tokio::test]
+    async fn handshake_accepts_a_peer_and_rejects_a_stranger() {
+        let (mut a, mut b) = duplex(64);
+        let ok = tokio::spawn(async move { handshake(&mut b).await });
+        handshake(&mut a).await.unwrap();
+        ok.await.unwrap().unwrap();
+
+        let (mut a2, mut b2) = duplex(64);
+        let evil = tokio::spawn(async move {
+            b2.write_all(b"NOTSAIL1").await.unwrap();
+            b2.flush().await.unwrap();
+        });
+        assert!(handshake(&mut a2).await.is_err());
+        evil.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn drive_identifies_attaches_replays_streams_and_forwards_input() {
+        let (client, mut server) = duplex(4096);
+        let host = tokio::spawn(async move {
+            let hello = host_handshake_hello(&mut server).await;
+            assert_eq!(hello, Frame::Hello("tok".into()));
+            assert_eq!(read_frame(&mut server).await.unwrap(), Frame::Attach { session: "s1".into(), write: true });
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
+            write_frame(&mut server, &Frame::ReplayBegin { safe: true }).await.unwrap();
+            write_frame(&mut server, &Frame::Output { last_input_seq: -1, bytes: b"history".to_vec() }).await.unwrap();
+            write_frame(&mut server, &Frame::ReplayEnd).await.unwrap();
+            // The client's keystroke arrives as an Input frame carrying seq 1.
+            assert_eq!(read_frame(&mut server).await.unwrap(), Frame::Input { seq: 1, bytes: b"ls\n".to_vec() });
+            write_frame(&mut server, &Frame::Output { last_input_seq: 1, bytes: b"live".to_vec() }).await.unwrap();
+            write_frame(&mut server, &Frame::SessionEnded("exited(0)".into())).await.unwrap();
+        });
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+        let driver = tokio::spawn(async move {
+            drive(
+                client,
+                AttachRequest { token: "tok".into(), session: "s1".into(), write: true, create: None },
+                cmd_rx,
+                move |ev| { let _ = ev_tx.send(ev); },
+            )
+            .await
+        });
+
+        assert_eq!(ev_rx.recv().await.unwrap(), SessionEvent::Replaying { safe: true });
+        assert_eq!(ev_rx.recv().await.unwrap(), SessionEvent::Output(b"history".to_vec()));
+        assert_eq!(ev_rx.recv().await.unwrap(), SessionEvent::ReplayDone);
+        cmd_tx.send(SessionCmd::Input(b"ls\n".to_vec())).await.unwrap();
+        assert_eq!(ev_rx.recv().await.unwrap(), SessionEvent::Output(b"live".to_vec()));
+        assert_eq!(ev_rx.recv().await.unwrap(), SessionEvent::Ended("exited(0)".into()));
+
+        driver.await.unwrap().unwrap();
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn drive_creates_before_attaching_when_asked() {
+        let (client, mut server) = duplex(4096);
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            match read_frame(&mut server).await.unwrap() {
+                Frame::Create { session, project, .. } => {
+                    assert_eq!(session, "fresh");
+                    assert_eq!(project, "acme");
+                }
+                other => panic!("expected Create, got {other:?}"),
+            }
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
+            assert!(matches!(read_frame(&mut server).await.unwrap(), Frame::Attach { .. }));
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
+            write_frame(&mut server, &Frame::SessionEnded("done".into())).await.unwrap();
+        });
+
+        let (_cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+        drive(
+            client,
+            AttachRequest {
+                token: "".into(),
+                session: "fresh".into(),
+                write: true,
+                create: Some(CreateSpec { command: vec!["bash".into()], cwd: "/home/dev".into(), project: "acme".into(), cols: 80, rows: 24 }),
+            },
+            cmd_rx,
+            move |ev| { let _ = ev_tx.send(ev); },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ev_rx.recv().await.unwrap(), SessionEvent::Ended("done".into()));
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn drive_detaches_on_command_leaving_the_session_alive() {
+        let (client, mut server) = duplex(1024);
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            read_frame(&mut server).await.unwrap(); // Attach
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
+            // The detach reaches the host as a Detach frame — the session is not ended.
+            assert_eq!(read_frame(&mut server).await.unwrap(), Frame::Detach);
+        });
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let driver = tokio::spawn(async move {
+            drive(
+                client,
+                AttachRequest { token: "".into(), session: "s".into(), write: false, create: None },
+                cmd_rx,
+                |_ev| {},
+            )
+            .await
+        });
+        cmd_tx.send(SessionCmd::Detach).await.unwrap();
+        driver.await.unwrap().unwrap();
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_refused_hello_surfaces_the_hosts_message() {
+        let (client, mut server) = duplex(1024);
+        let host = tokio::spawn(async move {
+            handshake(&mut server).await.unwrap();
+            read_frame(&mut server).await.unwrap(); // Hello
+            write_frame(&mut server, &Frame::Err("token is not valid or has expired".into())).await.unwrap();
+        });
+        let (_cmd_tx, cmd_rx) = mpsc::channel(1);
+        let err = drive(
+            client,
+            AttachRequest { token: "bad".into(), session: "s".into(), write: true, create: None },
+            cmd_rx,
+            |_ev| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("not valid"), "{err}");
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn control_round_trips_a_list_request() {
+        let (client, mut server) = duplex(1024);
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            assert_eq!(read_frame(&mut server).await.unwrap(), Frame::ListSessions);
+            write_frame(&mut server, &Frame::Sessions(vec![SessionInfo { name: "a".into(), live: true, attached: 1, writer_fde: "uday".into() }])).await.unwrap();
+        });
+        let reply = control(client, "tok", Frame::ListSessions).await.unwrap();
+        assert_eq!(reply, Frame::Sessions(vec![SessionInfo { name: "a".into(), live: true, attached: 1, writer_fde: "uday".into() }]));
+        host.await.unwrap();
     }
 }

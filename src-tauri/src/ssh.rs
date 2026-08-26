@@ -106,6 +106,10 @@ pub enum Error {
     BadStreamPath,
     #[error("no terminal with id {0}")]
     NoTerminal(String),
+    #[error("no session with id {0}")]
+    NoSession(String),
+    #[error("pty session: {0}")]
+    PtySession(String),
     #[error("sftp: {0}")]
     Sftp(String),
     #[error("too large: {path} is {size} bytes (limit {max} bytes) — download it instead")]
@@ -225,6 +229,10 @@ pub struct Backend {
     /// instead of asserting it by vibes.
     sftp_opens: AtomicU64,
     terminals: Mutex<HashMap<String, mpsc::Sender<TermCmd>>>,
+    /// Host-owned pty sessions attached over SSH direct-streamlocal, keyed by a
+    /// client-chosen id. The sender carries keystrokes/resize/detach into the
+    /// session driver; the session outlives the connection on the host side.
+    sessions: Mutex<HashMap<String, mpsc::Sender<crate::pty::SessionCmd>>>,
     /// Live long-read streams (SSE tails: events + agent log), keyed by a
     /// client-chosen id. The sender signals the pump task to stop when the
     /// webview closes the stream.
@@ -360,6 +368,20 @@ struct DownloadPlan {
 const CHUNK: usize = 64 * 1024;
 const EMIT_EVERY: u64 = 256 * 1024;
 
+/// Maps a session's non-data event to the JSON the webview renders as terminal-state UI.
+fn session_meta(event: &crate::pty::SessionEvent) -> serde_json::Value {
+    use crate::pty::SessionEvent;
+    match event {
+        SessionEvent::Replaying { safe } => json!({ "kind": "replaying", "safe": safe }),
+        SessionEvent::ReplayDone => json!({ "kind": "replay_done" }),
+        SessionEvent::Paused => json!({ "kind": "paused" }),
+        SessionEvent::Continued => json!({ "kind": "continued" }),
+        SessionEvent::WriterChanged(fde) => json!({ "kind": "writer_changed", "fde": fde }),
+        SessionEvent::Resized { cols, rows } => json!({ "kind": "resized", "cols": cols, "rows": rows }),
+        SessionEvent::Output(_) | SessionEvent::Ended(_) => json!({ "kind": "other" }),
+    }
+}
+
 fn emit_transfer(app: &AppHandle, progress: &TransferProgress) {
     let _ = app.emit("transfer", progress);
 }
@@ -376,6 +398,7 @@ impl Backend {
             sftp_pool: Mutex::new(HashMap::new()),
             sftp_opens: AtomicU64::new(0),
             terminals: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
             streams: Mutex::new(HashMap::new()),
             ghostty_hosts: Mutex::new(HashSet::new()),
         })
@@ -556,6 +579,101 @@ impl Backend {
             *guard = None;
         }
         Ok(result?)
+    }
+
+    /// Opens a channel forwarded to a unix-domain socket on the control-plane host — the pty
+    /// session host at `~/.sail/pty.sock`. Mirrors {@link open_forward} for streamlocal.
+    pub(crate) async fn open_streamlocal(&self, socket_path: &str) -> Result<Channel<Msg>, Error> {
+        self.ensure().await?;
+        let mut guard = self.session.lock().await;
+        let result = guard
+            .as_ref()
+            .expect("ensured")
+            .handle
+            .channel_open_direct_streamlocal(socket_path.to_string())
+            .await;
+        if result.is_err() {
+            *guard = None;
+        }
+        Ok(result?)
+    }
+
+    /// Attaches a terminal ({@code id}) to a host-owned pty session over a streamlocal channel,
+    /// speaking the pty-host protocol directly. Output frames become `session://data/{id}`, the
+    /// ending becomes `session://exit/{id}`, and flow-control/roster/resize become
+    /// `session://meta/{id}`. Keystrokes/resize/detach ride the returned sender via the session_*
+    /// methods. The session survives this connection on the host — closing here only detaches.
+    pub async fn session_open(
+        &self,
+        app: AppHandle,
+        id: String,
+        socket_path: String,
+        req: crate::pty::AttachRequest,
+    ) -> Result<(), Error> {
+        let channel = self.open_streamlocal(&socket_path).await?;
+        let stream = channel.into_stream();
+
+        let (tx, rx) = mpsc::channel::<crate::pty::SessionCmd>(256);
+        self.sessions.lock().await.insert(id.clone(), tx);
+
+        let emitter = app.clone();
+        let data_ev = format!("session://data/{id}");
+        let exit_ev = format!("session://exit/{id}");
+        let meta_ev = format!("session://meta/{id}");
+        let exit_on_error = exit_ev.clone();
+        tokio::spawn(async move {
+            let on_event = |event: crate::pty::SessionEvent| {
+                use crate::pty::SessionEvent;
+                match event {
+                    SessionEvent::Output(bytes) => {
+                        let _ = emitter.emit(&data_ev, bytes);
+                    }
+                    SessionEvent::Ended(reason) => {
+                        let _ = emitter.emit(&exit_ev, reason);
+                    }
+                    other => {
+                        let _ = emitter.emit(&meta_ev, session_meta(&other));
+                    }
+                }
+            };
+            if let Err(e) = crate::pty::drive(stream, req, rx, on_event).await {
+                let _ = app.emit(&exit_on_error, format!("transport error: {e}"));
+            }
+        });
+        Ok(())
+    }
+
+    async fn send_session(&self, id: &str, cmd: crate::pty::SessionCmd) -> Result<(), Error> {
+        let sessions = self.sessions.lock().await;
+        let tx = sessions.get(id).ok_or_else(|| Error::NoSession(id.into()))?;
+        tx.send(cmd).await.map_err(|_| Error::NoSession(id.into()))
+    }
+
+    pub async fn session_write(&self, id: &str, data: Vec<u8>) -> Result<(), Error> {
+        self.send_session(id, crate::pty::SessionCmd::Input(data)).await
+    }
+
+    pub async fn session_resize(&self, id: &str, cols: u32, rows: u32) -> Result<(), Error> {
+        self.send_session(id, crate::pty::SessionCmd::Resize { cols, rows }).await
+    }
+
+    pub async fn session_close(&self, id: &str) -> Result<(), Error> {
+        let _ = self.send_session(id, crate::pty::SessionCmd::Detach).await;
+        self.sessions.lock().await.remove(id);
+        Ok(())
+    }
+
+    /// A one-shot control request (list/kill/create) over its own streamlocal channel.
+    pub async fn session_control(
+        &self,
+        socket_path: String,
+        token: String,
+        request: crate::pty::Frame,
+    ) -> Result<crate::pty::Frame, Error> {
+        let channel = self.open_streamlocal(&socket_path).await?;
+        crate::pty::control(channel.into_stream(), &token, request)
+            .await
+            .map_err(|e| Error::PtySession(e.to_string()))
     }
 
     /// The cached SSH session for a project container, dialing (and caching) it
@@ -2700,6 +2818,7 @@ Host bastion
             sftp_pool: Mutex::new(HashMap::new()),
             sftp_opens: AtomicU64::new(0),
             terminals: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
             streams: Mutex::new(HashMap::new()),
             ghostty_hosts: Mutex::new(HashSet::new()),
         }

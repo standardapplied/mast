@@ -331,6 +331,151 @@ async fn terminal_close(state: State<'_, AppState>, id: String) -> Result<(), St
     state.backend().await?.terminal_close(&id).await.map_err(String::from)
 }
 
+/// Parameters for creating a fresh host-owned session before attaching to it.
+#[derive(serde::Deserialize)]
+struct SessionCreate {
+    command: Vec<String>,
+    cwd: String,
+    project: String,
+    cols: u32,
+    rows: u32,
+}
+
+/// Attach a terminal to a host-owned pty session over SSH direct-streamlocal. Output arrives on
+/// `session://data/{id}`, the ending on `session://exit/{id}`, terminal-state changes on
+/// `session://meta/{id}`. A `create` mints the session first (durable, survives the app).
+#[tauri::command]
+async fn session_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    socket_path: String,
+    token: String,
+    session: String,
+    write: bool,
+    create: Option<SessionCreate>,
+) -> Result<(), String> {
+    let req = pty::AttachRequest {
+        token,
+        session,
+        write,
+        create: create.map(|c| pty::CreateSpec {
+            command: c.command,
+            cwd: c.cwd,
+            project: c.project,
+            cols: c.cols,
+            rows: c.rows,
+        }),
+    };
+    state
+        .backend()
+        .await?
+        .session_open(app, id, socket_path, req)
+        .await
+        .map_err(String::from)
+}
+
+#[tauri::command]
+async fn session_write(state: State<'_, AppState>, id: String, data: Vec<u8>) -> Result<(), String> {
+    state.backend().await?.session_write(&id, data).await.map_err(String::from)
+}
+
+#[tauri::command]
+async fn session_resize(
+    state: State<'_, AppState>,
+    id: String,
+    cols: u32,
+    rows: u32,
+) -> Result<(), String> {
+    state.backend().await?.session_resize(&id, cols, rows).await.map_err(String::from)
+}
+
+#[tauri::command]
+async fn session_close(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.backend().await?.session_close(&id).await.map_err(String::from)
+}
+
+/// List the host's sessions (name, liveness, attached count, current writer).
+#[tauri::command]
+async fn session_list(
+    state: State<'_, AppState>,
+    socket_path: String,
+    token: String,
+) -> Result<serde_json::Value, String> {
+    let reply = state
+        .backend()
+        .await?
+        .session_control(socket_path, token, pty::Frame::ListSessions)
+        .await
+        .map_err(String::from)?;
+    match reply {
+        pty::Frame::Sessions(list) => Ok(json!(list
+            .into_iter()
+            .map(|s| json!({
+                "name": s.name,
+                "live": s.live,
+                "attached": s.attached,
+                "writerFde": s.writer_fde,
+            }))
+            .collect::<Vec<_>>())),
+        pty::Frame::Err(message) => Err(message),
+        other => Err(format!("unexpected session listing reply: {other:?}")),
+    }
+}
+
+/// Create a host-owned session without attaching (a durable named shell).
+#[tauri::command]
+async fn session_new(
+    state: State<'_, AppState>,
+    socket_path: String,
+    token: String,
+    create: SessionCreate,
+    session: String,
+) -> Result<(), String> {
+    let request = pty::Frame::Create {
+        session,
+        command: create.command,
+        cwd: create.cwd,
+        project: create.project,
+        cols: create.cols,
+        rows: create.rows,
+    };
+    expect_ok(
+        state
+            .backend()
+            .await?
+            .session_control(socket_path, token, request)
+            .await
+            .map_err(String::from),
+    )
+}
+
+/// End a host-owned session and its process.
+#[tauri::command]
+async fn session_kill(
+    state: State<'_, AppState>,
+    socket_path: String,
+    token: String,
+    session: String,
+) -> Result<(), String> {
+    let reply = state
+        .backend()
+        .await?
+        .session_control(socket_path, token, pty::Frame::Kill(session))
+        .await
+        .map_err(String::from);
+    expect_ok(reply)
+}
+
+/// Collapses a control reply into unit-or-error: Ok passes, Err surfaces the host's message.
+fn expect_ok(reply: Result<pty::Frame, String>) -> Result<(), String> {
+    match reply? {
+        pty::Frame::Ok => Ok(()),
+        pty::Frame::Err(message) => Err(message),
+        other => Err(format!("unexpected control reply: {other:?}")),
+    }
+}
+
 /// Open a long-lived SSE tail to the control plane (events or agent log) and
 /// stream its body to the webview as `stream://{open,data,end}/{id}`.
 #[tauri::command]
@@ -389,6 +534,13 @@ pub fn run() {
             terminal_write,
             terminal_resize,
             terminal_close,
+            session_open,
+            session_write,
+            session_resize,
+            session_close,
+            session_list,
+            session_new,
+            session_kill,
             stream_open,
             stream_close,
         ])
