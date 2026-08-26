@@ -45,6 +45,10 @@ export interface Cursor {
 
 const SUCCESS = 0;
 
+// Terminal dimensions are u16 inside libghostty-vt; reject anything that would
+// truncate, so the cached size can never disagree with the real grid.
+const MAX_DIM = 65535;
+
 // Enum values from ghostty/vt/render.h (build 1.3.2 +d9840f3), pinned alongside the wasm.
 const RS_DATA_DIRTY = 3;
 const RS_DATA_ROW_ITERATOR = 4;
@@ -202,8 +206,8 @@ export class VtCore {
    * tests), so VtCore never depends on where the wasm lives.
    */
   static async create(wasm: BufferSource, cols: number, rows: number): Promise<VtCore> {
-    if (cols <= 0 || rows <= 0) {
-      throw new Error(`VtCore: cols and rows must be positive (got ${cols}x${rows})`);
+    if (cols <= 0 || rows <= 0 || cols > MAX_DIM || rows > MAX_DIM) {
+      throw new Error(`VtCore: cols and rows must be in 1..${MAX_DIM} (got ${cols}x${rows})`);
     }
     const module = await WebAssembly.compile(wasm);
     const instance = await WebAssembly.instantiate(module, {});
@@ -227,8 +231,8 @@ export class VtCore {
   /** Resizes the terminal; libghostty-vt reflows internally. Cell pixel size is not tracked here. */
   resize(cols: number, rows: number): void {
     this.requireOpen();
-    if (cols <= 0 || rows <= 0) {
-      throw new Error(`VtCore.resize: cols and rows must be positive (got ${cols}x${rows})`);
+    if (cols <= 0 || rows <= 0 || cols > MAX_DIM || rows > MAX_DIM) {
+      throw new Error(`VtCore.resize: cols and rows must be in 1..${MAX_DIM} (got ${cols}x${rows})`);
     }
     const rc = this.e.ghostty_terminal_resize(this.term, cols, rows, 0, 0);
     if (rc !== SUCCESS) {
@@ -357,11 +361,11 @@ export class VtCore {
       if (this.e.ghostty_render_state_row_cells_get(this.cells, CELLS_DATA_GRAPHEMES_BUF, buf) !== SUCCESS) {
         return "";
       }
-      const points: number[] = [];
+      let text = "";
       for (let i = 0; i < count; i++) {
-        points.push(this.abi.readU32(buf + i * 4));
+        text += String.fromCodePoint(this.abi.readU32(buf + i * 4));
       }
-      return String.fromCodePoint(...points);
+      return text;
     } finally {
       this.abi.free(buf, count * 4);
     }
@@ -401,7 +405,10 @@ export class VtCore {
   private getU8(data: number): number {
     const ptr = this.abi.alloc(1);
     try {
-      this.e.ghostty_render_state_get(this.state, data, ptr);
+      const rc = this.e.ghostty_render_state_get(this.state, data, ptr);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: reading scalar ${data} failed (rc=${rc})`);
+      }
       return this.abi.readU8(ptr);
     } finally {
       this.abi.free(ptr, 1);
@@ -411,7 +418,10 @@ export class VtCore {
   private getU16(data: number): number {
     const ptr = this.abi.alloc(2);
     try {
-      this.e.ghostty_render_state_get(this.state, data, ptr);
+      const rc = this.e.ghostty_render_state_get(this.state, data, ptr);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: reading scalar ${data} failed (rc=${rc})`);
+      }
       return this.abi.readU16(ptr);
     } finally {
       this.abi.free(ptr, 2);
