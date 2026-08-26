@@ -3,6 +3,7 @@
 //! desktop (main.rs) and mobile (the `mobile_entry_point`).
 
 mod login;
+mod pty;
 mod ssh;
 
 use std::sync::Arc;
