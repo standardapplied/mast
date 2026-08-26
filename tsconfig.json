@@ -16,5 +16,6 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "test"]
+  "include": ["src", "test"],
+  "exclude": ["src/mainview/terminal/spike"]
 }
