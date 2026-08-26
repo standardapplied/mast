@@ -407,7 +407,10 @@ class WebGpuBackend implements Backend {
       fragment: { module, entryPoint: "fg_fs", targets: [{ format, blend }] },
       primitive: { topology: "triangle-list" },
     });
-    const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
+    // Nearest, not linear: the atlas is rasterized at the exact device-pixel cell
+    // size and blitted 1:1, so nearest is crisp AND never samples across a cell
+    // boundary into a neighbouring glyph (the source of edge-bleed dots).
+    const sampler = device.createSampler({ magFilter: "nearest", minFilter: "nearest" });
     return new WebGpuBackend(canvas, device, ctx, format, bgPipe, fgPipe, sampler, bindLayout);
   }
 
@@ -617,8 +620,8 @@ class WebGl2Backend implements Backend {
     if (this.uploadedAtlas !== d.atlasVersion) {
       gl.bindTexture(gl.TEXTURE_2D, this.tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, d.atlas);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       this.uploadedAtlas = d.atlasVersion;
