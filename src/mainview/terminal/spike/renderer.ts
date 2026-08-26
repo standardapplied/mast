@@ -333,6 +333,7 @@ class WebGpuBackend implements Backend {
     private readonly bgPipe: GPURenderPipeline,
     private readonly fgPipe: GPURenderPipeline,
     private readonly sampler: GPUSampler,
+    private readonly bindLayout: GPUBindGroupLayout,
   ) {}
 
   private uniform!: GPUBuffer;
@@ -351,7 +352,18 @@ class WebGpuBackend implements Backend {
     ctx.configure({ device, format, alphaMode: "opaque" });
 
     const module = device.createShaderModule({ code: WGSL });
-    const layout = "auto";
+    // One explicit layout shared by both pipelines: the background pipeline only
+    // reads the uniform, but sharing the layout lets a single bind group serve
+    // both draws. (With "auto", each pipeline derives a different layout and a
+    // bind group built for one is invalid for the other.)
+    const bindLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+      ],
+    });
+    const layout = device.createPipelineLayout({ bindGroupLayouts: [bindLayout] });
     const blend: GPUBlendState = {
       color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
       alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
@@ -396,7 +408,7 @@ class WebGpuBackend implements Backend {
       primitive: { topology: "triangle-list" },
     });
     const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
-    return new WebGpuBackend(canvas, device, ctx, format, bgPipe, fgPipe, sampler);
+    return new WebGpuBackend(canvas, device, ctx, format, bgPipe, fgPipe, sampler, bindLayout);
   }
 
   resize(pxW: number, pxH: number): void {
@@ -436,7 +448,7 @@ class WebGpuBackend implements Backend {
       });
     }
     this.bind = this.device.createBindGroup({
-      layout: this.bgPipe.getBindGroupLayout(0),
+      layout: this.bindLayout,
       entries: [
         { binding: 0, resource: { buffer: this.uniform } },
         { binding: 1, resource: this.texture.createView() },
