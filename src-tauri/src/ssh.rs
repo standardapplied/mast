@@ -232,7 +232,9 @@ pub struct Backend {
     /// Host-owned pty sessions attached over SSH direct-streamlocal, keyed by a
     /// client-chosen id. The sender carries keystrokes/resize/detach into the
     /// session driver; the session outlives the connection on the host side.
-    sessions: Mutex<HashMap<String, mpsc::Sender<crate::pty::SessionCmd>>>,
+    /// Shared with each driver task so it can evict its own id when the session
+    /// ends on its own, not only when the UI closes the tab.
+    sessions: Arc<Mutex<HashMap<String, mpsc::Sender<crate::pty::SessionCmd>>>>,
     /// Live long-read streams (SSE tails: events + agent log), keyed by a
     /// client-chosen id. The sender signals the pump task to stop when the
     /// webview closes the stream.
@@ -398,7 +400,7 @@ impl Backend {
             sftp_pool: Mutex::new(HashMap::new()),
             sftp_opens: AtomicU64::new(0),
             terminals: Mutex::new(HashMap::new()),
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
             streams: Mutex::new(HashMap::new()),
             ghostty_hosts: Mutex::new(HashSet::new()),
         })
@@ -616,6 +618,8 @@ impl Backend {
         let (tx, rx) = mpsc::channel::<crate::pty::SessionCmd>(256);
         self.sessions.lock().await.insert(id.clone(), tx);
 
+        let sessions = self.sessions.clone();
+        let cleanup_id = id.clone();
         let emitter = app.clone();
         let data_ev = format!("session://data/{id}");
         let exit_ev = format!("session://exit/{id}");
@@ -639,13 +643,20 @@ impl Backend {
             if let Err(e) = crate::pty::drive(stream, req, rx, on_event).await {
                 let _ = app.emit(&exit_on_error, format!("transport error: {e}"));
             }
+            // Evict the id whether the session ended on its own, detached, or the
+            // transport failed — the map must not keep a sender to a dead driver.
+            sessions.lock().await.remove(&cleanup_id);
         });
         Ok(())
     }
 
     async fn send_session(&self, id: &str, cmd: crate::pty::SessionCmd) -> Result<(), Error> {
-        let sessions = self.sessions.lock().await;
-        let tx = sessions.get(id).ok_or_else(|| Error::NoSession(id.into()))?;
+        // Clone the sender and drop the map lock before awaiting the send: a full
+        // channel must never hold the lock and stall every other session's writes.
+        let tx = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(id).cloned().ok_or_else(|| Error::NoSession(id.into()))?
+        };
         tx.send(cmd).await.map_err(|_| Error::NoSession(id.into()))
     }
 
@@ -2818,7 +2829,7 @@ Host bastion
             sftp_pool: Mutex::new(HashMap::new()),
             sftp_opens: AtomicU64::new(0),
             terminals: Mutex::new(HashMap::new()),
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
             streams: Mutex::new(HashMap::new()),
             ghostty_hosts: Mutex::new(HashSet::new()),
         }

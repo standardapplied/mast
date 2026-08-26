@@ -194,7 +194,7 @@ pub fn decode(payload: &[u8]) -> Result<Frame, DecodeError> {
         1 => {
             let session = c.string()?;
             let count = c.i32()?;
-            let mut command = Vec::with_capacity(count.max(0) as usize);
+            let mut command = Vec::new();
             for _ in 0..count {
                 command.push(c.string()?);
             }
@@ -240,7 +240,7 @@ pub fn decode(payload: &[u8]) -> Result<Frame, DecodeError> {
         28 => Frame::SessionInfo(c.info()?),
         29 => {
             let count = c.i32()?;
-            let mut list = Vec::with_capacity(count.max(0) as usize);
+            let mut list = Vec::new();
             for _ in 0..count {
                 list.push(c.info()?);
             }
@@ -416,15 +416,16 @@ pub struct AttachRequest {
 /// direct-streamlocal channel in production and a `tokio::io::duplex` in tests. Input frames carry a
 /// monotonic sequence — the enabler for client-side predictive echo — echoed back on output.
 pub async fn drive<S, F>(
-    mut stream: S,
+    stream: S,
     req: AttachRequest,
     mut cmds: mpsc::Receiver<SessionCmd>,
     mut on_event: F,
 ) -> io::Result<()>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     F: FnMut(SessionEvent),
 {
+    let mut stream = stream;
     handshake(&mut stream).await?;
     write_frame(&mut stream, &Frame::Hello(req.token.clone())).await?;
     expect_ok(&mut stream, "hello").await?;
@@ -455,11 +456,40 @@ where
     .await?;
     expect_ok(&mut stream, "attach").await?;
 
+    // The prologue is strictly request/reply, but the steady state must await a
+    // host frame and a UI command at once. `read_frame` is NOT cancel-safe
+    // (its inner `read_exact` can drop already-consumed bytes if a `select!`
+    // arm loses), so reads run in their own task that owns the read half and
+    // forwards whole frames over a cancel-safe channel. The select then only
+    // ever races two cancel-safe receivers.
+    let (mut rd, mut wr) = tokio::io::split(stream);
+    let (frame_tx, mut frame_rx) = mpsc::channel::<io::Result<Frame>>(64);
+    let _reader = AbortOnDrop(tokio::spawn(async move {
+        loop {
+            match read_frame(&mut rd).await {
+                Ok(frame) => {
+                    if frame_tx.send(Ok(frame)).await.is_err() {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    let _ = frame_tx.send(Err(e)).await;
+                    return;
+                }
+            }
+        }
+    }));
+
     let mut seq: i64 = 0;
     loop {
         tokio::select! {
-            frame = read_frame(&mut stream) => {
-                match frame? {
+            incoming = frame_rx.recv() => {
+                let frame = match incoming {
+                    Some(Ok(frame)) => frame,
+                    Some(Err(e)) => return Err(e),
+                    None => return Ok(()),
+                };
+                match frame {
                     Frame::Output { bytes, .. } => on_event(SessionEvent::Output(bytes)),
                     Frame::ReplayBegin { safe } => on_event(SessionEvent::Replaying { safe }),
                     Frame::ReplayEnd => on_event(SessionEvent::ReplayDone),
@@ -477,17 +507,27 @@ where
             cmd = cmds.recv() => match cmd {
                 Some(SessionCmd::Input(bytes)) => {
                     seq += 1;
-                    write_frame(&mut stream, &Frame::Input { seq, bytes }).await?;
+                    write_frame(&mut wr, &Frame::Input { seq, bytes }).await?;
                 }
                 Some(SessionCmd::Resize { cols, rows }) => {
-                    write_frame(&mut stream, &Frame::Resize { cols, rows }).await?;
+                    write_frame(&mut wr, &Frame::Resize { cols, rows }).await?;
                 }
                 Some(SessionCmd::Detach) | None => {
-                    let _ = write_frame(&mut stream, &Frame::Detach).await;
+                    let _ = write_frame(&mut wr, &Frame::Detach).await;
                     return Ok(());
                 }
             }
         }
+    }
+}
+
+/// Aborts a spawned task when the driver returns, so a reader parked on a quiet
+/// stream never outlives the session it was reading for.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -793,6 +833,81 @@ mod async_tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("not valid"), "{err}");
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_frame_split_around_an_interleaved_command_still_arrives_intact() {
+        let (client, mut server) = duplex(64);
+        let payload = vec![7u8; 200];
+        let expected = payload.clone();
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            assert!(matches!(
+                read_frame(&mut server).await.unwrap(),
+                Frame::Attach { .. }
+            ));
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
+            write_frame(
+                &mut server,
+                &Frame::Output {
+                    last_input_seq: 0,
+                    bytes: payload,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                read_frame(&mut server).await.unwrap(),
+                Frame::Input {
+                    seq: 1,
+                    bytes: b"k".to_vec()
+                },
+                "the interleaved keystroke arrives intact, in order"
+            );
+            write_frame(&mut server, &Frame::SessionEnded("done".into()))
+                .await
+                .unwrap();
+        });
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+        let driver = tokio::spawn(async move {
+            drive(
+                client,
+                AttachRequest {
+                    token: "t".into(),
+                    session: "s".into(),
+                    write: true,
+                    create: None,
+                },
+                cmd_rx,
+                move |ev| {
+                    let _ = ev_tx.send(ev);
+                },
+            )
+            .await
+        });
+
+        cmd_tx.send(SessionCmd::Input(b"k".to_vec())).await.unwrap();
+
+        let mut saw_full_output = false;
+        loop {
+            match ev_rx.recv().await.unwrap() {
+                SessionEvent::Output(bytes) => {
+                    assert_eq!(bytes, expected, "the big frame is reassembled, never desynced");
+                    saw_full_output = true;
+                }
+                SessionEvent::Ended(reason) => {
+                    assert_eq!(reason, "done");
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_full_output, "the fragmented output frame arrived");
+
+        driver.await.unwrap().unwrap();
         host.await.unwrap();
     }
 
