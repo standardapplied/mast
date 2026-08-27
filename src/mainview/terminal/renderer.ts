@@ -13,7 +13,8 @@
  * only the device, the shaders, and the draw call differ.
  */
 
-import type { Cursor, GridSnapshot, Rgb } from "../vtCore";
+import type { Renderer } from "./terminalController";
+import type { Cursor, GridSnapshot, Rgb } from "./vtCore";
 
 export type BackendName = "webgpu" | "webgl2";
 
@@ -126,7 +127,7 @@ interface ModelCell {
   bb: number;
 }
 
-export class TerminalRenderer {
+export class TerminalRenderer implements Renderer {
   private readonly opts: RendererOptions;
   private readonly atlas: GlyphAtlas;
   private backend!: Backend;
@@ -460,11 +461,22 @@ class WebGpuBackend implements Backend {
     });
   }
 
+  // ES2023 types Float32Array over ArrayBufferLike, which writeBuffer rejects; pass the
+  // (never-shared) backing buffer with an explicit byte range instead.
+  private writeF32(buffer: GPUBuffer, data: Float32Array): void {
+    this.device.queue.writeBuffer(
+      buffer,
+      0,
+      data.buffer as ArrayBuffer,
+      data.byteOffset,
+      data.byteLength,
+    );
+  }
+
   frame(d: FrameData): void {
     this.ensureAtlas(d.atlas, d.atlasVersion);
-    this.device.queue.writeBuffer(
+    this.writeF32(
       this.uniform,
-      0,
       new Float32Array([
         this.canvas.width,
         this.canvas.height,
@@ -493,13 +505,13 @@ class WebGpuBackend implements Backend {
       size: gridBg.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
-    this.device.queue.writeBuffer(bgBuf, 0, gridBg);
+    this.writeF32(bgBuf, gridBg);
 
     const fgBuf = this.device.createBuffer({
       size: Math.max(28, d.fg.byteLength),
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
-    if (d.fgCount > 0) this.device.queue.writeBuffer(fgBuf, 0, d.fg.subarray(0, d.fgCount * 7));
+    if (d.fgCount > 0) this.writeF32(fgBuf, d.fg.subarray(0, d.fgCount * 7));
 
     const encoder = this.device.createCommandEncoder();
     const pass = encoder.beginRenderPass({

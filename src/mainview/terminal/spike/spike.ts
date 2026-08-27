@@ -9,7 +9,7 @@
  * box-drawing alignment.
  */
 
-import { TerminalRenderer } from "./renderer";
+import { TerminalRenderer } from "../renderer";
 import { VtCore } from "../vtCore";
 
 const ESC = "\x1b";
