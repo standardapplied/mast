@@ -82,6 +82,7 @@ interface GhosttyExports {
   ghostty_render_state_get(state: number, data: number, out: number): number;
   ghostty_render_state_free(state: number): void;
   ghostty_render_state_row_iterator_new(alloc: number, out: number): number;
+  ghostty_render_state_row_iterator_next(it: number): boolean;
   ghostty_render_state_row_iterator_next_dirty(it: number, outY: number): boolean;
   ghostty_render_state_row_iterator_free(it: number): void;
   ghostty_render_state_row_get(it: number, data: number, out: number): number;
@@ -262,6 +263,23 @@ export class VtCore {
     return { dirty, rows };
   }
 
+  /**
+   * Like {@link snapshot} but every viewport row is returned when anything changed, not just the
+   * dirty ones. A renderer that repaints from this can never drift from the terminal: partial damage
+   * describes which cells changed, but not a scroll's row shift, so applying only dirty rows leaves a
+   * persistent grid misaligned after a scroll. {@link Dirty} still reports whether anything changed,
+   * so an idle frame stays free.
+   */
+  fullSnapshot(): GridSnapshot {
+    this.requireOpen();
+    this.refresh();
+    const dirty = this.dirtyKind();
+    if (dirty === "none") {
+      return { dirty, rows: [] };
+    }
+    return { dirty, rows: this.readAllRows() };
+  }
+
   /** The cursor's viewport position and visibility. */
   cursor(): Cursor {
     this.requireOpen();
@@ -322,6 +340,17 @@ export class VtCore {
       }
     } finally {
       this.abi.free(yPtr, 2);
+    }
+    return rows;
+  }
+
+  private readAllRows(): Row[] {
+    const rows: Row[] = [];
+    this.bindRowIterator();
+    let y = 0;
+    while (this.e.ghostty_render_state_row_iterator_next(this.rowIter)) {
+      rows.push({ y, cells: this.readRowCells() });
+      y++;
     }
     return rows;
   }

@@ -64,6 +64,7 @@ export function SessionTerminalPane({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<TerminalController | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [backend, setBackend] = useState<string>("");
 
   useEffect(() => {
     const host = hostRef.current;
@@ -87,11 +88,15 @@ export function SessionTerminalPane({
           fontPx: FONT_PX,
           linePad: LINE_PAD,
           dpr,
+          onError: (message) => {
+            if (!disposed) setError(message);
+          },
         }),
         vtWasm(),
       ]);
       if (disposed) return void renderer.destroy();
       cleanups.push(() => renderer.destroy());
+      setBackend(renderer.backendName);
 
       const { w: cellW, h: cellH } = renderer.cellSize;
       const fit = () => gridFor(host.clientWidth * dpr, host.clientHeight * dpr, cellW, cellH);
@@ -161,7 +166,11 @@ export function SessionTerminalPane({
       const start = performance.now();
       const loop = (now: number) => {
         if (disposed) return;
-        controller.frame((now - start) % BLINK_MS < BLINK_ON_MS);
+        try {
+          controller.frame((now - start) % BLINK_MS < BLINK_ON_MS);
+        } catch (e) {
+          if (!disposed) setError(e instanceof Error ? e.message : String(e));
+        }
         raf = requestAnimationFrame(loop);
       };
       raf = requestAnimationFrame(loop);
@@ -233,6 +242,22 @@ export function SessionTerminalPane({
       }}
     >
       <canvas ref={canvasRef} />
+      {backend && (
+        <div
+          style={{
+            position: "absolute",
+            right: "8px",
+            bottom: "6px",
+            font: '10px "JetBrains Mono", ui-monospace, monospace',
+            letterSpacing: "0.08em",
+            color: backend === "webgpu" ? "#4de0c8" : "#e0a24d",
+            opacity: 0.5,
+            pointerEvents: "none",
+          }}
+        >
+          {backend.toUpperCase()}
+        </div>
+      )}
       {error && (
         <div
           style={{

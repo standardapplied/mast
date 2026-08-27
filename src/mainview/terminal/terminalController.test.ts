@@ -78,6 +78,25 @@ describe("TerminalController", () => {
     expect(renderer.draws).toBe(1);
   });
 
+  test("a prompt and its typed echo reach the renderer on the right row", async () => {
+    const { controller, renderer } = await harness(20, 4);
+    controller.feed(enc("$ "));
+    controller.feed(enc("ls -la"));
+    controller.frame();
+    const grid = renderer.applied.at(-1)!;
+    expect(rowText(grid, 0)).toBe("$ ls -la");
+    // The renderer receives the whole viewport, so nothing can drift.
+    expect(grid.rows.map((r) => r.y)).toEqual([0, 1, 2, 3]);
+  });
+
+  test("scrolled output reaches the renderer aligned to the viewport", async () => {
+    const { controller, renderer } = await harness(20, 3);
+    controller.feed(enc("a\r\nb\r\nc\r\nd")); // 4 lines into 3 rows → viewport is b,c,d
+    controller.frame();
+    const grid = renderer.applied.at(-1)!;
+    expect([0, 1, 2].map((y) => rowText(grid, y))).toEqual(["b", "c", "d"]);
+  });
+
   test("empty output is a no-op", async () => {
     const { controller, core } = await harness();
     controller.feed(new Uint8Array(0));
