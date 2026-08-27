@@ -27,6 +27,8 @@ export interface RendererOptions {
   readonly linePad: number;
   /** Device pixel ratio to render at (crispness on retina). */
   readonly dpr: number;
+  /** Reports an async GPU error (uncaptured validation error, device loss) that no throw surfaces. */
+  readonly onError?: (message: string) => void;
 }
 
 const WHITE: Rgb = [230, 236, 245];
@@ -156,7 +158,7 @@ export class TerminalRenderer implements Renderer {
   static async create(canvas: HTMLCanvasElement, opts: RendererOptions): Promise<TerminalRenderer> {
     const self = new TerminalRenderer(opts);
     self.backend =
-      (await WebGpuBackend.tryCreate(canvas)) ?? WebGl2Backend.create(canvas);
+      (await WebGpuBackend.tryCreate(canvas, opts.onError)) ?? WebGl2Backend.create(canvas);
     return self;
   }
 
@@ -341,12 +343,21 @@ class WebGpuBackend implements Backend {
   private texture!: GPUTexture;
   private bind!: GPUBindGroup;
 
-  static async tryCreate(canvas: HTMLCanvasElement): Promise<WebGpuBackend | null> {
+  static async tryCreate(
+    canvas: HTMLCanvasElement,
+    onError?: (message: string) => void,
+  ): Promise<WebGpuBackend | null> {
     const gpu = (navigator as unknown as { gpu?: GPU }).gpu;
     if (!gpu) return null;
     const adapter = await gpu.requestAdapter();
     if (!adapter) return null;
     const device = await adapter.requestDevice();
+    if (onError) {
+      device.addEventListener("uncapturederror", (event) => {
+        onError(`GPU error: ${(event as GPUUncapturedErrorEvent).error.message}`);
+      });
+      void device.lost.then((info) => onError(`GPU device lost: ${info.message}`));
+    }
     const ctx = canvas.getContext("webgpu") as GPUCanvasContext | null;
     if (!ctx) return null;
     const format = gpu.getPreferredCanvasFormat();

@@ -56,7 +56,7 @@ export class TerminalController {
    * folds the UI blink phase into the pty's own cursor visibility, so a hidden cursor stays hidden.
    */
   frame(blinkOn = true): void {
-    const snapshot = this.core.snapshot();
+    const snapshot = this.core.fullSnapshot();
     if (snapshot.dirty !== "none") {
       this.renderer.apply(snapshot);
       this.core.clean();
