@@ -19,7 +19,7 @@ const NODE_SOCKET = "~/.sail/pty.sock";
 const NODE_SESSION = "mast-node";
 const NODE_CREATE: SessionCreate = {
   command: ["bash", "-l"],
-  cwd: "/home/dev",
+  cwd: "~",
   project: "",
   cols: 80,
   rows: 24,
