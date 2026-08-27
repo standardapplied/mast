@@ -119,19 +119,28 @@ export function SessionTerminalPane({
       cleanups.push(await listen(`session://meta/${id}`, noop));
       cleanups.push(await listen<string>(`session://exit/${id}`, noop));
 
+      // Reattach when the named session is already live; create it only when absent, so the
+      // terminal survives closing and reopening the pane (the point of a durable host session).
+      const existing = await invoke<Array<{ name: string; live: boolean }>>("session_list", {
+        socketPath,
+        token,
+      }).catch(() => [] as Array<{ name: string; live: boolean }>);
+      if (disposed) return;
+      const alive = existing.some((s) => s.name === session && s.live);
       await invoke("session_open", {
         id,
         socketPath,
         token,
         session,
         write,
-        create: create ? { ...create, cols, rows } : null,
+        create: alive || !create ? null : { ...create, cols, rows },
       });
       // Tell the pty our real geometry (a fresh session was created at this size; an existing one
       // is resized to the writer's window).
       sink.resize(cols, rows);
 
       const observer = new ResizeObserver(() => {
+        if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden tab
         const next = fit();
         if (next.cols !== cols || next.rows !== rows) {
           cols = next.cols;
