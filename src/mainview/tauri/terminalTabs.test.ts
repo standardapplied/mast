@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addTab, nextActive, tabKey, type Tab } from "./terminalTabs";
+import { addTab, nextActive, sessionSpecFor, tabKey, type Tab } from "./terminalTabs";
 
 const tab = (target: string | undefined, label = target ?? "node"): Tab => ({
   target,
@@ -32,5 +32,17 @@ describe("nextActive", () => {
   });
   test("closing the last tab yields none", () => {
     expect(nextActive([tab("a")], "a", "a")).toBeNull();
+  });
+});
+
+describe("sessionSpecFor", () => {
+  test("the node tab is a plain box shell", () => {
+    expect(sessionSpecFor(undefined)).toEqual({ session: "mast-node", project: "" });
+  });
+  test("a project tab targets its container by name", () => {
+    expect(sessionSpecFor("acme")).toEqual({ session: "mast-acme", project: "acme" });
+  });
+  test("distinct projects never collide on one host session", () => {
+    expect(sessionSpecFor("a").session).not.toBe(sessionSpecFor("b").session);
   });
 });

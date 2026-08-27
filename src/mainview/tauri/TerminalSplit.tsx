@@ -60,10 +60,13 @@ export function TerminalSplit({
   target,
   label,
   active,
+  terminal,
 }: {
   target: string;
   label: string;
   active?: boolean;
+  /** Render the terminal pillar (durable pty); falls back to the raw-shell {@link TerminalPane}. */
+  terminal?: (ref: React.Ref<TerminalHandle>) => React.ReactNode;
 }) {
   // Created once for this mounted project (keyed by target upstream). Not
   // disposed on unmount: the listeners unsubscribe themselves and the store is
@@ -372,7 +375,11 @@ export function TerminalSplit({
       </div>
       <div className="term-split__panes">
         <div className={`term-split__main${terminalTargeted ? " term-split__main--drop" : ""}`}>
-          <TerminalPane ref={termRef} target={target} label={label} active={active} />
+          {terminal ? (
+            terminal(termRef)
+          ) : (
+            <TerminalPane ref={termRef} target={target} label={label} active={active} />
+          )}
         </div>
         {viewerOpen && (
           <>

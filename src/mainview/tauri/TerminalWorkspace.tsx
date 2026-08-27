@@ -1,29 +1,44 @@
-import { useState } from "react";
+import { type Ref, useState } from "react";
 import { SnapshotsPanel } from "../board/SnapshotsPanel";
 import { cx } from "../components/cx";
 import type { Gateway } from "../gateway";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
 import { type SessionCreate, SessionTerminalPane } from "./SessionTerminalPane";
-import { addTab, nextActive, tabKey, type Tab } from "./terminalTabs";
-import { TerminalPane } from "./TerminalPane";
+import { addTab, nextActive, sessionSpecFor, tabKey, type Tab } from "./terminalTabs";
+import { type TerminalHandle, TerminalPane } from "./TerminalPane";
 import { TerminalSplit } from "./TerminalSplit";
 
 /**
- * The node's pty-host reached over the control-plane SSH session. The `~/` is expanded against the
- * remote home on the Rust side (the host writes its socket under whichever user the box logs in as —
- * root on a bare-metal node, dev in a container), and a blank token resolves to the box owner.
- * (Per-project container sessions are the follow-up; today the WebGPU option covers the node shell.)
+ * The pty-host reached over the control-plane SSH session — one host on the box, addressed by the
+ * same `~/.sail/pty.sock`. The `~/` is expanded against the remote home on the Rust side, and a
+ * blank token resolves to the box owner. A session's `project` (empty for the node, the container
+ * name for a project tab) tells that host whether to run the shell on the box or `incus exec` it
+ * inside the project's container, so one durable terminal reaches both.
  */
 const NODE_SOCKET = "~/.sail/pty.sock";
-const NODE_SESSION = "mast-node";
-const NODE_CREATE: SessionCreate = {
+const BASE_CREATE: SessionCreate = {
   command: ["bash", "-l"],
   cwd: "~",
   project: "",
   cols: 80,
   rows: 24,
 };
+
+/** The durable WebGPU terminal for a tab, node or container. `ref` wires drop-to-paste in a split. */
+function durablePane(target: string | undefined, ref?: Ref<TerminalHandle>) {
+  const { session, project } = sessionSpecFor(target);
+  return (
+    <SessionTerminalPane
+      ref={ref}
+      socketPath={NODE_SOCKET}
+      token=""
+      session={session}
+      create={{ ...BASE_CREATE, project }}
+    />
+  );
+}
+
 const WEBGPU_PREF = "mast.webgpuTerminal";
 
 function loadWebgpuPref(): boolean {
@@ -116,7 +131,7 @@ export function TerminalWorkspace({
             type="button"
             className={cx("dep-chip term-tab__tools", webgpu && "is-active")}
             onClick={toggleWebgpu}
-            title="Render the node shell with the experimental WebGPU terminal"
+            title="Render terminals with the experimental WebGPU engine — node and project containers"
           >
             {webgpu ? "WebGPU ✓" : "WebGPU"}
           </button>
@@ -142,14 +157,14 @@ export function TerminalWorkspace({
               style={{ display: active ? "flex" : "none" }}
             >
               {t.target ? (
-                <TerminalSplit target={t.target} label={t.label} active={active} />
-              ) : webgpu ? (
-                <SessionTerminalPane
-                  socketPath={NODE_SOCKET}
-                  token=""
-                  session={NODE_SESSION}
-                  create={NODE_CREATE}
+                <TerminalSplit
+                  target={t.target}
+                  label={t.label}
+                  active={active}
+                  terminal={webgpu ? (ref) => durablePane(t.target, ref) : undefined}
                 />
+              ) : webgpu ? (
+                durablePane(undefined)
               ) : (
                 <TerminalPane label={t.label} active={active} />
               )}

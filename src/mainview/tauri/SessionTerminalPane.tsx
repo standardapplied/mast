@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { TerminalRenderer } from "../terminal/renderer";
 import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
 import { VtCore } from "../terminal/vtCore";
+import type { TerminalHandle } from "./TerminalPane";
 
 /**
  * SessionTerminalPane — a durable, host-owned pty rendered by our own WebGPU terminal.
@@ -53,18 +54,26 @@ export interface SessionTerminalProps {
 
 const noop = () => {};
 
-export function SessionTerminalPane({
-  socketPath,
-  token,
-  session,
-  write = true,
-  create,
-}: SessionTerminalProps) {
+export const SessionTerminalPane = forwardRef<
+  TerminalHandle,
+  SessionTerminalProps
+>(function SessionTerminalPane({ socketPath, token, session, write = true, create }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<TerminalController | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [backend, setBackend] = useState<string>("");
+
+  // Drop-to-paste routes through here; the pane refits itself from its own ResizeObserver, so the
+  // workbench's post-splitter-drag refit is a no-op.
+  useImperativeHandle(
+    ref,
+    () => ({
+      paste: (text: string) => controllerRef.current?.paste(text),
+      refit: () => {},
+    }),
+    [],
+  );
 
   useEffect(() => {
     const host = hostRef.current;
@@ -279,7 +288,7 @@ export function SessionTerminalPane({
       )}
     </div>
   );
-}
+});
 
 function nextFrame(): Promise<number> {
   return new Promise((resolve) => requestAnimationFrame(resolve));
