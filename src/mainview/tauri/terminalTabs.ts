@@ -6,6 +6,20 @@ export function tabKey(target?: string): string {
   return target ?? "__node__";
 }
 
+/** The host session to attach for a tab: the node shell, or a per-project container session. */
+export type SessionSpec = { session: string; project: string };
+
+/**
+ * Maps a tab's target to its durable host session. A project tab attaches a `mast-<project>` session
+ * whose `project` tells the node pty-host to run it inside that container (`incus exec`); the node
+ * tab (no target) runs a plain shell on the box itself.
+ */
+export function sessionSpecFor(target?: string): SessionSpec {
+  return target
+    ? { session: `mast-${target}`, project: target }
+    : { session: "mast-node", project: "" };
+}
+
 /** Add a tab, or no-op if the project is already open. */
 export function addTab(tabs: Tab[], target: string | undefined, label: string): Tab[] {
   const key = tabKey(target);
