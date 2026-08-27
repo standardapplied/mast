@@ -14,6 +14,7 @@
  */
 
 import type { Renderer } from "./terminalController";
+import { TerminalGrid } from "./terminalGrid";
 import type { Cursor, GridSnapshot, Rgb } from "./vtCore";
 
 export type BackendName = "webgpu" | "webgl2";
@@ -118,25 +119,17 @@ interface Backend {
   destroy(): void;
 }
 
-/** One packed cell in the persistent grid model. */
-interface ModelCell {
-  glyph: number;
-  fr: number;
-  fg: number;
-  fb: number;
-  br: number;
-  bg: number;
-  bb: number;
-}
-
 export class TerminalRenderer implements Renderer {
   private readonly opts: RendererOptions;
   private readonly atlas: GlyphAtlas;
   private backend!: Backend;
-  private model: ModelCell[] = [];
+  private readonly grid = new TerminalGrid();
   private cols = 0;
   private rows = 0;
   private cursor: Cursor = { present: false, x: 0, y: 0, visible: false };
+  // Instance buffers reused across frames — sized on resize, never per frame.
+  private bgInstances = new Float32Array(0);
+  private fgInstances = new Float32Array(0);
 
   private constructor(opts: RendererOptions) {
     this.opts = opts;
@@ -166,50 +159,30 @@ export class TerminalRenderer implements Renderer {
   resize(cols: number, rows: number): void {
     this.cols = cols;
     this.rows = rows;
-    this.model = Array.from({ length: cols * rows }, () => ({
-      glyph: 0,
-      fr: 0,
-      fg: 0,
-      fb: 0,
-      br: 0,
-      bg: 0,
-      bb: 0,
-    }));
+    this.grid.resize(cols, rows);
+    this.bgInstances = new Float32Array(cols * rows * 3);
+    this.fgInstances = new Float32Array(cols * rows * 7);
     this.backend.resize(cols * this.atlas.cellW, rows * this.atlas.cellH);
   }
 
-  /** Folds a snapshot's dirty rows into the grid model. Cheap: only changed rows are touched. */
+  /** Folds a snapshot's rows into the grid. Cheap on a dirty snapshot: only changed rows are touched. */
   apply(snapshot: GridSnapshot): void {
-    for (const row of snapshot.rows) {
-      if (row.y < 0 || row.y >= this.rows) continue;
-      for (let x = 0; x < row.cells.length && x < this.cols; x++) {
-        const c = row.cells[x];
-        const m = this.model[row.y * this.cols + x];
-        m.glyph = this.atlas.glyph(c.text);
-        m.fr = c.fg[0];
-        m.fg = c.fg[1];
-        m.fb = c.fg[2];
-        m.br = c.bg[0];
-        m.bg = c.bg[1];
-        m.bb = c.bg[2];
-      }
-    }
+    this.grid.apply(snapshot);
   }
 
   setCursor(cursor: Cursor): void {
     this.cursor = cursor;
   }
 
-  /** Packs the current grid model into instance buffers and draws one frame. */
+  /** Packs the current grid into the reused instance buffers and draws one frame. */
   draw(): void {
-    const n = this.cols * this.rows;
-    const bg = new Float32Array(n * 3);
-    const fg = new Float32Array(n * 7);
+    const bg = this.bgInstances;
+    const fg = this.fgInstances;
     let fgCount = 0;
 
     for (let y = 0; y < this.rows; y++) {
       for (let x = 0; x < this.cols; x++) {
-        const m = this.model[y * this.cols + x];
+        const cell = this.grid.cell(x, y);
         const onCursor =
           this.cursor.present && this.cursor.visible && this.cursor.x === x && this.cursor.y === y;
         const bi = (y * this.cols + x) * 3;
@@ -218,12 +191,13 @@ export class TerminalRenderer implements Renderer {
           bg[bi + 1] = WHITE[1] / 255;
           bg[bi + 2] = WHITE[2] / 255;
         } else {
-          bg[bi] = m.br / 255;
-          bg[bi + 1] = m.bg / 255;
-          bg[bi + 2] = m.bb / 255;
+          bg[bi] = cell.bg[0] / 255;
+          bg[bi + 1] = cell.bg[1] / 255;
+          bg[bi + 2] = cell.bg[2] / 255;
         }
-        if (m.glyph !== 0) {
-          const { u, v } = this.atlas.cell(m.glyph);
+        const glyph = this.atlas.glyph(cell.text);
+        if (glyph !== 0) {
+          const { u, v } = this.atlas.cell(glyph);
           const o = fgCount * 7;
           fg[o] = x;
           fg[o + 1] = y;
@@ -232,9 +206,9 @@ export class TerminalRenderer implements Renderer {
             fg[o + 3] = GROUND[1] / 255;
             fg[o + 4] = GROUND[2] / 255;
           } else {
-            fg[o + 2] = m.fr / 255;
-            fg[o + 3] = m.fg / 255;
-            fg[o + 4] = m.fb / 255;
+            fg[o + 2] = cell.fg[0] / 255;
+            fg[o + 3] = cell.fg[1] / 255;
+            fg[o + 4] = cell.fg[2] / 255;
           }
           fg[o + 5] = u;
           fg[o + 6] = v;
