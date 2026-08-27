@@ -35,5 +35,8 @@ cpSync("src/mainview/static", `${OUT}/static`, { recursive: true });
 cpSync("src/mainview/index.tauri.html", `${OUT}/index.html`);
 // ghostty loads its ~400KB VT parser at runtime from `/ghostty-vt.wasm`.
 cpSync("node_modules/ghostty-web/ghostty-vt.wasm", `${OUT}/ghostty-vt.wasm`);
+// Our own terminal widget loads its pinned libghostty-vt build (see terminal/PIN.md;
+// a different build from ghostty-web's, and the one VtCore's ABI was derived against).
+cpSync("src/mainview/terminal/ghostty-vt.wasm", `${OUT}/sail-vt.wasm`);
 
 console.log(`Built ${OUT}/ (${result.outputs.length} outputs)`);

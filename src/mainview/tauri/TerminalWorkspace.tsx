@@ -4,9 +4,35 @@ import { cx } from "../components/cx";
 import type { Gateway } from "../gateway";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
+import { type SessionCreate, SessionTerminalPane } from "./SessionTerminalPane";
 import { addTab, nextActive, tabKey, type Tab } from "./terminalTabs";
 import { TerminalPane } from "./TerminalPane";
 import { TerminalSplit } from "./TerminalSplit";
+
+/**
+ * The node's pty-host reached over the control-plane SSH session. `~` is not expanded for a
+ * streamlocal forward, so the socket path is absolute; a blank token resolves to the box owner.
+ * (Per-project container sessions and remote-home resolution are the follow-up; today the WebGPU
+ * option covers the durable node shell.)
+ */
+const NODE_SOCKET = "/home/dev/.sail/pty.sock";
+const NODE_SESSION = "mast-node";
+const NODE_CREATE: SessionCreate = {
+  command: ["bash", "-l"],
+  cwd: "/home/dev",
+  project: "",
+  cols: 80,
+  rows: 24,
+};
+const WEBGPU_PREF = "mast.webgpuTerminal";
+
+function loadWebgpuPref(): boolean {
+  try {
+    return localStorage.getItem(WEBGPU_PREF) === "1";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The Terminal section: browser-tab UX over project workspaces. Each open
@@ -25,6 +51,18 @@ export function TerminalWorkspace({
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [snapshotsFor, setSnapshotsFor] = useState<string | null>(null);
+  const [webgpu, setWebgpu] = useState<boolean>(loadWebgpuPref);
+
+  const toggleWebgpu = () =>
+    setWebgpu((on) => {
+      const next = !on;
+      try {
+        localStorage.setItem(WEBGPU_PREF, next ? "1" : "0");
+      } catch {
+        /* preference is best-effort */
+      }
+      return next;
+    });
 
   const open = (target: string | undefined, label: string) => {
     setTabs((prev) => addTab(prev, target, label));
@@ -74,6 +112,14 @@ export function TerminalWorkspace({
           >
             ＋
           </button>
+          <button
+            type="button"
+            className={cx("dep-chip term-tab__tools", webgpu && "is-active")}
+            onClick={toggleWebgpu}
+            title="Render the node shell with the experimental WebGPU terminal"
+          >
+            {webgpu ? "WebGPU ✓" : "WebGPU"}
+          </button>
           {gateway && activeTarget && !adding && (
             <button
               type="button"
@@ -97,6 +143,13 @@ export function TerminalWorkspace({
             >
               {t.target ? (
                 <TerminalSplit target={t.target} label={t.label} active={active} />
+              ) : webgpu ? (
+                <SessionTerminalPane
+                  socketPath={NODE_SOCKET}
+                  token=""
+                  session={NODE_SESSION}
+                  create={NODE_CREATE}
+                />
               ) : (
                 <TerminalPane label={t.label} active={active} />
               )}

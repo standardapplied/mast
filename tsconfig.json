@@ -5,7 +5,7 @@
     "moduleResolution": "bundler",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": ["bun", "react", "react-dom"],
+    "types": ["bun", "react", "react-dom", "@webgpu/types"],
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -16,5 +16,6 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "test"]
+  "include": ["src", "test"],
+  "exclude": ["src/mainview/terminal/spike"]
 }
