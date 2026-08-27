@@ -235,6 +235,9 @@ pub struct Backend {
     /// Shared with each driver task so it can evict its own id when the session
     /// ends on its own, not only when the UI closes the tab.
     sessions: Arc<Mutex<HashMap<String, mpsc::Sender<crate::pty::SessionCmd>>>>,
+    /// The remote `$HOME` for the node SSH user, resolved once and cached — so a `~/`-relative
+    /// socket path lands in the right home whether the box logs in as root, dev, or anyone else.
+    home: Mutex<Option<String>>,
     /// Live long-read streams (SSE tails: events + agent log), keyed by a
     /// client-chosen id. The sender signals the pump task to stop when the
     /// webview closes the stream.
@@ -401,6 +404,7 @@ impl Backend {
             sftp_opens: AtomicU64::new(0),
             terminals: Mutex::new(HashMap::new()),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            home: Mutex::new(None),
             streams: Mutex::new(HashMap::new()),
             ghostty_hosts: Mutex::new(HashSet::new()),
         })
@@ -583,16 +587,52 @@ impl Backend {
         Ok(result?)
     }
 
+    /// The remote `$HOME` for the node SSH user, resolved once over the session and cached. Used to
+    /// expand a `~/`-relative socket path — the pty host writes its socket under whichever home the
+    /// box logs in as (root on a bare-metal node, dev in a container), so we cannot hardcode it.
+    async fn remote_home(&self) -> Result<String, Error> {
+        if let Some(home) = self.home.lock().await.clone() {
+            return Ok(home);
+        }
+        let mut channel = self.open_session_channel().await?;
+        channel.exec(true, "printf %s \"$HOME\"".as_bytes()).await?;
+        let mut out = Vec::new();
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                ChannelMsg::Data { data } => out.extend_from_slice(&data),
+                ChannelMsg::Close | ChannelMsg::Eof => break,
+                _ => {}
+            }
+        }
+        let home = String::from_utf8_lossy(&out).trim().to_string();
+        if home.is_empty() || !home.starts_with('/') {
+            return Err(Error::PtySession(
+                "could not resolve the remote home for the pty socket".into(),
+            ));
+        }
+        *self.home.lock().await = Some(home.clone());
+        Ok(home)
+    }
+
+    /// Expands a leading `~/` in a socket path against the remote home; absolute paths pass through.
+    async fn resolve_socket(&self, socket_path: &str) -> Result<String, Error> {
+        match socket_path.strip_prefix("~/") {
+            Some(rest) => Ok(format!("{}/{}", self.remote_home().await?.trim_end_matches('/'), rest)),
+            None => Ok(socket_path.to_string()),
+        }
+    }
+
     /// Opens a channel forwarded to a unix-domain socket on the control-plane host — the pty
     /// session host at `~/.sail/pty.sock`. Mirrors {@link open_forward} for streamlocal.
     pub(crate) async fn open_streamlocal(&self, socket_path: &str) -> Result<Channel<Msg>, Error> {
+        let resolved = self.resolve_socket(socket_path).await?;
         self.ensure().await?;
         let mut guard = self.session.lock().await;
         let result = guard
             .as_ref()
             .expect("ensured")
             .handle
-            .channel_open_direct_streamlocal(socket_path.to_string())
+            .channel_open_direct_streamlocal(resolved)
             .await;
         if result.is_err() {
             *guard = None;
@@ -2830,6 +2870,7 @@ Host bastion
             sftp_opens: AtomicU64::new(0),
             terminals: Mutex::new(HashMap::new()),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            home: Mutex::new(None),
             streams: Mutex::new(HashMap::new()),
             ghostty_hosts: Mutex::new(HashSet::new()),
         }

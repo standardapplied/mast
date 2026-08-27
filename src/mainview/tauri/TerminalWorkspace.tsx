@@ -10,12 +10,12 @@ import { TerminalPane } from "./TerminalPane";
 import { TerminalSplit } from "./TerminalSplit";
 
 /**
- * The node's pty-host reached over the control-plane SSH session. `~` is not expanded for a
- * streamlocal forward, so the socket path is absolute; a blank token resolves to the box owner.
- * (Per-project container sessions and remote-home resolution are the follow-up; today the WebGPU
- * option covers the durable node shell.)
+ * The node's pty-host reached over the control-plane SSH session. The `~/` is expanded against the
+ * remote home on the Rust side (the host writes its socket under whichever user the box logs in as —
+ * root on a bare-metal node, dev in a container), and a blank token resolves to the box owner.
+ * (Per-project container sessions are the follow-up; today the WebGPU option covers the node shell.)
  */
-const NODE_SOCKET = "/home/dev/.sail/pty.sock";
+const NODE_SOCKET = "~/.sail/pty.sock";
 const NODE_SESSION = "mast-node";
 const NODE_CREATE: SessionCreate = {
   command: ["bash", "-l"],
