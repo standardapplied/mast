@@ -7,21 +7,27 @@ import {
   type Renderer,
   TerminalController,
 } from "./terminalController";
+import { TerminalGrid } from "./terminalGrid";
 import type { Cursor, GridSnapshot } from "./vtCore";
 import { VtCore } from "./vtCore";
 
 const WASM = readFileSync(join(import.meta.dir, "ghostty-vt.wasm"));
 
+// Mirrors the real renderer: accumulates applied snapshots into a persistent grid, so tests can
+// assert the built-up screen the way the renderer draws it — not just the per-frame dirty rows.
 class RecRenderer implements Renderer {
   resizes: [number, number][] = [];
   applied: GridSnapshot[] = [];
   cursors: Cursor[] = [];
   draws = 0;
+  readonly grid = new TerminalGrid();
   resize(cols: number, rows: number): void {
     this.resizes.push([cols, rows]);
+    this.grid.resize(cols, rows);
   }
   apply(snapshot: GridSnapshot): void {
     this.applied.push(snapshot);
+    this.grid.apply(snapshot);
   }
   setCursor(cursor: Cursor): void {
     this.cursors.push(cursor);
@@ -49,6 +55,12 @@ function rowText(snapshot: GridSnapshot, y: number): string {
   return row ? row.cells.map((c) => c.text).join("").trimEnd() : "";
 }
 
+function gridRow(grid: TerminalGrid, y: number): string {
+  let s = "";
+  for (let x = 0; x < grid.cols; x++) s += grid.cell(x, y).text;
+  return s.trimEnd();
+}
+
 let cores: VtCore[] = [];
 async function harness(cols = 80, rows = 24) {
   const core = await VtCore.create(WASM, cols, rows);
@@ -69,32 +81,39 @@ describe("TerminalController", () => {
     expect(renderer.resizes).toEqual([[100, 30]]);
   });
 
-  test("fed pty output reaches the renderer as cells", async () => {
+  test("fed pty output reaches the renderer's grid as cells", async () => {
     const { controller, renderer } = await harness();
     controller.feed(enc("hello"));
     controller.frame();
-    const last = renderer.applied.at(-1)!;
-    expect(rowText(last, 0)).toBe("hello");
+    expect(gridRow(renderer.grid, 0)).toBe("hello");
     expect(renderer.draws).toBe(1);
   });
 
-  test("a prompt and its typed echo reach the renderer on the right row", async () => {
+  test("a prompt and its typed echo build up on the right row across frames", async () => {
     const { controller, renderer } = await harness(20, 4);
     controller.feed(enc("$ "));
-    controller.feed(enc("ls -la"));
     controller.frame();
-    const grid = renderer.applied.at(-1)!;
-    expect(rowText(grid, 0)).toBe("$ ls -la");
-    // The renderer receives the whole viewport, so nothing can drift.
-    expect(grid.rows.map((r) => r.y)).toEqual([0, 1, 2, 3]);
+    controller.feed(enc("ls -la")); // a later frame only re-applies the dirty row
+    controller.frame();
+    expect(gridRow(renderer.grid, 0)).toBe("$ ls -la");
   });
 
-  test("scrolled output reaches the renderer aligned to the viewport", async () => {
+  test("scrolled output stays aligned to the viewport in the grid", async () => {
     const { controller, renderer } = await harness(20, 3);
     controller.feed(enc("a\r\nb\r\nc\r\nd")); // 4 lines into 3 rows → viewport is b,c,d
     controller.frame();
-    const grid = renderer.applied.at(-1)!;
-    expect([0, 1, 2].map((y) => rowText(grid, y))).toEqual(["b", "c", "d"]);
+    expect([0, 1, 2].map((y) => gridRow(renderer.grid, y))).toEqual(["b", "c", "d"]);
+  });
+
+  test("a keystroke re-applies only its row, not the whole screen (damage-based)", async () => {
+    const { controller, renderer } = await harness(80, 40); // a large viewport
+    controller.feed(enc("$ "));
+    controller.frame(); // first paint is the whole viewport
+    controller.feed(enc("x")); // one echoed keystroke
+    controller.frame();
+    const last = renderer.applied.at(-1)!;
+    expect(last.dirty).toBe("partial");
+    expect(last.rows.length).toBeLessThanOrEqual(1); // just the current line, not 40 rows
   });
 
   test("empty output is a no-op", async () => {
@@ -150,6 +169,20 @@ describe("TerminalController", () => {
     expect(renderer.resizes).toEqual([[80, 24], [120, 40]]);
     expect(sink.resizes).toEqual([[120, 40]]);
     expect(controller.size).toEqual({ cols: 120, rows: 40 });
+  });
+
+  test("after a resize the grid re-aligns to the reflowed terminal", async () => {
+    const { controller, core, renderer } = await harness(10, 4);
+    controller.feed(enc("hello world it wraps here"));
+    controller.frame();
+    controller.resize(30, 4); // widen → VtCore reflows
+    controller.frame();
+    const truth = core.fullSnapshot();
+    for (const row of truth.rows) {
+      for (let x = 0; x < 30; x++) {
+        expect(renderer.grid.cell(x, row.y).text).toBe(row.cells[x]?.text ?? " ");
+      }
+    }
   });
 
   test("a same-size resize is a no-op", async () => {
