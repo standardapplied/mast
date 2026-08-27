@@ -614,18 +614,23 @@ impl Backend {
         Ok(home)
     }
 
-    /// Expands a leading `~/` in a socket path against the remote home; absolute paths pass through.
-    async fn resolve_socket(&self, socket_path: &str) -> Result<String, Error> {
-        match socket_path.strip_prefix("~/") {
+    /// Expands `~` / `~/…` against the remote home; absolute (and other) paths pass through. Used
+    /// for the pty socket and the session's working directory, which both live under the box user's
+    /// home and differ by login (root on a bare-metal node, dev in a container).
+    async fn resolve_path(&self, path: &str) -> Result<String, Error> {
+        if path == "~" {
+            return self.remote_home().await;
+        }
+        match path.strip_prefix("~/") {
             Some(rest) => Ok(format!("{}/{}", self.remote_home().await?.trim_end_matches('/'), rest)),
-            None => Ok(socket_path.to_string()),
+            None => Ok(path.to_string()),
         }
     }
 
     /// Opens a channel forwarded to a unix-domain socket on the control-plane host — the pty
     /// session host at `~/.sail/pty.sock`. Mirrors {@link open_forward} for streamlocal.
     pub(crate) async fn open_streamlocal(&self, socket_path: &str) -> Result<Channel<Msg>, Error> {
-        let resolved = self.resolve_socket(socket_path).await?;
+        let resolved = self.resolve_path(socket_path).await?;
         self.ensure().await?;
         let mut guard = self.session.lock().await;
         let result = guard
@@ -650,9 +655,14 @@ impl Backend {
         app: AppHandle,
         id: String,
         socket_path: String,
-        req: crate::pty::AttachRequest,
+        mut req: crate::pty::AttachRequest,
     ) -> Result<(), Error> {
         let channel = self.open_streamlocal(&socket_path).await?;
+        // The shell's working directory lives under the box user's home too; expand `~` so a
+        // create doesn't fail spawning in a directory that only exists on the client.
+        if let Some(spec) = req.create.as_mut() {
+            spec.cwd = self.resolve_path(&spec.cwd).await?;
+        }
         let stream = channel.into_stream();
 
         let (tx, rx) = mpsc::channel::<crate::pty::SessionCmd>(256);

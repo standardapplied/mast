@@ -119,7 +119,11 @@ export function SessionTerminalPane({
         ),
       );
       cleanups.push(await listen(`session://meta/${id}`, noop));
-      cleanups.push(await listen<string>(`session://exit/${id}`, noop));
+      cleanups.push(
+        await listen<string>(`session://exit/${id}`, (e) => {
+          if (!disposed) setError(e.payload);
+        }),
+      );
 
       // Reattach when the named session is already live; create it only when absent, so the
       // terminal survives closing and reopening the pane (the point of a durable host session).
@@ -242,9 +246,10 @@ export function SessionTerminalPane({
             font: '13px/1.6 "JetBrains Mono", ui-monospace, monospace',
             textAlign: "center",
             whiteSpace: "pre-wrap",
+            maxWidth: "640px",
           }}
         >
-          {`Terminal could not start.\n\n${error}`}
+          {error}
         </div>
       )}
     </div>
