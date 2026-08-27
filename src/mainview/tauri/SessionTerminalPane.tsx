@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TerminalRenderer } from "../terminal/renderer";
 import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
 import { VtCore } from "../terminal/vtCore";
@@ -63,12 +63,14 @@ export function SessionTerminalPane({
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<TerminalController | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
     const canvas = canvasRef.current;
     if (!host || !canvas) return;
 
+    setError(null);
     let disposed = false;
     let raf = 0;
     const cleanups: Array<() => void> = [];
@@ -162,7 +164,11 @@ export function SessionTerminalPane({
     };
 
     run().catch((e) => {
-      if (!disposed) console.error("session terminal:", e);
+      if (!disposed) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error("session terminal:", e);
+        setError(message);
+      }
     });
 
     return () => {
@@ -212,6 +218,7 @@ export function SessionTerminalPane({
       onKeyDown={onKeyDown}
       onPaste={onPaste}
       style={{
+        position: "relative",
         width: "100%",
         height: "100%",
         overflow: "hidden",
@@ -222,6 +229,24 @@ export function SessionTerminalPane({
       }}
     >
       <canvas ref={canvasRef} />
+      {error && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "grid",
+            placeItems: "center",
+            padding: "24px",
+            background: "#0b0e14",
+            color: "#e0a24d",
+            font: '13px/1.6 "JetBrains Mono", ui-monospace, monospace',
+            textAlign: "center",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {`Terminal could not start.\n\n${error}`}
+        </div>
+      )}
     </div>
   );
 }
