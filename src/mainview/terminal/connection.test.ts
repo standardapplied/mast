@@ -1,26 +1,38 @@
 import { describe, expect, test } from "bun:test";
 import {
-  classifyEnd,
+  isUnwell,
   Reconnector,
   type SessionStatus,
   STABLE_MS,
   statusEqual,
+  toSessionEnd,
   worstStatus,
 } from "./connection";
 
-describe("classifyEnd", () => {
-  test("a transport failure is reconnectable", () => {
-    expect(classifyEnd("transport error: Connection reset by peer")).toBe("transport");
-    expect(classifyEnd("transport error: Disconnected")).toBe("transport");
+describe("toSessionEnd", () => {
+  test("the structured payload the Rust side emits passes through", () => {
+    expect(toSessionEnd({ class: "ended", reason: "exited(0)" })).toEqual({
+      klass: "ended",
+      reason: "exited(0)",
+    });
+    expect(toSessionEnd({ class: "transport", reason: "Disconnected" })).toEqual({
+      klass: "transport",
+      reason: "Disconnected",
+    });
+    expect(toSessionEnd({ class: "refused", reason: "attach: session belongs to mady" })).toEqual({
+      klass: "refused",
+      reason: "attach: session belongs to mady",
+    });
   });
 
-  test("a shell exit is a clean end", () => {
-    expect(classifyEnd("exited(0)")).toBe("clean");
-    expect(classifyEnd("exited(137)")).toBe("clean");
-  });
-
-  test("a host-side failure reason is a clean end (the session is gone, not the link)", () => {
-    expect(classifyEnd("pty read failed: EIO")).toBe("clean");
+  test("anything unrecognized is treated as a transport drop — the retryable default", () => {
+    expect(toSessionEnd("Connection reset by peer")).toEqual({
+      klass: "transport",
+      reason: "Connection reset by peer",
+    });
+    expect(toSessionEnd({ class: "shrug", reason: "?" }).klass).toBe("transport");
+    expect(toSessionEnd(null).klass).toBe("transport");
+    expect(toSessionEnd(42)).toEqual({ klass: "transport", reason: "42" });
   });
 });
 
@@ -92,6 +104,15 @@ describe("worstStatus", () => {
 
   test("no panes reads as a quiet first connect", () => {
     expect(worstStatus([])).toEqual(first);
+  });
+
+  test("isUnwell flags everything except live and a quiet first connect", () => {
+    expect(isUnwell(up)).toBe(false);
+    expect(isUnwell(first)).toBe(false);
+    expect(isUnwell(retrying)).toBe(true);
+    expect(isUnwell(down)).toBe(true);
+    expect(isUnwell(ended)).toBe(true);
+    expect(isUnwell(failed)).toBe(true);
   });
 
   test("statusEqual compares structure, not identity", () => {

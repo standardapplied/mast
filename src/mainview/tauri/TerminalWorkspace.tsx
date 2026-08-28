@@ -2,7 +2,7 @@ import { type Ref, useRef, useState } from "react";
 import { SnapshotsPanel } from "../board/SnapshotsPanel";
 import { cx } from "../components/cx";
 import type { Gateway } from "../gateway";
-import type { SessionStatus } from "../terminal/connection";
+import { isUnwell, type SessionStatus } from "../terminal/connection";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
 import { addTab, nextActive, tabKey, type Tab } from "./terminalTabs";
@@ -133,7 +133,7 @@ export function TerminalWorkspace({
         <div className="term-tabs">
           {tabs.map((t) => {
             const s = statuses[t.key];
-            const unwell = webgpu && s && s.kind !== "up" && !(s.kind === "connecting" && !s.retrying);
+            const unwell = webgpu && s !== undefined && isUnwell(s);
             return (
               <div
                 key={t.key}

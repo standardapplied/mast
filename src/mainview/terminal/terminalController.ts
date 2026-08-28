@@ -102,7 +102,9 @@ export class TerminalController {
     if (text.length === 0) {
       return true;
     }
-    if (!opts.force && !this.core.bracketedPaste() && /[\r\n]/.test(text)) {
+    // A newline with more content behind it is the dangerous shape; the trailing newline on a
+    // single copied command is routine and pastes straight through.
+    if (!opts.force && !this.core.bracketedPaste() && /[\r\n]\s*\S/.test(text)) {
       return false;
     }
     this.sink.write(this.core.encodePaste(text));

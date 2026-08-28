@@ -3,7 +3,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { Dialog } from "../components/Dialog";
 import { cx } from "../components/cx";
 import { Button } from "../components/ui";
-import { type SessionStatus, statusEqual, worstStatus } from "../terminal/connection";
+import { isUnwell, type SessionStatus, statusEqual, worstStatus } from "../terminal/connection";
 import {
   baseSessionFor,
   defaultLayout,
@@ -12,6 +12,7 @@ import {
   nextSessionName,
   type PaneLayout,
   paneCount,
+  parseLayout,
   projectFor,
   reconcile,
   removePane,
@@ -27,9 +28,12 @@ import type { TerminalHandle } from "./TerminalPane";
  * this edge discovers live sessions from the pty-host, persists the arrangement locally, renders
  * the slim pane bar, and fans a {@link TerminalHandle} + aggregated status up to the workspace.
  *
- * Every pane stays mounted (hidden when its sub-tab is inactive), so switching never detaches a
- * session. Closing a pane *kills* its host session — that is the one destructive act here, so it
- * confirms first; quitting the app merely detaches and every shell survives.
+ * Mounting is lazy: a sub-tab's panes first mount when it is first shown, so a restored multi-tab
+ * layout doesn't attach (or geometry-thrash) sessions nobody is looking at. Once visited, panes
+ * stay mounted — hidden ones keep their attach but stop drawing (the pane gates its own frames).
+ *
+ * Closing a pane *kills* its host session — that is the one destructive act here, so it confirms
+ * first; quitting the app merely detaches and every shell survives.
  */
 
 /** The pty-host unix socket on the devbox; `~` expands against the remote home on the Rust side. */
@@ -53,23 +57,13 @@ function storageKey(base: string): string {
   return `mast.panes.${base}`;
 }
 
-function loadStored(base: string): PaneLayout | null {
-  try {
-    const raw = localStorage.getItem(storageKey(base));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as PaneLayout;
-    return Array.isArray(parsed.groups) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
   function TerminalPanes({ target, active, onStatus }, ref) {
     const base = baseSessionFor(target);
     const create: SessionCreate = { ...BASE_CREATE, project: projectFor(target) };
     const [layout, setLayout] = useState<PaneLayout | null>(null);
     const [focused, setFocused] = useState<string>(base);
+    const [visited, setVisited] = useState<ReadonlySet<number>>(new Set());
     const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
     const [closing, setClosing] = useState<string[] | null>(null);
     const paneRefs = useRef(new Map<string, TerminalHandle>());
@@ -79,9 +73,21 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       let cancelled = false;
       const settle = (live: string[]) => {
         if (cancelled) return;
-        const next = reconcile(loadStored(base), live, base);
+        let next: PaneLayout;
+        try {
+          next = reconcile(parseLayout(localStorage.getItem(storageKey(base))), live, base);
+        } catch {
+          // A poisoned stored value must never blank the tab forever — heal to the default.
+          try {
+            localStorage.removeItem(storageKey(base));
+          } catch {
+            /* storage is a convenience */
+          }
+          next = defaultLayout(base);
+        }
         setLayout(next);
-        setFocused((f) => (sessionsOf(next).includes(f) ? f : next.groups[next.active]![0]!));
+        setVisited(new Set([next.groups[next.active]!.id]));
+        setFocused((f) => (sessionsOf(next).includes(f) ? f : next.groups[next.active]!.panes[0]!));
       };
       void invoke<Array<{ name: string; live: boolean }>>("session_list", {
         socketPath: NODE_SOCKET,
@@ -118,6 +124,10 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
 
     const apply = useCallback((next: PaneLayout, focus?: string) => {
       setLayout(next);
+      setVisited((v) => {
+        const id = next.groups[next.active]!.id;
+        return v.has(id) ? v : new Set([...v, id]);
+      });
       if (focus) setFocused(focus);
     }, []);
 
@@ -128,7 +138,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     };
 
     const split = () => {
-      if (!layout || layout.groups[layout.active]!.length >= MAX_SPLITS) return;
+      if (!layout || layout.groups[layout.active]!.panes.length >= MAX_SPLITS) return;
       const name = nextSessionName(sessionsOf(layout), base);
       apply(splitGroup(layout, layout.active, name), name);
     };
@@ -148,13 +158,13 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         return next;
       });
       const next = sessions.reduce((acc, s) => removePane(acc, s, base), layout);
-      const survivors = next.groups[next.active]!;
+      const survivors = next.groups[next.active]!.panes;
       apply(next, survivors.includes(focused) ? focused : survivors[0]!);
     };
 
     const activateGroup = (index: number) => {
       if (!layout) return;
-      const panes = layout.groups[index]!;
+      const panes = layout.groups[index]!.panes;
       apply({ ...layout, active: index }, panes.includes(focused) ? focused : panes[0]!);
     };
 
@@ -195,27 +205,28 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       <div className="term-panes" onKeyDown={onKeyDown}>
         <div className="term-panes__bar">
           {layout.groups.map((group, i) => {
-            const unwell = group.some((s) => {
+            const unwell = group.panes.some((s) => {
               const st = statuses[s];
-              return st && st.kind !== "up" && !(st.kind === "connecting" && !st.retrying);
+              return st !== undefined && isUnwell(st);
             });
+            const label = group.panes.map((s) => labelFor(s, base)).join("·");
             return (
               <button
-                key={group[0]}
+                key={group.id}
                 type="button"
                 className={cx("term-pane-chip", i === layout.active && "is-active")}
                 onClick={() => activateGroup(i)}
               >
                 {unwell && <span className="term-status__dot term-status__dot--warn" aria-hidden />}
-                {group.map((s) => labelFor(s, base)).join("·")}
+                {label}
                 {closable && (
                   <span
                     role="button"
-                    aria-label={`Close shell ${group.map((s) => labelFor(s, base)).join("·")}`}
+                    aria-label={`Close shell ${label}`}
                     className="term-pane-chip__close"
                     onClick={(e) => {
                       e.stopPropagation();
-                      confirmClose([...group]);
+                      confirmClose([...group.panes]);
                     }}
                   >
                     ×
@@ -240,7 +251,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
             title="Split right (⌘D)"
             aria-label="Split right"
             onClick={split}
-            disabled={layout.groups[layout.active]!.length >= MAX_SPLITS}
+            disabled={layout.groups[layout.active]!.panes.length >= MAX_SPLITS}
           >
             ◫
           </button>
@@ -248,18 +259,19 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         <div className="term-panes__body">
           {layout.groups.map((group, i) => {
             const groupActive = i === layout.active;
+            if (!visited.has(group.id)) return null; // first mount happens on first visit
             return (
               <div
-                key={group[0]}
+                key={group.id}
                 className="term-panes__group"
                 style={{ display: groupActive ? "flex" : "none" }}
               >
-                {group.map((session) => (
+                {group.panes.map((session) => (
                   <div
                     key={session}
                     className={cx(
                       "term-panes__cell",
-                      group.length > 1 && session === focused && "is-focused",
+                      group.panes.length > 1 && session === focused && "is-focused",
                     )}
                     onPointerDownCapture={() => setFocused(session)}
                   >
@@ -273,6 +285,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                       session={session}
                       create={create}
                       active={active && groupActive && session === focused}
+                      visible={active && groupActive}
                       onStatus={(s) =>
                         setStatuses((prev) => (prev[session] === s ? prev : { ...prev, [session]: s }))
                       }
@@ -299,7 +312,11 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
           <Dialog
             isOpen
             onClose={() => setClosing(null)}
-            title={closing.length === 1 ? `Close shell ${labelFor(closing[0]!, base)}?` : `Close ${closing.length} shells?`}
+            title={
+              closing.length === 1
+                ? `Close shell ${labelFor(closing[0]!, base)}?`
+                : `Close ${closing.length} shells?`
+            }
             size="sm"
             footer={
               <>

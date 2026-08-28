@@ -227,7 +227,7 @@ pub struct Backend {
     /// The API bearer token, mutable at runtime so login/logout take effect
     /// without a restart. Mirrors `~/.sail/config.yaml`.
     token: Mutex<Option<String>>,
-    session: Mutex<Option<Session>>,
+    session: Mutex<Option<Arc<Session>>>,
     /// One cached SSH session per project container (keyed by ssh alias), shared
     /// by that container's terminals and SFTP channels — one connection, many
     /// multiplexed channels. Evicted and redialed if it dies.
@@ -480,7 +480,7 @@ impl Backend {
     /// this so `phase` can reach `ready` — otherwise nothing dials until a board
     /// request, and the board is itself gated on `ready`.
     pub async fn connect(&self) -> Result<(), Error> {
-        self.ensure().await
+        self.ensure().await.map(|_| ())
     }
 
     /// Dials the devbox, chaining through every `ProxyJump` hop resolved from
@@ -562,40 +562,49 @@ impl Backend {
     }
 
     /// Connects the session if it isn't already up, with a timeout so a bad
-    /// host/ProxyJump surfaces as an error instead of a hung loader. A dead
-    /// session is cleared by `open_*` so the next call redials.
-    async fn ensure(&self) -> Result<(), Error> {
+    /// host/ProxyJump surfaces as an error instead of a hung loader. Returns a
+    /// shared handle so callers open channels without holding the cache lock —
+    /// a slow or hung open must never serialize every other backend operation.
+    async fn ensure(&self) -> Result<Arc<Session>, Error> {
         let mut guard = self.session.lock().await;
-        if guard.is_none() {
-            let session = tokio::time::timeout(CONNECT_TIMEOUT, self.dial())
-                .await
-                .map_err(|_| Error::Timeout(self.config.ssh_host.clone()))??;
-            *guard = Some(session);
+        if let Some(session) = guard.as_ref() {
+            return Ok(session.clone());
         }
-        Ok(())
+        let session = Arc::new(
+            tokio::time::timeout(CONNECT_TIMEOUT, self.dial())
+                .await
+                .map_err(|_| Error::Timeout(self.config.ssh_host.clone()))??,
+        );
+        *guard = Some(session.clone());
+        Ok(session)
+    }
+
+    /// Drops the cached session so the next call redials — but only when it is
+    /// still the one that failed, so a stale failure never clobbers a fresh dial.
+    async fn evict(&self, failed: &Arc<Session>) {
+        let mut guard = self.session.lock().await;
+        if guard.as_ref().is_some_and(|s| Arc::ptr_eq(s, failed)) {
+            *guard = None;
+        }
     }
 
     async fn open_session_channel(&self) -> Result<Channel<Msg>, Error> {
-        self.ensure().await?;
-        let mut guard = self.session.lock().await;
-        let result = guard.as_ref().expect("ensured").handle.channel_open_session().await;
+        let session = self.ensure().await?;
+        let result = session.handle.channel_open_session().await;
         if result.is_err() {
-            *guard = None;
+            self.evict(&session).await;
         }
         Ok(result?)
     }
 
     pub(crate) async fn open_forward(&self, host: &str, port: u16) -> Result<Channel<Msg>, Error> {
-        self.ensure().await?;
-        let mut guard = self.session.lock().await;
-        let result = guard
-            .as_ref()
-            .expect("ensured")
+        let session = self.ensure().await?;
+        let result = session
             .handle
             .channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0)
             .await;
         if result.is_err() {
-            *guard = None;
+            self.evict(&session).await;
         }
         Ok(result?)
     }
@@ -645,25 +654,27 @@ impl Backend {
     pub(crate) async fn open_streamlocal(&self, socket_path: &str) -> Result<Channel<Msg>, Error> {
         let resolved = self.resolve_path(socket_path).await?;
         // Two attempts: a cached session that died since its last use fails (or hangs — hence the
-        // timeout) on channel-open; dropping it here closes every channel that rode it, which is
-        // what wakes their panes to reconnect, and the second attempt rides a fresh dial.
+        // timeout) on channel-open; evicting it closes every channel that rode it, which is what
+        // wakes their panes to reconnect, and the second attempt rides a fresh dial. A peer that
+        // REFUSES the channel is the opposite case — SSH is healthy, the pty-host socket isn't
+        // there — so the shared session (and everything riding it) must be left alone.
         let mut last: Option<Error> = None;
         for _ in 0..2 {
-            self.ensure().await?;
-            let mut guard = self.session.lock().await;
-            let open = guard
-                .as_ref()
-                .expect("ensured")
-                .handle
-                .channel_open_direct_streamlocal(resolved.clone());
+            let session = self.ensure().await?;
+            let open = session.handle.channel_open_direct_streamlocal(resolved.clone());
             match tokio::time::timeout(CONNECT_TIMEOUT, open).await {
                 Ok(Ok(channel)) => return Ok(channel),
+                Ok(Err(russh::Error::ChannelOpenFailure(reason))) => {
+                    return Err(Error::PtySession(format!(
+                        "pty host refused the connection at {resolved} ({reason:?}) — is sail-pty-host running?"
+                    )));
+                }
                 Ok(Err(e)) => {
-                    *guard = None;
+                    self.evict(&session).await;
                     last = Some(e.into());
                 }
                 Err(_) => {
-                    *guard = None;
+                    self.evict(&session).await;
                     last = Some(Error::Timeout("pty socket channel".into()));
                 }
             }
@@ -709,7 +720,8 @@ impl Backend {
                         let _ = emitter.emit(&data_ev, bytes);
                     }
                     SessionEvent::Ended(reason) => {
-                        let _ = emitter.emit(&exit_ev, reason);
+                        let _ = emitter
+                            .emit(&exit_ev, serde_json::json!({ "class": "ended", "reason": reason }));
                     }
                     other => {
                         let _ = emitter.emit(&meta_ev, session_meta(&other));
@@ -717,7 +729,18 @@ impl Backend {
                 }
             };
             if let Err(e) = crate::pty::drive(stream, req, rx, on_event).await {
-                let _ = app.emit(&exit_on_error, format!("transport error: {e}"));
+                // A host refusal (bad token, foreign session, dead container) would fail identically
+                // on every retry; only genuine transport failures are worth reattaching for.
+                let class = match e.kind() {
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::InvalidData => {
+                        "refused"
+                    }
+                    _ => "transport",
+                };
+                let _ = app.emit(
+                    &exit_on_error,
+                    serde_json::json!({ "class": class, "reason": e.to_string() }),
+                );
             }
             // Evict the id whether the session ended on its own, detached, or the
             // transport failed — the map must not keep a sender to a dead driver.

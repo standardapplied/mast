@@ -6,6 +6,7 @@ import {
   newGroup,
   nextSessionName,
   paneCount,
+  parseLayout,
   projectFor,
   reconcile,
   removePane,
@@ -38,66 +39,112 @@ describe("session naming", () => {
 describe("reconcile", () => {
   test("no stored layout and no live sessions yields the single base pane", () => {
     expect(reconcile(null, [], "mast-a")).toEqual(defaultLayout("mast-a"));
-    expect(defaultLayout("mast-a")).toEqual({ groups: [["mast-a"]], active: 0 });
+    expect(defaultLayout("mast-a")).toEqual({
+      groups: [{ id: 1, panes: ["mast-a"] }],
+      active: 0,
+      seq: 2,
+    });
   });
 
-  test("stored arrangement survives; the host adds what the client forgot", () => {
-    const stored = { groups: [["mast-a", "mast-a.2"]], active: 0 };
+  test("stored arrangement and group identities survive; the host adds what the client forgot", () => {
+    const stored = { groups: [{ id: 7, panes: ["mast-a", "mast-a.2"] }], active: 0, seq: 8 };
     const out = reconcile(stored, ["mast-a", "mast-a.2", "mast-a.3"], "mast-a");
-    expect(out.groups).toEqual([["mast-a", "mast-a.2"], ["mast-a.3"]]);
+    expect(out.groups).toEqual([
+      { id: 7, panes: ["mast-a", "mast-a.2"] },
+      { id: 8, panes: ["mast-a.3"] },
+    ]);
+    expect(out.seq).toBe(9);
   });
 
   test("a stored pane whose session died is kept — reopening recreates the shell", () => {
-    const stored = { groups: [["mast-a"], ["mast-a.2"]], active: 1 };
-    const out = reconcile(stored, [], "mast-a");
-    expect(out).toEqual(stored);
+    const stored = { groups: [{ id: 1, panes: ["mast-a"] }, { id: 2, panes: ["mast-a.2"] }], active: 1, seq: 3 };
+    expect(reconcile(stored, [], "mast-a")).toEqual(stored);
   });
 
   test("live sessions from another Mac appear as their own tabs, in ordinal order", () => {
     const out = reconcile(null, ["mast-a.3", "mast-a", "mast-a.2"], "mast-a");
-    expect(out.groups).toEqual([["mast-a"], ["mast-a.2"], ["mast-a.3"]]);
+    expect(out.groups.map((g) => g.panes)).toEqual([["mast-a"], ["mast-a.2"], ["mast-a.3"]]);
+    expect(new Set(out.groups.map((g) => g.id)).size).toBe(3);
     expect(out.active).toBe(0);
   });
 
   test("a garbled stored active index is clamped", () => {
-    const out = reconcile({ groups: [["mast-a"]], active: 9 }, [], "mast-a");
-    expect(out.active).toBe(0);
+    const stored = { groups: [{ id: 1, panes: ["mast-a"] }], active: 9, seq: 2 };
+    expect(reconcile(stored, [], "mast-a").active).toBe(0);
   });
 
   test("foreign sessions on the socket never leak into this tab", () => {
     const out = reconcile(null, ["mast-other", "mast-a", "mast-ab.2"], "mast-a");
-    expect(out.groups).toEqual([["mast-a"]]);
+    expect(out.groups.map((g) => g.panes)).toEqual([["mast-a"]]);
+  });
+
+  test("a stale seq is repaired so new groups never collide with stored ids", () => {
+    const stored = { groups: [{ id: 9, panes: ["mast-a"] }], active: 0, seq: 2 };
+    const out = reconcile(stored, ["mast-a.2"], "mast-a");
+    expect(out.groups[1]!.id).toBe(10);
+  });
+});
+
+describe("parseLayout", () => {
+  test("round-trips a healthy layout", () => {
+    const layout = { groups: [{ id: 3, panes: ["mast-a", "mast-a.2"] }], active: 0, seq: 4 };
+    expect(parseLayout(JSON.stringify(layout))).toEqual(layout);
+  });
+
+  test("rejects malformed shapes instead of poisoning the tab", () => {
+    expect(parseLayout(null)).toBeNull();
+    expect(parseLayout("not json")).toBeNull();
+    expect(parseLayout(JSON.stringify({ groups: ["mast-a"], active: 0 }))).toBeNull();
+    expect(parseLayout(JSON.stringify({ groups: [{ id: "x", panes: ["a"] }], active: 0, seq: 1 }))).toBeNull();
+    expect(parseLayout(JSON.stringify({ groups: [{ id: 1, panes: [2] }], active: 0, seq: 2 }))).toBeNull();
+    expect(parseLayout(JSON.stringify({ groups: [{ id: 1, panes: [] }], active: 0, seq: 2 }))).toBeNull();
+    expect(parseLayout(JSON.stringify({ groups: [{ id: 1, panes: ["a"] }], active: "0", seq: 2 }))).toBeNull();
   });
 });
 
 describe("editing", () => {
-  const two = { groups: [["a"], ["b"]], active: 0 };
+  const two = { groups: [{ id: 1, panes: ["a"] }, { id: 2, panes: ["b"] }], active: 0, seq: 3 };
 
-  test("newGroup appends and activates", () => {
-    expect(newGroup(two, "c")).toEqual({ groups: [["a"], ["b"], ["c"]], active: 2 });
+  test("newGroup appends with a fresh identity and activates", () => {
+    expect(newGroup(two, "c")).toEqual({
+      groups: [{ id: 1, panes: ["a"] }, { id: 2, panes: ["b"] }, { id: 3, panes: ["c"] }],
+      active: 2,
+      seq: 4,
+    });
   });
 
-  test("splitGroup adds a pane beside the active group's panes", () => {
-    expect(splitGroup(two, 0, "c")).toEqual({ groups: [["a", "c"], ["b"]], active: 0 });
-  });
-
-  test("removePane drops the pane, then the empty group, and clamps active", () => {
-    const layout = { groups: [["a", "c"], ["b"]], active: 1 };
-    expect(removePane(layout, "c", "base")).toEqual({ groups: [["a"], ["b"]], active: 1 });
-    expect(removePane({ groups: [["a"], ["b"]], active: 1 }, "b", "base")).toEqual({
-      groups: [["a"]],
+  test("splitGroup adds a pane beside the active group's panes, identity unchanged", () => {
+    expect(splitGroup(two, 0, "c")).toEqual({
+      groups: [{ id: 1, panes: ["a", "c"] }, { id: 2, panes: ["b"] }],
       active: 0,
+      seq: 3,
+    });
+  });
+
+  test("removePane keeps the group's identity when a sibling survives", () => {
+    const layout = { groups: [{ id: 1, panes: ["a", "c"] }, { id: 2, panes: ["b"] }], active: 1, seq: 3 };
+    expect(removePane(layout, "c", "base")).toEqual({
+      groups: [{ id: 1, panes: ["a"] }, { id: 2, panes: ["b"] }],
+      active: 1,
+      seq: 3,
+    });
+  });
+
+  test("removePane drops an emptied group and clamps active", () => {
+    expect(removePane(two, "b", "base")).toEqual({
+      groups: [{ id: 1, panes: ["a"] }],
+      active: 0,
+      seq: 3,
     });
   });
 
   test("removing the last pane falls back to the default layout", () => {
-    expect(removePane({ groups: [["a"]], active: 0 }, "a", "mast-x")).toEqual(
-      defaultLayout("mast-x"),
-    );
+    const one = { groups: [{ id: 5, panes: ["a"] }], active: 0, seq: 6 };
+    expect(removePane(one, "a", "mast-x")).toEqual(defaultLayout("mast-x"));
   });
 
   test("paneCount and sessionsOf see every pane across groups", () => {
-    const layout = { groups: [["a", "c"], ["b"]], active: 0 };
+    const layout = { groups: [{ id: 1, panes: ["a", "c"] }, { id: 2, panes: ["b"] }], active: 0, seq: 3 };
     expect(paneCount(layout)).toBe(3);
     expect(sessionsOf(layout)).toEqual(["a", "c", "b"]);
   });

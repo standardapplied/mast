@@ -459,6 +459,9 @@ export class VtCore {
         if (rc !== OUT_OF_SPACE) {
           throw new Error(`VtCore.encodePaste failed (rc=${rc})`);
         }
+        if (written <= bufLen) {
+          throw new Error(`VtCore.encodePaste: out of space but required ${written} <= ${bufLen}`);
+        }
         need = written;
       } finally {
         this.abi.free(outPtr, 4);
