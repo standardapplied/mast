@@ -146,6 +146,15 @@ const OPT_COLOR_BACKGROUND = 12;
 const OPT_COLOR_CURSOR = 13;
 const OPT_COLOR_PALETTE = 14;
 
+// GhosttyTerminalScrollViewport: a 24-byte tagged union {tag: u32 @0, value @8}.
+const SCROLL_STRUCT_SIZE = 24;
+const SCROLL_TOP = 0;
+const SCROLL_BOTTOM = 1;
+const SCROLL_DELTA = 2;
+
+/** How to move the viewport: to the top/bottom of scrollback, or by a signed line delta (up < 0). */
+export type Scroll = "top" | "bottom" | { readonly delta: number };
+
 /** The subset of libghostty-vt exports VtCore drives. */
 interface GhosttyExports {
   memory: WebAssembly.Memory;
@@ -156,6 +165,7 @@ interface GhosttyExports {
   ghostty_wasm_free_opaque(slot: number): void;
   ghostty_terminal_new(alloc: number, out: number, cols: number, rows: number): number;
   ghostty_terminal_set(term: number, option: number, value: number): number;
+  ghostty_terminal_scroll_viewport(term: number, behavior: number): void;
   ghostty_color_palette_default(palette: number): void;
   ghostty_terminal_vt_write(term: number, ptr: number, len: number): void;
   ghostty_terminal_resize(term: number, cols: number, rows: number, cw: number, ch: number): number;
@@ -445,6 +455,32 @@ export class VtCore {
       y: this.getU16(RS_DATA_CURSOR_VIEWPORT_Y),
       visible: this.getBool(RS_DATA_CURSOR_VISIBLE),
     };
+  }
+
+  /**
+   * Moves the viewport through scrollback. A later {@link readAll} reflects the new position; the
+   * cursor reports absent while scrolled off the active area, so the caller draws none. Writing new
+   * output does not move the viewport, so a scrolled-up view stays put until scrolled back to bottom.
+   */
+  scroll(behavior: Scroll): void {
+    this.requireOpen();
+    const ptr = this.abi.alloc(SCROLL_STRUCT_SIZE);
+    try {
+      const bytes = this.abi.bytes();
+      for (let i = 0; i < SCROLL_STRUCT_SIZE; i++) bytes[ptr + i] = 0;
+      const dv = new DataView(this.e.memory.buffer);
+      if (behavior === "top") {
+        dv.setUint32(ptr, SCROLL_TOP, true);
+      } else if (behavior === "bottom") {
+        dv.setUint32(ptr, SCROLL_BOTTOM, true);
+      } else {
+        dv.setUint32(ptr, SCROLL_DELTA, true);
+        dv.setInt32(ptr + 8, behavior.delta, true);
+      }
+      this.e.ghostty_terminal_scroll_viewport(this.term, ptr);
+    } finally {
+      this.abi.free(ptr, SCROLL_STRUCT_SIZE);
+    }
   }
 
   /** Clears damage so the next {@link snapshot} reports only what changes after this point. */

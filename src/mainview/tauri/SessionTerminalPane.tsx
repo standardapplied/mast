@@ -253,7 +253,18 @@ export const SessionTerminalPane = forwardRef<
       meta: e.metaKey,
       shift: e.shiftKey,
     });
-    if (consumed) e.preventDefault();
+    if (consumed) {
+      controller.scroll("bottom"); // typing returns to the live view
+      e.preventDefault();
+    }
+  };
+
+  const onWheel = (e: React.WheelEvent) => {
+    const controller = controllerRef.current;
+    if (!controller) return;
+    const perLine = e.deltaMode === 1 ? 1 : 24; // line-mode vs ~24px-per-line pixel-mode
+    const lines = e.deltaY < 0 ? Math.floor(e.deltaY / perLine) : Math.ceil(e.deltaY / perLine);
+    if (lines !== 0) controller.scroll({ delta: lines });
   };
 
   const onPaste = (e: React.ClipboardEvent) => {
@@ -261,6 +272,7 @@ export const SessionTerminalPane = forwardRef<
     if (!controller) return;
     const text = e.clipboardData.getData("text");
     if (text) {
+      controller.scroll("bottom");
       controller.paste(text);
       e.preventDefault();
     }
@@ -272,6 +284,7 @@ export const SessionTerminalPane = forwardRef<
       tabIndex={0}
       onKeyDown={onKeyDown}
       onPaste={onPaste}
+      onWheel={onWheel}
       onPointerDown={() => hostRef.current?.focus()}
       style={{
         position: "relative",

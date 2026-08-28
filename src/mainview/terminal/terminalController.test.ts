@@ -116,6 +116,16 @@ describe("TerminalController", () => {
     expect(gridRow(renderer.grid, 0)).toBe("$ x");
   });
 
+  test("a scroll repaints at the new viewport, with no new pty output", async () => {
+    const { controller, renderer } = await harness(20, 3);
+    for (let i = 0; i < 8; i++) controller.feed(enc(`row${i}\r\n`));
+    controller.frame();
+    const before = renderer.applied.length;
+    controller.scroll({ delta: -3 }); // up into scrollback
+    controller.frame();
+    expect(renderer.applied.length).toBeGreaterThan(before);
+  });
+
   test("empty output is a no-op", async () => {
     const { controller, core } = await harness();
     controller.feed(new Uint8Array(0));
