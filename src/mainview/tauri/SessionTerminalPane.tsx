@@ -467,10 +467,14 @@ export const SessionTerminalPane = forwardRef<
     }
     const consumed = controller.key({
       key: e.key,
+      code: e.code,
       ctrl: e.ctrlKey,
       alt: e.altKey,
       meta: e.metaKey,
       shift: e.shiftKey,
+      caps: e.getModifierState?.("CapsLock") ?? false,
+      repeat: e.repeat,
+      composing: e.nativeEvent.isComposing,
     });
     if (consumed) {
       controller.setSelection(null); // typing clears the highlight...
@@ -523,6 +527,14 @@ export const SessionTerminalPane = forwardRef<
     dragRef.current = null;
   };
 
+  const onCompositionEnd = (e: React.CompositionEvent) => {
+    const controller = controllerRef.current;
+    if (!controller || !e.data) return;
+    controller.setSelection(null);
+    controller.scroll("bottom");
+    controller.text(e.data);
+  };
+
   const onPaste = (e: React.ClipboardEvent) => {
     const text = e.clipboardData.getData("text");
     if (text) {
@@ -544,6 +556,7 @@ export const SessionTerminalPane = forwardRef<
       ref={hostRef}
       tabIndex={0}
       onKeyDown={onKeyDown}
+      onCompositionEnd={onCompositionEnd}
       onPaste={onPaste}
       onContextMenu={onContextMenu}
       onWheel={onWheel}

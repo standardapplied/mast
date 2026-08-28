@@ -10,6 +10,10 @@
  * private {@link Abi} helper below — churn is isolated to this one file, behind a stable surface.
  */
 
+import type { KeyEventSpec } from "./input";
+
+const UTF8 = new TextEncoder();
+
 /** A resolved 8-bit RGB triple, already accounting for the palette. */
 export type Rgb = readonly [number, number, number];
 
@@ -82,6 +86,12 @@ const MODE_CONFIG_SIZE = 4;
 const MODE_CONFIG_VALUE_OFFSET = 2;
 /** `ESC[200~` + `ESC[201~` around a bracketed paste. */
 const PASTE_FRAME_OVERHEAD = 12;
+
+/** GhosttyKeyEncoderOption: macOS option-as-alt (an int-typed enum; TRUE = 1). */
+const KEY_OPT_MACOS_OPTION_AS_ALT = 6;
+const OPTION_AS_ALT_TRUE = 1;
+/** Encoded key sequences are tiny; one retry handles the out-of-space contract regardless. */
+const KEY_BUF_LEN = 64;
 
 // Terminal dimensions are u16 inside libghostty-vt; reject anything that would
 // truncate, so the cached size can never disagree with the real grid.
@@ -178,6 +188,26 @@ interface GhosttyExports {
   ghostty_wasm_free_opaque(slot: number): void;
   ghostty_terminal_new(alloc: number, out: number, cols: number, rows: number): number;
   ghostty_terminal_set(term: number, option: number, value: number): number;
+  ghostty_key_encoder_new(alloc: number, out: number): number;
+  ghostty_key_encoder_free(encoder: number): void;
+  ghostty_key_encoder_setopt(encoder: number, option: number, valuePtr: number): void;
+  ghostty_key_encoder_setopt_from_terminal(encoder: number, term: number): void;
+  ghostty_key_encoder_encode(
+    encoder: number,
+    event: number,
+    buf: number,
+    bufLen: number,
+    outLen: number,
+  ): number;
+  ghostty_key_event_new(alloc: number, out: number): number;
+  ghostty_key_event_free(event: number): void;
+  ghostty_key_event_set_action(event: number, action: number): void;
+  ghostty_key_event_set_key(event: number, key: number): void;
+  ghostty_key_event_set_mods(event: number, mods: number): void;
+  ghostty_key_event_set_consumed_mods(event: number, mods: number): void;
+  ghostty_key_event_set_composing(event: number, composing: number): void;
+  ghostty_key_event_set_utf8(event: number, ptr: number, len: number): void;
+  ghostty_key_event_set_unshifted_codepoint(event: number, codepoint: number): void;
   ghostty_terminal_get(term: number, data: number, out: number): number;
   ghostty_paste_encode(
     data: number,
@@ -279,6 +309,10 @@ class Abi {
     this.view().setUint16(ptr, value, true);
   }
 
+  writeI32(ptr: number, value: number): void {
+    this.view().setInt32(ptr, value, true);
+  }
+
   readU32(ptr: number): number {
     return this.view().getUint32(ptr, true);
   }
@@ -313,6 +347,10 @@ export class VtCore {
   private rows: number;
   private freed = false;
 
+  private readonly keyEncoder: number;
+  private readonly keyEvent: number;
+  private readonly optAsAltPtr: number;
+
   private readonly fg: Rgb;
   private readonly bg: Rgb;
 
@@ -332,6 +370,21 @@ export class VtCore {
     this.state = this.abi.construct((slot) => e.ghostty_render_state_new(0, slot));
     this.rowIter = this.abi.construct((slot) => e.ghostty_render_state_row_iterator_new(0, slot));
     this.cells = this.abi.construct((slot) => e.ghostty_render_state_row_cells_new(0, slot));
+    this.keyEncoder = this.abi.construct((slot) => e.ghostty_key_encoder_new(0, slot));
+    this.keyEvent = this.abi.construct((slot) => e.ghostty_key_event_new(0, slot));
+    this.optAsAltPtr = this.abi.alloc(4);
+    this.abi.writeI32(this.optAsAltPtr, OPTION_AS_ALT_TRUE);
+    this.setOptionAsAlt();
+  }
+
+  /**
+   * Option is Alt (meta-sends-escape), the behavior this terminal has always had. Terminal state
+   * cannot express this preference, so {@code setopt_from_terminal} resets it — re-apply after
+   * every sync (the header documents exactly this dance). The value never changes, so it lives in
+   * one preallocated slot rather than an alloc per keystroke.
+   */
+  private setOptionAsAlt(): void {
+    this.e.ghostty_key_encoder_setopt(this.keyEncoder, KEY_OPT_MACOS_OPTION_AS_ALT, this.optAsAltPtr);
   }
 
   /**
@@ -405,6 +458,43 @@ export class VtCore {
     }
   }
 
+  /**
+   * Encodes one key press into the bytes the pty expects, or null when the key produces nothing
+   * (a bare modifier, an in-progress IME composition). Encoding is libghostty's own key encoder,
+   * synced with the terminal's live state first — cursor-key application mode (DECCKM), the kitty
+   * keyboard protocol, modifyOtherKeys — which is exactly what a hand-rolled table cannot honor.
+   */
+  encodeKey(spec: KeyEventSpec): Uint8Array | null {
+    this.requireOpen();
+    if (spec.composing) {
+      return null;
+    }
+    const e = this.e;
+    e.ghostty_key_encoder_setopt_from_terminal(this.keyEncoder, this.term);
+    this.setOptionAsAlt();
+    e.ghostty_key_event_set_action(this.keyEvent, spec.action);
+    e.ghostty_key_event_set_key(this.keyEvent, spec.key);
+    e.ghostty_key_event_set_mods(this.keyEvent, spec.mods);
+    e.ghostty_key_event_set_consumed_mods(this.keyEvent, spec.consumedMods);
+    e.ghostty_key_event_set_composing(this.keyEvent, 0);
+    e.ghostty_key_event_set_unshifted_codepoint(this.keyEvent, spec.unshifted);
+    const utf8 = UTF8.encode(spec.utf8);
+    const utf8Ptr = utf8.length > 0 ? this.abi.writeInto(utf8) : 0;
+    e.ghostty_key_event_set_utf8(this.keyEvent, utf8Ptr, utf8.length);
+    try {
+      const out = this.encodeWithRetry("encodeKey", KEY_BUF_LEN, (buf, len, outPtr) =>
+        e.ghostty_key_encoder_encode(this.keyEncoder, this.keyEvent, buf, len, outPtr),
+      );
+      return out.length === 0 ? null : out;
+    } finally {
+      // The event borrows the utf8 buffer; drop the borrow before the memory goes away.
+      e.ghostty_key_event_set_utf8(this.keyEvent, 0, 0);
+      if (utf8Ptr !== 0) {
+        this.abi.free(utf8Ptr, utf8.length);
+      }
+    }
+  }
+
   /** Whether the application enabled bracketed paste (mode 2004) — vim, zsh, claude-code do. */
   bracketedPaste(): boolean {
     this.requireOpen();
@@ -430,45 +520,54 @@ export class VtCore {
    */
   encodePaste(text: string): Uint8Array {
     this.requireOpen();
-    const data = new TextEncoder().encode(text);
+    const data = UTF8.encode(text);
     if (data.length === 0) {
       return data;
     }
     const bracketed = this.bracketedPaste();
-    // Bracketed framing adds 12 bytes; stripping never grows the text. One retry handles the
-    // out-of-space contract anyway, so a wrong guess is a second call, not a failure.
-    let need = data.length + PASTE_FRAME_OVERHEAD;
-    for (;;) {
-      const bufLen = need;
+    // Bracketed framing adds 12 bytes; stripping never grows the text, so the retry never fires.
+    // The input is re-written per attempt because the encoder strips it in place.
+    return this.encodeWithRetry("encodePaste", data.length + PASTE_FRAME_OVERHEAD, (buf, len, out) => {
       const dataPtr = this.abi.writeInto(data);
+      try {
+        return this.e.ghostty_paste_encode(dataPtr, data.length, bracketed ? 1 : 0, buf, len, out);
+      } finally {
+        this.abi.free(dataPtr, data.length);
+      }
+    });
+  }
+
+  /**
+   * Runs an encode call that reports its required size on OUT_OF_SPACE, retrying once with that
+   * size. A second refusal — or a "required" size that doesn't exceed the buffer offered — is a
+   * broken wasm contract and throws rather than looping.
+   */
+  private encodeWithRetry(
+    what: string,
+    initialLen: number,
+    call: (bufPtr: number, bufLen: number, outPtr: number) => number,
+  ): Uint8Array {
+    let need = initialLen;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const bufLen = need;
       const bufPtr = this.abi.alloc(bufLen);
       const outPtr = this.abi.alloc(4);
       try {
-        const rc = this.e.ghostty_paste_encode(
-          dataPtr,
-          data.length,
-          bracketed ? 1 : 0,
-          bufPtr,
-          bufLen,
-          outPtr,
-        );
+        const rc = call(bufPtr, bufLen, outPtr);
         const written = this.abi.readU32(outPtr);
         if (rc === SUCCESS) {
           return this.abi.bytes().slice(bufPtr, bufPtr + written);
         }
-        if (rc !== OUT_OF_SPACE) {
-          throw new Error(`VtCore.encodePaste failed (rc=${rc})`);
-        }
-        if (written <= bufLen) {
-          throw new Error(`VtCore.encodePaste: out of space but required ${written} <= ${bufLen}`);
+        if (rc !== OUT_OF_SPACE || written <= bufLen) {
+          throw new Error(`VtCore.${what} failed (rc=${rc}, need=${written})`);
         }
         need = written;
       } finally {
         this.abi.free(outPtr, 4);
         this.abi.free(bufPtr, bufLen);
-        this.abi.free(dataPtr, data.length);
       }
     }
+    throw new Error(`VtCore.${what}: the encoder rejected its own required size`);
   }
 
   /** Resizes the terminal; libghostty-vt reflows internally. Cell pixel size is not tracked here. */
@@ -588,6 +687,9 @@ export class VtCore {
       return;
     }
     this.freed = true;
+    this.abi.free(this.optAsAltPtr, 4);
+    this.e.ghostty_key_event_free(this.keyEvent);
+    this.e.ghostty_key_encoder_free(this.keyEncoder);
     this.e.ghostty_render_state_row_cells_free(this.cells);
     this.e.ghostty_render_state_row_iterator_free(this.rowIter);
     this.e.ghostty_render_state_free(this.state);

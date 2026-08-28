@@ -13,3 +13,13 @@ PTY bytes and read the resulting cell grid to render ourselves (WebGPU).
   `vtCore.ts`. The C ABI is a public alpha (no tagged release yet) — `vtCore.ts` wraps it
   behind our own stable interface so upstream churn is isolated to one file. Re-pin by
   replacing this file and updating the SHA.
+
+## Vendored headers (`ghostty-vt-headers/`)
+
+`key_event.h` and `key_encoder.h` (fetched 2026-08-28 from ghostty `main`, matching the
+pinned tip build) are vendored because the `GhosttyKey` enum has IMPLICIT ordinals — the
+declaration order is the ABI — and `input.ts` mirrors it as `GHOSTTY_KEY`.
+`ghosttyHeaders.test.ts` parses the vendored headers and verifies the mirror entry-for-entry
+plus the encoder option/action/mod constants, and the wasm-driven tests in `vtCore.test.ts`
+verify real encodings, so drift fails loudly at both seams. **Re-pin the headers together
+with the wasm**, then run `bun test` and fix whatever those two suites report.
