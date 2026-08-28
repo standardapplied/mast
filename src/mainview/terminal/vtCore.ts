@@ -280,13 +280,6 @@ export class VtCore {
     return { dirty, rows: this.readAllRows() };
   }
 
-  /** Every viewport row right now, ignoring damage — diagnostics only, not a render path. */
-  viewportRows(): Row[] {
-    this.requireOpen();
-    this.refresh();
-    return this.readAllRows();
-  }
-
   /** The cursor's viewport position and visibility. */
   cursor(): Cursor {
     this.requireOpen();

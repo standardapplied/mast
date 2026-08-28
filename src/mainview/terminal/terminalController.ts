@@ -52,11 +52,17 @@ export class TerminalController {
   }
 
   /**
-   * Renders one frame: applies dirty rows (if any), then draws with the cursor. {@code blinkOn}
-   * folds the UI blink phase into the pty's own cursor visibility, so a hidden cursor stays hidden.
+   * Renders one frame: when anything changed, re-reads the whole viewport and applies it, then draws
+   * with the cursor. {@code blinkOn} folds the UI blink phase into the pty's own cursor visibility.
+   *
+   * <p>Full viewport, not the dirty-rows-only {@code snapshot()}: libghostty-vt's dirty-row iterator
+   * does not flag in-place edits on the active line (readline echoing a keystroke edits the cursor
+   * row in place), so a damage-only renderer never repaints them and typed text stays invisible.
+   * {@code dirtyKind} still gates the read, so idle frames cost nothing; the extra rows are read only
+   * on frames that actually changed, and the GPU repaints every cell each frame either way.
    */
   frame(blinkOn = true): void {
-    const snapshot = this.core.snapshot();
+    const snapshot = this.core.fullSnapshot();
     if (snapshot.dirty !== "none") {
       this.renderer.apply(snapshot);
       this.core.clean();
