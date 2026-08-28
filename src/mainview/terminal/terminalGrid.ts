@@ -24,6 +24,14 @@ export class TerminalGrid {
   private colsN = 0;
   private rowsN = 0;
   private cells: GridCell[] = [];
+  private readonly blankFg: Rgb;
+  private readonly blankBg: Rgb;
+
+  /** Blank cells (and out-of-range reads) paint in these theme colors; defaults to the dark theme. */
+  constructor(blank: { fg: Rgb; bg: Rgb } = { fg: BLANK_FG, bg: BLANK_BG }) {
+    this.blankFg = blank.fg;
+    this.blankBg = blank.bg;
+  }
 
   get cols(): number {
     return this.colsN;
@@ -38,8 +46,8 @@ export class TerminalGrid {
     this.rowsN = rows;
     this.cells = Array.from({ length: cols * rows }, () => ({
       text: " ",
-      fg: BLANK_FG,
-      bg: BLANK_BG,
+      fg: this.blankFg,
+      bg: this.blankBg,
     }));
   }
 
@@ -57,8 +65,8 @@ export class TerminalGrid {
           cell.bg = source.bg;
         } else {
           cell.text = " ";
-          cell.fg = BLANK_FG;
-          cell.bg = BLANK_BG;
+          cell.fg = this.blankFg;
+          cell.bg = this.blankBg;
         }
       }
     }
@@ -67,7 +75,7 @@ export class TerminalGrid {
   /** The cell at {@code (x, y)}; out-of-range positions read blank. */
   cell(x: number, y: number): GridCell {
     if (x < 0 || x >= this.colsN || y < 0 || y >= this.rowsN) {
-      return { text: " ", fg: BLANK_FG, bg: BLANK_BG };
+      return { text: " ", fg: this.blankFg, bg: this.blankBg };
     }
     return this.cells[y * this.colsN + x];
   }
