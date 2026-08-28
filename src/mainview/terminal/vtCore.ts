@@ -71,6 +71,17 @@ export interface Cursor {
 }
 
 const SUCCESS = 0;
+const OUT_OF_SPACE = -3;
+
+/** GhosttyTerminalData discriminant for a mode query (GHOSTTY_TERMINAL_DATA_MODE). */
+const DATA_MODE = 37;
+/** DEC private mode 2004 — bracketed paste. */
+const MODE_BRACKETED_PASTE = 2004;
+/** GhosttyTerminalModeConfig: u16 mode + bool value, padded (frozen layout). */
+const MODE_CONFIG_SIZE = 4;
+const MODE_CONFIG_VALUE_OFFSET = 2;
+/** `ESC[200~` + `ESC[201~` around a bracketed paste. */
+const PASTE_FRAME_OVERHEAD = 12;
 
 // Terminal dimensions are u16 inside libghostty-vt; reject anything that would
 // truncate, so the cached size can never disagree with the real grid.
@@ -167,6 +178,15 @@ interface GhosttyExports {
   ghostty_wasm_free_opaque(slot: number): void;
   ghostty_terminal_new(alloc: number, out: number, cols: number, rows: number): number;
   ghostty_terminal_set(term: number, option: number, value: number): number;
+  ghostty_terminal_get(term: number, data: number, out: number): number;
+  ghostty_paste_encode(
+    data: number,
+    dataLen: number,
+    bracketed: number,
+    buf: number,
+    bufLen: number,
+    outWritten: number,
+  ): number;
   ghostty_terminal_scroll_viewport(term: number, behavior: number): void;
   ghostty_color_palette_default(palette: number): void;
   ghostty_terminal_vt_write(term: number, ptr: number, len: number): void;
@@ -253,6 +273,10 @@ class Abi {
 
   readU16(ptr: number): number {
     return this.view().getUint16(ptr, true);
+  }
+
+  writeU16(ptr: number, value: number): void {
+    this.view().setUint16(ptr, value, true);
   }
 
   readU32(ptr: number): number {
@@ -378,6 +402,69 @@ export class VtCore {
       this.e.ghostty_terminal_vt_write(this.term, ptr, bytes.length);
     } finally {
       this.abi.free(ptr, bytes.length);
+    }
+  }
+
+  /** Whether the application enabled bracketed paste (mode 2004) — vim, zsh, claude-code do. */
+  bracketedPaste(): boolean {
+    this.requireOpen();
+    // GhosttyTerminalModeConfig (frozen layout): u16 mode, then a bool the query fills in.
+    const ptr = this.abi.alloc(MODE_CONFIG_SIZE);
+    try {
+      this.abi.writeU16(ptr, MODE_BRACKETED_PASTE);
+      const rc = this.e.ghostty_terminal_get(this.term, DATA_MODE, ptr);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore.bracketedPaste: mode query failed (rc=${rc})`);
+      }
+      return this.abi.readU8(ptr + MODE_CONFIG_VALUE_OFFSET) !== 0;
+    } finally {
+      this.abi.free(ptr, MODE_CONFIG_SIZE);
+    }
+  }
+
+  /**
+   * Encodes pasted text into the bytes the pty should receive, per the terminal's current state:
+   * wrapped in bracketed-paste markers when the app enabled mode 2004, newlines converted to
+   * carriage returns when it didn't, and raw ESC/control bytes stripped either way so pasted text
+   * can never forge sequences (libghostty's own paste encoder).
+   */
+  encodePaste(text: string): Uint8Array {
+    this.requireOpen();
+    const data = new TextEncoder().encode(text);
+    if (data.length === 0) {
+      return data;
+    }
+    const bracketed = this.bracketedPaste();
+    // Bracketed framing adds 12 bytes; stripping never grows the text. One retry handles the
+    // out-of-space contract anyway, so a wrong guess is a second call, not a failure.
+    let need = data.length + PASTE_FRAME_OVERHEAD;
+    for (;;) {
+      const bufLen = need;
+      const dataPtr = this.abi.writeInto(data);
+      const bufPtr = this.abi.alloc(bufLen);
+      const outPtr = this.abi.alloc(4);
+      try {
+        const rc = this.e.ghostty_paste_encode(
+          dataPtr,
+          data.length,
+          bracketed ? 1 : 0,
+          bufPtr,
+          bufLen,
+          outPtr,
+        );
+        const written = this.abi.readU32(outPtr);
+        if (rc === SUCCESS) {
+          return this.abi.bytes().slice(bufPtr, bufPtr + written);
+        }
+        if (rc !== OUT_OF_SPACE) {
+          throw new Error(`VtCore.encodePaste failed (rc=${rc})`);
+        }
+        need = written;
+      } finally {
+        this.abi.free(outPtr, 4);
+        this.abi.free(bufPtr, bufLen);
+        this.abi.free(dataPtr, data.length);
+      }
     }
   }
 

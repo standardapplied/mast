@@ -80,10 +80,19 @@ describe("encodeKey", () => {
     expect(bytes({ key: "1", ctrl: true })).toEqual([0x31]);
   });
 
-  test("Alt/Meta prefix ESC (meta-sends-escape)", () => {
+  test("Alt prefixes ESC (meta-sends-escape)", () => {
     expect(str({ key: "b", alt: true })).toBe("\x1bb");
-    expect(str({ key: "f", meta: true })).toBe("\x1bf");
     expect(str({ key: "ArrowLeft", alt: true })).toBe("\x1b\x1b[D");
+  });
+
+  test("Cmd chords never reach the pty — they belong to the app and the OS", () => {
+    // Cmd+V used to leak as ESC+v into the shell instead of pasting.
+    expect(bytes({ key: "v", meta: true })).toBeNull();
+    expect(bytes({ key: "c", meta: true })).toBeNull();
+    expect(bytes({ key: "a", meta: true })).toBeNull();
+    expect(bytes({ key: "Enter", meta: true })).toBeNull();
+    expect(bytes({ key: "ArrowLeft", meta: true })).toBeNull();
+    expect(bytes({ key: "c", meta: true, ctrl: true })).toBeNull();
   });
 
   test("unhandled keys send nothing", () => {

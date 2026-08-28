@@ -91,11 +91,22 @@ export class TerminalController {
     return true;
   }
 
-  /** Sends pasted text to the pty verbatim. */
-  paste(text: string): void {
-    if (text.length > 0) {
-      this.sink.write(new TextEncoder().encode(text));
+  /**
+   * Sends pasted text to the pty, encoded for the terminal's paste state (bracketed-paste framing
+   * when the app enabled mode 2004, newline→CR conversion when it didn't; ESC bytes stripped either
+   * way — see {@link VtCore#encodePaste}). Returns false — writing nothing — when the paste needs
+   * the user's confirmation first: multi-line text into an unbracketed terminal runs each line as a
+   * command the moment it lands. Confirm and call again with {@code force}.
+   */
+  paste(text: string, opts: { force?: boolean } = {}): boolean {
+    if (text.length === 0) {
+      return true;
     }
+    if (!opts.force && !this.core.bracketedPaste() && /[\r\n]/.test(text)) {
+      return false;
+    }
+    this.sink.write(this.core.encodePaste(text));
+    return true;
   }
 
   /** Moves the viewport through scrollback; the next {@link #frame} repaints at the new position. */

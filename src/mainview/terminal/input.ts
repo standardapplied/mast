@@ -57,12 +57,13 @@ const encoder = new TextEncoder();
 export function encodeKey(stroke: KeyStroke): Uint8Array | null {
   const { key, ctrl = false, alt = false, meta = false } = stroke;
 
-  if (BARE_MODIFIER.has(key)) {
+  // Cmd chords are the app's and the OS's (copy, paste, app shortcuts) — never pty bytes.
+  if (meta || BARE_MODIFIER.has(key)) {
     return null;
   }
 
   // Ctrl+key control codes (Ctrl+A..Z → 0x01..0x1a, plus the classic symbol controls).
-  if (ctrl && !alt && !meta) {
+  if (ctrl && !alt) {
     const control = controlByte(key);
     if (control !== null) {
       return Uint8Array.of(control);
@@ -71,13 +72,13 @@ export function encodeKey(stroke: KeyStroke): Uint8Array | null {
 
   const named = NAMED[key];
   if (named !== undefined) {
-    // Alt/Meta on a named key prefixes ESC (xterm meta-sends-escape).
-    return encoder.encode(alt || meta ? ESC + named : named);
+    // Alt on a named key prefixes ESC (xterm meta-sends-escape).
+    return encoder.encode(alt ? ESC + named : named);
   }
 
   // A single printable character.
   if (charLength(key) === 1) {
-    return encoder.encode(alt || meta ? ESC + key : key);
+    return encoder.encode(alt ? ESC + key : key);
   }
 
   return null;
