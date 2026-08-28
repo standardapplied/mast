@@ -65,19 +65,49 @@ const DIRTY_FALSE = 0;
 const DIRTY_PARTIAL = 1;
 
 /**
- * libghostty-vt reports a cell that uses the terminal's DEFAULT foreground or background as pure
- * black `(0,0,0)` — a "use the configured default" sentinel, not a literal color (a cell with an
- * explicit SGR color reports its resolved RGB instead). With no default configured the core has
- * nothing to resolve to, so the consumer substitutes its own theme, exactly as ghostty-web does.
+ * The colors a {@link VtCore} runs with. `fg`/`bg`/`cursor` are the terminal's defaults; `palette`
+ * is the 16 ANSI base colors that indexed SGR colors (`\x1b[31m`, `\x1b[38;5;Nm` 0-15) resolve
+ * through. True-color (`\x1b[38;2;…m`) is unaffected — it carries its own RGB. Configured into
+ * libghostty via {@code ghostty_terminal_set}; the base-color entries override the default 256
+ * palette so indexed colors match the embedder's design instead of ghostty's stock palette.
  */
-const DEFAULT_FG: Rgb = [220, 224, 230];
-const DEFAULT_BG: Rgb = [11, 14, 20];
-
-/** The theme colors a {@link VtCore} paints DEFAULT-colored cells in (see {@link DEFAULT_FG}). */
 export interface Theme {
   readonly fg: Rgb;
   readonly bg: Rgb;
+  readonly cursor: Rgb;
+  readonly palette: readonly Rgb[];
 }
+
+/** A neutral dark fallback for callers (mainly tests) that do not supply a theme. */
+const DEFAULT_THEME: Theme = {
+  fg: [220, 224, 230],
+  bg: [11, 14, 20],
+  cursor: [252, 73, 38],
+  palette: [
+    [18, 23, 27],
+    [224, 123, 111],
+    [134, 184, 154],
+    [210, 162, 76],
+    [147, 179, 215],
+    [208, 143, 166],
+    [127, 191, 202],
+    [201, 196, 188],
+    [74, 85, 96],
+    [240, 150, 138],
+    [163, 209, 179],
+    [230, 186, 105],
+    [174, 200, 232],
+    [227, 168, 188],
+    [156, 212, 222],
+    [246, 241, 233],
+  ],
+};
+
+/** Terminal option ids for {@code ghostty_terminal_set} (from ghostty/vt/terminal.h). */
+const OPT_COLOR_FOREGROUND = 11;
+const OPT_COLOR_BACKGROUND = 12;
+const OPT_COLOR_CURSOR = 13;
+const OPT_COLOR_PALETTE = 14;
 
 /** The subset of libghostty-vt exports VtCore drives. */
 interface GhosttyExports {
@@ -88,6 +118,8 @@ interface GhosttyExports {
   ghostty_wasm_take_opaque(slot: number): number;
   ghostty_wasm_free_opaque(slot: number): void;
   ghostty_terminal_new(alloc: number, out: number, cols: number, rows: number): number;
+  ghostty_terminal_set(term: number, option: number, value: number): number;
+  ghostty_color_palette_default(palette: number): void;
   ghostty_terminal_vt_write(term: number, ptr: number, len: number): void;
   ghostty_terminal_resize(term: number, cols: number, rows: number, cw: number, ch: number): number;
   ghostty_terminal_free(term: number): void;
@@ -185,6 +217,11 @@ class Abi {
     const m = this.u8();
     return [m[ptr], m[ptr + 1], m[ptr + 2]];
   }
+
+  /** The live byte view of wasm memory; re-acquire after any wasm call that may grow memory. */
+  bytes(): Uint8Array {
+    return this.u8();
+  }
 }
 
 /**
@@ -217,9 +254,48 @@ export class VtCore {
     this.fg = theme.fg;
     this.bg = theme.bg;
     this.term = this.abi.construct((slot) => e.ghostty_terminal_new(0, slot, cols, rows));
+    this.configure(theme);
     this.state = this.abi.construct((slot) => e.ghostty_render_state_new(0, slot));
     this.rowIter = this.abi.construct((slot) => e.ghostty_render_state_row_iterator_new(0, slot));
     this.cells = this.abi.construct((slot) => e.ghostty_render_state_row_cells_new(0, slot));
+  }
+
+  /**
+   * Installs the theme into libghostty: the default fg/bg/cursor, and a 256-color palette whose 16
+   * base entries are the embedder's ANSI colors (the rest left at ghostty's defaults). Indexed SGR
+   * colors then resolve to the embedder's design; true-color and default cells are unaffected.
+   */
+  private configure(theme: Theme): void {
+    this.setColor(OPT_COLOR_FOREGROUND, theme.fg);
+    this.setColor(OPT_COLOR_BACKGROUND, theme.bg);
+    this.setColor(OPT_COLOR_CURSOR, theme.cursor);
+
+    const ptr = this.abi.alloc(256 * 3);
+    try {
+      this.e.ghostty_color_palette_default(ptr);
+      const mem = this.abi.bytes();
+      theme.palette.slice(0, 16).forEach((c, i) => {
+        mem[ptr + i * 3] = c[0];
+        mem[ptr + i * 3 + 1] = c[1];
+        mem[ptr + i * 3 + 2] = c[2];
+      });
+      this.e.ghostty_terminal_set(this.term, OPT_COLOR_PALETTE, ptr);
+    } finally {
+      this.abi.free(ptr, 256 * 3);
+    }
+  }
+
+  private setColor(option: number, rgb: Rgb): void {
+    const ptr = this.abi.alloc(3);
+    try {
+      const mem = this.abi.bytes();
+      mem[ptr] = rgb[0];
+      mem[ptr + 1] = rgb[1];
+      mem[ptr + 2] = rgb[2];
+      this.e.ghostty_terminal_set(this.term, option, ptr);
+    } finally {
+      this.abi.free(ptr, 3);
+    }
   }
 
   /**
@@ -231,7 +307,7 @@ export class VtCore {
     wasm: BufferSource,
     cols: number,
     rows: number,
-    theme: Theme = { fg: DEFAULT_FG, bg: DEFAULT_BG },
+    theme: Theme = DEFAULT_THEME,
   ): Promise<VtCore> {
     if (cols <= 0 || rows <= 0 || cols > MAX_DIM || rows > MAX_DIM) {
       throw new Error(`VtCore: cols and rows must be in 1..${MAX_DIM} (got ${cols}x${rows})`);
@@ -438,13 +514,17 @@ export class VtCore {
     }
   }
 
+  /**
+   * A cell's resolved fg or bg. libghostty returns non-SUCCESS (GHOSTTY_INVALID_VALUE) for a cell
+   * that carries no explicit color — the "use the terminal default" case — so we substitute the
+   * theme color; an explicit color (palette-resolved or true-color) is returned as-is, even black.
+   */
   private readColor(kind: number, ptr: number): Rgb {
     const fallback = kind === CELLS_DATA_FG_COLOR ? this.fg : this.bg;
     if (this.e.ghostty_render_state_row_cells_get(this.cells, kind, ptr) !== SUCCESS) {
       return fallback;
     }
-    const rgb = this.abi.readRgb(ptr);
-    return rgb[0] === 0 && rgb[1] === 0 && rgb[2] === 0 ? fallback : rgb;
+    return this.abi.readRgb(ptr);
   }
 
   private bindRowIterator(): void {

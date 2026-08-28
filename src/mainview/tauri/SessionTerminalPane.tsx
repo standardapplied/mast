@@ -148,7 +148,7 @@ export const SessionTerminalPane = forwardRef<
       };
 
       let { cols, rows } = fit();
-      const core = await VtCore.create(wasm, cols, rows, { fg: palette.fg, bg: palette.bg });
+      const core = await VtCore.create(wasm, cols, rows, palette);
       if (disposed) return void core.free();
       cleanups.push(() => core.free());
       paint(cols, rows);
