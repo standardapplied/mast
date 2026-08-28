@@ -280,6 +280,18 @@ export class VtCore {
     return { dirty, rows: this.readAllRows() };
   }
 
+  /**
+   * The whole viewport, unconditionally — the render path when the caller already knows bytes
+   * arrived. libghostty-vt only flags damage on a scroll, not on an in-place edit (readline echoing
+   * a keystroke, a one-line command's output), so a renderer that trusts {@link snapshot}'s dirty
+   * gate silently drops those. This ignores the gate and reads every row, so nothing is missed.
+   */
+  readAll(): GridSnapshot {
+    this.requireOpen();
+    this.refresh();
+    return { dirty: "full", rows: this.readAllRows() };
+  }
+
   /** The cursor's viewport position and visibility. */
   cursor(): Cursor {
     this.requireOpen();

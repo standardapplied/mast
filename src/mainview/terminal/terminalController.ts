@@ -32,6 +32,7 @@ export interface PtySink {
 export class TerminalController {
   private cols: number;
   private rows: number;
+  private dirty = false;
 
   constructor(
     private readonly core: VtCore,
@@ -48,24 +49,26 @@ export class TerminalController {
   feed(bytes: Uint8Array): void {
     if (bytes.length > 0) {
       this.core.write(bytes);
+      this.dirty = true;
     }
   }
 
   /**
-   * Renders one frame: when anything changed, re-reads the whole viewport and applies it, then draws
-   * with the cursor. {@code blinkOn} folds the UI blink phase into the pty's own cursor visibility.
+   * Renders one frame: when bytes have arrived since the last paint, re-reads the whole viewport and
+   * applies it, then draws with the cursor. {@code blinkOn} folds the UI blink phase into the pty's
+   * own cursor visibility.
    *
-   * <p>Full viewport, not the dirty-rows-only {@code snapshot()}: libghostty-vt's dirty-row iterator
-   * does not flag in-place edits on the active line (readline echoing a keystroke edits the cursor
-   * row in place), so a damage-only renderer never repaints them and typed text stays invisible.
-   * {@code dirtyKind} still gates the read, so idle frames cost nothing; the extra rows are read only
-   * on frames that actually changed, and the GPU repaints every cell each frame either way.
+   * <p>The repaint is gated on our own "bytes fed" flag, not libghostty-vt's damage: it only flags a
+   * scroll as dirty, never an in-place edit (readline echoing a keystroke, a one-line command's
+   * output), so a renderer that trusts its dirty gate silently drops them and typed text stays
+   * invisible. We know when data arrived, so we re-read every row then and nothing is missed; idle
+   * frames still cost only a cursor draw.
    */
   frame(blinkOn = true): void {
-    const snapshot = this.core.fullSnapshot();
-    if (snapshot.dirty !== "none") {
-      this.renderer.apply(snapshot);
+    if (this.dirty) {
+      this.renderer.apply(this.core.readAll());
       this.core.clean();
+      this.dirty = false;
     }
     const cursor = this.core.cursor();
     this.renderer.setCursor({ ...cursor, visible: cursor.visible && blinkOn });
@@ -106,6 +109,7 @@ export class TerminalController {
     this.core.resize(cols, rows);
     this.renderer.resize(cols, rows);
     this.sink.resize(cols, rows);
+    this.dirty = true;
   }
 
   get size(): { cols: number; rows: number } {
