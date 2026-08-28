@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import type { ThemeName } from "../../shared/types";
 import { TerminalRenderer } from "../terminal/renderer";
+import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
 import { VtCore } from "../terminal/vtCore";
 import type { TerminalHandle } from "./TerminalPane";
@@ -20,6 +22,23 @@ const FONT_PX = 15;
 const LINE_PAD = 0.25;
 const BLINK_MS = 1060;
 const BLINK_ON_MS = 600;
+
+/** Tracks Mast's resolved theme, re-rendering when the user flips it or the OS scheme changes. */
+function useThemeName(): ThemeName {
+  const [name, setName] = useState<ThemeName>(resolveThemeName);
+  useEffect(() => {
+    const sync = () => setName(resolveThemeName());
+    const observer = new MutationObserver(sync);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    media?.addEventListener("change", sync);
+    return () => {
+      observer.disconnect();
+      media?.removeEventListener("change", sync);
+    };
+  }, []);
+  return name;
+}
 
 /** The pinned VT wasm, fetched once and shared by every pane (see build-tauri-web.ts). */
 let wasmPromise: Promise<ArrayBuffer> | null = null;
@@ -65,6 +84,9 @@ export const SessionTerminalPane = forwardRef<
   const controllerRef = useRef<TerminalController | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [backend, setBackend] = useState<string>("");
+  const themeName = useThemeName();
+  const palette = paletteFor(themeName);
+  const bgCss = `rgb(${palette.bg[0]}, ${palette.bg[1]}, ${palette.bg[2]})`;
 
   // Drop-to-paste routes through here; the pane refits itself from its own ResizeObserver, so the
   // workbench's post-splitter-drag refit is a no-op.
@@ -105,6 +127,9 @@ export const SessionTerminalPane = forwardRef<
           fontPx: FONT_PX,
           linePad: LINE_PAD,
           dpr,
+          bg: palette.bg,
+          fg: palette.fg,
+          cursor: palette.cursor,
           onError: (message) => {
             if (!disposed) setError(message);
           },
@@ -123,7 +148,7 @@ export const SessionTerminalPane = forwardRef<
       };
 
       let { cols, rows } = fit();
-      const core = await VtCore.create(wasm, cols, rows);
+      const core = await VtCore.create(wasm, cols, rows, { fg: palette.fg, bg: palette.bg });
       if (disposed) return void core.free();
       cleanups.push(() => core.free());
       paint(cols, rows);
@@ -216,7 +241,7 @@ export const SessionTerminalPane = forwardRef<
     };
     // The session identity — not the one-shot create spec — is the dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socketPath, token, session, write]);
+  }, [socketPath, token, session, write, themeName]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     const controller = controllerRef.current;
@@ -256,7 +281,7 @@ export const SessionTerminalPane = forwardRef<
         display: "grid",
         placeItems: "center",
         outline: "none",
-        background: "#0b0e14",
+        background: bgCss,
       }}
     >
       <canvas ref={canvasRef} />
@@ -284,7 +309,7 @@ export const SessionTerminalPane = forwardRef<
             display: "grid",
             placeItems: "center",
             padding: "24px",
-            background: "#0b0e14",
+            background: bgCss,
             color: "#e0a24d",
             font: '13px/1.6 "JetBrains Mono", ui-monospace, monospace',
             textAlign: "center",

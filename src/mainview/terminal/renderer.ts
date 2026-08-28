@@ -28,12 +28,16 @@ export interface RendererOptions {
   readonly linePad: number;
   /** Device pixel ratio to render at (crispness on retina). */
   readonly dpr: number;
+  /** Theme background — the canvas clear and the color drawn under the block cursor. */
+  readonly bg: Rgb;
+  /** Theme foreground — blank cells; default-colored text already arrives resolved from VtCore. */
+  readonly fg: Rgb;
+  /** Block-cursor color. */
+  readonly cursor: Rgb;
   /** Reports an async GPU error (uncaptured validation error, device loss) that no throw surfaces. */
   readonly onError?: (message: string) => void;
 }
 
-const WHITE: Rgb = [230, 236, 245];
-const GROUND: Rgb = [11, 14, 20];
 
 /**
  * Rasterizes graphemes into a fixed-cell atlas on an OffscreenCanvas and hands out a stable index
@@ -126,6 +130,8 @@ interface FrameData {
   readonly fgCount: number;
   readonly atlas: OffscreenCanvas;
   readonly atlasVersion: number;
+  /** Canvas clear color (theme background). */
+  readonly clear: Rgb;
 }
 
 interface Backend {
@@ -139,7 +145,7 @@ export class TerminalRenderer implements Renderer {
   private readonly opts: RendererOptions;
   private readonly atlas: GlyphAtlas;
   private backend!: Backend;
-  private readonly grid = new TerminalGrid();
+  private readonly grid: TerminalGrid;
   private cols = 0;
   private rows = 0;
   private cursor: Cursor = { present: false, x: 0, y: 0, visible: false };
@@ -150,6 +156,7 @@ export class TerminalRenderer implements Renderer {
   private constructor(opts: RendererOptions) {
     this.opts = opts;
     this.atlas = new GlyphAtlas(opts.fontFamily, opts.fontPx, opts.linePad, opts.dpr);
+    this.grid = new TerminalGrid({ fg: opts.fg, bg: opts.bg });
   }
 
   /** The cell size in device pixels, so the harness can size the terminal to the canvas. */
@@ -203,9 +210,9 @@ export class TerminalRenderer implements Renderer {
           this.cursor.present && this.cursor.visible && this.cursor.x === x && this.cursor.y === y;
         const bi = (y * this.cols + x) * 3;
         if (onCursor) {
-          bg[bi] = WHITE[0] / 255;
-          bg[bi + 1] = WHITE[1] / 255;
-          bg[bi + 2] = WHITE[2] / 255;
+          bg[bi] = this.opts.cursor[0] / 255;
+          bg[bi + 1] = this.opts.cursor[1] / 255;
+          bg[bi + 2] = this.opts.cursor[2] / 255;
         } else {
           bg[bi] = cell.bg[0] / 255;
           bg[bi + 1] = cell.bg[1] / 255;
@@ -218,9 +225,9 @@ export class TerminalRenderer implements Renderer {
           fg[o] = x;
           fg[o + 1] = y;
           if (onCursor) {
-            fg[o + 2] = GROUND[0] / 255;
-            fg[o + 3] = GROUND[1] / 255;
-            fg[o + 4] = GROUND[2] / 255;
+            fg[o + 2] = this.opts.bg[0] / 255;
+            fg[o + 3] = this.opts.bg[1] / 255;
+            fg[o + 4] = this.opts.bg[2] / 255;
           } else {
             fg[o + 2] = cell.fg[0] / 255;
             fg[o + 3] = cell.fg[1] / 255;
@@ -244,6 +251,7 @@ export class TerminalRenderer implements Renderer {
       fgCount,
       atlas: this.atlas.bitmap,
       atlasVersion: this.atlas.version,
+      clear: this.opts.bg,
     });
   }
 
@@ -521,7 +529,7 @@ class WebGpuBackend implements Backend {
       colorAttachments: [
         {
           view: this.ctx.getCurrentTexture().createView(),
-          clearValue: { r: 11 / 255, g: 14 / 255, b: 20 / 255, a: 1 },
+          clearValue: { r: d.clear[0] / 255, g: d.clear[1] / 255, b: d.clear[2] / 255, a: 1 },
           loadOp: "clear",
           storeOp: "store",
         },
@@ -653,7 +661,7 @@ class WebGl2Backend implements Backend {
       this.uploadedAtlas = d.atlasVersion;
     }
 
-    gl.clearColor(11 / 255, 14 / 255, 20 / 255, 1);
+    gl.clearColor(d.clear[0] / 255, d.clear[1] / 255, d.clear[2] / 255, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
     const gridBg = new Float32Array(d.cols * d.rows * 5);
