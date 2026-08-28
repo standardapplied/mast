@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ThemeName } from "../../shared/types";
 import { TerminalRenderer } from "../terminal/renderer";
+import { type CellPos, Selection } from "../terminal/selection";
 import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
 import { VtCore } from "../terminal/vtCore";
@@ -82,6 +83,8 @@ export const SessionTerminalPane = forwardRef<
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<TerminalController | null>(null);
+  const geomRef = useRef<{ cw: number; ch: number; cols: number; rows: number } | null>(null);
+  const dragRef = useRef<CellPos | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [backend, setBackend] = useState<string>("");
   const themeName = useThemeName();
@@ -130,6 +133,8 @@ export const SessionTerminalPane = forwardRef<
           bg: palette.bg,
           fg: palette.fg,
           cursor: palette.cursor,
+          selectionBg: palette.selectionBg,
+          selectionFg: palette.selectionFg,
           onError: (message) => {
             if (!disposed) setError(message);
           },
@@ -191,6 +196,10 @@ export const SessionTerminalPane = forwardRef<
       // Tell the pty our real geometry (a fresh session was created at this size; an existing one
       // is resized to the writer's window).
       sink.resize(cols, rows);
+      const setGeom = () => {
+        geomRef.current = { cw: cellW / dpr, ch: cellH / dpr, cols, rows };
+      };
+      setGeom();
 
       const observer = new ResizeObserver(() => {
         if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden tab
@@ -200,6 +209,8 @@ export const SessionTerminalPane = forwardRef<
           rows = next.rows;
           paint(cols, rows);
           controller.resize(cols, rows);
+          controller.setSelection(null); // geometry changed; drop the stale highlight
+          setGeom();
         }
       });
       observer.observe(host);
@@ -246,6 +257,14 @@ export const SessionTerminalPane = forwardRef<
   const onKeyDown = (e: React.KeyboardEvent) => {
     const controller = controllerRef.current;
     if (!controller) return;
+    if (e.metaKey && (e.key === "c" || e.key === "C")) {
+      const text = controller.selectedText();
+      if (text) {
+        void navigator.clipboard?.writeText(text).catch(() => {});
+        e.preventDefault();
+        return;
+      }
+    }
     const consumed = controller.key({
       key: e.key,
       ctrl: e.ctrlKey,
@@ -254,7 +273,8 @@ export const SessionTerminalPane = forwardRef<
       shift: e.shiftKey,
     });
     if (consumed) {
-      controller.scroll("bottom"); // typing returns to the live view
+      controller.setSelection(null); // typing clears the highlight...
+      controller.scroll("bottom"); // ...and returns to the live view
       e.preventDefault();
     }
   };
@@ -264,7 +284,43 @@ export const SessionTerminalPane = forwardRef<
     if (!controller) return;
     const perLine = e.deltaMode === 1 ? 1 : 24; // line-mode vs ~24px-per-line pixel-mode
     const lines = e.deltaY < 0 ? Math.floor(e.deltaY / perLine) : Math.ceil(e.deltaY / perLine);
-    if (lines !== 0) controller.scroll({ delta: lines });
+    if (lines !== 0) {
+      controller.setSelection(null); // the viewport-relative highlight no longer lines up
+      controller.scroll({ delta: lines });
+    }
+  };
+
+  const cellAt = (e: React.PointerEvent): CellPos | null => {
+    const canvas = canvasRef.current;
+    const g = geomRef.current;
+    if (!canvas || !g) return null;
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.min(g.cols - 1, Math.max(0, Math.floor((e.clientX - rect.left) / g.cw)));
+    const y = Math.min(g.rows - 1, Math.max(0, Math.floor((e.clientY - rect.top) / g.ch)));
+    return { x, y };
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    hostRef.current?.focus();
+    if (e.button !== 0) return;
+    const pos = cellAt(e);
+    if (!pos) return;
+    dragRef.current = pos;
+    controllerRef.current?.setSelection(null);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const anchor = dragRef.current;
+    if (!anchor) return;
+    const pos = cellAt(e);
+    const g = geomRef.current;
+    if (!pos || !g) return;
+    controllerRef.current?.setSelection(new Selection(anchor, pos, g.cols));
+  };
+
+  const onPointerUp = () => {
+    dragRef.current = null;
   };
 
   const onPaste = (e: React.ClipboardEvent) => {
@@ -285,7 +341,9 @@ export const SessionTerminalPane = forwardRef<
       onKeyDown={onKeyDown}
       onPaste={onPaste}
       onWheel={onWheel}
-      onPointerDown={() => hostRef.current?.focus()}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
       style={{
         position: "relative",
         width: "100%",

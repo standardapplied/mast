@@ -13,6 +13,7 @@
  * only the device, the shaders, and the draw call differ.
  */
 
+import type { Selection } from "./selection";
 import type { Renderer } from "./terminalController";
 import { TerminalGrid } from "./terminalGrid";
 import type { Cursor, GridSnapshot, Rgb } from "./vtCore";
@@ -34,6 +35,9 @@ export interface RendererOptions {
   readonly fg: Rgb;
   /** Block-cursor color. */
   readonly cursor: Rgb;
+  /** Selection highlight background and the text color drawn over it. */
+  readonly selectionBg: Rgb;
+  readonly selectionFg: Rgb;
   /** Reports an async GPU error (uncaptured validation error, device loss) that no throw surfaces. */
   readonly onError?: (message: string) => void;
 }
@@ -186,6 +190,7 @@ export class TerminalRenderer implements Renderer {
   private cols = 0;
   private rows = 0;
   private cursor: Cursor = { present: false, x: 0, y: 0, visible: false };
+  private selection: Selection | null = null;
   // Instance buffers reused across frames — sized on resize, never per frame.
   private bgInstances = new Float32Array(0);
   private fgInstances = new Float32Array(0);
@@ -234,6 +239,10 @@ export class TerminalRenderer implements Renderer {
     this.cursor = cursor;
   }
 
+  setSelection(selection: Selection | null): void {
+    this.selection = selection;
+  }
+
   /** Packs the current grid into the reused instance buffers and draws one frame. */
   draw(): void {
     const bg = this.bgInstances;
@@ -245,26 +254,23 @@ export class TerminalRenderer implements Renderer {
         const cell = this.grid.cell(x, y);
         const onCursor =
           this.cursor.present && this.cursor.visible && this.cursor.x === x && this.cursor.y === y;
+        const selected = !onCursor && (this.selection?.contains(x, y) ?? false);
+        const cellBg = onCursor ? this.opts.cursor : selected ? this.opts.selectionBg : cell.bg;
         const bi = (y * this.cols + x) * 3;
-        if (onCursor) {
-          bg[bi] = this.opts.cursor[0] / 255;
-          bg[bi + 1] = this.opts.cursor[1] / 255;
-          bg[bi + 2] = this.opts.cursor[2] / 255;
-        } else {
-          bg[bi] = cell.bg[0] / 255;
-          bg[bi + 1] = cell.bg[1] / 255;
-          bg[bi + 2] = cell.bg[2] / 255;
-        }
+        bg[bi] = cellBg[0] / 255;
+        bg[bi + 1] = cellBg[1] / 255;
+        bg[bi + 2] = cellBg[2] / 255;
         const glyph = this.atlas.glyph(cell.text, cell);
         if (glyph !== 0) {
           const { u, v } = this.atlas.cell(glyph);
           const o = fgCount * 7;
           fg[o] = x;
           fg[o + 1] = y;
-          if (onCursor) {
-            fg[o + 2] = this.opts.bg[0] / 255;
-            fg[o + 3] = this.opts.bg[1] / 255;
-            fg[o + 4] = this.opts.bg[2] / 255;
+          if (onCursor || selected) {
+            const glyphColor = onCursor ? this.opts.bg : this.opts.selectionFg;
+            fg[o + 2] = glyphColor[0] / 255;
+            fg[o + 3] = glyphColor[1] / 255;
+            fg[o + 4] = glyphColor[2] / 255;
           } else {
             // faint dims the glyph halfway toward its own background
             const t = cell.faint ? 0.5 : 0;

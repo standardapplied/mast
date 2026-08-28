@@ -14,14 +14,22 @@ export function hexToRgb(hex: string): Rgb {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
-/** Mast's resolved terminal theme as the {@link Theme} the VT core and renderer consume. */
-export function paletteFor(name: ThemeName): Theme {
+/** A {@link Theme} for the VT core, plus the selection-highlight colors the renderer needs. */
+export interface TerminalColors extends Theme {
+  readonly selectionBg: Rgb;
+  readonly selectionFg: Rgb;
+}
+
+/** Mast's resolved terminal theme as the colors the VT core and renderer consume. */
+export function paletteFor(name: ThemeName): TerminalColors {
   const t = terminalTheme(name);
   return {
     fg: hexToRgb(t.foreground),
     bg: hexToRgb(t.background),
     cursor: hexToRgb(t.cursor),
     palette: t.ansi.map(hexToRgb),
+    selectionBg: hexToRgb(t.selectionBackground),
+    selectionFg: hexToRgb(t.selectionForeground),
   };
 }
 

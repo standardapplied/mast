@@ -13,6 +13,7 @@
  */
 
 import { encodeKey, type KeyStroke } from "./input";
+import { type Selection, selectedText } from "./selection";
 import type { Cursor, GridSnapshot, Scroll, VtCore } from "./vtCore";
 
 /** What the controller needs from a renderer; the WebGPU renderer implements this structurally. */
@@ -20,6 +21,7 @@ export interface Renderer {
   resize(cols: number, rows: number): void;
   apply(snapshot: GridSnapshot): void;
   setCursor(cursor: Cursor): void;
+  setSelection(selection: Selection | null): void;
   draw(): void;
 }
 
@@ -33,6 +35,7 @@ export class TerminalController {
   private cols: number;
   private rows: number;
   private dirty = false;
+  private selection: Selection | null = null;
 
   constructor(
     private readonly core: VtCore,
@@ -99,6 +102,20 @@ export class TerminalController {
   scroll(behavior: Scroll): void {
     this.core.scroll(behavior);
     this.dirty = true;
+  }
+
+  /** Sets (or clears) the highlighted selection; the next frame repaints it. */
+  setSelection(selection: Selection | null): void {
+    this.selection = selection;
+    this.renderer.setSelection(selection);
+    this.dirty = true;
+  }
+
+  /** The selected text, newline-joined and per-line right-trimmed; empty when nothing is selected. */
+  selectedText(): string {
+    if (!this.selection || this.selection.isEmpty) return "";
+    const rows = this.core.readAll().rows.map((r) => r.cells.map((c) => c.text));
+    return selectedText(this.selection, rows);
   }
 
   /**
