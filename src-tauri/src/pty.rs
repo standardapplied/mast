@@ -533,11 +533,13 @@ impl Drop for AbortOnDrop {
 
 /// Reads one control reply that must be `Ok`, turning `Err`/unexpected frames into an I/O error
 /// carrying the host's own message — so a refusal (bad token, foreign session) surfaces verbatim.
+/// A refusal is minted as `PermissionDenied` so the caller can tell "the host said no" (retrying
+/// the same request can only fail the same way) from a transport failure (retrying reattaches).
 async fn expect_ok<S: AsyncRead + Unpin>(s: &mut S, verb: &str) -> io::Result<()> {
     match read_frame(s).await? {
         Frame::Ok => Ok(()),
         Frame::Err(message) => Err(io::Error::new(
-            io::ErrorKind::Other,
+            io::ErrorKind::PermissionDenied,
             format!("{verb}: {message}"),
         )),
         other => Err(io::Error::new(
@@ -833,6 +835,11 @@ mod async_tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("not valid"), "{err}");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::PermissionDenied,
+            "a host refusal must be distinguishable from a transport failure"
+        );
         host.await.unwrap();
     }
 

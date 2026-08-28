@@ -190,6 +190,13 @@ describe("TerminalController", () => {
     expect(sink.writes).toEqual([]);
   });
 
+  test("a single command with a trailing newline is routine, not a confirmation", async () => {
+    // Nearly every command copied from a web page or another terminal carries the trailing \n.
+    const { controller, sink } = await harness();
+    expect(controller.paste("ls -la\n")).toBe(true);
+    expect(sink.writes).toEqual([Array.from(enc("ls -la\r"))]);
+  });
+
   test("a confirmed multi-line paste writes with newlines as carriage returns", async () => {
     const { controller, sink } = await harness();
     expect(controller.paste("echo a\necho b", { force: true })).toBe(true);

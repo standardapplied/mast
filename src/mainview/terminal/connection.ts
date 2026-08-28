@@ -8,15 +8,22 @@
  * backoff while the link stays bad, reset once a connection has proven stable.
  */
 
-/** Reasons ssh.rs prefixes when the channel/driver failed rather than the session ending itself. */
-const TRANSPORT_PREFIX = "transport error:";
-
 /** How long a connection must hold before a new drop restarts the backoff ladder from the bottom. */
 export const STABLE_MS = 10_000;
 
 const BACKOFF_MS = [500, 1000, 2000, 4000, 8000, 15000] as const;
 
-export type EndClass = "transport" | "clean";
+/**
+ * Why an attach is over: `transport` — the link died, the host session lives, auto-reattach;
+ * `ended` — the shell itself exited, offer a restart; `refused` — the host said no (foreign
+ * session, bad token, dead container), where retrying the same request can only fail the same way.
+ */
+export type ExitClass = "transport" | "ended" | "refused";
+
+export interface SessionEnd {
+  readonly klass: ExitClass;
+  readonly reason: string;
+}
 
 /**
  * What a session pane is doing right now, for the pane overlay and the tab-bar status cluster.
@@ -29,9 +36,72 @@ export type SessionStatus =
   | { kind: "ended"; reason: string }
   | { kind: "failed"; reason: string };
 
-/** Whether an exit reason means the link died (reattach) or the shell ended (restart). */
-export function classifyEnd(reason: string): EndClass {
-  return reason.startsWith(TRANSPORT_PREFIX) ? "transport" : "clean";
+const EXIT_CLASSES: ReadonlySet<string> = new Set(["transport", "ended", "refused"]);
+
+/**
+ * Decodes the `session://exit` payload — `{class, reason}` as the Rust side emits it. Anything
+ * malformed reads as a transport drop: the retryable default, since a wrongly-parked pane strands
+ * the user while a wrongly-retried one merely backs off.
+ */
+export function toSessionEnd(payload: unknown): SessionEnd {
+  if (payload !== null && typeof payload === "object") {
+    const { class: klass, reason } = payload as { class?: unknown; reason?: unknown };
+    if (typeof klass === "string" && EXIT_CLASSES.has(klass)) {
+      return { klass: klass as ExitClass, reason: typeof reason === "string" ? reason : "" };
+    }
+  }
+  return { klass: "transport", reason: String(payload) };
+}
+
+/** Whether a status deserves a warning marker in chrome (tab dots, chips). A quiet first connect doesn't. */
+export function isUnwell(status: SessionStatus): boolean {
+  return status.kind !== "up" && !(status.kind === "connecting" && !status.retrying);
+}
+
+/** Structural equality — {@link worstStatus} mints fresh objects, so identity checks misfire. */
+export function statusEqual(a: SessionStatus, b: SessionStatus): boolean {
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "up":
+      return true;
+    case "connecting":
+      return a.retrying === (b as typeof a).retrying;
+    default:
+      return a.reason === (b as typeof a).reason;
+  }
+}
+
+/** Higher = more broken. Ordering: up < connecting < reconnecting < ended < down < failed. */
+function severity(status: SessionStatus): number {
+  switch (status.kind) {
+    case "up":
+      return 0;
+    case "connecting":
+      return status.retrying ? 2 : 1;
+    case "ended":
+      return 3;
+    case "down":
+      return 4;
+    case "failed":
+      return 5;
+  }
+}
+
+/**
+ * The status a multi-pane tab reports upward: its most broken pane, so the tab bar's cluster and
+ * dot surface trouble anywhere in the tab. An empty tab reads as a quiet first connect.
+ */
+export function worstStatus(statuses: readonly SessionStatus[]): SessionStatus {
+  let worst: SessionStatus = { kind: "connecting", retrying: false };
+  let max = -1;
+  for (const s of statuses) {
+    const sev = severity(s);
+    if (sev > max) {
+      max = sev;
+      worst = s;
+    }
+  }
+  return worst;
 }
 
 /**

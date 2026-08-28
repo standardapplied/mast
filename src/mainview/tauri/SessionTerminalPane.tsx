@@ -2,8 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ThemeName } from "../../shared/types";
-import { ContextMenu } from "../components/ContextMenu";
-import { classifyEnd, Reconnector, type SessionStatus } from "../terminal/connection";
+import { ContextMenu, type MenuNode } from "../components/ContextMenu";
+import {
+  Reconnector,
+  type SessionEnd,
+  type SessionStatus,
+  toSessionEnd,
+} from "../terminal/connection";
 import { TerminalRenderer } from "../terminal/renderer";
 import { type CellPos, Selection } from "../terminal/selection";
 import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
@@ -77,13 +82,24 @@ export interface SessionTerminalProps {
   readonly write?: boolean;
   /** When set, create this session before attaching; its cols/rows are overridden with the fit. */
   readonly create?: SessionCreate;
-  /** True when this pane's tab is the visible one — take keyboard focus so typing lands here. */
+  /** True when this pane is the focused one — take keyboard focus so typing lands here. */
   readonly active?: boolean;
+  /**
+   * True when the pane is on screen (its sub-tab and workspace tab are the visible ones). A hidden
+   * pane stays attached but stops drawing, and never pushes its zero-size geometry at the pty.
+   */
+  readonly visible?: boolean;
   /** Lifecycle reporting for the tab bar's status cluster. */
   readonly onStatus?: (status: SessionStatus) => void;
+  /** Extra context-menu entries after Copy/Paste (e.g. the pane host's "Close pane"). */
+  readonly menuExtras?: MenuNode[];
 }
 
 const noop = () => {};
+
+/** Shared across panes: the sleep-wake liveness probe needs to fire once, not once per pane. */
+let lastWakeProbe = 0;
+const WAKE_PROBE_GAP_MS = 3000;
 
 /**
  * The system clipboard as text: the Rust side (`pbpaste`) first — WKWebView's own clipboard read
@@ -106,7 +122,7 @@ export const SessionTerminalPane = forwardRef<
   TerminalHandle,
   SessionTerminalProps
 >(function SessionTerminalPane(
-  { socketPath, token, session, write = true, create, active, onStatus },
+  { socketPath, token, session, write = true, create, active, visible = true, onStatus, menuExtras },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -120,6 +136,8 @@ export const SessionTerminalPane = forwardRef<
   const [epoch, setEpoch] = useState(0);
   const reconnector = useRef(new Reconnector());
   const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const [backend, setBackend] = useState<string>("");
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
@@ -201,7 +219,10 @@ export const SessionTerminalPane = forwardRef<
       // Still "up"? The link may be dead without knowing it yet (sleep-wake). A throwaway control
       // call probes it: on a dead session the Rust side times out, drops the cached SSH session —
       // which closes this pane's channel — and the resulting exit event drives the reconnect.
-      if (s.kind === "up") {
+      // One probe per wake is plenty: every mounted pane hears the same event, and a stampede of
+      // channel-opens would serialize the backend for nothing.
+      if (s.kind === "up" && Date.now() - lastWakeProbe > WAKE_PROBE_GAP_MS) {
+        lastWakeProbe = Date.now();
         void invoke("session_list", { socketPath, token }).catch(noop);
       }
     };
@@ -237,19 +258,22 @@ export const SessionTerminalPane = forwardRef<
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
     /** The session is over for this attach; decide between auto-reattach and parking. */
-    const onEnd = (reason: string) => {
+    const onEnd = (end: SessionEnd) => {
       if (disposed) return;
-      if (classifyEnd(reason) === "clean") {
-        setStatus({ kind: "ended", reason });
+      if (end.klass === "ended") {
+        setStatus({ kind: "ended", reason: end.reason });
+        return;
+      }
+      if (end.klass === "refused") {
+        // The host said no (foreign session, bad token, dead container) — retrying the same
+        // request can only fail the same way, so park with the message and a manual Retry.
+        setStatus({ kind: "failed", reason: end.reason });
         return;
       }
       const delay = reconnector.current.lost();
-      setStatus({ kind: "down", reason });
+      setStatus({ kind: "down", reason: end.reason });
       clearTimeout(retryTimer.current);
-      retryTimer.current = setTimeout(() => {
-        setStatus({ kind: "connecting", retrying: true });
-        setEpoch((e) => e + 1);
-      }, delay);
+      retryTimer.current = setTimeout(reattach, delay);
     };
 
     const run = async () => {
@@ -284,7 +308,11 @@ export const SessionTerminalPane = forwardRef<
         canvas.style.height = `${(rows * cellH) / dpr}px`;
       };
 
-      let { cols, rows } = fit();
+      // A hidden pane (inactive sub-tab, restored layout) mounts at zero size; fitting that would
+      // create — or worse, SIGWINCH a live session to — a 1x1 grid, garbling every other attached
+      // client. Attach at a sane default instead; the ResizeObserver fits it on first reveal.
+      const sized = host.clientWidth > 0 && host.clientHeight > 0;
+      let { cols, rows } = sized ? fit() : { cols: 80, rows: 24 };
       const core = await VtCore.create(wasm, cols, rows, palette);
       if (disposed) return void core.free();
       cleanups.push(() => core.free());
@@ -303,7 +331,7 @@ export const SessionTerminalPane = forwardRef<
         ),
       );
       cleanups.push(await listen(`session://meta/${id}`, noop));
-      cleanups.push(await listen<string>(`session://exit/${id}`, (e) => onEnd(e.payload)));
+      cleanups.push(await listen<unknown>(`session://exit/${id}`, (e) => onEnd(toSessionEnd(e.payload))));
 
       try {
         // Reattach when the named session is already live; create it only when absent, so the
@@ -324,16 +352,21 @@ export const SessionTerminalPane = forwardRef<
         });
       } catch (e) {
         // The link (not the pane) is the usual culprit — reattach on the same backoff.
-        onEnd(`transport error: ${e instanceof Error ? e.message : String(e)}`);
+        onEnd({ klass: "transport", reason: e instanceof Error ? e.message : String(e) });
         return;
       }
       if (disposed) return;
+      // A theme flip can re-run this effect and attach while a retry timer still pends; landing
+      // here settles the connection, so a stale timer must not force another remount.
+      clearTimeout(retryTimer.current);
       reconnector.current.opened();
       setStatus({ kind: "up" });
 
       // Tell the pty our real geometry (a fresh session was created at this size; an existing one
-      // is resized to the writer's window).
-      sink.resize(cols, rows);
+      // is resized to the writer's window) — only when we actually have one.
+      if (sized) {
+        sink.resize(cols, rows);
+      }
       const setGeom = () => {
         geomRef.current = { cw: cellW / dpr, ch: cellH / dpr, cols, rows };
       };
@@ -357,6 +390,12 @@ export const SessionTerminalPane = forwardRef<
       const start = performance.now();
       const loop = (now: number) => {
         if (disposed) return;
+        // A hidden pane keeps its session and buffers bytes, but burns no GPU: skip the draw and
+        // let the accumulated damage paint in one catch-up frame on reveal.
+        if (!visibleRef.current) {
+          raf = requestAnimationFrame(loop);
+          return;
+        }
         try {
           controller.frame((now - start) % BLINK_MS < BLINK_ON_MS);
         } catch (e) {
@@ -396,6 +435,18 @@ export const SessionTerminalPane = forwardRef<
   const onKeyDown = (e: React.KeyboardEvent) => {
     const controller = controllerRef.current;
     if (!controller) return;
+    // While the paste confirmation is up, the keyboard answers the dialog — never the shell. An
+    // instinctive Enter or Escape must not land at the prompt behind the modal.
+    if (pendingPaste !== null) {
+      if (e.key === "Enter") {
+        controller.paste(pendingPaste, { force: true });
+        setPendingPaste(null);
+      } else if (e.key === "Escape") {
+        setPendingPaste(null);
+      }
+      e.preventDefault();
+      return;
+    }
     if (e.metaKey && !e.ctrlKey && !e.altKey) {
       if ((e.key === "c" || e.key === "C") && copySelection()) {
         e.preventDefault();
@@ -406,6 +457,13 @@ export const SessionTerminalPane = forwardRef<
         e.preventDefault();
         return;
       }
+      // Cmd chords produce no pty bytes, but a few WebKit defaults would wreck the view over the
+      // app DOM (select-all flash, history navigation). Swallow those; everything else stays with
+      // the app and the OS (⌘T/⌘D bubble to the pane bar, ⌘Q to the menu).
+      if (e.key === "a" || e.key === "A" || e.key.startsWith("Arrow")) {
+        e.preventDefault();
+      }
+      return;
     }
     const consumed = controller.key({
       key: e.key,
@@ -585,6 +643,7 @@ export const SessionTerminalPane = forwardRef<
               hint: "⌘V",
               onSelect: pasteFromClipboard,
             },
+            ...(menuExtras?.length ? [{ kind: "separator" } as MenuNode, ...menuExtras] : []),
           ]}
         />
       )}
