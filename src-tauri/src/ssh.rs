@@ -35,6 +35,19 @@ const EXEC_TIMEOUT: Duration = Duration::from_secs(300);
 /// the shell simply falls back to TERM=xterm-256color.
 const TERMINFO_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Keepalive probe cadence. A silently dead link (laptop lid, network change) surfaces as a
+/// closed session within `KEEPALIVE_INTERVAL * (keepalive_max + 1)` — ~40s — instead of
+/// freezing every terminal until TCP gives up many minutes later.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+
+/// The SSH client config for every hop: defaults plus keepalives (see [`KEEPALIVE_INTERVAL`]).
+fn client_config() -> Arc<Config> {
+    let mut cfg = Config::default();
+    cfg.keepalive_interval = Some(KEEPALIVE_INTERVAL);
+    cfg.keepalive_max = 3;
+    Arc::new(cfg)
+}
+
 /// Default byte cap for `fs_read` when the webview doesn't pass one: generous
 /// for anything an in-app editor/viewer opens, small enough that a stray click
 /// on a core dump can't balloon the process.
@@ -487,7 +500,7 @@ impl Backend {
             target.user = user_fallback;
         }
         let hops = build_hops(&target, &cfg_text);
-        let ssh_cfg = Arc::new(Config::default());
+        let ssh_cfg = client_config();
 
         let mut jumps: Vec<Handle<Client>> = Vec::new();
         let mut carried: Option<ChannelStream<Msg>> = None;
@@ -631,18 +644,31 @@ impl Backend {
     /// session host at `~/.sail/pty.sock`. Mirrors {@link open_forward} for streamlocal.
     pub(crate) async fn open_streamlocal(&self, socket_path: &str) -> Result<Channel<Msg>, Error> {
         let resolved = self.resolve_path(socket_path).await?;
-        self.ensure().await?;
-        let mut guard = self.session.lock().await;
-        let result = guard
-            .as_ref()
-            .expect("ensured")
-            .handle
-            .channel_open_direct_streamlocal(resolved)
-            .await;
-        if result.is_err() {
-            *guard = None;
+        // Two attempts: a cached session that died since its last use fails (or hangs — hence the
+        // timeout) on channel-open; dropping it here closes every channel that rode it, which is
+        // what wakes their panes to reconnect, and the second attempt rides a fresh dial.
+        let mut last: Option<Error> = None;
+        for _ in 0..2 {
+            self.ensure().await?;
+            let mut guard = self.session.lock().await;
+            let open = guard
+                .as_ref()
+                .expect("ensured")
+                .handle
+                .channel_open_direct_streamlocal(resolved.clone());
+            match tokio::time::timeout(CONNECT_TIMEOUT, open).await {
+                Ok(Ok(channel)) => return Ok(channel),
+                Ok(Err(e)) => {
+                    *guard = None;
+                    last = Some(e.into());
+                }
+                Err(_) => {
+                    *guard = None;
+                    last = Some(Error::Timeout("pty socket channel".into()));
+                }
+            }
         }
-        Ok(result?)
+        Err(last.expect("two failed attempts"))
     }
 
     /// Attaches a terminal ({@code id}) to a host-owned pty session over a streamlocal channel,
@@ -2433,6 +2459,13 @@ fn default_port(scheme: &str) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_hop_probes_the_link_with_keepalives() {
+        let cfg = client_config();
+        assert_eq!(cfg.keepalive_interval, Some(KEEPALIVE_INTERVAL));
+        assert!(cfg.keepalive_max > 0, "unanswered probes must close the session");
+    }
 
     const CONFIG: &str = "\
 Host devbox
