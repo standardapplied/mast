@@ -13,6 +13,7 @@
  * only the device, the shaders, and the draw call differ.
  */
 
+import type { Selection } from "./selection";
 import type { Renderer } from "./terminalController";
 import { TerminalGrid } from "./terminalGrid";
 import type { Cursor, GridSnapshot, Rgb } from "./vtCore";
@@ -34,6 +35,9 @@ export interface RendererOptions {
   readonly fg: Rgb;
   /** Block-cursor color. */
   readonly cursor: Rgb;
+  /** Selection highlight background and the text color drawn over it. */
+  readonly selectionBg: Rgb;
+  readonly selectionFg: Rgb;
   /** Reports an async GPU error (uncaptured validation error, device loss) that no throw surfaces. */
   readonly onError?: (message: string) => void;
 }
@@ -44,6 +48,21 @@ export interface RendererOptions {
  * per grapheme. Glyphs are drawn in white on transparent; the renderer tints them per cell, so one
  * atlas entry serves every color the same grapheme ever appears in.
  */
+/** The style attributes that change how a glyph is rasterized (color is applied later, at draw). */
+export interface GlyphStyle {
+  readonly bold: boolean;
+  readonly italic: boolean;
+  readonly underline: boolean;
+  readonly strikethrough: boolean;
+}
+
+const PLAIN_GLYPH: GlyphStyle = {
+  bold: false,
+  italic: false,
+  underline: false,
+  strikethrough: false,
+};
+
 class GlyphAtlas {
   readonly cellW: number;
   readonly cellH: number;
@@ -52,6 +71,11 @@ class GlyphAtlas {
   private readonly ctx: OffscreenCanvasRenderingContext2D;
   private readonly index = new Map<string, number>();
   private readonly baseline: number;
+  private readonly family: string;
+  private readonly px: number;
+  private readonly thickness: number;
+  private readonly underlineY: number;
+  private readonly strikeY: number;
   private next = 1; // 0 is reserved for "blank" (drawn as nothing)
   private generation = 0;
 
@@ -62,25 +86,42 @@ class GlyphAtlas {
     this.cellW = Math.max(1, Math.round(advance * dpr));
     this.cellH = Math.max(1, Math.round(fontPx * (1 + linePad) * dpr));
     this.baseline = Math.round(fontPx * (1 + linePad / 2) * dpr) - Math.round(fontPx * 0.2 * dpr);
+    this.family = fontFamily;
+    this.px = Math.round(fontPx * dpr);
+    this.thickness = Math.max(1, Math.round(dpr));
+    this.underlineY = Math.min(this.cellH - this.thickness, this.baseline + Math.round(2 * dpr));
+    this.strikeY = Math.max(0, this.baseline - Math.round(this.px * 0.3));
     this.cols = 64;
     const rows = 64;
     this.canvas = new OffscreenCanvas(this.cols * this.cellW, rows * this.cellH);
     this.ctx = this.canvas.getContext("2d")!;
     this.ctx.textBaseline = "alphabetic";
-    this.ctx.font = `${Math.round(fontPx * dpr)}px ${fontFamily}`;
     this.ctx.fillStyle = "#fff";
   }
 
-  /** The atlas index for {@code text}; blank/space is 0. Rasterizes on first sight. */
-  glyph(text: string): number {
-    if (text === "" || text === " ") return 0;
-    const hit = this.index.get(text);
+  /**
+   * The atlas index for {@code text} rendered in {@code style}; blank with no decoration is 0.
+   * Rasterizes on first sight, keyed by (text, style): bold/italic pick the font face, underline and
+   * strikethrough draw rules into the cell. Color is applied per-cell at draw time, so one entry
+   * serves every color the same styled grapheme ever appears in.
+   */
+  glyph(text: string, style: GlyphStyle = PLAIN_GLYPH): number {
+    const blank = text === "" || text === " ";
+    if (blank && !style.underline && !style.strikethrough) return 0;
+    const key = `${style.bold ? "b" : ""}${style.italic ? "i" : ""}${
+      style.underline ? "u" : ""
+    }${style.strikethrough ? "s" : ""}|${text}`;
+    const hit = this.index.get(key);
     if (hit !== undefined) return hit;
+    if (this.next >= this.cols * this.cols) return 0; // atlas full: draw blank rather than corrupt
     const id = this.next++;
-    this.index.set(text, id);
-    const col = id % this.cols;
-    const row = Math.floor(id / this.cols);
-    this.ctx.fillText(text, col * this.cellW + 1, row * this.cellH + this.baseline);
+    this.index.set(key, id);
+    const x0 = (id % this.cols) * this.cellW;
+    const y0 = Math.floor(id / this.cols) * this.cellH;
+    this.ctx.font = `${style.italic ? "italic " : ""}${style.bold ? "bold " : ""}${this.px}px ${this.family}`;
+    if (!blank) this.ctx.fillText(text, x0 + 1, y0 + this.baseline);
+    if (style.underline) this.ctx.fillRect(x0, y0 + this.underlineY, this.cellW, this.thickness);
+    if (style.strikethrough) this.ctx.fillRect(x0, y0 + this.strikeY, this.cellW, this.thickness);
     this.generation++;
     return id;
   }
@@ -149,6 +190,7 @@ export class TerminalRenderer implements Renderer {
   private cols = 0;
   private rows = 0;
   private cursor: Cursor = { present: false, x: 0, y: 0, visible: false };
+  private selection: Selection | null = null;
   // Instance buffers reused across frames — sized on resize, never per frame.
   private bgInstances = new Float32Array(0);
   private fgInstances = new Float32Array(0);
@@ -197,6 +239,10 @@ export class TerminalRenderer implements Renderer {
     this.cursor = cursor;
   }
 
+  setSelection(selection: Selection | null): void {
+    this.selection = selection;
+  }
+
   /** Packs the current grid into the reused instance buffers and draws one frame. */
   draw(): void {
     const bg = this.bgInstances;
@@ -208,30 +254,29 @@ export class TerminalRenderer implements Renderer {
         const cell = this.grid.cell(x, y);
         const onCursor =
           this.cursor.present && this.cursor.visible && this.cursor.x === x && this.cursor.y === y;
+        const selected = !onCursor && (this.selection?.contains(x, y) ?? false);
+        const cellBg = onCursor ? this.opts.cursor : selected ? this.opts.selectionBg : cell.bg;
         const bi = (y * this.cols + x) * 3;
-        if (onCursor) {
-          bg[bi] = this.opts.cursor[0] / 255;
-          bg[bi + 1] = this.opts.cursor[1] / 255;
-          bg[bi + 2] = this.opts.cursor[2] / 255;
-        } else {
-          bg[bi] = cell.bg[0] / 255;
-          bg[bi + 1] = cell.bg[1] / 255;
-          bg[bi + 2] = cell.bg[2] / 255;
-        }
-        const glyph = this.atlas.glyph(cell.text);
+        bg[bi] = cellBg[0] / 255;
+        bg[bi + 1] = cellBg[1] / 255;
+        bg[bi + 2] = cellBg[2] / 255;
+        const glyph = this.atlas.glyph(cell.text, cell);
         if (glyph !== 0) {
           const { u, v } = this.atlas.cell(glyph);
           const o = fgCount * 7;
           fg[o] = x;
           fg[o + 1] = y;
-          if (onCursor) {
-            fg[o + 2] = this.opts.bg[0] / 255;
-            fg[o + 3] = this.opts.bg[1] / 255;
-            fg[o + 4] = this.opts.bg[2] / 255;
+          if (onCursor || selected) {
+            const glyphColor = onCursor ? this.opts.bg : this.opts.selectionFg;
+            fg[o + 2] = glyphColor[0] / 255;
+            fg[o + 3] = glyphColor[1] / 255;
+            fg[o + 4] = glyphColor[2] / 255;
           } else {
-            fg[o + 2] = cell.fg[0] / 255;
-            fg[o + 3] = cell.fg[1] / 255;
-            fg[o + 4] = cell.fg[2] / 255;
+            // faint dims the glyph halfway toward its own background
+            const t = cell.faint ? 0.5 : 0;
+            fg[o + 2] = (cell.fg[0] + (cell.bg[0] - cell.fg[0]) * t) / 255;
+            fg[o + 3] = (cell.fg[1] + (cell.bg[1] - cell.fg[1]) * t) / 255;
+            fg[o + 4] = (cell.fg[2] + (cell.bg[2] - cell.fg[2]) * t) / 255;
           }
           fg[o + 5] = u;
           fg[o + 6] = v;

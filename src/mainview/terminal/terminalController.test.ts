@@ -7,6 +7,7 @@ import {
   type Renderer,
   TerminalController,
 } from "./terminalController";
+import { Selection } from "./selection";
 import { TerminalGrid } from "./terminalGrid";
 import type { Cursor, GridSnapshot } from "./vtCore";
 import { VtCore } from "./vtCore";
@@ -32,6 +33,7 @@ class RecRenderer implements Renderer {
   setCursor(cursor: Cursor): void {
     this.cursors.push(cursor);
   }
+  setSelection(): void {}
   draw(): void {
     this.draws++;
   }
@@ -114,6 +116,26 @@ describe("TerminalController", () => {
     // The whole viewport is re-read on any change (libghostty-vt's dirty-row iterator drops
     // in-place edits on the active line), so an echo on the current row is never missed.
     expect(gridRow(renderer.grid, 0)).toBe("$ x");
+  });
+
+  test("selectedText reads the highlighted cells straight from the live grid", async () => {
+    const { controller } = await harness(20, 3);
+    controller.feed(enc("hello world"));
+    controller.frame();
+    controller.setSelection(new Selection({ x: 0, y: 0 }, { x: 4, y: 0 }, 20));
+    expect(controller.selectedText()).toBe("hello");
+    controller.setSelection(null);
+    expect(controller.selectedText()).toBe("");
+  });
+
+  test("a scroll repaints at the new viewport, with no new pty output", async () => {
+    const { controller, renderer } = await harness(20, 3);
+    for (let i = 0; i < 8; i++) controller.feed(enc(`row${i}\r\n`));
+    controller.frame();
+    const before = renderer.applied.length;
+    controller.scroll({ delta: -3 }); // up into scrollback
+    controller.frame();
+    expect(renderer.applied.length).toBeGreaterThan(before);
   });
 
   test("empty output is a no-op", async () => {

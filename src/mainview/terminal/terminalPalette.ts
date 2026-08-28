@@ -6,14 +6,7 @@
 
 import type { ThemeName } from "../../shared/types";
 import { terminalTheme } from "../ansi";
-import type { Rgb } from "./vtCore";
-
-/** Mast's resolved terminal theme, as the colors the core and renderer paint with. */
-export interface Palette {
-  readonly fg: Rgb;
-  readonly bg: Rgb;
-  readonly cursor: Rgb;
-}
+import type { Rgb, Theme } from "./vtCore";
 
 /** Parses a `#rrggbb` string into an {@link Rgb} triple. */
 export function hexToRgb(hex: string): Rgb {
@@ -21,10 +14,23 @@ export function hexToRgb(hex: string): Rgb {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
-/** The theme's foreground, background, and cursor as RGB. */
-export function paletteFor(name: ThemeName): Palette {
+/** A {@link Theme} for the VT core, plus the selection-highlight colors the renderer needs. */
+export interface TerminalColors extends Theme {
+  readonly selectionBg: Rgb;
+  readonly selectionFg: Rgb;
+}
+
+/** Mast's resolved terminal theme as the colors the VT core and renderer consume. */
+export function paletteFor(name: ThemeName): TerminalColors {
   const t = terminalTheme(name);
-  return { fg: hexToRgb(t.foreground), bg: hexToRgb(t.background), cursor: hexToRgb(t.cursor) };
+  return {
+    fg: hexToRgb(t.foreground),
+    bg: hexToRgb(t.background),
+    cursor: hexToRgb(t.cursor),
+    palette: t.ansi.map(hexToRgb),
+    selectionBg: hexToRgb(t.selectionBackground),
+    selectionFg: hexToRgb(t.selectionForeground),
+  };
 }
 
 /** The active theme from the document's `data-theme`, falling back to the OS color-scheme. */
