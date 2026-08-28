@@ -12,7 +12,7 @@
  * blink), so nothing spins when the screen is quiet.
  */
 
-import { encodeKey, type KeyStroke } from "./input";
+import { keyEventFor, type KeyStroke } from "./input";
 import { type Selection, selectedText } from "./selection";
 import type { Cursor, GridSnapshot, Scroll, VtCore } from "./vtCore";
 
@@ -79,11 +79,17 @@ export class TerminalController {
   }
 
   /**
-   * Encodes a key press and sends it to the pty. Returns whether anything was sent, so the caller
-   * can preventDefault exactly when the terminal consumed the key. No local echo — the pty echoes.
+   * Encodes a key press through libghostty's mode-aware key encoder (DECCKM, kitty protocol,
+   * modifyOtherKeys — see {@link VtCore#encodeKey}) and sends it to the pty. Returns whether
+   * anything was sent, so the caller can preventDefault exactly when the terminal consumed the
+   * key. No local echo — the pty echoes. Cmd chords never reach the pty: they belong to the app
+   * and the OS, and the pane routes the ones it owns (copy, paste, splits) before calling here.
    */
   key(stroke: KeyStroke): boolean {
-    const bytes = encodeKey(stroke);
+    if (stroke.meta) {
+      return false;
+    }
+    const bytes = this.core.encodeKey(keyEventFor(stroke));
     if (bytes === null) {
       return false;
     }

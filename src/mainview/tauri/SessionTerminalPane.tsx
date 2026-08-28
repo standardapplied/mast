@@ -467,10 +467,14 @@ export const SessionTerminalPane = forwardRef<
     }
     const consumed = controller.key({
       key: e.key,
+      code: e.code,
       ctrl: e.ctrlKey,
       alt: e.altKey,
       meta: e.metaKey,
       shift: e.shiftKey,
+      caps: e.getModifierState?.("CapsLock") ?? false,
+      repeat: e.repeat,
+      composing: e.nativeEvent.isComposing,
     });
     if (consumed) {
       controller.setSelection(null); // typing clears the highlight...

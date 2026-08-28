@@ -83,6 +83,12 @@ const MODE_CONFIG_VALUE_OFFSET = 2;
 /** `ESC[200~` + `ESC[201~` around a bracketed paste. */
 const PASTE_FRAME_OVERHEAD = 12;
 
+/** GhosttyKeyEncoderOption: macOS option-as-alt (an int-typed enum; TRUE = 1). */
+const KEY_OPT_MACOS_OPTION_AS_ALT = 6;
+const OPTION_AS_ALT_TRUE = 1;
+/** Encoded key sequences are tiny; one retry handles the out-of-space contract regardless. */
+const KEY_BUF_LEN = 64;
+
 // Terminal dimensions are u16 inside libghostty-vt; reject anything that would
 // truncate, so the cached size can never disagree with the real grid.
 const MAX_DIM = 65535;
@@ -178,6 +184,26 @@ interface GhosttyExports {
   ghostty_wasm_free_opaque(slot: number): void;
   ghostty_terminal_new(alloc: number, out: number, cols: number, rows: number): number;
   ghostty_terminal_set(term: number, option: number, value: number): number;
+  ghostty_key_encoder_new(alloc: number, out: number): number;
+  ghostty_key_encoder_free(encoder: number): void;
+  ghostty_key_encoder_setopt(encoder: number, option: number, valuePtr: number): void;
+  ghostty_key_encoder_setopt_from_terminal(encoder: number, term: number): void;
+  ghostty_key_encoder_encode(
+    encoder: number,
+    event: number,
+    buf: number,
+    bufLen: number,
+    outLen: number,
+  ): number;
+  ghostty_key_event_new(alloc: number, out: number): number;
+  ghostty_key_event_free(event: number): void;
+  ghostty_key_event_set_action(event: number, action: number): void;
+  ghostty_key_event_set_key(event: number, key: number): void;
+  ghostty_key_event_set_mods(event: number, mods: number): void;
+  ghostty_key_event_set_consumed_mods(event: number, mods: number): void;
+  ghostty_key_event_set_composing(event: number, composing: number): void;
+  ghostty_key_event_set_utf8(event: number, ptr: number, len: number): void;
+  ghostty_key_event_set_unshifted_codepoint(event: number, codepoint: number): void;
   ghostty_terminal_get(term: number, data: number, out: number): number;
   ghostty_paste_encode(
     data: number,
@@ -279,6 +305,10 @@ class Abi {
     this.view().setUint16(ptr, value, true);
   }
 
+  writeI32(ptr: number, value: number): void {
+    this.view().setInt32(ptr, value, true);
+  }
+
   readU32(ptr: number): number {
     return this.view().getUint32(ptr, true);
   }
@@ -313,6 +343,9 @@ export class VtCore {
   private rows: number;
   private freed = false;
 
+  private readonly keyEncoder: number;
+  private readonly keyEvent: number;
+
   private readonly fg: Rgb;
   private readonly bg: Rgb;
 
@@ -332,6 +365,24 @@ export class VtCore {
     this.state = this.abi.construct((slot) => e.ghostty_render_state_new(0, slot));
     this.rowIter = this.abi.construct((slot) => e.ghostty_render_state_row_iterator_new(0, slot));
     this.cells = this.abi.construct((slot) => e.ghostty_render_state_row_cells_new(0, slot));
+    this.keyEncoder = this.abi.construct((slot) => e.ghostty_key_encoder_new(0, slot));
+    this.keyEvent = this.abi.construct((slot) => e.ghostty_key_event_new(0, slot));
+    this.setOptionAsAlt();
+  }
+
+  /**
+   * Option is Alt (meta-sends-escape), the behavior this terminal has always had. Terminal state
+   * cannot express this preference, so {@code setopt_from_terminal} resets it — re-apply after
+   * every sync (the header documents exactly this dance).
+   */
+  private setOptionAsAlt(): void {
+    const ptr = this.abi.alloc(4);
+    try {
+      this.abi.writeI32(ptr, OPTION_AS_ALT_TRUE);
+      this.e.ghostty_key_encoder_setopt(this.keyEncoder, KEY_OPT_MACOS_OPTION_AS_ALT, ptr);
+    } finally {
+      this.abi.free(ptr, 4);
+    }
   }
 
   /**
@@ -402,6 +453,73 @@ export class VtCore {
       this.e.ghostty_terminal_vt_write(this.term, ptr, bytes.length);
     } finally {
       this.abi.free(ptr, bytes.length);
+    }
+  }
+
+  /**
+   * Encodes one key press into the bytes the pty expects, or null when the key produces nothing
+   * (a bare modifier, an in-progress IME composition). Encoding is libghostty's own key encoder,
+   * synced with the terminal's live state first — cursor-key application mode (DECCKM), the kitty
+   * keyboard protocol, modifyOtherKeys — which is exactly what a hand-rolled table cannot honor.
+   */
+  encodeKey(spec: {
+    key: number;
+    mods: number;
+    consumedMods: number;
+    utf8: string;
+    unshifted: number;
+    action: number;
+    composing: boolean;
+  }): Uint8Array | null {
+    this.requireOpen();
+    if (spec.composing) {
+      return null;
+    }
+    const e = this.e;
+    e.ghostty_key_encoder_setopt_from_terminal(this.keyEncoder, this.term);
+    this.setOptionAsAlt();
+    e.ghostty_key_event_set_action(this.keyEvent, spec.action);
+    e.ghostty_key_event_set_key(this.keyEvent, spec.key);
+    e.ghostty_key_event_set_mods(this.keyEvent, spec.mods);
+    e.ghostty_key_event_set_consumed_mods(this.keyEvent, spec.consumedMods);
+    e.ghostty_key_event_set_composing(this.keyEvent, 0);
+    e.ghostty_key_event_set_unshifted_codepoint(this.keyEvent, spec.unshifted);
+    const utf8 = new TextEncoder().encode(spec.utf8);
+    const utf8Ptr = utf8.length > 0 ? this.abi.writeInto(utf8) : 0;
+    e.ghostty_key_event_set_utf8(this.keyEvent, utf8Ptr, utf8.length);
+    try {
+      let need = KEY_BUF_LEN;
+      for (;;) {
+        const bufLen = need;
+        const bufPtr = this.abi.alloc(bufLen);
+        const outPtr = this.abi.alloc(4);
+        try {
+          const rc = e.ghostty_key_encoder_encode(
+            this.keyEncoder,
+            this.keyEvent,
+            bufPtr,
+            bufLen,
+            outPtr,
+          );
+          const written = this.abi.readU32(outPtr);
+          if (rc === SUCCESS) {
+            return written === 0 ? null : this.abi.bytes().slice(bufPtr, bufPtr + written);
+          }
+          if (rc !== OUT_OF_SPACE || written <= bufLen) {
+            throw new Error(`VtCore.encodeKey failed (rc=${rc}, need=${written})`);
+          }
+          need = written;
+        } finally {
+          this.abi.free(outPtr, 4);
+          this.abi.free(bufPtr, bufLen);
+        }
+      }
+    } finally {
+      // The event borrows the utf8 buffer; drop the borrow before the memory goes away.
+      e.ghostty_key_event_set_utf8(this.keyEvent, 0, 0);
+      if (utf8Ptr !== 0) {
+        this.abi.free(utf8Ptr, utf8.length);
+      }
     }
   }
 
@@ -588,6 +706,8 @@ export class VtCore {
       return;
     }
     this.freed = true;
+    this.e.ghostty_key_event_free(this.keyEvent);
+    this.e.ghostty_key_encoder_free(this.keyEncoder);
     this.e.ghostty_render_state_row_cells_free(this.cells);
     this.e.ghostty_render_state_row_iterator_free(this.rowIter);
     this.e.ghostty_render_state_free(this.state);

@@ -177,6 +177,21 @@ describe("TerminalController", () => {
     expect(sink.writes).toEqual([]);
   });
 
+  test("Cmd chords never reach the pty — they belong to the app and the OS", async () => {
+    const { controller, sink } = await harness();
+    expect(controller.key({ key: "v", code: "KeyV", meta: true })).toBe(false);
+    expect(controller.key({ key: "ArrowLeft", code: "ArrowLeft", meta: true })).toBe(false);
+    expect(sink.writes).toEqual([]);
+  });
+
+  test("key encoding follows the terminal's own modes (DECCKM through the live core)", async () => {
+    const { controller, core, sink } = await harness();
+    controller.key({ key: "ArrowUp", code: "ArrowUp" });
+    core.write(enc("\x1b[?1h")); // the app enters application cursor mode
+    controller.key({ key: "ArrowUp", code: "ArrowUp" });
+    expect(sink.writes).toEqual([Array.from(enc("\x1b[A")), Array.from(enc("\x1bOA"))]);
+  });
+
   test("paste sends single-line text; an empty paste sends nothing", async () => {
     const { controller, sink } = await harness();
     expect(controller.paste("ls")).toBe(true);
