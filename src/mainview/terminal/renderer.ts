@@ -97,6 +97,22 @@ class GlyphAtlas {
   }
 }
 
+/**
+ * The atlas's pixels, read synchronously. Uploading from these exact bytes — rather than handing the
+ * OffscreenCanvas to {@code copyExternalImageToTexture} / {@code texImage2D} — sidesteps a WebKit
+ * WebGPU quirk: the canvas *snapshot* those take can miss a {@code fillText} done earlier in the same
+ * tick, so a freshly-typed glyph gets marked uploaded yet never reaches the GPU texture until a later
+ * upload happens to catch it (default-fg text stays black, then "fixes itself" minutes later).
+ * {@code getImageData} forces a current read of the backing store, so the upload can never be stale.
+ */
+function atlasPixels(atlas: OffscreenCanvas): Uint8ClampedArray {
+  const ctx = atlas.getContext("2d");
+  if (!ctx) {
+    throw new Error("TerminalRenderer: the glyph atlas has no 2D context.");
+  }
+  return ctx.getImageData(0, 0, atlas.width, atlas.height).data;
+}
+
 interface FrameData {
   readonly cols: number;
   readonly rows: number;
@@ -423,10 +439,12 @@ class WebGpuBackend implements Backend {
       this.uploadedAtlas = -1;
     }
     if (this.uploadedAtlas !== version) {
-      this.device.queue.copyExternalImageToTexture(
-        { source: atlas },
+      const pixels = atlasPixels(atlas);
+      this.device.queue.writeTexture(
         { texture: this.texture },
-        [atlas.width, atlas.height],
+        pixels.buffer as ArrayBuffer,
+        { offset: pixels.byteOffset, bytesPerRow: atlas.width * 4, rowsPerImage: atlas.height },
+        { width: atlas.width, height: atlas.height },
       );
       this.uploadedAtlas = version;
     }
@@ -615,8 +633,19 @@ class WebGl2Backend implements Backend {
   frame(d: FrameData): void {
     const gl = this.gl;
     if (this.uploadedAtlas !== d.atlasVersion) {
+      const pixels = atlasPixels(d.atlas);
       gl.bindTexture(gl.TEXTURE_2D, this.tex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, d.atlas);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        d.atlas.width,
+        d.atlas.height,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        pixels,
+      );
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
