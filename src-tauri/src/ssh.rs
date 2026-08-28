@@ -31,9 +31,6 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Generous bound for a recursive delete (`rm -rf`): the remote does the work in
 /// one shot, but a huge tree over a slow link can still take a while.
 const EXEC_TIMEOUT: Duration = Duration::from_secs(300);
-/// Bound for the one-shot terminfo install before a terminal opens; on expiry
-/// the shell simply falls back to TERM=xterm-256color.
-const TERMINFO_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Keepalive probe cadence. A silently dead link (laptop lid, network change) surfaces as a
 /// closed session within `KEEPALIVE_INTERVAL * (keepalive_max + 1)` — ~40s — instead of
@@ -85,22 +82,6 @@ const PRUNED_DIRS: &[&str] = &[
     ".rustup",
 ];
 
-/// Ghostty's compiled terminfo (from the Ghostty project, MIT), base64 so it
-/// embeds as one safe shell word. The webview terminal is a real Ghostty VT,
-/// so its PTY requests TERM=xterm-ghostty — the TERM under which kitty-aware
-/// TUIs (Claude Code) enable their keyboard protocol — and this entry keeps
-/// full-screen apps working on boxes that never saw a desktop Ghostty SSH in.
-const GHOSTTY_TERMINFO_B64: &str = include_str!("../assets/xterm-ghostty.terminfo.b64");
-
-/// One idempotent shell word-list: install the terminfo entry unless present.
-/// No user input is interpolated; the base64 alphabet needs no quoting.
-fn terminfo_install_command() -> String {
-    format!(
-        "sh -c 'test -e \"$HOME/.terminfo/x/xterm-ghostty\" || {{ mkdir -p \"$HOME/.terminfo/x\" && echo {} | base64 -d > \"$HOME/.terminfo/x/xterm-ghostty\"; }}'",
-        GHOSTTY_TERMINFO_B64.trim()
-    )
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("no ~/.sail/config.yaml — run `sail host config` or log in first")]
@@ -117,8 +98,6 @@ pub enum Error {
     BadResponse,
     #[error("refusing to open a stream to a non-allowlisted or malformed path")]
     BadStreamPath,
-    #[error("no terminal with id {0}")]
-    NoTerminal(String),
     #[error("no session with id {0}")]
     NoSession(String),
     #[error("pty session: {0}")]
@@ -214,11 +193,6 @@ impl Handler for Client {
     }
 }
 
-enum TermCmd {
-    Write(Vec<u8>),
-    Resize(u32, u32),
-    Close,
-}
 
 /// One lazily-connected russh session, shared by the HTTP proxy and every
 /// terminal. Held in Tauri managed state.
@@ -241,7 +215,6 @@ pub struct Backend {
     /// SFTP subsystem opens since launch — lets tests observe session reuse
     /// instead of asserting it by vibes.
     sftp_opens: AtomicU64,
-    terminals: Mutex<HashMap<String, mpsc::Sender<TermCmd>>>,
     /// Host-owned pty sessions attached over SSH direct-streamlocal, keyed by a
     /// client-chosen id. The sender carries keystrokes/resize/detach into the
     /// session driver; the session outlives the connection on the host side.
@@ -255,10 +228,6 @@ pub struct Backend {
     /// client-chosen id. The sender signals the pump task to stop when the
     /// webview closes the stream.
     streams: Mutex<HashMap<String, mpsc::Sender<()>>>,
-    /// Hosts (by terminal target, "" = node) where the Ghostty terminfo is
-    /// confirmed installed, so only a target's first terminal pays the
-    /// negotiation round-trip. Failures are not cached — they retry next open.
-    ghostty_hosts: Mutex<HashSet<String>>,
 }
 
 #[derive(Serialize)]
@@ -415,11 +384,9 @@ impl Backend {
             containers: Mutex::new(HashMap::new()),
             sftp_pool: Mutex::new(HashMap::new()),
             sftp_opens: AtomicU64::new(0),
-            terminals: Mutex::new(HashMap::new()),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             home: Mutex::new(None),
             streams: Mutex::new(HashMap::new()),
-            ghostty_hosts: Mutex::new(HashSet::new()),
         })
     }
 
@@ -1507,128 +1474,6 @@ impl Backend {
         Ok(())
     }
 
-    /// A fresh channel where a terminal's shell would run: the container's
-    /// cached session for a named target, the control-plane session otherwise.
-    async fn shell_channel(&self, target: Option<&str>) -> Result<Channel<Msg>, Error> {
-        match target {
-            Some(alias) => self.container_channel(alias).await,
-            None => self.open_session_channel().await,
-        }
-    }
-
-    /// The TERM a new terminal should request. Installs Ghostty's terminfo on
-    /// the shell's host first (idempotent, one `test -e` after the first run);
-    /// any failure — no channel, non-zero exit, timeout — degrades to
-    /// xterm-256color so a shell never starts under an unresolvable TERM.
-    /// Success is cached per target so only the first terminal pays the
-    /// round-trip; a failure retries on the next open.
-    async fn negotiated_term(&self, target: Option<&str>) -> &'static str {
-        let key = target.unwrap_or("").to_string();
-        if self.ghostty_hosts.lock().await.contains(&key) {
-            return "xterm-ghostty";
-        }
-        let install = tokio::time::timeout(TERMINFO_TIMEOUT, async {
-            let mut channel = self.shell_channel(target).await?;
-            channel
-                .exec(true, terminfo_install_command().as_bytes())
-                .await?;
-            let mut exit = u32::MAX;
-            while let Some(msg) = channel.wait().await {
-                match msg {
-                    ChannelMsg::ExitStatus { exit_status } => exit = exit_status,
-                    ChannelMsg::Eof | ChannelMsg::Close => break,
-                    _ => {}
-                }
-            }
-            Ok::<u32, Error>(exit)
-        })
-        .await;
-        match install {
-            Ok(Ok(0)) => {
-                self.ghostty_hosts.lock().await.insert(key);
-                "xterm-ghostty"
-            }
-            _ => "xterm-256color",
-        }
-    }
-
-    /// Returns the TERM the PTY was opened with, so the webview can surface a
-    /// degraded negotiation (xterm-256color = no kitty keys for Claude Code)
-    /// in its diagnostics instead of it failing silently.
-    pub async fn terminal_open(
-        &self,
-        app: AppHandle,
-        id: String,
-        target: Option<String>,
-        cols: u32,
-        rows: u32,
-    ) -> Result<&'static str, Error> {
-        // A named target opens a shell in that project container (over its
-        // cached session, shared with the file bridge); no target = a shell on
-        // the node over the control-plane session.
-        let target = target.filter(|t| !t.is_empty());
-        let term = self.negotiated_term(target.as_deref()).await;
-        let mut channel = self.shell_channel(target.as_deref()).await?;
-        channel.request_pty(false, term, cols, rows, 0, 0, &[]).await?;
-        channel.request_shell(true).await?;
-
-        let (tx, mut rx) = mpsc::channel::<TermCmd>(256);
-        self.terminals.lock().await.insert(id.clone(), tx);
-
-        let data_event = format!("terminal://data/{id}");
-        let exit_event = format!("terminal://exit/{id}");
-
-        tokio::spawn(async move {
-            // The container session is kept alive by the `containers` cache; the
-            // node session lives in `self`. Nothing to own here.
-            loop {
-                tokio::select! {
-                    msg = channel.wait() => match msg {
-                        Some(ChannelMsg::Data { data }) => {
-                            let _ = app.emit(&data_event, data.to_vec());
-                        }
-                        Some(ChannelMsg::ExtendedData { data, .. }) => {
-                            let _ = app.emit(&data_event, data.to_vec());
-                        }
-                        Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
-                        _ => {}
-                    },
-                    cmd = rx.recv() => match cmd {
-                        Some(TermCmd::Write(bytes)) => {
-                            let _ = channel.data(&bytes[..]).await;
-                        }
-                        Some(TermCmd::Resize(c, r)) => {
-                            let _ = channel.window_change(c, r, 0, 0).await;
-                        }
-                        Some(TermCmd::Close) | None => break,
-                    }
-                }
-            }
-            let _ = app.emit(&exit_event, ());
-        });
-
-        Ok(term)
-    }
-
-    async fn send(&self, id: &str, cmd: TermCmd) -> Result<(), Error> {
-        let terminals = self.terminals.lock().await;
-        let tx = terminals.get(id).ok_or_else(|| Error::NoTerminal(id.into()))?;
-        tx.send(cmd).await.map_err(|_| Error::NoTerminal(id.into()))
-    }
-
-    pub async fn terminal_write(&self, id: &str, data: Vec<u8>) -> Result<(), Error> {
-        self.send(id, TermCmd::Write(data)).await
-    }
-
-    pub async fn terminal_resize(&self, id: &str, cols: u32, rows: u32) -> Result<(), Error> {
-        self.send(id, TermCmd::Resize(cols, rows)).await
-    }
-
-    pub async fn terminal_close(&self, id: &str) -> Result<(), Error> {
-        let _ = self.send(id, TermCmd::Close).await;
-        self.terminals.lock().await.remove(id);
-        Ok(())
-    }
 }
 
 /// Try every identity the ssh-agent holds. Returns `None` if there's no agent
@@ -2753,18 +2598,6 @@ Host bastion
     }
 
     #[test]
-    fn terminfo_install_command_is_one_clean_idempotent_shell_line() {
-        let cmd = terminfo_install_command();
-        assert!(cmd.starts_with("sh -c 'test -e"));
-        assert!(cmd.contains(".terminfo/x/xterm-ghostty"));
-        assert!(cmd.contains("base64 -d"));
-        assert!(!cmd.bytes().any(|b| b == b'\n' || b == b'\r'));
-        let payload = GHOSTTY_TERMINFO_B64.trim();
-        assert!(!payload.is_empty());
-        assert!(payload.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='));
-    }
-
-    #[test]
     fn pruned_dirs_match_whole_names_only() {
         for name in PRUNED_DIRS {
             assert!(is_pruned(name), "{name} should be pruned");
@@ -2934,11 +2767,9 @@ Host bastion
             containers: Mutex::new(HashMap::new()),
             sftp_pool: Mutex::new(HashMap::new()),
             sftp_opens: AtomicU64::new(0),
-            terminals: Mutex::new(HashMap::new()),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             home: Mutex::new(None),
             streams: Mutex::new(HashMap::new()),
-            ghostty_hosts: Mutex::new(HashSet::new()),
         }
     }
 

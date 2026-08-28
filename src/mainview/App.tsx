@@ -265,7 +265,7 @@ export function App({
     <ToastProvider>
       {ready && <Notifier gateway={gateway} focusedSpecId={focusedSpecId} />}
       <div className="cockpit">
-        <nav className="rail" aria-label="Sections">
+        <nav className="rail" aria-label="Sections" data-tauri-drag-region>
           <button type="button" className="rail-brand" onClick={goRooms} aria-label="Mast — rooms">
             <Logo size={22} />
           </button>

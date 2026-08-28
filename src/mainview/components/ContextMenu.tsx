@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cx } from "./cx";
 import { CaretRight } from "./icons";
 
@@ -13,7 +13,7 @@ import { CaretRight } from "./icons";
 export type MenuNode =
   | {
       kind: "item";
-      label: string;
+      label: ReactNode;
       onSelect?: () => void;
       disabled?: boolean;
       hint?: string;

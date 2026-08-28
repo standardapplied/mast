@@ -81,6 +81,8 @@ const OUT_OF_SPACE = -3;
 const DATA_MODE = 37;
 /** DEC private mode 2004 — bracketed paste. */
 const MODE_BRACKETED_PASTE = 2004;
+/** The alternate-screen modes (1049 modern, 1047/47 legacy) — any one means a full-screen TUI. */
+const MODES_ALT_SCREEN = [1049, 1047, 47] as const;
 /** GhosttyTerminalModeConfig: u16 mode + bool value, padded (frozen layout). */
 const MODE_CONFIG_SIZE = 4;
 const MODE_CONFIG_VALUE_OFFSET = 2;
@@ -495,21 +497,31 @@ export class VtCore {
     }
   }
 
-  /** Whether the application enabled bracketed paste (mode 2004) — vim, zsh, claude-code do. */
-  bracketedPaste(): boolean {
+  /** Whether a DEC private mode is currently enabled. */
+  private modeEnabled(mode: number): boolean {
     this.requireOpen();
     // GhosttyTerminalModeConfig (frozen layout): u16 mode, then a bool the query fills in.
     const ptr = this.abi.alloc(MODE_CONFIG_SIZE);
     try {
-      this.abi.writeU16(ptr, MODE_BRACKETED_PASTE);
+      this.abi.writeU16(ptr, mode);
       const rc = this.e.ghostty_terminal_get(this.term, DATA_MODE, ptr);
       if (rc !== SUCCESS) {
-        throw new Error(`VtCore.bracketedPaste: mode query failed (rc=${rc})`);
+        throw new Error(`VtCore: mode ${mode} query failed (rc=${rc})`);
       }
       return this.abi.readU8(ptr + MODE_CONFIG_VALUE_OFFSET) !== 0;
     } finally {
       this.abi.free(ptr, MODE_CONFIG_SIZE);
     }
+  }
+
+  /** Whether the application enabled bracketed paste (mode 2004) — vim, zsh, claude-code do. */
+  bracketedPaste(): boolean {
+    return this.modeEnabled(MODE_BRACKETED_PASTE);
+  }
+
+  /** Whether the application is on the alternate screen (a full-screen TUI, no scrollback). */
+  altScreen(): boolean {
+    return MODES_ALT_SCREEN.some((mode) => this.modeEnabled(mode));
   }
 
   /**

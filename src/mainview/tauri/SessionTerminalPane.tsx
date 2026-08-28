@@ -14,7 +14,16 @@ import { type CellPos, Selection } from "../terminal/selection";
 import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
 import { VtCore } from "../terminal/vtCore";
-import type { TerminalHandle } from "./TerminalPane";
+/** What a mounted terminal offers its host: paste routing, refit, and connection recovery. */
+export type TerminalHandle = {
+  paste: (text: string) => void;
+  /** Refit the VT to the pane's *settled* size — a splitter drag resizes the
+   *  host without a window resize, and fitting at a stale mid-drag size
+   *  garbles the PTY geometry. */
+  refit: () => void;
+  /** Reattach a dead link now, or restart an ended shell. */
+  revive?: () => void;
+};
 
 /**
  * SessionTerminalPane — a durable, host-owned pty rendered by our own WebGPU terminal.
@@ -138,7 +147,6 @@ export const SessionTerminalPane = forwardRef<
   const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
-  const [backend, setBackend] = useState<string>("");
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const themeName = useThemeName();
@@ -299,7 +307,6 @@ export const SessionTerminalPane = forwardRef<
       ]);
       if (disposed) return void renderer.destroy();
       cleanups.push(() => renderer.destroy());
-      setBackend(renderer.backendName);
 
       const { w: cellW, h: cellH } = renderer.cellSize;
       const fit = () => gridFor(host.clientWidth * dpr, host.clientHeight * dpr, cellW, cellH);
@@ -490,7 +497,7 @@ export const SessionTerminalPane = forwardRef<
     const lines = e.deltaY < 0 ? Math.floor(e.deltaY / perLine) : Math.ceil(e.deltaY / perLine);
     if (lines !== 0) {
       controller.setSelection(null); // the viewport-relative highlight no longer lines up
-      controller.scroll({ delta: lines });
+      controller.wheel(lines);
     }
   };
 
@@ -505,6 +512,15 @@ export const SessionTerminalPane = forwardRef<
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
+    // Overlay chrome (the context menu, confirm cards) renders inside this host. Capturing the
+    // pointer here would retarget its clicks to the host — the menu's Copy/Paste would never fire —
+    // and clearing the selection here would empty Copy before it runs. Chrome owns its own clicks;
+    // while the paste card is up, a click anywhere in the pane still restores keyboard focus so
+    // Enter/Escape answer the dialog.
+    if (e.target !== canvasRef.current && e.target !== hostRef.current) {
+      if (pendingPaste !== null) hostRef.current?.focus();
+      return;
+    }
     hostRef.current?.focus();
     if (e.button !== 0) return;
     const pos = cellAt(e);
@@ -575,24 +591,8 @@ export const SessionTerminalPane = forwardRef<
       }}
     >
       <canvas ref={canvasRef} />
-      {backend && !overlay && (
-        <div
-          style={{
-            position: "absolute",
-            right: "8px",
-            bottom: "6px",
-            font: '10px "JetBrains Mono", ui-monospace, monospace',
-            letterSpacing: "0.08em",
-            color: backend === "webgpu" ? "#4de0c8" : "#e0a24d",
-            opacity: 0.5,
-            pointerEvents: "none",
-          }}
-        >
-          {backend.toUpperCase()}
-        </div>
-      )}
       {overlay && (
-        <div className="term-overlay">
+        <div className={overlay.delayed ? "term-overlay term-overlay--delayed" : "term-overlay"}>
           <div className="term-overlay__card">
             <div className={`term-overlay__title term-overlay__title--${overlay.tone}`}>
               {overlay.spin && <span className="term-overlay__spinner" aria-hidden />}
@@ -676,16 +676,23 @@ function previewOf(text: string): string {
 }
 
 /** The overlay card for a non-up status; null when the terminal should stand alone. */
-function overlayFor(
-  status: SessionStatus,
-): { title: string; reason?: string; action?: string; tone: "warn" | "muted"; spin?: boolean } | null {
+function overlayFor(status: SessionStatus): {
+  title: string;
+  reason?: string;
+  action?: string;
+  tone: "warn" | "muted";
+  spin?: boolean;
+  delayed?: boolean;
+} | null {
   switch (status.kind) {
     case "up":
       return null;
     case "connecting":
+      // The first attach usually lands in well under a second; the delayed fade keeps a healthy
+      // connect from flashing a card while an actually-slow dial stops looking like a wedged pane.
       return status.retrying
         ? { title: "Reconnecting…", tone: "warn", spin: true }
-        : null;
+        : { title: "Connecting…", tone: "muted", spin: true, delayed: true };
     case "down":
       return {
         title: "Connection lost — retrying…",

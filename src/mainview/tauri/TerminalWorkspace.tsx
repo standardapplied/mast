@@ -5,20 +5,10 @@ import type { Gateway } from "../gateway";
 import { isUnwell, type SessionStatus } from "../terminal/connection";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
+import type { TerminalHandle } from "./SessionTerminalPane";
 import { addTab, nextActive, tabKey, type Tab } from "./terminalTabs";
-import { type TerminalHandle, TerminalPane } from "./TerminalPane";
 import { TerminalPanes } from "./TerminalPanes";
 import { TerminalSplit } from "./TerminalSplit";
-
-const WEBGPU_PREF = "mast.webgpuTerminal";
-
-function loadWebgpuPref(): boolean {
-  try {
-    return localStorage.getItem(WEBGPU_PREF) === "1";
-  } catch {
-    return false;
-  }
-}
 
 /** One callback ref fanning out to several consumers (the split's drop-paste + our status cluster). */
 function mergeRefs<T>(...refs: Array<Ref<T> | undefined>): (value: T | null) => void {
@@ -84,20 +74,8 @@ export function TerminalWorkspace({
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [snapshotsFor, setSnapshotsFor] = useState<string | null>(null);
-  const [webgpu, setWebgpu] = useState<boolean>(loadWebgpuPref);
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
   const paneRefs = useRef(new Map<string, TerminalHandle>());
-
-  const toggleWebgpu = () =>
-    setWebgpu((on) => {
-      const next = !on;
-      try {
-        localStorage.setItem(WEBGPU_PREF, next ? "1" : "0");
-      } catch {
-        /* preference is best-effort */
-      }
-      return next;
-    });
 
   /** A tab's durable WebGPU terminals (sub-tabs + splits), reporting into the status cluster. */
   const durablePane = (key: string, target: string | undefined, active: boolean, ref?: Ref<TerminalHandle>) => (
@@ -125,15 +103,15 @@ export function TerminalWorkspace({
 
   const showPicker = tabs.length === 0 || adding;
   const activeTarget = tabs.find((t) => t.key === activeKey)?.target;
-  const activeStatus = webgpu && activeKey && !adding ? statuses[activeKey] : undefined;
+  const activeStatus = activeKey && !adding ? statuses[activeKey] : undefined;
 
   return (
     <div className="term-workspace">
       {tabs.length > 0 && (
-        <div className="term-tabs">
+        <div className="term-tabs" data-tauri-drag-region>
           {tabs.map((t) => {
             const s = statuses[t.key];
-            const unwell = webgpu && s !== undefined && isUnwell(s);
+            const unwell = s !== undefined && isUnwell(s);
             return (
               <div
                 key={t.key}
@@ -174,14 +152,6 @@ export function TerminalWorkspace({
                 onRevive={() => paneRefs.current.get(activeKey!)?.revive?.()}
               />
             )}
-            <button
-              type="button"
-              className={cx("dep-chip", webgpu && "is-active")}
-              onClick={toggleWebgpu}
-              title="Render terminals with the experimental WebGPU engine — node and project containers"
-            >
-              {webgpu ? "WebGPU ✓" : "WebGPU"}
-            </button>
             {gateway && activeTarget && !adding && (
               <button
                 type="button"
@@ -207,14 +177,11 @@ export function TerminalWorkspace({
               {t.target ? (
                 <TerminalSplit
                   target={t.target}
-                  label={t.label}
                   active={active}
-                  terminal={webgpu ? (ref) => durablePane(t.key, t.target, active, ref) : undefined}
+                  terminal={(ref) => durablePane(t.key, t.target, active, ref)}
                 />
-              ) : webgpu ? (
-                durablePane(t.key, undefined, active)
               ) : (
-                <TerminalPane label={t.label} active={active} />
+                durablePane(t.key, undefined, active)
               )}
             </div>
           );

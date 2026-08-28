@@ -17,6 +17,9 @@ import { browserThemeDeps, createThemeController } from "./theme";
  */
 
 document.documentElement.classList.add("in-shell");
+// The window runs a transparent titlebar (titleBarStyle Overlay): content owns the top strip and
+// the traffic lights float over the rail — CSS keyed on this flag makes room for them.
+document.body.dataset.chrome = "overlay";
 
 const gateway = createTauriGateway();
 const rosterSources: RosterSources = {

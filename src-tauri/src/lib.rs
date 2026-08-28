@@ -311,46 +311,6 @@ async fn clipboard_read_text() -> Result<String, String> {
     Err("clipboard read is only supported on macOS".into())
 }
 
-#[tauri::command]
-async fn terminal_open(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: String,
-    target: Option<String>,
-    cols: u32,
-    rows: u32,
-) -> Result<&'static str, String> {
-    let backend = state.backend().await?;
-    backend
-        .terminal_open(app, id, target, cols, rows)
-        .await
-        .map_err(String::from)
-}
-
-#[tauri::command]
-async fn terminal_write(
-    state: State<'_, AppState>,
-    id: String,
-    data: Vec<u8>,
-) -> Result<(), String> {
-    state.backend().await?.terminal_write(&id, data).await.map_err(String::from)
-}
-
-#[tauri::command]
-async fn terminal_resize(
-    state: State<'_, AppState>,
-    id: String,
-    cols: u32,
-    rows: u32,
-) -> Result<(), String> {
-    state.backend().await?.terminal_resize(&id, cols, rows).await.map_err(String::from)
-}
-
-#[tauri::command]
-async fn terminal_close(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.backend().await?.terminal_close(&id).await.map_err(String::from)
-}
-
 /// Parameters for creating a fresh host-owned session before attaching to it.
 #[derive(serde::Deserialize)]
 struct SessionCreate {
@@ -550,10 +510,6 @@ pub fn run() {
             fs_mkdir,
             fs_delete,
             fs_open,
-            terminal_open,
-            terminal_write,
-            terminal_resize,
-            terminal_close,
             clipboard_read_text,
             session_open,
             session_write,

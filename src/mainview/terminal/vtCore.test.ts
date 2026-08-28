@@ -383,6 +383,19 @@ describe("key encoding", () => {
 describe("paste", () => {
   const decode = (b: Uint8Array) => new TextDecoder().decode(b);
 
+  test("altScreen tracks the application's alternate-screen modes", async () => {
+    const core = await track();
+    expect(core.altScreen()).toBe(false);
+    core.write(bytes("\x1b[?1049h")); // vim, less, claude-code
+    expect(core.altScreen()).toBe(true);
+    core.write(bytes("\x1b[?1049l"));
+    expect(core.altScreen()).toBe(false);
+    core.write(bytes("\x1b[?47h")); // the legacy variant
+    expect(core.altScreen()).toBe(true);
+    core.write(bytes("\x1b[?47l"));
+    expect(core.altScreen()).toBe(false);
+  });
+
   test("bracketed paste mode tracks the application's own requests", async () => {
     const core = await track();
     expect(core.bracketedPaste()).toBe(false);

@@ -9,6 +9,7 @@ export function PromptDialog({
   label,
   initial = "",
   confirmLabel = "OK",
+  allowEmpty = false,
   onConfirm,
   onClose,
 }: {
@@ -16,12 +17,15 @@ export function PromptDialog({
   label: string;
   initial?: string;
   confirmLabel?: string;
+  /** Accept a blank submission (e.g. a rename where blank restores the default name). */
+  allowEmpty?: boolean;
   onConfirm: (value: string) => void;
   onClose: () => void;
 }) {
   const [value, setValue] = useState(initial);
   const trimmed = value.trim();
-  const submit = () => trimmed && onConfirm(trimmed);
+  const submittable = trimmed.length > 0 || allowEmpty;
+  const submit = () => submittable && onConfirm(trimmed);
 
   return (
     <Dialog
@@ -34,7 +38,7 @@ export function PromptDialog({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={!trimmed} onClick={submit}>
+          <Button disabled={!submittable} onClick={submit}>
             {confirmLabel}
           </Button>
         </>
