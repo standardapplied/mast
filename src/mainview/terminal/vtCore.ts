@@ -64,6 +64,21 @@ const CELLS_DATA_FG_COLOR = 6;
 const DIRTY_FALSE = 0;
 const DIRTY_PARTIAL = 1;
 
+/**
+ * libghostty-vt reports a cell that uses the terminal's DEFAULT foreground or background as pure
+ * black `(0,0,0)` — a "use the configured default" sentinel, not a literal color (a cell with an
+ * explicit SGR color reports its resolved RGB instead). With no default configured the core has
+ * nothing to resolve to, so the consumer substitutes its own theme, exactly as ghostty-web does.
+ */
+const DEFAULT_FG: Rgb = [220, 224, 230];
+const DEFAULT_BG: Rgb = [11, 14, 20];
+
+/** The theme colors a {@link VtCore} paints DEFAULT-colored cells in (see {@link DEFAULT_FG}). */
+export interface Theme {
+  readonly fg: Rgb;
+  readonly bg: Rgb;
+}
+
 /** The subset of libghostty-vt exports VtCore drives. */
 interface GhosttyExports {
   memory: WebAssembly.Memory;
@@ -187,14 +202,20 @@ export class VtCore {
   private rows: number;
   private freed = false;
 
+  private readonly fg: Rgb;
+  private readonly bg: Rgb;
+
   private constructor(
     private readonly e: GhosttyExports,
     cols: number,
     rows: number,
+    theme: Theme,
   ) {
     this.abi = new Abi(e);
     this.cols = cols;
     this.rows = rows;
+    this.fg = theme.fg;
+    this.bg = theme.bg;
     this.term = this.abi.construct((slot) => e.ghostty_terminal_new(0, slot, cols, rows));
     this.state = this.abi.construct((slot) => e.ghostty_render_state_new(0, slot));
     this.rowIter = this.abi.construct((slot) => e.ghostty_render_state_row_iterator_new(0, slot));
@@ -206,13 +227,18 @@ export class VtCore {
    * raw module bytes — injected by the caller (a bundled asset in the app, the vendored file in
    * tests), so VtCore never depends on where the wasm lives.
    */
-  static async create(wasm: BufferSource, cols: number, rows: number): Promise<VtCore> {
+  static async create(
+    wasm: BufferSource,
+    cols: number,
+    rows: number,
+    theme: Theme = { fg: DEFAULT_FG, bg: DEFAULT_BG },
+  ): Promise<VtCore> {
     if (cols <= 0 || rows <= 0 || cols > MAX_DIM || rows > MAX_DIM) {
       throw new Error(`VtCore: cols and rows must be in 1..${MAX_DIM} (got ${cols}x${rows})`);
     }
     const module = await WebAssembly.compile(wasm);
     const instance = await WebAssembly.instantiate(module, {});
-    return new VtCore(instance.exports as unknown as GhosttyExports, cols, rows);
+    return new VtCore(instance.exports as unknown as GhosttyExports, cols, rows, theme);
   }
 
   /** Feeds PTY output bytes to the terminal, advancing its state. */
@@ -413,10 +439,12 @@ export class VtCore {
   }
 
   private readColor(kind: number, ptr: number): Rgb {
+    const fallback = kind === CELLS_DATA_FG_COLOR ? this.fg : this.bg;
     if (this.e.ghostty_render_state_row_cells_get(this.cells, kind, ptr) !== SUCCESS) {
-      return [0, 0, 0];
+      return fallback;
     }
-    return this.abi.readRgb(ptr);
+    const rgb = this.abi.readRgb(ptr);
+    return rgb[0] === 0 && rgb[1] === 0 && rgb[2] === 0 ? fallback : rgb;
   }
 
   private bindRowIterator(): void {
