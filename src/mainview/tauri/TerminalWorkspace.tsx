@@ -108,7 +108,7 @@ export function TerminalWorkspace({
   return (
     <div className="term-workspace">
       {tabs.length > 0 && (
-        <div className="term-tabs">
+        <div className="term-tabs" data-tauri-drag-region>
           {tabs.map((t) => {
             const s = statuses[t.key];
             const unwell = s !== undefined && isUnwell(s);

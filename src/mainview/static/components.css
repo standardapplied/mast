@@ -5184,3 +5184,12 @@ button.room-section-head:hover {
   margin-right: 8px;
   vertical-align: middle;
 }
+
+/* Transparent-titlebar chrome (Tauri, macOS): the traffic lights float over the rail's top,
+   so the brand drops below them, and the tab strip indents clear of the zoom button's spill. */
+body[data-chrome="overlay"] .rail {
+  padding-top: calc(40px + env(safe-area-inset-top));
+}
+body[data-chrome="overlay"] .term-tabs {
+  padding-left: 24px;
+}
