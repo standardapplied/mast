@@ -24,6 +24,8 @@ export interface Cell {
   readonly underline: boolean;
   readonly strikethrough: boolean;
   readonly faint: boolean;
+  /** Display columns the grapheme occupies: 2 for wide (CJK/emoji), else 1. */
+  readonly width: number;
 }
 
 /** A cell with no styling, before colors are filled in — the common case (plain text). */
@@ -184,6 +186,7 @@ interface GhosttyExports {
   ghostty_render_state_row_cells_next(cells: number): boolean;
   ghostty_render_state_row_cells_get(cells: number, data: number, out: number): number;
   ghostty_render_state_row_cells_free(cells: number): void;
+  ghostty_unicode_grapheme_width(cps: number, len: number, outWidth: number): number;
 }
 
 /**
@@ -548,14 +551,17 @@ export class VtCore {
     const lenPtr = this.abi.alloc(4);
     const fgPtr = this.abi.alloc(4);
     const bgPtr = this.abi.alloc(4);
+    const widthPtr = this.abi.alloc(1);
     const stylePtr = this.abi.alloc(STYLE_SIZE);
     try {
       while (this.e.ghostty_render_state_row_cells_next(this.cells)) {
         const style = this.readStyle(fgPtr, stylePtr);
         const fg = this.readColor(CELLS_DATA_FG_COLOR, fgPtr);
         const bg = this.readColor(CELLS_DATA_BG_COLOR, bgPtr);
+        const { text, width } = this.readGrapheme(lenPtr, widthPtr);
         cells.push({
-          text: this.readGrapheme(lenPtr),
+          text,
+          width,
           fg: style.inverse ? bg : fg,
           bg: style.inverse ? fg : bg,
           bold: style.bold,
@@ -569,6 +575,7 @@ export class VtCore {
       this.abi.free(lenPtr, 4);
       this.abi.free(fgPtr, 4);
       this.abi.free(bgPtr, 4);
+      this.abi.free(widthPtr, 1);
       this.abi.free(stylePtr, STYLE_SIZE);
     }
     return cells;
@@ -607,24 +614,34 @@ export class VtCore {
     };
   }
 
-  private readGrapheme(lenPtr: number): string {
-    if (this.e.ghostty_render_state_row_cells_get(this.cells, CELLS_DATA_GRAPHEMES_LEN, lenPtr) !== SUCCESS) {
-      return "";
+  /** The cell's grapheme text and its display width (2 for wide CJK/emoji, else 1). Blank cells are
+   *  width 1 so the column after a wide glyph — its spacer — never claims extra width itself. */
+  private readGrapheme(lenPtr: number, widthPtr: number): { text: string; width: number } {
+    if (
+      this.e.ghostty_render_state_row_cells_get(this.cells, CELLS_DATA_GRAPHEMES_LEN, lenPtr) !==
+      SUCCESS
+    ) {
+      return { text: "", width: 1 };
     }
     const count = this.abi.readU32(lenPtr);
     if (count === 0) {
-      return "";
+      return { text: "", width: 1 };
     }
     const buf = this.abi.alloc(count * 4);
     try {
-      if (this.e.ghostty_render_state_row_cells_get(this.cells, CELLS_DATA_GRAPHEMES_BUF, buf) !== SUCCESS) {
-        return "";
+      if (
+        this.e.ghostty_render_state_row_cells_get(this.cells, CELLS_DATA_GRAPHEMES_BUF, buf) !==
+        SUCCESS
+      ) {
+        return { text: "", width: 1 };
       }
+      this.e.ghostty_unicode_grapheme_width(buf, count, widthPtr);
+      const width = this.abi.readU8(widthPtr) === 2 ? 2 : 1;
       let text = "";
       for (let i = 0; i < count; i++) {
         text += String.fromCodePoint(this.abi.readU32(buf + i * 4));
       }
-      return text;
+      return { text, width };
     } finally {
       this.abi.free(buf, count * 4);
     }

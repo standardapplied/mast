@@ -20,6 +20,7 @@ export interface GridCell {
   underline: boolean;
   strikethrough: boolean;
   faint: boolean;
+  width: number;
 }
 
 const BLANK_FG: Rgb = [200, 208, 220];
@@ -55,6 +56,7 @@ export class TerminalGrid {
       underline: false,
       strikethrough: false,
       faint: false,
+      width: 1,
     };
   }
 
@@ -82,6 +84,7 @@ export class TerminalGrid {
           cell.underline = source.underline;
           cell.strikethrough = source.strikethrough;
           cell.faint = source.faint;
+          cell.width = source.width;
         } else {
           cell.text = " ";
           cell.fg = this.blankFg;
@@ -91,6 +94,7 @@ export class TerminalGrid {
           cell.underline = false;
           cell.strikethrough = false;
           cell.faint = false;
+          cell.width = 1;
         }
       }
     }
