@@ -181,6 +181,7 @@ export function reconcile(
 /** A fresh pane in its own sub-tab, focused. */
 export function newGroup(layout: PaneLayout, session: string): PaneLayout {
   return {
+    ...layout,
     groups: [...layout.groups, { id: layout.seq, panes: [session] }],
     active: layout.groups.length,
     seq: layout.seq + 1,

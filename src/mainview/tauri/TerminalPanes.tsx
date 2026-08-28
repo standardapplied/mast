@@ -8,7 +8,6 @@ import { Tooltip } from "../components/Tooltip";
 import {
   baseSessionFor,
   defaultLayout,
-  labelFor,
   newGroup,
   nextSessionName,
   type PaneLayout,
@@ -218,7 +217,8 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const closable = paneCount(layout) > 1;
 
     return (
-      <div className="term-panes" onKeyDown={onKeyDown}>
+      // `terminal-pane` is the drop-target marker classifyDrop keys on (see dropTarget.ts).
+      <div className="term-panes terminal-pane" onKeyDown={onKeyDown}>
         <div className="term-panes__bar">
           {layout.groups.map((group, i) => {
             const unwell = group.panes.some((s) => {
@@ -249,7 +249,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                           aria-hidden
                         />
                       )}
-                      {titleOf(layout, s, base)}
+                      <span className="term-pane-chip__title">{titleOf(layout, s, base)}</span>
                     </span>
                   );
                 })}
@@ -382,7 +382,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
             onClose={() => setClosing(null)}
             title={
               closing.length === 1
-                ? `Close shell ${labelFor(closing[0]!, base)}?`
+                ? `Close shell ${titleOf(layout, closing[0]!, base)}?`
                 : `Close ${closing.length} shells?`
             }
             size="sm"
@@ -406,7 +406,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         )}
         {renaming && layout && (
           <PromptDialog
-            title={`Rename shell ${labelFor(renaming, base)}`}
+            title={`Rename shell ${titleOf(layout, renaming, base)}`}
             label="Name"
             initial={layout.meta?.[renaming]?.label ?? ""}
             confirmLabel="Rename"

@@ -172,6 +172,12 @@ describe("pane identity (rename + color)", () => {
     expect(l.meta?.["mast-a"]).toBeUndefined();
   });
 
+  test("opening or splitting a shell never touches existing identities", () => {
+    const named = withPaneMeta(layout, "mast-a", { label: "agent", color: 3 });
+    expect(newGroup(named, "mast-a.3").meta).toEqual(named.meta);
+    expect(splitGroup(named, 0, "mast-a.3").meta).toEqual(named.meta);
+  });
+
   test("closing a pane drops its identity", () => {
     const named = withPaneMeta(layout, "mast-a.2", { label: "logs", color: 1 });
     const closed = removePane(named, "mast-a.2", base);

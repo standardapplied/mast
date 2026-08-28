@@ -3751,60 +3751,7 @@ button.room-section-head:hover {
   background: var(--surface-hover);
 }
 
-/* Tauri spike terminal harness — proves the russh PTY pipe end to end. */
-.terminal-pane {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  background: var(--background-deep);
-}
-.terminal-pane__statusbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
-  padding: 8px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--background);
-  font: 500 11px/1 var(--font-mono);
-  letter-spacing: var(--tracking-eyebrow);
-  text-transform: uppercase;
-  color: var(--subtle-foreground);
-}
-.terminal-pane__conn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--muted-foreground);
-}
-.terminal-pane__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--muted-foreground);
-}
-.terminal-pane__conn[data-state="connected"] .terminal-pane__dot {
-  background: var(--success);
-}
-.terminal-pane__conn[data-state="connecting"] .terminal-pane__dot {
-  background: var(--warning);
-}
-.terminal-pane__conn[data-state="off"] .terminal-pane__dot {
-  background: var(--error);
-}
-.terminal-pane__screen {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  overflow: hidden;
-  padding: 8px 10px;
-  outline: none;
-  background: var(--background-deep);
-}
+/* .terminal-pane is a bare drop-target marker (dropTarget.ts classifyDrop); no styling. */
 
 /* Terminal workspace: tabs + panes ------------------------------------------ */
 .term-workspace {
@@ -3956,9 +3903,13 @@ button.room-section-head:hover {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+.term-pane-chip__title {
+  display: inline-block;
   max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .term-pane-chip__sep {
   color: var(--subtle-foreground);
@@ -4905,10 +4856,6 @@ button.room-section-head:hover {
 .term-picker__item svg {
   color: var(--subtle-foreground);
 }
-.terminal-pane__screen canvas {
-  display: block;
-}
-
 /* Agent presence chip ------------------------------------------------------------ */
 
 .presence-chip {
@@ -5192,4 +5139,14 @@ body[data-chrome="overlay"] .rail {
 }
 body[data-chrome="overlay"] .term-tabs {
   padding-left: 24px;
+}
+
+.term-overlay--delayed {
+  opacity: 0;
+  animation: term-overlay-reveal 0.2s ease 0.4s forwards;
+}
+@keyframes term-overlay-reveal {
+  to {
+    opacity: 1;
+  }
 }

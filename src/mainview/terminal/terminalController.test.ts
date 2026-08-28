@@ -184,6 +184,22 @@ describe("TerminalController", () => {
     expect(sink.writes).toEqual([]);
   });
 
+  test("the wheel scrolls scrollback normally, but drives an alternate-screen TUI with arrows", async () => {
+    const { controller, core, sink } = await harness();
+    controller.wheel(-2); // normal screen: local scrollback, nothing sent
+    expect(sink.writes).toEqual([]);
+    core.write(enc("\x1b[?1049h")); // vim/claude-code take the alt screen — it has no scrollback
+    controller.wheel(-2);
+    controller.wheel(3);
+    expect(sink.writes).toEqual([
+      Array.from(enc("\x1b[A\x1b[A")),
+      Array.from(enc("\x1b[B\x1b[B\x1b[B")),
+    ]);
+    core.write(enc("\x1b[?1h")); // and with DECCKM on, the arrows follow it
+    controller.wheel(-1);
+    expect(sink.writes.at(-1)).toEqual(Array.from(enc("\x1bOA")));
+  });
+
   test("committed composition text (IME, dead keys) flows to the pty verbatim", async () => {
     const { controller, sink } = await harness();
     // The composing keydowns themselves encode nothing...

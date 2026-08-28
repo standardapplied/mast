@@ -497,7 +497,7 @@ export const SessionTerminalPane = forwardRef<
     const lines = e.deltaY < 0 ? Math.floor(e.deltaY / perLine) : Math.ceil(e.deltaY / perLine);
     if (lines !== 0) {
       controller.setSelection(null); // the viewport-relative highlight no longer lines up
-      controller.scroll({ delta: lines });
+      controller.wheel(lines);
     }
   };
 
@@ -514,8 +514,13 @@ export const SessionTerminalPane = forwardRef<
   const onPointerDown = (e: React.PointerEvent) => {
     // Overlay chrome (the context menu, confirm cards) renders inside this host. Capturing the
     // pointer here would retarget its clicks to the host — the menu's Copy/Paste would never fire —
-    // and clearing the selection here would empty Copy before it runs. Chrome owns its own clicks.
-    if (e.target !== canvasRef.current && e.target !== hostRef.current) return;
+    // and clearing the selection here would empty Copy before it runs. Chrome owns its own clicks;
+    // while the paste card is up, a click anywhere in the pane still restores keyboard focus so
+    // Enter/Escape answer the dialog.
+    if (e.target !== canvasRef.current && e.target !== hostRef.current) {
+      if (pendingPaste !== null) hostRef.current?.focus();
+      return;
+    }
     hostRef.current?.focus();
     if (e.button !== 0) return;
     const pos = cellAt(e);
@@ -587,7 +592,7 @@ export const SessionTerminalPane = forwardRef<
     >
       <canvas ref={canvasRef} />
       {overlay && (
-        <div className="term-overlay">
+        <div className={overlay.delayed ? "term-overlay term-overlay--delayed" : "term-overlay"}>
           <div className="term-overlay__card">
             <div className={`term-overlay__title term-overlay__title--${overlay.tone}`}>
               {overlay.spin && <span className="term-overlay__spinner" aria-hidden />}
@@ -671,16 +676,23 @@ function previewOf(text: string): string {
 }
 
 /** The overlay card for a non-up status; null when the terminal should stand alone. */
-function overlayFor(
-  status: SessionStatus,
-): { title: string; reason?: string; action?: string; tone: "warn" | "muted"; spin?: boolean } | null {
+function overlayFor(status: SessionStatus): {
+  title: string;
+  reason?: string;
+  action?: string;
+  tone: "warn" | "muted";
+  spin?: boolean;
+  delayed?: boolean;
+} | null {
   switch (status.kind) {
     case "up":
       return null;
     case "connecting":
+      // The first attach usually lands in well under a second; the delayed fade keeps a healthy
+      // connect from flashing a card while an actually-slow dial stops looking like a wedged pane.
       return status.retrying
         ? { title: "Reconnecting…", tone: "warn", spin: true }
-        : null;
+        : { title: "Connecting…", tone: "muted", spin: true, delayed: true };
     case "down":
       return {
         title: "Connection lost — retrying…",

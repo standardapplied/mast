@@ -24,7 +24,8 @@ export function PromptDialog({
 }) {
   const [value, setValue] = useState(initial);
   const trimmed = value.trim();
-  const submit = () => (trimmed || allowEmpty) && onConfirm(trimmed);
+  const submittable = trimmed.length > 0 || allowEmpty;
+  const submit = () => submittable && onConfirm(trimmed);
 
   return (
     <Dialog
@@ -37,7 +38,7 @@ export function PromptDialog({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={!trimmed} onClick={submit}>
+          <Button disabled={!submittable} onClick={submit}>
             {confirmLabel}
           </Button>
         </>

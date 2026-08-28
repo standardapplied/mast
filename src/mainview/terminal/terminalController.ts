@@ -133,6 +133,32 @@ export class TerminalController {
     this.dirty = true;
   }
 
+  /**
+   * Routes mouse-wheel intent ({@code lines} < 0 = up): the local scrollback normally, but an
+   * alternate-screen TUI (vim, less, claude-code) has no scrollback — it gets arrow keys, one per
+   * line, encoded mode-aware so DECCKM applications hear their own dialect.
+   */
+  wheel(lines: number): void {
+    if (lines === 0) {
+      return;
+    }
+    if (!this.core.altScreen()) {
+      this.scroll({ delta: lines });
+      return;
+    }
+    const key = lines < 0 ? "ArrowUp" : "ArrowDown";
+    const stroke = keyEventFor({ key, code: key });
+    const bytes = this.core.encodeKey(stroke);
+    if (bytes === null) {
+      return;
+    }
+    const out = new Uint8Array(bytes.length * Math.abs(lines));
+    for (let i = 0; i < Math.abs(lines); i++) {
+      out.set(bytes, i * bytes.length);
+    }
+    this.sink.write(out);
+  }
+
   /** Sets (or clears) the highlighted selection; the next frame repaints it. */
   setSelection(selection: Selection | null): void {
     this.selection = selection;
