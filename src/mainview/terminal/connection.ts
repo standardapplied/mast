@@ -34,6 +34,52 @@ export function classifyEnd(reason: string): EndClass {
   return reason.startsWith(TRANSPORT_PREFIX) ? "transport" : "clean";
 }
 
+/** Structural equality — {@link worstStatus} mints fresh objects, so identity checks misfire. */
+export function statusEqual(a: SessionStatus, b: SessionStatus): boolean {
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "up":
+      return true;
+    case "connecting":
+      return a.retrying === (b as typeof a).retrying;
+    default:
+      return a.reason === (b as typeof a).reason;
+  }
+}
+
+/** Higher = more broken. Ordering: up < connecting < reconnecting < ended < down < failed. */
+function severity(status: SessionStatus): number {
+  switch (status.kind) {
+    case "up":
+      return 0;
+    case "connecting":
+      return status.retrying ? 2 : 1;
+    case "ended":
+      return 3;
+    case "down":
+      return 4;
+    case "failed":
+      return 5;
+  }
+}
+
+/**
+ * The status a multi-pane tab reports upward: its most broken pane, so the tab bar's cluster and
+ * dot surface trouble anywhere in the tab. An empty tab reads as a quiet first connect.
+ */
+export function worstStatus(statuses: readonly SessionStatus[]): SessionStatus {
+  let worst: SessionStatus = { kind: "connecting", retrying: false };
+  let max = -1;
+  for (const s of statuses) {
+    const sev = severity(s);
+    if (sev > max) {
+      max = sev;
+      worst = s;
+    }
+  }
+  return worst;
+}
+
 /**
  * Paces reconnect attempts. Call {@link opened} when an attach succeeds, {@link lost} when the
  * transport drops (it returns how long to wait before the next attempt), and {@link reset} on a

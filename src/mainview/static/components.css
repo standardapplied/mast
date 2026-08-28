@@ -3916,6 +3916,94 @@ button.room-section-head:hover {
     opacity: 0.35;
   }
 }
+.term-panes {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.term-panes__bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 6px;
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.term-pane-chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.term-pane-chip:hover {
+  color: var(--foreground);
+  background: var(--surface-hover);
+}
+.term-pane-chip.is-active {
+  color: var(--foreground);
+  background: var(--surface-hover);
+}
+.term-pane-chip--tool {
+  color: var(--subtle-foreground);
+  padding: 0 6px;
+}
+.term-pane-chip--tool:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.term-pane-chip__close {
+  color: var(--subtle-foreground);
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 1px;
+  visibility: hidden;
+}
+.term-pane-chip:hover .term-pane-chip__close {
+  visibility: visible;
+}
+.term-pane-chip__close:hover {
+  color: var(--foreground);
+}
+.term-panes__body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.term-panes__group {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+.term-panes__cell {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+.term-panes__cell + .term-panes__cell {
+  border-left: 1px solid var(--border);
+}
+.term-panes__cell.is-focused {
+  box-shadow: inset 0 1px 0 var(--primary);
+}
+
 .term-overlay {
   position: absolute;
   inset: 0;

@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { classifyEnd, Reconnector, STABLE_MS } from "./connection";
+import {
+  classifyEnd,
+  Reconnector,
+  type SessionStatus,
+  STABLE_MS,
+  statusEqual,
+  worstStatus,
+} from "./connection";
 
 describe("classifyEnd", () => {
   test("a transport failure is reconnectable", () => {
@@ -63,5 +70,36 @@ describe("Reconnector", () => {
     r.lost();
     r.reset();
     expect(r.lost()).toBe(500);
+  });
+});
+
+describe("worstStatus", () => {
+  const up: SessionStatus = { kind: "up" };
+  const first: SessionStatus = { kind: "connecting", retrying: false };
+  const retrying: SessionStatus = { kind: "connecting", retrying: true };
+  const down: SessionStatus = { kind: "down", reason: "transport error: gone" };
+  const ended: SessionStatus = { kind: "ended", reason: "exited(0)" };
+  const failed: SessionStatus = { kind: "failed", reason: "no webgpu" };
+
+  test("a tab reports its most broken pane", () => {
+    expect(worstStatus([up, up])).toEqual(up);
+    expect(worstStatus([up, first])).toEqual(first);
+    expect(worstStatus([first, retrying])).toEqual(retrying);
+    expect(worstStatus([up, retrying, ended])).toEqual(ended);
+    expect(worstStatus([ended, down, up])).toEqual(down);
+    expect(worstStatus([down, failed])).toEqual(failed);
+  });
+
+  test("no panes reads as a quiet first connect", () => {
+    expect(worstStatus([])).toEqual(first);
+  });
+
+  test("statusEqual compares structure, not identity", () => {
+    expect(statusEqual({ kind: "up" }, { kind: "up" })).toBe(true);
+    expect(statusEqual(first, { ...first })).toBe(true);
+    expect(statusEqual(first, retrying)).toBe(false);
+    expect(statusEqual(down, { kind: "down", reason: down.reason })).toBe(true);
+    expect(statusEqual(down, { kind: "down", reason: "other" })).toBe(false);
+    expect(statusEqual(down, failed)).toBe(false);
   });
 });

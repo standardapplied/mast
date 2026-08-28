@@ -5,26 +5,10 @@ import type { Gateway } from "../gateway";
 import type { SessionStatus } from "../terminal/connection";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
-import { type SessionCreate, SessionTerminalPane } from "./SessionTerminalPane";
-import { addTab, nextActive, sessionSpecFor, tabKey, type Tab } from "./terminalTabs";
+import { addTab, nextActive, tabKey, type Tab } from "./terminalTabs";
 import { type TerminalHandle, TerminalPane } from "./TerminalPane";
+import { TerminalPanes } from "./TerminalPanes";
 import { TerminalSplit } from "./TerminalSplit";
-
-/**
- * The pty-host reached over the control-plane SSH session — one host on the box, addressed by the
- * same `~/.sail/pty.sock`. The `~/` is expanded against the remote home on the Rust side, and a
- * blank token resolves to the box owner. A session's `project` (empty for the node, the container
- * name for a project tab) tells that host whether to run the shell on the box or `incus exec` it
- * inside the project's container, so one durable terminal reaches both.
- */
-const NODE_SOCKET = "~/.sail/pty.sock";
-const BASE_CREATE: SessionCreate = {
-  command: ["bash", "-l"],
-  cwd: "~",
-  project: "",
-  cols: 80,
-  rows: 24,
-};
 
 const WEBGPU_PREF = "mast.webgpuTerminal";
 
@@ -115,24 +99,18 @@ export function TerminalWorkspace({
       return next;
     });
 
-  /** The durable WebGPU terminal for a tab, node or container, reporting into the status cluster. */
-  const durablePane = (key: string, target: string | undefined, active: boolean, ref?: Ref<TerminalHandle>) => {
-    const { session, project } = sessionSpecFor(target);
-    return (
-      <SessionTerminalPane
-        ref={mergeRefs(ref, (h: TerminalHandle | null) => {
-          if (h) paneRefs.current.set(key, h);
-          else paneRefs.current.delete(key);
-        })}
-        socketPath={NODE_SOCKET}
-        token=""
-        session={session}
-        create={{ ...BASE_CREATE, project }}
-        active={active}
-        onStatus={(s) => setStatuses((prev) => (prev[key] === s ? prev : { ...prev, [key]: s }))}
-      />
-    );
-  };
+  /** A tab's durable WebGPU terminals (sub-tabs + splits), reporting into the status cluster. */
+  const durablePane = (key: string, target: string | undefined, active: boolean, ref?: Ref<TerminalHandle>) => (
+    <TerminalPanes
+      ref={mergeRefs(ref, (h: TerminalHandle | null) => {
+        if (h) paneRefs.current.set(key, h);
+        else paneRefs.current.delete(key);
+      })}
+      target={target}
+      active={active}
+      onStatus={(s) => setStatuses((prev) => (prev[key] === s ? prev : { ...prev, [key]: s }))}
+    />
+  );
 
   const open = (target: string | undefined, label: string) => {
     setTabs((prev) => addTab(prev, target, label));

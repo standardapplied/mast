@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ThemeName } from "../../shared/types";
-import { ContextMenu } from "../components/ContextMenu";
+import { ContextMenu, type MenuNode } from "../components/ContextMenu";
 import { classifyEnd, Reconnector, type SessionStatus } from "../terminal/connection";
 import { TerminalRenderer } from "../terminal/renderer";
 import { type CellPos, Selection } from "../terminal/selection";
@@ -81,6 +81,8 @@ export interface SessionTerminalProps {
   readonly active?: boolean;
   /** Lifecycle reporting for the tab bar's status cluster. */
   readonly onStatus?: (status: SessionStatus) => void;
+  /** Extra context-menu entries after Copy/Paste (e.g. the pane host's "Close pane"). */
+  readonly menuExtras?: MenuNode[];
 }
 
 const noop = () => {};
@@ -106,7 +108,7 @@ export const SessionTerminalPane = forwardRef<
   TerminalHandle,
   SessionTerminalProps
 >(function SessionTerminalPane(
-  { socketPath, token, session, write = true, create, active, onStatus },
+  { socketPath, token, session, write = true, create, active, onStatus, menuExtras },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -585,6 +587,7 @@ export const SessionTerminalPane = forwardRef<
               hint: "⌘V",
               onSelect: pasteFromClipboard,
             },
+            ...(menuExtras?.length ? [{ kind: "separator" } as MenuNode, ...menuExtras] : []),
           ]}
         />
       )}
