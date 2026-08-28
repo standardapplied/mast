@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ThemeName } from "../../shared/types";
+import { ContextMenu } from "../components/ContextMenu";
 import { classifyEnd, Reconnector, type SessionStatus } from "../terminal/connection";
 import { TerminalRenderer } from "../terminal/renderer";
 import { type CellPos, Selection } from "../terminal/selection";
@@ -84,6 +85,23 @@ export interface SessionTerminalProps {
 
 const noop = () => {};
 
+/**
+ * The system clipboard as text: the Rust side (`pbpaste`) first — WKWebView's own clipboard read
+ * is gesture-gated and its paste event never fires on a non-editable surface — then the browser
+ * API as the non-Tauri fallback. Empty string when both decline.
+ */
+async function readClipboard(): Promise<string> {
+  try {
+    return await invoke<string>("clipboard_read_text");
+  } catch {
+    try {
+      return (await navigator.clipboard?.readText()) ?? "";
+    } catch {
+      return "";
+    }
+  }
+}
+
 export const SessionTerminalPane = forwardRef<
   TerminalHandle,
   SessionTerminalProps
@@ -103,6 +121,8 @@ export const SessionTerminalPane = forwardRef<
   const reconnector = useRef(new Reconnector());
   const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [backend, setBackend] = useState<string>("");
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const themeName = useThemeName();
   const palette = paletteFor(themeName);
   const bgCss = `rgb(${palette.bg[0]}, ${palette.bg[1]}, ${palette.bg[2]})`;
@@ -134,12 +154,34 @@ export const SessionTerminalPane = forwardRef<
     reattach();
   }, [socketPath, token, session, reattach]);
 
+  /** Routes text into the pty, parking multi-line pastes on the confirm card first. */
+  const tryPaste = useCallback((text: string) => {
+    const controller = controllerRef.current;
+    if (!controller || text.length === 0) return;
+    controller.scroll("bottom");
+    if (!controller.paste(text)) {
+      setPendingPaste(text);
+    }
+  }, []);
+
+  const pasteFromClipboard = useCallback(() => {
+    void readClipboard().then(tryPaste);
+  }, [tryPaste]);
+
+  const copySelection = useCallback((): boolean => {
+    const text = controllerRef.current?.selectedText() ?? "";
+    if (!text) return false;
+    void navigator.clipboard?.writeText(text).catch(noop);
+    return true;
+  }, []);
+
   // Drop-to-paste routes through here; the pane refits itself from its own ResizeObserver, so the
-  // workbench's post-splitter-drag refit is a no-op.
+  // workbench's post-splitter-drag refit is a no-op. A drop is scripted insertion (single-line
+  // shell-quoted paths), not a clipboard paste — never parked on the confirm card.
   useImperativeHandle(
     ref,
     () => ({
-      paste: (text: string) => controllerRef.current?.paste(text),
+      paste: (text: string) => controllerRef.current?.paste(text, { force: true }),
       refit: () => {},
       revive,
     }),
@@ -354,10 +396,13 @@ export const SessionTerminalPane = forwardRef<
   const onKeyDown = (e: React.KeyboardEvent) => {
     const controller = controllerRef.current;
     if (!controller) return;
-    if (e.metaKey && (e.key === "c" || e.key === "C")) {
-      const text = controller.selectedText();
-      if (text) {
-        void navigator.clipboard?.writeText(text).catch(() => {});
+    if (e.metaKey && !e.ctrlKey && !e.altKey) {
+      if ((e.key === "c" || e.key === "C") && copySelection()) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "v" || e.key === "V") {
+        pasteFromClipboard();
         e.preventDefault();
         return;
       }
@@ -421,14 +466,17 @@ export const SessionTerminalPane = forwardRef<
   };
 
   const onPaste = (e: React.ClipboardEvent) => {
-    const controller = controllerRef.current;
-    if (!controller) return;
     const text = e.clipboardData.getData("text");
     if (text) {
-      controller.scroll("bottom");
-      controller.paste(text);
+      tryPaste(text);
       e.preventDefault();
     }
+  };
+
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    hostRef.current?.focus();
+    setMenu({ x: e.clientX, y: e.clientY });
   };
 
   const overlay = overlayFor(status);
@@ -439,6 +487,7 @@ export const SessionTerminalPane = forwardRef<
       tabIndex={0}
       onKeyDown={onKeyDown}
       onPaste={onPaste}
+      onContextMenu={onContextMenu}
       onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -487,9 +536,72 @@ export const SessionTerminalPane = forwardRef<
           </div>
         </div>
       )}
+      {pendingPaste !== null && (
+        <div className="term-overlay">
+          <div className="term-overlay__card">
+            <div className="term-overlay__title term-overlay__title--warn">
+              Paste {lineCount(pendingPaste)} lines? Each will run as a command.
+            </div>
+            <div className="term-overlay__reason">{previewOf(pendingPaste)}</div>
+            <div className="term-overlay__actions">
+              <button
+                type="button"
+                className="term-overlay__btn term-overlay__btn--ghost"
+                onClick={() => setPendingPaste(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="term-overlay__btn"
+                onClick={() => {
+                  controllerRef.current?.paste(pendingPaste, { force: true });
+                  setPendingPaste(null);
+                  hostRef.current?.focus();
+                }}
+              >
+                Paste
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={[
+            {
+              kind: "item",
+              label: "Copy",
+              hint: "⌘C",
+              disabled: !controllerRef.current?.selectedText(),
+              onSelect: () => void copySelection(),
+            },
+            {
+              kind: "item",
+              label: "Paste",
+              hint: "⌘V",
+              onSelect: pasteFromClipboard,
+            },
+          ]}
+        />
+      )}
     </div>
   );
 });
+
+function lineCount(text: string): number {
+  return text.split(/\r\n|[\r\n]/).length;
+}
+
+/** The first few lines of a pending paste, elided — enough to recognize, never a wall. */
+function previewOf(text: string): string {
+  const lines = text.split(/\r\n|[\r\n]/);
+  const shown = lines.slice(0, 4).map((l) => (l.length > 80 ? `${l.slice(0, 80)}…` : l));
+  return shown.join("\n") + (lines.length > 4 ? `\n… ${lines.length - 4} more` : "");
+}
 
 /** The overlay card for a non-up status; null when the terminal should stand alone. */
 function overlayFor(

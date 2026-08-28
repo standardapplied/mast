@@ -177,11 +177,30 @@ describe("TerminalController", () => {
     expect(sink.writes).toEqual([]);
   });
 
-  test("paste sends the text; an empty paste sends nothing", async () => {
+  test("paste sends single-line text; an empty paste sends nothing", async () => {
     const { controller, sink } = await harness();
-    controller.paste("ls\n");
-    controller.paste("");
-    expect(sink.writes).toEqual([Array.from(enc("ls\n"))]);
+    expect(controller.paste("ls")).toBe(true);
+    expect(controller.paste("")).toBe(true);
+    expect(sink.writes).toEqual([Array.from(enc("ls"))]);
+  });
+
+  test("an unbracketed multi-line paste demands confirmation and writes nothing", async () => {
+    const { controller, sink } = await harness();
+    expect(controller.paste("rm -rf /\necho gotcha")).toBe(false);
+    expect(sink.writes).toEqual([]);
+  });
+
+  test("a confirmed multi-line paste writes with newlines as carriage returns", async () => {
+    const { controller, sink } = await harness();
+    expect(controller.paste("echo a\necho b", { force: true })).toBe(true);
+    expect(sink.writes).toEqual([Array.from(enc("echo a\recho b"))]);
+  });
+
+  test("with bracketed paste on, multi-line pastes flow wrapped and unconfirmed", async () => {
+    const { controller, core, sink } = await harness();
+    core.write(enc("\x1b[?2004h")); // the app (vim, claude-code) opts in
+    expect(controller.paste("echo a\necho b")).toBe(true);
+    expect(sink.writes).toEqual([Array.from(enc("\x1b[200~echo a\necho b\x1b[201~"))]);
   });
 
   test("resize reflows the core, resizes the renderer, and notifies the pty", async () => {

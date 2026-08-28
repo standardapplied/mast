@@ -291,6 +291,26 @@ async fn fs_open(
     Ok(())
 }
 
+/// Read the system clipboard as text. The webview cannot do this itself: WKWebView never fires DOM
+/// paste events on a non-editable surface, and its async clipboard *read* is gesture-gated — while
+/// `pbpaste` ships on every Mac. Empty clipboard reads as an empty string, not an error.
+#[tauri::command]
+async fn clipboard_read_text() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let out = tokio::task::spawn_blocking(|| std::process::Command::new("pbpaste").output())
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("pbpaste: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("pbpaste exited with {}", out.status));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("clipboard read is only supported on macOS".into())
+}
+
 #[tauri::command]
 async fn terminal_open(
     app: AppHandle,
@@ -534,6 +554,7 @@ pub fn run() {
             terminal_write,
             terminal_resize,
             terminal_close,
+            clipboard_read_text,
             session_open,
             session_write,
             session_resize,
