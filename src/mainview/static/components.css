@@ -3927,10 +3927,10 @@ button.room-section-head:hover {
 .term-panes__bar {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
   flex-shrink: 0;
-  height: 26px;
-  padding: 0 6px;
+  height: 34px;
+  padding: 0 8px;
   background: var(--background);
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
@@ -3939,18 +3939,37 @@ button.room-section-head:hover {
   appearance: none;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 20px;
-  padding: 0 8px;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
   background: none;
   border: none;
-  border-radius: 3px;
+  border-radius: 4px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   letter-spacing: 0.06em;
   color: var(--muted-foreground);
   cursor: pointer;
   white-space: nowrap;
+}
+.term-pane-chip__pane {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.term-pane-chip__sep {
+  color: var(--subtle-foreground);
+  margin-right: 5px;
+}
+.term-pane-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
 }
 .term-pane-chip:hover {
   color: var(--foreground);
@@ -5160,4 +5179,8 @@ button.room-section-head:hover {
     animation: none;
     opacity: 0.6;
   }
+}
+.context-menu-label .term-pane-dot {
+  margin-right: 8px;
+  vertical-align: middle;
 }

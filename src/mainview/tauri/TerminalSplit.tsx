@@ -10,7 +10,7 @@ import { classifyDrop, parentDir, shellQuote, type DropTarget } from "./dropTarg
 import { FileTree, type FileActions } from "./FileTree";
 import { FileTreeStore, type FileEntry, type FsApi } from "./fileTreeStore";
 import { PromptDialog } from "./PromptDialog";
-import { TerminalPane, type TerminalHandle } from "./TerminalPane";
+import type { TerminalHandle } from "./SessionTerminalPane";
 import { duplicateDownloadName } from "./transfers";
 import { TransfersTray } from "./TransfersTray";
 import { ViewerPane } from "./ViewerPane";
@@ -58,15 +58,13 @@ type PendingViewerAction = { kind: "open"; entry: FileEntry } | { kind: "close" 
 
 export function TerminalSplit({
   target,
-  label,
   active,
   terminal,
 }: {
   target: string;
-  label: string;
   active?: boolean;
-  /** Render the terminal pillar (durable pty); falls back to the raw-shell {@link TerminalPane}. */
-  terminal?: (ref: React.Ref<TerminalHandle>) => React.ReactNode;
+  /** Renders the terminal pillar (the durable multi-pane workspace). */
+  terminal: (ref: React.Ref<TerminalHandle>) => React.ReactNode;
 }) {
   // Created once for this mounted project (keyed by target upstream). Not
   // disposed on unmount: the listeners unsubscribe themselves and the store is
@@ -375,11 +373,7 @@ export function TerminalSplit({
       </div>
       <div className="term-split__panes">
         <div className={`term-split__main${terminalTargeted ? " term-split__main--drop" : ""}`}>
-          {terminal ? (
-            terminal(termRef)
-          ) : (
-            <TerminalPane ref={termRef} target={target} label={label} active={active} />
-          )}
+          {terminal(termRef)}
         </div>
         {viewerOpen && (
           <>

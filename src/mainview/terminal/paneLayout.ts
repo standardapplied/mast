@@ -19,11 +19,18 @@ export interface PaneGroup {
   readonly panes: readonly string[];
 }
 
+/** A pane's optional identity: a custom name and a swatch index (see the component's palette). */
+export interface PaneMeta {
+  readonly label?: string;
+  readonly color?: number;
+}
+
 /** `groups[i]` renders as side-by-side splits; `active` is the open sub-tab; `seq` mints ids. */
 export interface PaneLayout {
   readonly groups: readonly PaneGroup[];
   readonly active: number;
   readonly seq: number;
+  readonly meta?: Readonly<Record<string, PaneMeta>>;
 }
 
 export function baseSessionFor(target?: string): string {
@@ -51,6 +58,44 @@ export function labelFor(session: string, base: string): string {
   return String(ordinalOf(session, base) ?? "?");
 }
 
+/** What a pane is called: its custom label when set, its ordinal otherwise. */
+export function titleOf(layout: PaneLayout, session: string, base: string): string {
+  return layout.meta?.[session]?.label || labelFor(session, base);
+}
+
+/**
+ * Sets a pane's identity, merging with what it had: a blank label clears the name, an undefined
+ * color clears the swatch, and an identity emptied of both disappears entirely.
+ */
+export function withPaneMeta(layout: PaneLayout, session: string, patch: PaneMeta): PaneLayout {
+  const merged: { label?: string; color?: number } = { ...layout.meta?.[session] };
+  if ("label" in patch) {
+    if (patch.label) merged.label = patch.label;
+    else delete merged.label;
+  }
+  if ("color" in patch) {
+    if (patch.color !== undefined) merged.color = patch.color;
+    else delete merged.color;
+  }
+  const meta = { ...layout.meta };
+  if (merged.label === undefined && merged.color === undefined) {
+    delete meta[session];
+  } else {
+    meta[session] = merged;
+  }
+  return { ...layout, meta: Object.keys(meta).length > 0 ? meta : undefined };
+}
+
+/** The stored identities restricted to panes that still exist. */
+function pruneMeta(
+  meta: Readonly<Record<string, PaneMeta>> | undefined,
+  survivors: ReadonlySet<string>,
+): Readonly<Record<string, PaneMeta>> | undefined {
+  if (!meta) return undefined;
+  const kept = Object.fromEntries(Object.entries(meta).filter(([s]) => survivors.has(s)));
+  return Object.keys(kept).length > 0 ? kept : undefined;
+}
+
 /** The lowest-free-ordinal name for a fresh pane, given every name already spoken for. */
 export function nextSessionName(taken: Iterable<string>, base: string): string {
   const used = new Set(taken);
@@ -68,7 +113,7 @@ export function nextSessionName(taken: Iterable<string>, base: string): string {
 export function parseLayout(raw: string | null): PaneLayout | null {
   if (!raw) return null;
   try {
-    const p = JSON.parse(raw) as { groups?: unknown; active?: unknown; seq?: unknown };
+    const p = JSON.parse(raw) as { groups?: unknown; active?: unknown; seq?: unknown; meta?: unknown };
     const sound =
       Array.isArray(p.groups) &&
       p.groups.every(
@@ -82,7 +127,21 @@ export function parseLayout(raw: string | null): PaneLayout | null {
       ) &&
       typeof p.active === "number" &&
       typeof p.seq === "number";
-    return sound ? (p as unknown as PaneLayout) : null;
+    if (!sound) return null;
+    // Identity is decoration: a garbled meta heals to none rather than blanking the layout.
+    const metaSound =
+      p.meta !== undefined &&
+      p.meta !== null &&
+      typeof p.meta === "object" &&
+      Object.values(p.meta as Record<string, unknown>).every(
+        (m) =>
+          m !== null &&
+          typeof m === "object" &&
+          ((m as PaneMeta).label === undefined || typeof (m as PaneMeta).label === "string") &&
+          ((m as PaneMeta).color === undefined || typeof (m as PaneMeta).color === "number"),
+      );
+    if (!metaSound) delete p.meta;
+    return p as unknown as PaneLayout;
   } catch {
     return null;
   }
@@ -115,7 +174,8 @@ export function reconcile(
     return defaultLayout(base);
   }
   const active = Math.min(Math.max(stored?.active ?? 0, 0), groups.length - 1);
-  return { groups, active, seq };
+  const meta = pruneMeta(stored?.meta, new Set(groups.flatMap((g) => g.panes)));
+  return meta ? { groups, active, seq, meta } : { groups, active, seq };
 }
 
 /** A fresh pane in its own sub-tab, focused. */
@@ -143,7 +203,9 @@ export function removePane(layout: PaneLayout, session: string, base: string): P
   if (groups.length === 0) {
     return defaultLayout(base);
   }
-  return { ...layout, groups, active: Math.min(layout.active, groups.length - 1) };
+  const meta = pruneMeta(layout.meta, new Set(groups.flatMap((g) => g.panes)));
+  const next: PaneLayout = { groups, active: Math.min(layout.active, groups.length - 1), seq: layout.seq };
+  return meta ? { ...next, meta } : next;
 }
 
 export function paneCount(layout: PaneLayout): number {

@@ -4,6 +4,7 @@ import { Dialog } from "../components/Dialog";
 import { cx } from "../components/cx";
 import { Button } from "../components/ui";
 import { isUnwell, type SessionStatus, statusEqual, worstStatus } from "../terminal/connection";
+import { Tooltip } from "../components/Tooltip";
 import {
   baseSessionFor,
   defaultLayout,
@@ -18,9 +19,11 @@ import {
   removePane,
   sessionsOf,
   splitGroup,
+  titleOf,
+  withPaneMeta,
 } from "../terminal/paneLayout";
-import { type SessionCreate, SessionTerminalPane } from "./SessionTerminalPane";
-import type { TerminalHandle } from "./TerminalPane";
+import { PromptDialog } from "./PromptDialog";
+import { type SessionCreate, SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane";
 
 /**
  * TerminalPanes — one workspace tab's terminals: sub-tabs of durable host sessions, each sub-tab
@@ -41,6 +44,18 @@ const NODE_SOCKET = "~/.sail/pty.sock";
 const BASE_CREATE = { command: ["bash", "-l"], cwd: "~", cols: 80, rows: 24 };
 const MAX_SPLITS = 4;
 const MAX_GROUPS = 8;
+
+/** The swatches a shell can wear (ghostty-style tab dots) — index is what the layout stores. */
+const PANE_COLORS = [
+  "#fc4926",
+  "#e0a24d",
+  "#e8d44d",
+  "#86b89a",
+  "#4de0c8",
+  "#5b9bd5",
+  "#a78bfa",
+  "#d08fa6",
+] as const;
 
 const noop = () => {};
 
@@ -66,6 +81,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const [visited, setVisited] = useState<ReadonlySet<number>>(new Set());
     const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
     const [closing, setClosing] = useState<string[] | null>(null);
+    const [renaming, setRenaming] = useState<string | null>(null);
     const paneRefs = useRef(new Map<string, TerminalHandle>());
 
     // Existence is the host's truth: reconcile the stored arrangement against its live sessions.
@@ -209,20 +225,38 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               const st = statuses[s];
               return st !== undefined && isUnwell(st);
             });
-            const label = group.panes.map((s) => labelFor(s, base)).join("·");
+            const plainLabel = group.panes.map((s) => titleOf(layout, s, base)).join("·");
             return (
               <button
                 key={group.id}
                 type="button"
                 className={cx("term-pane-chip", i === layout.active && "is-active")}
                 onClick={() => activateGroup(i)}
+                onDoubleClick={() =>
+                  setRenaming(group.panes.includes(focused) ? focused : group.panes[0]!)
+                }
               >
                 {unwell && <span className="term-status__dot term-status__dot--warn" aria-hidden />}
-                {label}
+                {group.panes.map((s, p) => {
+                  const color = layout.meta?.[s]?.color;
+                  return (
+                    <span key={s} className="term-pane-chip__pane">
+                      {p > 0 && <span className="term-pane-chip__sep">·</span>}
+                      {color !== undefined && PANE_COLORS[color] && (
+                        <span
+                          className="term-pane-dot"
+                          style={{ background: PANE_COLORS[color] }}
+                          aria-hidden
+                        />
+                      )}
+                      {titleOf(layout, s, base)}
+                    </span>
+                  );
+                })}
                 {closable && (
                   <span
                     role="button"
-                    aria-label={`Close shell ${label}`}
+                    aria-label={`Close shell ${plainLabel}`}
                     className="term-pane-chip__close"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -235,26 +269,28 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               </button>
             );
           })}
-          <button
-            type="button"
-            className="term-pane-chip term-pane-chip--tool"
-            title="New shell (⌘T)"
-            aria-label="New shell"
-            onClick={addShell}
-            disabled={layout.groups.length >= MAX_GROUPS}
-          >
-            ＋
-          </button>
-          <button
-            type="button"
-            className="term-pane-chip term-pane-chip--tool"
-            title="Split right (⌘D)"
-            aria-label="Split right"
-            onClick={split}
-            disabled={layout.groups[layout.active]!.panes.length >= MAX_SPLITS}
-          >
-            ◫
-          </button>
+          <Tooltip content="New shell — ⌘T" side="bottom">
+            <button
+              type="button"
+              className="term-pane-chip term-pane-chip--tool"
+              aria-label="New shell"
+              onClick={addShell}
+              disabled={layout.groups.length >= MAX_GROUPS}
+            >
+              ＋
+            </button>
+          </Tooltip>
+          <Tooltip content="Split right — ⌘D" side="bottom">
+            <button
+              type="button"
+              className="term-pane-chip term-pane-chip--tool"
+              aria-label="Split right"
+              onClick={split}
+              disabled={layout.groups[layout.active]!.panes.length >= MAX_SPLITS}
+            >
+              ◫
+            </button>
+          </Tooltip>
         </div>
         <div className="term-panes__body">
           {layout.groups.map((group, i) => {
@@ -289,18 +325,50 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                       onStatus={(s) =>
                         setStatuses((prev) => (prev[session] === s ? prev : { ...prev, [session]: s }))
                       }
-                      menuExtras={
-                        closable
+                      menuExtras={[
+                        {
+                          kind: "item",
+                          label: "Rename shell…",
+                          onSelect: () => setRenaming(session),
+                        },
+                        {
+                          kind: "item",
+                          label: "Color",
+                          submenu: [
+                            {
+                              kind: "item",
+                              label: "None",
+                              onSelect: () =>
+                                setLayout((l) => l && withPaneMeta(l, session, { color: undefined })),
+                            },
+                            ...PANE_COLORS.map((hex, index) => ({
+                              kind: "item" as const,
+                              label: (
+                                <>
+                                  <span
+                                    className="term-pane-dot"
+                                    style={{ background: hex }}
+                                    aria-hidden
+                                  />
+                                  {`Color ${index + 1}`}
+                                </>
+                              ),
+                              onSelect: () =>
+                                setLayout((l) => l && withPaneMeta(l, session, { color: index })),
+                            })),
+                          ],
+                        },
+                        ...(closable
                           ? [
                               {
-                                kind: "item",
-                                label: `Close pane ${labelFor(session, base)}`,
+                                kind: "item" as const,
+                                label: `Close pane ${titleOf(layout, session, base)}`,
                                 danger: true,
                                 onSelect: () => confirmClose([session]),
                               },
                             ]
-                          : undefined
-                      }
+                          : []),
+                      ]}
                     />
                   </div>
                 ))}
@@ -335,6 +403,20 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                 : "These shells and anything running in them will end. Quitting Mast instead leaves every shell running."}
             </p>
           </Dialog>
+        )}
+        {renaming && layout && (
+          <PromptDialog
+            title={`Rename shell ${labelFor(renaming, base)}`}
+            label="Name"
+            initial={layout.meta?.[renaming]?.label ?? ""}
+            confirmLabel="Rename"
+            allowEmpty
+            onConfirm={(value) => {
+              setLayout((l) => l && withPaneMeta(l, renaming, { label: value }));
+              setRenaming(null);
+            }}
+            onClose={() => setRenaming(null)}
+          />
         )}
       </div>
     );

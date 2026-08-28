@@ -12,6 +12,8 @@ import {
   removePane,
   sessionsOf,
   splitGroup,
+  titleOf,
+  withPaneMeta,
 } from "./paneLayout";
 
 describe("session naming", () => {
@@ -147,5 +149,51 @@ describe("editing", () => {
     const layout = { groups: [{ id: 1, panes: ["a", "c"] }, { id: 2, panes: ["b"] }], active: 0, seq: 3 };
     expect(paneCount(layout)).toBe(3);
     expect(sessionsOf(layout)).toEqual(["a", "c", "b"]);
+  });
+});
+
+describe("pane identity (rename + color)", () => {
+  const base = "mast-a";
+  const layout = { groups: [{ id: 1, panes: ["mast-a", "mast-a.2"] }], active: 0, seq: 2 };
+
+  test("a pane's title is its custom label, falling back to the ordinal", () => {
+    expect(titleOf(layout, "mast-a", base)).toBe("1");
+    const named = withPaneMeta(layout, "mast-a", { label: "agent" });
+    expect(titleOf(named, "mast-a", base)).toBe("agent");
+    expect(titleOf(named, "mast-a.2", base)).toBe("2");
+  });
+
+  test("renaming to blank clears back to the ordinal; color survives independently", () => {
+    let l = withPaneMeta(layout, "mast-a", { label: "agent", color: 3 });
+    l = withPaneMeta(l, "mast-a", { label: "" });
+    expect(titleOf(l, "mast-a", base)).toBe("1");
+    expect(l.meta?.["mast-a"]).toEqual({ color: 3 });
+    l = withPaneMeta(l, "mast-a", { color: undefined });
+    expect(l.meta?.["mast-a"]).toBeUndefined();
+  });
+
+  test("closing a pane drops its identity", () => {
+    const named = withPaneMeta(layout, "mast-a.2", { label: "logs", color: 1 });
+    const closed = removePane(named, "mast-a.2", base);
+    expect(closed.meta?.["mast-a.2"]).toBeUndefined();
+    expect(closed.groups).toEqual([{ id: 1, panes: ["mast-a"] }]);
+  });
+
+  test("reconcile keeps identity for surviving panes and sheds orphans", () => {
+    const stored = {
+      groups: [{ id: 1, panes: ["mast-a"] }],
+      active: 0,
+      seq: 2,
+      meta: { "mast-a": { label: "agent" }, "mast-a.9": { label: "ghost" } },
+    };
+    const out = reconcile(stored, [], base);
+    expect(out.meta).toEqual({ "mast-a": { label: "agent" } });
+  });
+
+  test("identity round-trips through parseLayout; malformed meta heals to none", () => {
+    const named = withPaneMeta(layout, "mast-a", { label: "agent", color: 5 });
+    expect(parseLayout(JSON.stringify(named))).toEqual(named);
+    const garbled = JSON.stringify({ ...layout, meta: { "mast-a": { label: 7, color: "red" } } });
+    expect(parseLayout(garbled)?.meta).toBeUndefined();
   });
 });
