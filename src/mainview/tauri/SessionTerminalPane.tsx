@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ThemeName } from "../../shared/types";
+import { classifyEnd, Reconnector, type SessionStatus } from "../terminal/connection";
 import { TerminalRenderer } from "../terminal/renderer";
 import { type CellPos, Selection } from "../terminal/selection";
 import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
@@ -16,6 +17,11 @@ import type { TerminalHandle } from "./TerminalPane";
  * renderer + a Tauri-backed {@link PtySink}) to the `session_*` commands and `session://` events,
  * and runs the frame loop. All terminal logic lives in the tested `terminal/` modules; this file
  * only bridges them to the live IPC host, so it is the untested, Mac-verified surface — kept thin.
+ *
+ * Connection lifecycle: the host session outlives any one link, so a dead transport (lid close,
+ * network change, keepalive timeout) auto-reattaches on the {@link Reconnector}'s backoff — plus
+ * immediately when the window becomes visible or the network returns. A shell that exited is a
+ * different matter: the pane parks on an "ended" card until the user restarts it.
  */
 
 const FONT_FAMILY = '"JetBrains Mono", ui-monospace, "SF Mono", monospace';
@@ -72,6 +78,8 @@ export interface SessionTerminalProps {
   readonly create?: SessionCreate;
   /** True when this pane's tab is the visible one — take keyboard focus so typing lands here. */
   readonly active?: boolean;
+  /** Lifecycle reporting for the tab bar's status cluster. */
+  readonly onStatus?: (status: SessionStatus) => void;
 }
 
 const noop = () => {};
@@ -79,17 +87,52 @@ const noop = () => {};
 export const SessionTerminalPane = forwardRef<
   TerminalHandle,
   SessionTerminalProps
->(function SessionTerminalPane({ socketPath, token, session, write = true, create, active }, ref) {
+>(function SessionTerminalPane(
+  { socketPath, token, session, write = true, create, active, onStatus },
+  ref,
+) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<TerminalController | null>(null);
   const geomRef = useRef<{ cw: number; ch: number; cols: number; rows: number } | null>(null);
   const dragRef = useRef<CellPos | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<SessionStatus>({ kind: "connecting", retrying: false });
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const [epoch, setEpoch] = useState(0);
+  const reconnector = useRef(new Reconnector());
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [backend, setBackend] = useState<string>("");
   const themeName = useThemeName();
   const palette = paletteFor(themeName);
   const bgCss = `rgb(${palette.bg[0]}, ${palette.bg[1]}, ${palette.bg[2]})`;
+
+  useEffect(() => {
+    onStatus?.(status);
+  }, [status, onStatus]);
+
+  /** Tears the current attach down and dials again, painting the "reconnecting" state. */
+  const reattach = useCallback(() => {
+    clearTimeout(retryTimer.current);
+    setStatus({ kind: "connecting", retrying: true });
+    setEpoch((e) => e + 1);
+  }, []);
+
+  /**
+   * The one recovery verb: reattach a dead link now (skipping any scheduled backoff), or — after
+   * the shell itself ended — clear the corpse and start a fresh session in its place.
+   */
+  const revive = useCallback(() => {
+    const current = statusRef.current;
+    reconnector.current.reset();
+    if (current.kind === "ended") {
+      void invoke("session_kill", { socketPath, token, session })
+        .catch(noop)
+        .finally(reattach);
+      return;
+    }
+    reattach();
+  }, [socketPath, token, session, reattach]);
 
   // Drop-to-paste routes through here; the pane refits itself from its own ResizeObserver, so the
   // workbench's post-splitter-drag refit is a no-op.
@@ -98,27 +141,74 @@ export const SessionTerminalPane = forwardRef<
     () => ({
       paste: (text: string) => controllerRef.current?.paste(text),
       refit: () => {},
+      revive,
     }),
-    [],
+    [revive],
   );
+
+  // A lid reopening or the network returning is the moment a waiting retry should fire — the user
+  // is looking at the window right now, so skip the rest of the backoff.
+  useEffect(() => {
+    const wake = () => {
+      const s = statusRef.current;
+      if (s.kind === "down" || (s.kind === "connecting" && s.retrying)) {
+        reconnector.current.reset();
+        reattach();
+        return;
+      }
+      // Still "up"? The link may be dead without knowing it yet (sleep-wake). A throwaway control
+      // call probes it: on a dead session the Rust side times out, drops the cached SSH session —
+      // which closes this pane's channel — and the resulting exit event drives the reconnect.
+      if (s.kind === "up") {
+        void invoke("session_list", { socketPath, token }).catch(noop);
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") wake();
+    };
+    window.addEventListener("online", wake);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("online", wake);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [reattach, socketPath, token]);
+
+  // The retry timer must survive effect re-runs (a theme flip mid-wait) and die with the pane.
+  useEffect(() => () => clearTimeout(retryTimer.current), []);
 
   // Take keyboard focus when this pane's tab becomes the visible one, so keystrokes land in the
   // terminal instead of being dropped on an unfocused div (the old xterm pane focused itself).
   useEffect(() => {
     if (active !== false) hostRef.current?.focus();
-  }, [active]);
+  }, [active, epoch]);
 
   useEffect(() => {
     const host = hostRef.current;
     const canvas = canvasRef.current;
     if (!host || !canvas) return;
 
-    setError(null);
     let disposed = false;
     let raf = 0;
     const cleanups: Array<() => void> = [];
     const id = crypto.randomUUID();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    /** The session is over for this attach; decide between auto-reattach and parking. */
+    const onEnd = (reason: string) => {
+      if (disposed) return;
+      if (classifyEnd(reason) === "clean") {
+        setStatus({ kind: "ended", reason });
+        return;
+      }
+      const delay = reconnector.current.lost();
+      setStatus({ kind: "down", reason });
+      clearTimeout(retryTimer.current);
+      retryTimer.current = setTimeout(() => {
+        setStatus({ kind: "connecting", retrying: true });
+        setEpoch((e) => e + 1);
+      }, delay);
+    };
 
     const run = async () => {
       await waitStableSize(host);
@@ -136,7 +226,7 @@ export const SessionTerminalPane = forwardRef<
           selectionBg: palette.selectionBg,
           selectionFg: palette.selectionFg,
           onError: (message) => {
-            if (!disposed) setError(message);
+            if (!disposed) setStatus({ kind: "failed", reason: message });
           },
         }),
         vtWasm(),
@@ -171,28 +261,34 @@ export const SessionTerminalPane = forwardRef<
         ),
       );
       cleanups.push(await listen(`session://meta/${id}`, noop));
-      cleanups.push(
-        await listen<string>(`session://exit/${id}`, (e) => {
-          if (!disposed) setError(e.payload);
-        }),
-      );
+      cleanups.push(await listen<string>(`session://exit/${id}`, (e) => onEnd(e.payload)));
 
-      // Reattach when the named session is already live; create it only when absent, so the
-      // terminal survives closing and reopening the pane (the point of a durable host session).
-      const existing = await invoke<Array<{ name: string; live: boolean }>>("session_list", {
-        socketPath,
-        token,
-      }).catch(() => [] as Array<{ name: string; live: boolean }>);
+      try {
+        // Reattach when the named session is already live; create it only when absent, so the
+        // terminal survives closing and reopening the pane (the point of a durable host session).
+        const existing = await invoke<Array<{ name: string; live: boolean }>>("session_list", {
+          socketPath,
+          token,
+        });
+        if (disposed) return;
+        const alive = existing.some((s) => s.name === session && s.live);
+        await invoke("session_open", {
+          id,
+          socketPath,
+          token,
+          session,
+          write,
+          create: alive || !create ? null : { ...create, cols, rows },
+        });
+      } catch (e) {
+        // The link (not the pane) is the usual culprit — reattach on the same backoff.
+        onEnd(`transport error: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
       if (disposed) return;
-      const alive = existing.some((s) => s.name === session && s.live);
-      await invoke("session_open", {
-        id,
-        socketPath,
-        token,
-        session,
-        write,
-        create: alive || !create ? null : { ...create, cols, rows },
-      });
+      reconnector.current.opened();
+      setStatus({ kind: "up" });
+
       // Tell the pty our real geometry (a fresh session was created at this size; an existing one
       // is resized to the writer's window).
       sink.resize(cols, rows);
@@ -222,7 +318,7 @@ export const SessionTerminalPane = forwardRef<
         try {
           controller.frame((now - start) % BLINK_MS < BLINK_ON_MS);
         } catch (e) {
-          if (!disposed) setError(e instanceof Error ? e.message : String(e));
+          if (!disposed) setStatus({ kind: "failed", reason: e instanceof Error ? e.message : String(e) });
         }
         raf = requestAnimationFrame(loop);
       };
@@ -230,10 +326,11 @@ export const SessionTerminalPane = forwardRef<
     };
 
     run().catch((e) => {
+      // Reaching here means setup (WebGPU, wasm, canvas) failed — retrying won't change it.
       if (!disposed) {
         const message = e instanceof Error ? e.message : String(e);
         console.error("session terminal:", e);
-        setError(message);
+        setStatus({ kind: "failed", reason: message });
       }
     });
 
@@ -250,9 +347,9 @@ export const SessionTerminalPane = forwardRef<
         }
       }
     };
-    // The session identity — not the one-shot create spec — is the dependency.
+    // The session identity — not the one-shot create spec — is the dependency; `epoch` re-dials it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socketPath, token, session, write, themeName]);
+  }, [socketPath, token, session, write, themeName, epoch]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     const controller = controllerRef.current;
@@ -334,6 +431,8 @@ export const SessionTerminalPane = forwardRef<
     }
   };
 
+  const overlay = overlayFor(status);
+
   return (
     <div
       ref={hostRef}
@@ -356,7 +455,7 @@ export const SessionTerminalPane = forwardRef<
       }}
     >
       <canvas ref={canvasRef} />
-      {backend && (
+      {backend && !overlay && (
         <div
           style={{
             position: "absolute",
@@ -372,28 +471,60 @@ export const SessionTerminalPane = forwardRef<
           {backend.toUpperCase()}
         </div>
       )}
-      {error && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "grid",
-            placeItems: "center",
-            padding: "24px",
-            background: bgCss,
-            color: "#e0a24d",
-            font: '13px/1.6 "JetBrains Mono", ui-monospace, monospace',
-            textAlign: "center",
-            whiteSpace: "pre-wrap",
-            maxWidth: "640px",
-          }}
-        >
-          {error}
+      {overlay && (
+        <div className="term-overlay">
+          <div className="term-overlay__card">
+            <div className={`term-overlay__title term-overlay__title--${overlay.tone}`}>
+              {overlay.spin && <span className="term-overlay__spinner" aria-hidden />}
+              {overlay.title}
+            </div>
+            {overlay.reason && <div className="term-overlay__reason">{overlay.reason}</div>}
+            {overlay.action && (
+              <button type="button" className="term-overlay__btn" onClick={revive}>
+                {overlay.action}
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
   );
 });
+
+/** The overlay card for a non-up status; null when the terminal should stand alone. */
+function overlayFor(
+  status: SessionStatus,
+): { title: string; reason?: string; action?: string; tone: "warn" | "muted"; spin?: boolean } | null {
+  switch (status.kind) {
+    case "up":
+      return null;
+    case "connecting":
+      return status.retrying
+        ? { title: "Reconnecting…", tone: "warn", spin: true }
+        : null;
+    case "down":
+      return {
+        title: "Connection lost — retrying…",
+        reason: status.reason,
+        action: "Reconnect now",
+        tone: "warn",
+        spin: true,
+      };
+    case "ended":
+      return {
+        title: `Shell ended (${status.reason})`,
+        action: "Restart shell",
+        tone: "muted",
+      };
+    case "failed":
+      return {
+        title: "Terminal failed",
+        reason: status.reason,
+        action: "Retry",
+        tone: "warn",
+      };
+  }
+}
 
 function nextFrame(): Promise<number> {
   return new Promise((resolve) => requestAnimationFrame(resolve));

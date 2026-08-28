@@ -13,6 +13,8 @@ export type TerminalHandle = {
    *  host without a window resize, and fitting at a stale mid-drag size
    *  garbles the PTY geometry. */
   refit: () => void;
+  /** Reattach a dead link now, or restart an ended shell (durable session panes only). */
+  revive?: () => void;
 };
 
 /**

@@ -1,0 +1,67 @@
+/**
+ * Connection lifecycle policy for a durable terminal session — pure logic, no timers or transport.
+ *
+ * A session ends for one of two reasons, and they demand opposite UX: the link died (laptop lid,
+ * network change, SSH keepalive timeout) while the host session lives on — reconnect, automatically;
+ * or the shell itself exited — the session is gone, offer a restart. {@link classifyEnd} tells them
+ * apart from the exit reason, and {@link Reconnector} paces the automatic retries: exponential
+ * backoff while the link stays bad, reset once a connection has proven stable.
+ */
+
+/** Reasons ssh.rs prefixes when the channel/driver failed rather than the session ending itself. */
+const TRANSPORT_PREFIX = "transport error:";
+
+/** How long a connection must hold before a new drop restarts the backoff ladder from the bottom. */
+export const STABLE_MS = 10_000;
+
+const BACKOFF_MS = [500, 1000, 2000, 4000, 8000, 15000] as const;
+
+export type EndClass = "transport" | "clean";
+
+/**
+ * What a session pane is doing right now, for the pane overlay and the tab-bar status cluster.
+ * `connecting.retrying` separates a first attach (quiet) from a reconnect in flight (surfaced).
+ */
+export type SessionStatus =
+  | { kind: "connecting"; retrying: boolean }
+  | { kind: "up" }
+  | { kind: "down"; reason: string }
+  | { kind: "ended"; reason: string }
+  | { kind: "failed"; reason: string };
+
+/** Whether an exit reason means the link died (reattach) or the shell ended (restart). */
+export function classifyEnd(reason: string): EndClass {
+  return reason.startsWith(TRANSPORT_PREFIX) ? "transport" : "clean";
+}
+
+/**
+ * Paces reconnect attempts. Call {@link opened} when an attach succeeds, {@link lost} when the
+ * transport drops (it returns how long to wait before the next attempt), and {@link reset} on a
+ * manual reconnect so the user's click is never delayed by earlier failures.
+ */
+export class Reconnector {
+  private attempt = 0;
+  private connectedAt: number | null = null;
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  opened(): void {
+    this.connectedAt = this.now();
+  }
+
+  /** The transport dropped; returns the delay in ms before the next automatic attempt. */
+  lost(): number {
+    if (this.connectedAt !== null && this.now() - this.connectedAt >= STABLE_MS) {
+      this.attempt = 0;
+    }
+    this.connectedAt = null;
+    const delay = BACKOFF_MS[Math.min(this.attempt, BACKOFF_MS.length - 1)]!;
+    this.attempt++;
+    return delay;
+  }
+
+  reset(): void {
+    this.attempt = 0;
+    this.connectedAt = null;
+  }
+}

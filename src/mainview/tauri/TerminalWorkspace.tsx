@@ -1,7 +1,8 @@
-import { type Ref, useState } from "react";
+import { type Ref, useRef, useState } from "react";
 import { SnapshotsPanel } from "../board/SnapshotsPanel";
 import { cx } from "../components/cx";
 import type { Gateway } from "../gateway";
+import type { SessionStatus } from "../terminal/connection";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
 import { type SessionCreate, SessionTerminalPane } from "./SessionTerminalPane";
@@ -25,21 +26,6 @@ const BASE_CREATE: SessionCreate = {
   rows: 24,
 };
 
-/** The durable WebGPU terminal for a tab, node or container. `ref` wires drop-to-paste in a split. */
-function durablePane(target: string | undefined, active: boolean, ref?: Ref<TerminalHandle>) {
-  const { session, project } = sessionSpecFor(target);
-  return (
-    <SessionTerminalPane
-      ref={ref}
-      socketPath={NODE_SOCKET}
-      token=""
-      session={session}
-      create={{ ...BASE_CREATE, project }}
-      active={active}
-    />
-  );
-}
-
 const WEBGPU_PREF = "mast.webgpuTerminal";
 
 function loadWebgpuPref(): boolean {
@@ -47,6 +33,53 @@ function loadWebgpuPref(): boolean {
     return localStorage.getItem(WEBGPU_PREF) === "1";
   } catch {
     return false;
+  }
+}
+
+/** One callback ref fanning out to several consumers (the split's drop-paste + our status cluster). */
+function mergeRefs<T>(...refs: Array<Ref<T> | undefined>): (value: T | null) => void {
+  return (value) => {
+    for (const r of refs) {
+      if (!r) continue;
+      if (typeof r === "function") r(value);
+      else (r as { current: T | null }).current = value;
+    }
+  };
+}
+
+/** The tab bar's connection readout for the visible pane: a dot, a word, and the recovery button. */
+function StatusCluster({ status, onRevive }: { status: SessionStatus; onRevive: () => void }) {
+  const view = statusView(status);
+  if (!view) return null;
+  return (
+    <span className="term-status" title={view.hint}>
+      <span className={cx("term-status__dot", `term-status__dot--${view.tone}`)} aria-hidden />
+      <span className="term-status__label">{view.label}</span>
+      {view.action && (
+        <button type="button" className="dep-chip term-status__action" onClick={onRevive}>
+          {view.action}
+        </button>
+      )}
+    </span>
+  );
+}
+
+function statusView(
+  status: SessionStatus,
+): { label: string; hint: string; tone: "up" | "warn" | "off"; action?: string } | null {
+  switch (status.kind) {
+    case "up":
+      return { label: "Connected", hint: "Session live", tone: "up" };
+    case "connecting":
+      return status.retrying
+        ? { label: "Reconnecting…", hint: "Reattaching to the session", tone: "warn" }
+        : { label: "Connecting…", hint: "Attaching to the session", tone: "warn" };
+    case "down":
+      return { label: "Disconnected", hint: status.reason, tone: "warn", action: "Reconnect" };
+    case "ended":
+      return { label: "Ended", hint: status.reason, tone: "off", action: "Restart" };
+    case "failed":
+      return { label: "Failed", hint: status.reason, tone: "warn", action: "Retry" };
   }
 }
 
@@ -68,6 +101,8 @@ export function TerminalWorkspace({
   const [adding, setAdding] = useState(false);
   const [snapshotsFor, setSnapshotsFor] = useState<string | null>(null);
   const [webgpu, setWebgpu] = useState<boolean>(loadWebgpuPref);
+  const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
+  const paneRefs = useRef(new Map<string, TerminalHandle>());
 
   const toggleWebgpu = () =>
     setWebgpu((on) => {
@@ -80,6 +115,25 @@ export function TerminalWorkspace({
       return next;
     });
 
+  /** The durable WebGPU terminal for a tab, node or container, reporting into the status cluster. */
+  const durablePane = (key: string, target: string | undefined, active: boolean, ref?: Ref<TerminalHandle>) => {
+    const { session, project } = sessionSpecFor(target);
+    return (
+      <SessionTerminalPane
+        ref={mergeRefs(ref, (h: TerminalHandle | null) => {
+          if (h) paneRefs.current.set(key, h);
+          else paneRefs.current.delete(key);
+        })}
+        socketPath={NODE_SOCKET}
+        token=""
+        session={session}
+        create={{ ...BASE_CREATE, project }}
+        active={active}
+        onStatus={(s) => setStatuses((prev) => (prev[key] === s ? prev : { ...prev, [key]: s }))}
+      />
+    );
+  };
+
   const open = (target: string | undefined, label: string) => {
     setTabs((prev) => addTab(prev, target, label));
     setActiveKey(tabKey(target));
@@ -88,38 +142,45 @@ export function TerminalWorkspace({
   const close = (key: string) => {
     setActiveKey((a) => nextActive(tabs, key, a));
     setTabs((prev) => prev.filter((t) => t.key !== key));
+    setStatuses(({ [key]: _closed, ...rest }) => rest);
   };
 
   const showPicker = tabs.length === 0 || adding;
   const activeTarget = tabs.find((t) => t.key === activeKey)?.target;
+  const activeStatus = webgpu && activeKey && !adding ? statuses[activeKey] : undefined;
 
   return (
     <div className="term-workspace">
       {tabs.length > 0 && (
         <div className="term-tabs">
-          {tabs.map((t) => (
-            <div
-              key={t.key}
-              className={cx("term-tab", t.key === activeKey && !adding && "is-active")}
-              onClick={() => {
-                setActiveKey(t.key);
-                setAdding(false);
-              }}
-            >
-              <span className="term-tab__label">{t.label}</span>
-              <button
-                type="button"
-                className="term-tab__close"
-                aria-label={`Close ${t.label}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  close(t.key);
+          {tabs.map((t) => {
+            const s = statuses[t.key];
+            const unwell = webgpu && s && s.kind !== "up" && !(s.kind === "connecting" && !s.retrying);
+            return (
+              <div
+                key={t.key}
+                className={cx("term-tab", t.key === activeKey && !adding && "is-active")}
+                onClick={() => {
+                  setActiveKey(t.key);
+                  setAdding(false);
                 }}
               >
-                ×
-              </button>
-            </div>
-          ))}
+                {unwell && <span className="term-status__dot term-status__dot--warn" aria-hidden />}
+                <span className="term-tab__label">{t.label}</span>
+                <button
+                  type="button"
+                  className="term-tab__close"
+                  aria-label={`Close ${t.label}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    close(t.key);
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
           <button
             type="button"
             className={cx("term-tab__add", adding && "is-active")}
@@ -128,23 +189,31 @@ export function TerminalWorkspace({
           >
             ＋
           </button>
-          <button
-            type="button"
-            className={cx("dep-chip term-tab__tools", webgpu && "is-active")}
-            onClick={toggleWebgpu}
-            title="Render terminals with the experimental WebGPU engine — node and project containers"
-          >
-            {webgpu ? "WebGPU ✓" : "WebGPU"}
-          </button>
-          {gateway && activeTarget && !adding && (
+          <span className="term-tab__tools">
+            {activeStatus && (
+              <StatusCluster
+                status={activeStatus}
+                onRevive={() => paneRefs.current.get(activeKey!)?.revive?.()}
+              />
+            )}
             <button
               type="button"
-              className="dep-chip term-tab__tools"
-              onClick={() => setSnapshotsFor(activeTarget)}
+              className={cx("dep-chip", webgpu && "is-active")}
+              onClick={toggleWebgpu}
+              title="Render terminals with the experimental WebGPU engine — node and project containers"
             >
-              Snapshots
+              {webgpu ? "WebGPU ✓" : "WebGPU"}
             </button>
-          )}
+            {gateway && activeTarget && !adding && (
+              <button
+                type="button"
+                className="dep-chip"
+                onClick={() => setSnapshotsFor(activeTarget)}
+              >
+                Snapshots
+              </button>
+            )}
+          </span>
         </div>
       )}
 
@@ -162,10 +231,10 @@ export function TerminalWorkspace({
                   target={t.target}
                   label={t.label}
                   active={active}
-                  terminal={webgpu ? (ref) => durablePane(t.target, active, ref) : undefined}
+                  terminal={webgpu ? (ref) => durablePane(t.key, t.target, active, ref) : undefined}
                 />
               ) : webgpu ? (
-                durablePane(undefined, active)
+                durablePane(t.key, undefined, active)
               ) : (
                 <TerminalPane label={t.label} active={active} />
               )}
