@@ -26,7 +26,7 @@ const BASE_CREATE: SessionCreate = {
 };
 
 /** The durable WebGPU terminal for a tab, node or container. `ref` wires drop-to-paste in a split. */
-function durablePane(target: string | undefined, ref?: Ref<TerminalHandle>) {
+function durablePane(target: string | undefined, active: boolean, ref?: Ref<TerminalHandle>) {
   const { session, project } = sessionSpecFor(target);
   return (
     <SessionTerminalPane
@@ -35,6 +35,7 @@ function durablePane(target: string | undefined, ref?: Ref<TerminalHandle>) {
       token=""
       session={session}
       create={{ ...BASE_CREATE, project }}
+      active={active}
     />
   );
 }
@@ -161,10 +162,10 @@ export function TerminalWorkspace({
                   target={t.target}
                   label={t.label}
                   active={active}
-                  terminal={webgpu ? (ref) => durablePane(t.target, ref) : undefined}
+                  terminal={webgpu ? (ref) => durablePane(t.target, active, ref) : undefined}
                 />
               ) : webgpu ? (
-                durablePane(undefined)
+                durablePane(undefined, active)
               ) : (
                 <TerminalPane label={t.label} active={active} />
               )}

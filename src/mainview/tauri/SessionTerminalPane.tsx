@@ -50,6 +50,8 @@ export interface SessionTerminalProps {
   readonly write?: boolean;
   /** When set, create this session before attaching; its cols/rows are overridden with the fit. */
   readonly create?: SessionCreate;
+  /** True when this pane's tab is the visible one — take keyboard focus so typing lands here. */
+  readonly active?: boolean;
 }
 
 const noop = () => {};
@@ -57,12 +59,13 @@ const noop = () => {};
 export const SessionTerminalPane = forwardRef<
   TerminalHandle,
   SessionTerminalProps
->(function SessionTerminalPane({ socketPath, token, session, write = true, create }, ref) {
+>(function SessionTerminalPane({ socketPath, token, session, write = true, create, active }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<TerminalController | null>(null);
   const coreRef = useRef<VtCore | null>(null);
   const feedRef = useRef({ chunks: 0, bytes: 0, recent: [] as number[] });
+  const sentRef = useRef({ keys: 0, writes: 0, err: "" });
   const [error, setError] = useState<string | null>(null);
   const [backend, setBackend] = useState<string>("");
   const [probe, setProbe] = useState<string>("");
@@ -77,6 +80,12 @@ export const SessionTerminalPane = forwardRef<
     }),
     [],
   );
+
+  // Take keyboard focus when this pane's tab becomes the visible one, so keystrokes land in the
+  // terminal instead of being dropped on an unfocused div (the old xterm pane focused itself).
+  useEffect(() => {
+    if (active !== false) hostRef.current?.focus();
+  }, [active]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -125,7 +134,14 @@ export const SessionTerminalPane = forwardRef<
       paint(cols, rows);
 
       const sink: PtySink = {
-        write: (bytes) => void invoke("session_write", { id, data: Array.from(bytes) }).catch(noop),
+        write: (bytes) =>
+          void invoke("session_write", { id, data: Array.from(bytes) })
+            .then(() => {
+              sentRef.current.writes += 1;
+            })
+            .catch((e) => {
+              sentRef.current.err = e instanceof Error ? e.message : String(e);
+            }),
         resize: (c, r) => void invoke("session_resize", { id, cols: c, rows: r }).catch(noop),
       };
       const controller = new TerminalController(core, renderer, sink);
@@ -200,8 +216,11 @@ export const SessionTerminalPane = forwardRef<
         } catch {
           /* probe is best-effort */
         }
+        const s = sentRef.current;
+        const focused = document.activeElement === host;
         setProbe(
-          `fed ${f.chunks}ch/${f.bytes}b  cur ${cur.x},${cur.y}  grid ${cols}x${rows}\n` +
+          `fed ${f.chunks}ch/${f.bytes}b  sent ${s.keys}k/${s.writes}w  focus ${focused ? "Y" : "N"}  cur ${cur.x},${cur.y}  ${cols}x${rows}\n` +
+            `${s.err ? `writeErr: ${s.err}\n` : ""}` +
             `recent: ${f.recent.map(asChar).join("")}\n` +
             `vtRow[${cur.y}]: ${rowText.slice(0, 90)}`,
         );
@@ -256,7 +275,10 @@ export const SessionTerminalPane = forwardRef<
       meta: e.metaKey,
       shift: e.shiftKey,
     });
-    if (consumed) e.preventDefault();
+    if (consumed) {
+      sentRef.current.keys += 1;
+      e.preventDefault();
+    }
   };
 
   const onPaste = (e: React.ClipboardEvent) => {
@@ -275,6 +297,7 @@ export const SessionTerminalPane = forwardRef<
       tabIndex={0}
       onKeyDown={onKeyDown}
       onPaste={onPaste}
+      onPointerDown={() => hostRef.current?.focus()}
       style={{
         position: "relative",
         width: "100%",
