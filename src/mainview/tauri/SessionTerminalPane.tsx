@@ -527,6 +527,14 @@ export const SessionTerminalPane = forwardRef<
     dragRef.current = null;
   };
 
+  const onCompositionEnd = (e: React.CompositionEvent) => {
+    const controller = controllerRef.current;
+    if (!controller || !e.data) return;
+    controller.setSelection(null);
+    controller.scroll("bottom");
+    controller.text(e.data);
+  };
+
   const onPaste = (e: React.ClipboardEvent) => {
     const text = e.clipboardData.getData("text");
     if (text) {
@@ -548,6 +556,7 @@ export const SessionTerminalPane = forwardRef<
       ref={hostRef}
       tabIndex={0}
       onKeyDown={onKeyDown}
+      onCompositionEnd={onCompositionEnd}
       onPaste={onPaste}
       onContextMenu={onContextMenu}
       onWheel={onWheel}

@@ -45,6 +45,13 @@ describe("ghosttyKeyOf", () => {
     expect(ghosttyKeyOf(undefined, "F5")).toBe(GHOSTTY_KEY.indexOf("F5"));
   });
 
+  test("an empty code (synthetic events, soft keyboards) falls back like a missing one", () => {
+    expect(ghosttyKeyOf("", "Enter")).toBe(GHOSTTY_KEY.indexOf("Enter"));
+    expect(ghosttyKeyOf("", "Backspace")).toBe(GHOSTTY_KEY.indexOf("Backspace"));
+    expect(ghosttyKeyOf("", "ArrowUp")).toBe(GHOSTTY_KEY.indexOf("ArrowUp"));
+    expect(ghosttyKeyOf("", "a")).toBe(GHOSTTY_KEY.indexOf("KeyA"));
+  });
+
   test("the unknown falls to Unidentified, never a wrong key", () => {
     expect(ghosttyKeyOf("Gamepad3", "x")).toBe(0);
     expect(ghosttyKeyOf(undefined, "∆")).toBe(0);
@@ -76,16 +83,23 @@ describe("keyEventFor", () => {
     expect(arrow.consumedMods).toBe(0);
   });
 
-  test("ctrl and cmd suppress the text — the encoder derives those bytes from the key", () => {
-    expect(keyEventFor({ key: "a", code: "KeyA", ctrl: true }).utf8).toBe("");
-    expect(keyEventFor({ key: "a", code: "KeyA", meta: true }).utf8).toBe("");
+  test("ctrl chords keep their text — the encoder owns suppression (Ctrl+[ needs it)", () => {
+    expect(keyEventFor({ key: "a", code: "KeyA", ctrl: true }).utf8).toBe("a");
+    expect(keyEventFor({ key: "[", code: "BracketLeft", ctrl: true }).utf8).toBe("[");
+    expect(keyEventFor({ key: "a", code: "KeyA", meta: true }).utf8).toBe("a");
   });
 
-  test("the unshifted codepoint comes from the physical key, not the produced char", () => {
-    // Shift+2 produces "@" but the key without shift is '2'.
+  test("the unshifted codepoint is layout-aware for letters, physical for shifted punctuation", () => {
+    // Shift+2 produces "@" but the key without shift is '2' (physical row).
     expect(keyEventFor({ key: "@", code: "Digit2", shift: true }).unshifted).toBe(0x32);
     // macOS Option+B composes "∫" but the key without modifiers is 'b'.
     expect(keyEventFor({ key: "∫", code: "KeyB", alt: true }).unshifted).toBe(0x62);
+    // German QWERTZ: the physical KeyY produces 'z' — the layout wins over the US code.
+    expect(keyEventFor({ key: "z", code: "KeyY", ctrl: true }).unshifted).toBe(0x7a);
+    // AZERTY: physical KeyQ produces 'a'.
+    expect(keyEventFor({ key: "a", code: "KeyQ", ctrl: true }).unshifted).toBe(0x61);
+    // Cyrillic: layout letter carries its own codepoint.
+    expect(keyEventFor({ key: "ф", code: "KeyA" }).unshifted).toBe("ф".codePointAt(0)!);
   });
 
   test("named keys carry no text", () => {

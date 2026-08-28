@@ -184,6 +184,17 @@ describe("TerminalController", () => {
     expect(sink.writes).toEqual([]);
   });
 
+  test("committed composition text (IME, dead keys) flows to the pty verbatim", async () => {
+    const { controller, sink } = await harness();
+    // The composing keydowns themselves encode nothing...
+    expect(controller.key({ key: "Dead", code: "KeyE", alt: true })).toBe(false);
+    expect(controller.key({ key: "é", code: "KeyE", composing: true })).toBe(false);
+    // ...the committed text arrives whole, via the composition event.
+    controller.text("é");
+    controller.text("");
+    expect(sink.writes).toEqual([Array.from(enc("é"))]);
+  });
+
   test("key encoding follows the terminal's own modes (DECCKM through the live core)", async () => {
     const { controller, core, sink } = await harness();
     controller.key({ key: "ArrowUp", code: "ArrowUp" });

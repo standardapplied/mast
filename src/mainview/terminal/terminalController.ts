@@ -98,6 +98,16 @@ export class TerminalController {
   }
 
   /**
+   * Sends committed composition text (an IME commit, a dead-key sequence like Option+E then E) to
+   * the pty as-is. The composing keydowns themselves encode nothing — this is their delivery path.
+   */
+  text(committed: string): void {
+    if (committed.length > 0) {
+      this.sink.write(new TextEncoder().encode(committed));
+    }
+  }
+
+  /**
    * Sends pasted text to the pty, encoded for the terminal's paste state (bracketed-paste framing
    * when the app enabled mode 2004, newline→CR conversion when it didn't; ESC bytes stripped either
    * way — see {@link VtCore#encodePaste}). Returns false — writing nothing — when the paste needs

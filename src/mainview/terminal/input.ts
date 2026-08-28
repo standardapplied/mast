@@ -101,9 +101,12 @@ const BASE_CHAR: Record<string, string> = {
   Equal: "=", Minus: "-", Period: ".", Quote: "'", Semicolon: ";", Slash: "/", Space: " ",
 };
 
-/** The libghostty key value for a DOM code (falling back to the key), or 0 (Unidentified). */
+/**
+ * The libghostty key value for a DOM code, or 0 (Unidentified). An absent OR empty code (synthetic
+ * events, soft keyboards) falls back to deriving from the key, so named keys never go dark there.
+ */
 export function ghosttyKeyOf(code: string | undefined, key: string): number {
-  if (code !== undefined) {
+  if (code) {
     return KEY_INDEX.get(code) ?? 0;
   }
   if (key.length === 1) {
@@ -120,9 +123,17 @@ function charLength(s: string): number {
   return [...s].length;
 }
 
-/** The unmodified codepoint of the pressed key: the physical key's base char, else the text itself. */
+/**
+ * The unmodified codepoint of the pressed key. The active LAYOUT wins for letters and digits —
+ * QWERTZ Ctrl+Z arrives on physical KeyY but must byte as 'z', and a Cyrillic 'ф' carries its own
+ * codepoint — while shifted punctuation falls back to the physical key's base char (Shift+2
+ * produces '@' but the key without shift is '2', which the produced char cannot reveal).
+ */
 function unshiftedOf(code: string | undefined, key: string): number {
-  if (code !== undefined) {
+  if (charLength(key) === 1 && /[\p{L}\p{N}]/u.test(key)) {
+    return key.toLowerCase().codePointAt(0)!;
+  }
+  if (code) {
     if (code.startsWith("Key") && code.length === 4) return code.toLowerCase().codePointAt(3)!;
     if (code.startsWith("Digit") && code.length === 6) return code.codePointAt(5)!;
     const base = BASE_CHAR[code];
@@ -140,8 +151,9 @@ export function keyEventFor(stroke: KeyStroke): KeyEventSpec {
     (alt ? MODS.ALT : 0) |
     (meta ? MODS.SUPER : 0) |
     (caps ? MODS.CAPS : 0);
-  // Ctrl/cmd chords produce no insertable text — the encoder derives their bytes from the key.
-  const utf8 = !ctrl && !meta && charLength(key) === 1 ? key : "";
+  // Every single-char key carries its text — the ENCODER decides what a chord suppresses or maps
+  // (Ctrl+[ → ESC needs the '[' to reach it). Cmd chords are gated once, in the controller.
+  const utf8 = charLength(key) === 1 ? key : "";
   const unshifted = unshiftedOf(code, key);
   const consumedMods =
     utf8 !== "" && shift && utf8.codePointAt(0) !== unshifted ? MODS.SHIFT : 0;
