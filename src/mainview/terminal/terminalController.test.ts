@@ -105,15 +105,15 @@ describe("TerminalController", () => {
     expect([0, 1, 2].map((y) => gridRow(renderer.grid, y))).toEqual(["b", "c", "d"]);
   });
 
-  test("a keystroke re-applies only its row, not the whole screen (damage-based)", async () => {
-    const { controller, renderer } = await harness(80, 40); // a large viewport
+  test("an echoed keystroke on the active line reaches the rendered grid", async () => {
+    const { controller, renderer } = await harness(80, 40);
     controller.feed(enc("$ "));
-    controller.frame(); // first paint is the whole viewport
-    controller.feed(enc("x")); // one echoed keystroke
     controller.frame();
-    const last = renderer.applied.at(-1)!;
-    expect(last.dirty).toBe("partial");
-    expect(last.rows.length).toBeLessThanOrEqual(1); // just the current line, not 40 rows
+    controller.feed(enc("x")); // one echoed keystroke edits the cursor row in place
+    controller.frame();
+    // The whole viewport is re-read on any change (libghostty-vt's dirty-row iterator drops
+    // in-place edits on the active line), so an echo on the current row is never missed.
+    expect(gridRow(renderer.grid, 0)).toBe("$ x");
   });
 
   test("empty output is a no-op", async () => {

@@ -63,12 +63,8 @@ export const SessionTerminalPane = forwardRef<
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<TerminalController | null>(null);
-  const coreRef = useRef<VtCore | null>(null);
-  const feedRef = useRef({ chunks: 0, bytes: 0, recent: [] as number[] });
-  const sentRef = useRef({ keys: 0, writes: 0, err: "" });
   const [error, setError] = useState<string | null>(null);
   const [backend, setBackend] = useState<string>("");
-  const [probe, setProbe] = useState<string>("");
 
   // Drop-to-paste routes through here; the pane refits itself from its own ResizeObserver, so the
   // workbench's post-splitter-drag refit is a no-op.
@@ -129,34 +125,20 @@ export const SessionTerminalPane = forwardRef<
       let { cols, rows } = fit();
       const core = await VtCore.create(wasm, cols, rows);
       if (disposed) return void core.free();
-      coreRef.current = core;
       cleanups.push(() => core.free());
       paint(cols, rows);
 
       const sink: PtySink = {
-        write: (bytes) =>
-          void invoke("session_write", { id, data: Array.from(bytes) })
-            .then(() => {
-              sentRef.current.writes += 1;
-            })
-            .catch((e) => {
-              sentRef.current.err = e instanceof Error ? e.message : String(e);
-            }),
+        write: (bytes) => void invoke("session_write", { id, data: Array.from(bytes) }).catch(noop),
         resize: (c, r) => void invoke("session_resize", { id, cols: c, rows: r }).catch(noop),
       };
       const controller = new TerminalController(core, renderer, sink);
       controllerRef.current = controller;
 
       cleanups.push(
-        await listen<number[]>(`session://data/${id}`, (e) => {
-          const bytes = new Uint8Array(e.payload);
-          const f = feedRef.current;
-          f.chunks += 1;
-          f.bytes += bytes.length;
-          for (const b of bytes) f.recent.push(b);
-          if (f.recent.length > 64) f.recent.splice(0, f.recent.length - 64);
-          controller.feed(bytes);
-        }),
+        await listen<number[]>(`session://data/${id}`, (e) =>
+          controller.feed(new Uint8Array(e.payload)),
+        ),
       );
       cleanups.push(await listen(`session://meta/${id}`, noop));
       cleanups.push(
@@ -197,35 +179,6 @@ export const SessionTerminalPane = forwardRef<
       });
       observer.observe(host);
       cleanups.push(() => observer.disconnect());
-
-      const asChar = (b: number) =>
-        b === 10 ? "\\n" : b === 13 ? "\\r" : b === 27 ? "^[" : b >= 32 && b < 127 ? String.fromCharCode(b) : "·";
-      const debug = window.setInterval(() => {
-        if (disposed) return;
-        const f = feedRef.current;
-        const cur = core.cursor();
-        let rowText = "";
-        try {
-          const row = core.viewportRows().find((r) => r.y === cur.y);
-          if (row) {
-            rowText = row.cells
-              .map((c) => (c.text === "" ? " " : c.text))
-              .join("")
-              .replace(/\s+$/, "");
-          }
-        } catch {
-          /* probe is best-effort */
-        }
-        const s = sentRef.current;
-        const focused = document.activeElement === host;
-        setProbe(
-          `fed ${f.chunks}ch/${f.bytes}b  sent ${s.keys}k/${s.writes}w  focus ${focused ? "Y" : "N"}  cur ${cur.x},${cur.y}  ${cols}x${rows}\n` +
-            `${s.err ? `writeErr: ${s.err}\n` : ""}` +
-            `recent: ${f.recent.map(asChar).join("")}\n` +
-            `vtRow[${cur.y}]: ${rowText.slice(0, 90)}`,
-        );
-      }, 300);
-      cleanups.push(() => window.clearInterval(debug));
 
       const start = performance.now();
       const loop = (now: number) => {
@@ -275,10 +228,7 @@ export const SessionTerminalPane = forwardRef<
       meta: e.metaKey,
       shift: e.shiftKey,
     });
-    if (consumed) {
-      sentRef.current.keys += 1;
-      e.preventDefault();
-    }
+    if (consumed) e.preventDefault();
   };
 
   const onPaste = (e: React.ClipboardEvent) => {
@@ -310,28 +260,6 @@ export const SessionTerminalPane = forwardRef<
       }}
     >
       <canvas ref={canvasRef} />
-      {probe && (
-        <pre
-          style={{
-            position: "absolute",
-            left: "6px",
-            top: "6px",
-            margin: 0,
-            padding: "6px 8px",
-            font: '11px/1.4 "JetBrains Mono", ui-monospace, monospace',
-            color: "#7dd3fc",
-            background: "rgba(0,0,0,0.72)",
-            border: "1px solid #164e63",
-            borderRadius: "4px",
-            whiteSpace: "pre-wrap",
-            maxWidth: "min(90%, 900px)",
-            pointerEvents: "none",
-            zIndex: 5,
-          }}
-        >
-          {probe}
-        </pre>
-      )}
       {backend && (
         <div
           style={{
