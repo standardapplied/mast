@@ -13,11 +13,36 @@
 /** A resolved 8-bit RGB triple, already accounting for the palette. */
 export type Rgb = readonly [number, number, number];
 
-/** One rendered cell: its text (a grapheme cluster) and resolved colors. */
+/** One rendered cell: text (a grapheme cluster), resolved colors, and SGR style. Colors already
+ *  account for reverse video (fg/bg are swapped when the cell is inverse). */
 export interface Cell {
   readonly text: string;
   readonly fg: Rgb;
   readonly bg: Rgb;
+  readonly bold: boolean;
+  readonly italic: boolean;
+  readonly underline: boolean;
+  readonly strikethrough: boolean;
+  readonly faint: boolean;
+}
+
+/** A cell with no styling, before colors are filled in — the common case (plain text). */
+const PLAIN = {
+  bold: false,
+  italic: false,
+  underline: false,
+  strikethrough: false,
+  faint: false,
+  inverse: false,
+} as const;
+
+interface CellStyle {
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strikethrough: boolean;
+  faint: boolean;
+  inverse: boolean;
 }
 
 /** A row of cells at viewport position {@link y}. */
@@ -57,10 +82,22 @@ const RS_DATA_CURSOR_VIEWPORT_HAS_VALUE = 14;
 const RS_DATA_CURSOR_VIEWPORT_X = 15;
 const RS_DATA_CURSOR_VIEWPORT_Y = 16;
 const ROW_DATA_CELLS = 3;
+const CELLS_DATA_STYLE = 2;
 const CELLS_DATA_GRAPHEMES_LEN = 3;
 const CELLS_DATA_GRAPHEMES_BUF = 4;
 const CELLS_DATA_BG_COLOR = 5;
 const CELLS_DATA_FG_COLOR = 6;
+const CELLS_DATA_HAS_STYLING = 8;
+
+// GhosttyStyle field byte offsets (wasm32) and struct size, confirmed against the wasm. The bool
+// flags sit past three GhosttyStyleColor unions; `underline` is an int (>0 ⇒ underlined).
+const STYLE_SIZE = 72;
+const STYLE_BOLD = 56;
+const STYLE_ITALIC = 57;
+const STYLE_FAINT = 58;
+const STYLE_INVERSE = 60;
+const STYLE_STRIKETHROUGH = 62;
+const STYLE_UNDERLINE = 64;
 const DIRTY_FALSE = 0;
 const DIRTY_PARTIAL = 1;
 
@@ -475,20 +512,63 @@ export class VtCore {
     const lenPtr = this.abi.alloc(4);
     const fgPtr = this.abi.alloc(4);
     const bgPtr = this.abi.alloc(4);
+    const stylePtr = this.abi.alloc(STYLE_SIZE);
     try {
       while (this.e.ghostty_render_state_row_cells_next(this.cells)) {
+        const style = this.readStyle(fgPtr, stylePtr);
+        const fg = this.readColor(CELLS_DATA_FG_COLOR, fgPtr);
+        const bg = this.readColor(CELLS_DATA_BG_COLOR, bgPtr);
         cells.push({
           text: this.readGrapheme(lenPtr),
-          fg: this.readColor(CELLS_DATA_FG_COLOR, fgPtr),
-          bg: this.readColor(CELLS_DATA_BG_COLOR, bgPtr),
+          fg: style.inverse ? bg : fg,
+          bg: style.inverse ? fg : bg,
+          bold: style.bold,
+          italic: style.italic,
+          underline: style.underline,
+          strikethrough: style.strikethrough,
+          faint: style.faint,
         });
       }
     } finally {
       this.abi.free(lenPtr, 4);
       this.abi.free(fgPtr, 4);
       this.abi.free(bgPtr, 4);
+      this.abi.free(stylePtr, STYLE_SIZE);
     }
     return cells;
+  }
+
+  /**
+   * The cell's SGR style. Fast-pathed on HAS_STYLING so a plain cell (the common case) costs one
+   * bool read; a styled cell reads the {@code GhosttyStyle} struct and extracts the flags at their
+   * (wasm-confirmed) offsets. {@code scratch} is a reusable 1-byte-plus scratch buffer.
+   */
+  private readStyle(scratch: number, stylePtr: number): CellStyle {
+    if (
+      this.e.ghostty_render_state_row_cells_get(this.cells, CELLS_DATA_HAS_STYLING, scratch) !==
+        SUCCESS ||
+      this.abi.readU8(scratch) === 0
+    ) {
+      return { ...PLAIN };
+    }
+    const zero = this.abi.bytes();
+    for (let i = 0; i < STYLE_SIZE; i++) zero[stylePtr + i] = 0;
+    new DataView(this.e.memory.buffer).setUint32(stylePtr, STYLE_SIZE, true);
+    if (
+      this.e.ghostty_render_state_row_cells_get(this.cells, CELLS_DATA_STYLE, stylePtr) !== SUCCESS
+    ) {
+      return { ...PLAIN };
+    }
+    const m = this.abi.bytes();
+    const dv = new DataView(this.e.memory.buffer);
+    return {
+      bold: m[stylePtr + STYLE_BOLD] !== 0,
+      italic: m[stylePtr + STYLE_ITALIC] !== 0,
+      faint: m[stylePtr + STYLE_FAINT] !== 0,
+      inverse: m[stylePtr + STYLE_INVERSE] !== 0,
+      strikethrough: m[stylePtr + STYLE_STRIKETHROUGH] !== 0,
+      underline: dv.getInt32(stylePtr + STYLE_UNDERLINE, true) > 0,
+    };
   }
 
   private readGrapheme(lenPtr: number): string {

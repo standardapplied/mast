@@ -10,11 +10,16 @@
 
 import type { GridSnapshot, Rgb } from "./vtCore";
 
-/** One cell's rendered content: its grapheme and resolved colors. */
+/** One cell's rendered content: grapheme, resolved colors, and SGR style. */
 export interface GridCell {
   text: string;
   fg: Rgb;
   bg: Rgb;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strikethrough: boolean;
+  faint: boolean;
 }
 
 const BLANK_FG: Rgb = [200, 208, 220];
@@ -40,15 +45,24 @@ export class TerminalGrid {
     return this.rowsN;
   }
 
+  private blankCell(): GridCell {
+    return {
+      text: " ",
+      fg: this.blankFg,
+      bg: this.blankBg,
+      bold: false,
+      italic: false,
+      underline: false,
+      strikethrough: false,
+      faint: false,
+    };
+  }
+
   /** Resizes to {@code cols}×{@code rows}, resetting every cell to blank. */
   resize(cols: number, rows: number): void {
     this.colsN = cols;
     this.rowsN = rows;
-    this.cells = Array.from({ length: cols * rows }, () => ({
-      text: " ",
-      fg: this.blankFg,
-      bg: this.blankBg,
-    }));
+    this.cells = Array.from({ length: cols * rows }, () => this.blankCell());
   }
 
   /** Folds a snapshot's rows into the grid in place; rows outside the grid are ignored. */
@@ -63,10 +77,20 @@ export class TerminalGrid {
           cell.text = source.text;
           cell.fg = source.fg;
           cell.bg = source.bg;
+          cell.bold = source.bold;
+          cell.italic = source.italic;
+          cell.underline = source.underline;
+          cell.strikethrough = source.strikethrough;
+          cell.faint = source.faint;
         } else {
           cell.text = " ";
           cell.fg = this.blankFg;
           cell.bg = this.blankBg;
+          cell.bold = false;
+          cell.italic = false;
+          cell.underline = false;
+          cell.strikethrough = false;
+          cell.faint = false;
         }
       }
     }
@@ -75,7 +99,7 @@ export class TerminalGrid {
   /** The cell at {@code (x, y)}; out-of-range positions read blank. */
   cell(x: number, y: number): GridCell {
     if (x < 0 || x >= this.colsN || y < 0 || y >= this.rowsN) {
-      return { text: " ", fg: this.blankFg, bg: this.blankBg };
+      return this.blankCell();
     }
     return this.cells[y * this.colsN + x];
   }
