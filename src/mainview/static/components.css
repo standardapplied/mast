@@ -3974,6 +3974,14 @@ button.room-section-head:hover {
   border-color: var(--primary);
   color: var(--primary);
 }
+.term-overlay__btn--ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+}
+.term-overlay__actions {
+  display: flex;
+  gap: 10px;
+}
 .term-overlay__spinner {
   width: 12px;
   height: 12px;
