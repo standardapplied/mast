@@ -105,23 +105,28 @@ class GlyphAtlas {
    * strikethrough draw rules into the cell. Color is applied per-cell at draw time, so one entry
    * serves every color the same styled grapheme ever appears in.
    */
-  glyph(text: string, style: GlyphStyle = PLAIN_GLYPH): number {
+  glyph(text: string, style: GlyphStyle = PLAIN_GLYPH, wide = false): number {
     const blank = text === "" || text === " ";
     if (blank && !style.underline && !style.strikethrough) return 0;
-    const key = `${style.bold ? "b" : ""}${style.italic ? "i" : ""}${
-      style.underline ? "u" : ""
-    }${style.strikethrough ? "s" : ""}|${text}`;
+    const key = `${style.bold ? "b" : ""}${style.italic ? "i" : ""}${style.underline ? "u" : ""}${
+      style.strikethrough ? "s" : ""
+    }${wide ? "w" : ""}|${text}`;
     const hit = this.index.get(key);
     if (hit !== undefined) return hit;
-    if (this.next >= this.cols * this.cols) return 0; // atlas full: draw blank rather than corrupt
-    const id = this.next++;
+    const span = wide ? 2 : 1;
+    // A wide glyph occupies two atlas cells; keep them in one row so its right half is (u+1, v).
+    if (wide && this.next % this.cols === this.cols - 1) this.next++;
+    if (this.next + span > this.cols * this.cols) return 0; // atlas full: blank, never corrupt
+    const id = this.next;
+    this.next += span;
     this.index.set(key, id);
     const x0 = (id % this.cols) * this.cellW;
     const y0 = Math.floor(id / this.cols) * this.cellH;
+    const w = span * this.cellW;
     this.ctx.font = `${style.italic ? "italic " : ""}${style.bold ? "bold " : ""}${this.px}px ${this.family}`;
     if (!blank) this.ctx.fillText(text, x0 + 1, y0 + this.baseline);
-    if (style.underline) this.ctx.fillRect(x0, y0 + this.underlineY, this.cellW, this.thickness);
-    if (style.strikethrough) this.ctx.fillRect(x0, y0 + this.strikeY, this.cellW, this.thickness);
+    if (style.underline) this.ctx.fillRect(x0, y0 + this.underlineY, w, this.thickness);
+    if (style.strikethrough) this.ctx.fillRect(x0, y0 + this.strikeY, w, this.thickness);
     this.generation++;
     return id;
   }
@@ -226,7 +231,7 @@ export class TerminalRenderer implements Renderer {
     this.rows = rows;
     this.grid.resize(cols, rows);
     this.bgInstances = new Float32Array(cols * rows * 3);
-    this.fgInstances = new Float32Array(cols * rows * 7);
+    this.fgInstances = new Float32Array(cols * rows * 8);
     this.backend.resize(cols * this.atlas.cellW, rows * this.atlas.cellH);
   }
 
@@ -260,10 +265,11 @@ export class TerminalRenderer implements Renderer {
         bg[bi] = cellBg[0] / 255;
         bg[bi + 1] = cellBg[1] / 255;
         bg[bi + 2] = cellBg[2] / 255;
-        const glyph = this.atlas.glyph(cell.text, cell);
+        const wide = cell.width === 2;
+        const glyph = this.atlas.glyph(cell.text, cell, wide);
         if (glyph !== 0) {
           const { u, v } = this.atlas.cell(glyph);
-          const o = fgCount * 7;
+          const o = fgCount * 8;
           fg[o] = x;
           fg[o + 1] = y;
           if (onCursor || selected) {
@@ -280,6 +286,7 @@ export class TerminalRenderer implements Renderer {
           }
           fg[o + 5] = u;
           fg[o + 6] = v;
+          fg[o + 7] = wide ? 2 : 1;
           fgCount++;
         }
       }
@@ -345,11 +352,13 @@ struct FgOut { @builtin(position) pos : vec4f, @location(0) color : vec3f, @loca
 fn fg_vs(@builtin(vertex_index) vi : u32,
          @location(0) grid : vec2f,
          @location(1) color : vec3f,
-         @location(2) atlasCell : vec2f) -> FgOut {
+         @location(2) atlasCell : vec2f,
+         @location(3) w : f32) -> FgOut {
   var corners = array<vec2f,6>(
     vec2f(0,0), vec2f(1,0), vec2f(0,1),
     vec2f(0,1), vec2f(1,0), vec2f(1,1));
-  let c = corners[vi];
+  let base = corners[vi];
+  let c = vec2f(base.x * w, base.y); // a wide glyph spans w cells in x, sampling w atlas cells
   let px = (grid + c) * U.cell;
   let ndc = vec2f(px.x / U.view.x * 2.0 - 1.0, 1.0 - px.y / U.view.y * 2.0);
   let uv = (atlasCell + c) / vec2f(U.atlas.x, U.atlas.x);
@@ -449,12 +458,13 @@ class WebGpuBackend implements Backend {
         entryPoint: "fg_vs",
         buffers: [
           {
-            arrayStride: 7 * 4,
+            arrayStride: 8 * 4,
             stepMode: "instance",
             attributes: [
               { shaderLocation: 0, offset: 0, format: "float32x2" },
               { shaderLocation: 1, offset: 2 * 4, format: "float32x3" },
               { shaderLocation: 2, offset: 5 * 4, format: "float32x2" },
+              { shaderLocation: 3, offset: 7 * 4, format: "float32" },
             ],
           },
         ],
@@ -567,7 +577,7 @@ class WebGpuBackend implements Backend {
       size: Math.max(28, d.fg.byteLength),
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
-    if (d.fgCount > 0) this.writeF32(fgBuf, d.fg.subarray(0, d.fgCount * 7));
+    if (d.fgCount > 0) this.writeF32(fgBuf, d.fg.subarray(0, d.fgCount * 8));
 
     const encoder = this.device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
@@ -622,11 +632,12 @@ precision highp float;
 layout(location=0) in vec2 grid;
 layout(location=1) in vec3 color;
 layout(location=2) in vec2 atlasCell;
+layout(location=3) in float w;
 uniform vec2 uView; uniform vec2 uCell; uniform float uAtlasCols;
 out vec3 vColor; out vec2 vUv;
 const vec2 C[6] = vec2[6](vec2(0,0),vec2(1,0),vec2(0,1),vec2(0,1),vec2(1,0),vec2(1,1));
 void main(){
-  vec2 c = C[gl_VertexID];
+  vec2 c = vec2(C[gl_VertexID].x * w, C[gl_VertexID].y); // wide glyph spans w cells
   vec2 px = (grid + c) * uCell;
   gl_Position = vec4(px.x/uView.x*2.0-1.0, 1.0-px.y/uView.y*2.0, 0.0, 1.0);
   vUv = (atlasCell + c) / vec2(uAtlasCols, uAtlasCols);
@@ -667,9 +678,10 @@ class WebGl2Backend implements Backend {
     const fgVao = gl.createVertexArray()!;
     gl.bindVertexArray(fgVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, fgBuf);
-    attr(gl, 0, 2, 7 * 4, 0);
-    attr(gl, 1, 3, 7 * 4, 2 * 4);
-    attr(gl, 2, 2, 7 * 4, 5 * 4);
+    attr(gl, 0, 2, 8 * 4, 0);
+    attr(gl, 1, 3, 8 * 4, 2 * 4);
+    attr(gl, 2, 2, 8 * 4, 5 * 4);
+    attr(gl, 3, 1, 8 * 4, 7 * 4);
     gl.bindVertexArray(null);
     const tex = gl.createTexture()!;
     gl.enable(gl.BLEND);
@@ -740,7 +752,7 @@ class WebGl2Backend implements Backend {
       gl.bindTexture(gl.TEXTURE_2D, this.tex);
       gl.bindVertexArray(this.fgVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.fgBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, d.fg.subarray(0, d.fgCount * 7), gl.DYNAMIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, d.fg.subarray(0, d.fgCount * 8), gl.DYNAMIC_DRAW);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, d.fgCount);
     }
     gl.bindVertexArray(null);
