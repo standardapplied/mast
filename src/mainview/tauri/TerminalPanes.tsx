@@ -13,7 +13,6 @@ import {
   newGroup,
   nextSessionName,
   type PaneLayout,
-  paneCount,
   parseLayout,
   projectFor,
   reconcile,
@@ -196,22 +195,35 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const doClose = (sessions: string[]) => {
       setClosing(null);
       if (!layout) return;
+      const next = sessions.reduce((acc, s) => removePane(acc, s, base), layout);
+      // Closing the LAST shell heals the layout back to the same base session name — the pane
+      // stays mounted, so after the kill it must revive into a fresh shell instead of parking
+      // on the corpse's "ended" card.
+      const resurrected = new Set(sessions.filter((s) => sessionsOf(next).includes(s)));
       for (const session of sessions) {
-        void invoke("session_kill", { socketPath: NODE_SOCKET, token: "", session }).catch(noop);
-        paneRefs.current.delete(session);
+        const revive = resurrected.has(session)
+          ? () => paneRefs.current.get(session)?.revive?.()
+          : noop;
+        void invoke("session_kill", { socketPath: NODE_SOCKET, token: "", session })
+          .catch(noop)
+          .finally(revive);
+        if (!resurrected.has(session)) {
+          paneRefs.current.delete(session);
+        }
       }
       {
-        const next = { ...statusesRef.current };
-        for (const session of sessions) delete next[session];
-        statusesRef.current = next;
-        setStatuses(next);
+        const pruned = { ...statusesRef.current };
+        for (const session of sessions) {
+          if (!resurrected.has(session)) delete pruned[session];
+        }
+        statusesRef.current = pruned;
+        setStatuses(pruned);
       }
       setTitles((prev) => {
-        const next = { ...prev };
-        for (const session of sessions) delete next[session];
-        return next;
+        const pruned = { ...prev };
+        for (const session of sessions) delete pruned[session];
+        return pruned;
       });
-      const next = sessions.reduce((acc, s) => removePane(acc, s, base), layout);
       const survivors = next.groups[next.active]!.panes;
       apply(next, survivors.includes(focused) ? focused : survivors[0]!);
     };
@@ -253,7 +265,6 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       return <div className="term-panes" />;
     }
 
-    const closable = paneCount(layout) > 1;
 
     return (
       // `terminal-pane` is the drop-target marker classifyDrop keys on (see dropTarget.ts).
@@ -296,19 +307,17 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                     </span>
                   );
                 })}
-                {closable && (
-                  <span
-                    role="button"
-                    aria-label={`Close shell ${plainLabel}`}
-                    className="term-pane-chip__close"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      confirmClose([...group.panes]);
-                    }}
-                  >
-                    ×
-                  </span>
-                )}
+                <span
+                  role="button"
+                  aria-label={`Close shell ${plainLabel}`}
+                  className="term-pane-chip__close"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    confirmClose([...group.panes]);
+                  }}
+                >
+                  ×
+                </span>
               </button>
             );
           })}
@@ -365,7 +374,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                         const t = shortTitle(raw);
                         setTitles((prev) => (prev[session] === t ? prev : { ...prev, [session]: t }));
                       }}
-                      menuExtras={paneMenuItems(layout, session, base, closable, menuActions, titles)}
+                      menuExtras={paneMenuItems(layout, session, base, menuActions, titles)}
                     />
                   </div>
                 ))}
@@ -411,7 +420,6 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               layout.groups[chipMenu.group]!,
               focused,
               base,
-              closable,
               menuActions,
               titles,
             )}

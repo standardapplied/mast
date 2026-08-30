@@ -57,27 +57,22 @@ export function identityItems(session: string, actions: PaneMenuActions): MenuNo
   ];
 }
 
-/** The pane's context-menu extras: identity, then Close pane when it isn't the last one. */
+/** The pane's context-menu extras: identity, then Close pane (closing the last one = a fresh shell). */
 export function paneMenuItems(
   layout: PaneLayout,
   session: string,
   base: string,
-  closable: boolean,
   actions: PaneMenuActions,
   titles?: Readonly<Record<string, string>>,
 ): MenuNode[] {
   return [
     ...identityItems(session, actions),
-    ...(closable
-      ? [
-          {
-            kind: "item" as const,
-            label: `Close pane ${titleOf(layout, session, base, titles)}`,
-            danger: true,
-            onSelect: () => actions.close([session]),
-          },
-        ]
-      : []),
+    {
+      kind: "item" as const,
+      label: `Close pane ${titleOf(layout, session, base, titles)}`,
+      danger: true,
+      onSelect: () => actions.close([session]),
+    },
   ];
 }
 
@@ -90,7 +85,6 @@ export function chipMenuItems(
   group: PaneGroup,
   focused: string,
   base: string,
-  closable: boolean,
   actions: PaneMenuActions,
   titles?: Readonly<Record<string, string>>,
 ): MenuNode[] {
@@ -98,16 +92,12 @@ export function chipMenuItems(
   const label = group.panes.map((s) => titleOf(layout, s, base, titles)).join("·");
   return [
     ...identityItems(target, actions),
-    ...(closable
-      ? [
-          { kind: "separator" } as MenuNode,
-          {
-            kind: "item" as const,
-            label: `Close shell ${label}`,
-            danger: true,
-            onSelect: () => actions.close([...group.panes]),
-          },
-        ]
-      : []),
+    { kind: "separator" } as MenuNode,
+    {
+      kind: "item" as const,
+      label: `Close shell ${label}`,
+      danger: true,
+      onSelect: () => actions.close([...group.panes]),
+    },
   ];
 }
