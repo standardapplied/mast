@@ -71,8 +71,8 @@ export function Dialog({
         void handleClose();
       }
     };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside, true);
+    return () => document.removeEventListener("mousedown", handleClickOutside, true);
   }, [isOpen, handleClose]);
 
   if (!isOpen) return null;

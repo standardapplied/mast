@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { ContextMenu, type MenuNode } from "../components/ContextMenu";
+import { ContextMenu } from "../components/ContextMenu";
 import { Dialog } from "../components/Dialog";
 import { cx } from "../components/cx";
 import { Button } from "../components/ui";
@@ -22,6 +22,12 @@ import {
   titleOf,
   withPaneMeta,
 } from "../terminal/paneLayout";
+import {
+  chipMenuItems,
+  PANE_COLORS,
+  type PaneMenuActions,
+  paneMenuItems,
+} from "../terminal/paneMenu";
 import { PromptDialog } from "./PromptDialog";
 import { type SessionCreate, SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane";
 
@@ -45,17 +51,6 @@ const BASE_CREATE = { command: ["bash", "-l"], cwd: "~", cols: 80, rows: 24 };
 const MAX_SPLITS = 4;
 const MAX_GROUPS = 8;
 
-/** The swatches a shell can wear (ghostty-style tab dots) — index is what the layout stores. */
-const PANE_COLORS = [
-  "#fc4926",
-  "#e0a24d",
-  "#e8d44d",
-  "#86b89a",
-  "#4de0c8",
-  "#5b9bd5",
-  "#a78bfa",
-  "#d08fa6",
-] as const;
 
 const noop = () => {};
 
@@ -85,35 +80,12 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const [chipMenu, setChipMenu] = useState<{ x: number; y: number; group: number } | null>(null);
     const paneRefs = useRef(new Map<string, TerminalHandle>());
 
-    /** The identity actions for one shell — shared by the pane's menu and its chip's menu. */
-    const identityItems = (session: string): MenuNode[] => [
-      {
-        kind: "item",
-        label: "Rename shell…",
-        onSelect: () => setRenaming(session),
-      },
-      {
-        kind: "item",
-        label: "Color",
-        submenu: [
-          {
-            kind: "item",
-            label: "None",
-            onSelect: () => setLayout((l) => l && withPaneMeta(l, session, { color: undefined })),
-          },
-          ...PANE_COLORS.map((hex, index) => ({
-            kind: "item" as const,
-            label: (
-              <>
-                <span className="term-pane-dot" style={{ background: hex }} aria-hidden />
-                {`Color ${index + 1}`}
-              </>
-            ),
-            onSelect: () => setLayout((l) => l && withPaneMeta(l, session, { color: index })),
-          })),
-        ],
-      },
-    ];
+    /** Menu actions, injected into the tested builders in terminal/paneMenu. */
+    const menuActions: PaneMenuActions = {
+      rename: setRenaming,
+      setColor: (session, color) => setLayout((l) => l && withPaneMeta(l, session, { color })),
+      close: (sessions) => setClosing(sessions),
+    };
 
     // Existence is the host's truth: reconcile the stored arrangement against its live sessions.
     useEffect(() => {
@@ -361,19 +333,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                       onStatus={(s) =>
                         setStatuses((prev) => (prev[session] === s ? prev : { ...prev, [session]: s }))
                       }
-                      menuExtras={[
-                        ...identityItems(session),
-                        ...(closable
-                          ? [
-                              {
-                                kind: "item" as const,
-                                label: `Close pane ${titleOf(layout, session, base)}`,
-                                danger: true,
-                                onSelect: () => confirmClose([session]),
-                              },
-                            ]
-                          : []),
-                      ]}
+                      menuExtras={paneMenuItems(layout, session, base, closable, menuActions)}
                     />
                   </div>
                 ))}
@@ -414,25 +374,14 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
             x={chipMenu.x}
             y={chipMenu.y}
             onClose={() => setChipMenu(null)}
-            items={(() => {
-              const group = layout.groups[chipMenu.group]!;
-              const target = group.panes.includes(focused) ? focused : group.panes[0]!;
-              const label = group.panes.map((s) => titleOf(layout, s, base)).join("·");
-              return [
-                ...identityItems(target),
-                ...(closable
-                  ? [
-                      { kind: "separator" } as MenuNode,
-                      {
-                        kind: "item" as const,
-                        label: `Close shell ${label}`,
-                        danger: true,
-                        onSelect: () => confirmClose([...group.panes]),
-                      },
-                    ]
-                  : []),
-              ];
-            })()}
+            items={chipMenuItems(
+              layout,
+              layout.groups[chipMenu.group]!,
+              focused,
+              base,
+              closable,
+              menuActions,
+            )}
           />
         )}
         {renaming && layout && (

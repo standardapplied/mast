@@ -92,10 +92,13 @@ export function ContextMenu({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
-    document.addEventListener("mousedown", onDown);
+    // Capture phase: Tauri's injected drag-region handler stopImmediatePropagation()s document
+    // bubble-phase mousedowns on the chrome band, which would let a window drag start with this
+    // menu still open. Capture listeners run before it. (Same discipline in every outside-closer.)
+    document.addEventListener("mousedown", onDown, true);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("mousedown", onDown, true);
       document.removeEventListener("keydown", onKey);
     };
   }, [onClose]);

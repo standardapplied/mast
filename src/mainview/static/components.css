@@ -3763,12 +3763,24 @@ button.room-section-head:hover {
 .term-tabs {
   display: flex;
   align-items: stretch;
-  gap: 1px;
   flex: 1;
   min-width: 0;
   height: 100%;
   padding: 0 8px 0 0;
+}
+/* Only the tab list scrolls (scrollbar hidden — trackpads scroll it fine); the status/recovery
+   tools stay pinned in the viewport, never off the end of the scrolled content. */
+.term-tabs__scroll {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
+  scrollbar-width: none;
+}
+.term-tabs__scroll::-webkit-scrollbar {
+  display: none;
 }
 .term-tab {
   display: inline-flex;
@@ -5150,6 +5162,10 @@ button.room-section-head:hover {
 }
 body[data-chrome="overlay"] .topbar__inset {
   width: 76px;
+}
+/* macOS fullscreen auto-hides the traffic lights; the inset collapses with them. */
+body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
+  width: 8px;
 }
 .topbar__slot {
   flex: 1;

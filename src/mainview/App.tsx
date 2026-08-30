@@ -269,22 +269,24 @@ export function App({
             click zooms, via the window's drag-region handler), it insets for the macOS traffic
             lights, and its content is the active view's — the terminal parks its project tabs
             here through the #topbar-slot portal; other views show their context. */}
-        <header className="topbar" data-tauri-drag-region>
-          <div className="topbar__inset" data-tauri-drag-region aria-hidden />
+        {/* "deep" arms every non-interactive pixel of the band as a drag/zoom surface — buttons,
+            links, and role="tab" elements block it themselves, so a tab-filled band still drags
+            from its gaps (bare attrs only arm direct hits and go dead once children cover them). */}
+        <header className="topbar" data-tauri-drag-region="deep">
+          <div className="topbar__inset" aria-hidden />
           <div
             id="topbar-slot"
             className="topbar__slot"
-            data-tauri-drag-region
             style={{ display: view === "terminal" ? "flex" : "none" }}
           />
           {view !== "terminal" && (
-            <div className="topbar__context" data-tauri-drag-region>
-              {navItems.find((item) => item.value === view)?.label ?? "Mast"}
+            <div className="topbar__context">
+              {showWorkspace ? (navItems.find((item) => item.value === view)?.label ?? "Mast") : "Mast"}
             </div>
           )}
         </header>
         <div className="cockpit-body">
-        <nav className="rail" aria-label="Sections" data-tauri-drag-region>
+        <nav className="rail" aria-label="Sections" data-tauri-drag-region="deep">
           <button type="button" className="rail-brand" onClick={goRooms} aria-label="Mast — rooms">
             <Logo size={22} />
           </button>
