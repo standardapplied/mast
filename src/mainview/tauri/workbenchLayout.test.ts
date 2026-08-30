@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_WIDTHS, loadWidths, PANE_LIMITS, saveWidths } from "./workbenchLayout";
+import {
+  DEFAULT_WIDTHS,
+  loadTreeCollapsed,
+  loadWidths,
+  PANE_LIMITS,
+  saveTreeCollapsed,
+  saveWidths,
+} from "./workbenchLayout";
 
 function fakeStorage(seed: Record<string, string> = {}) {
   const map = new Map(Object.entries(seed));
@@ -37,4 +44,14 @@ describe("workbench layout persistence", () => {
     const storage = fakeStorage({ "mast.workbench.t": "not json" });
     expect(loadWidths(storage, "t")).toEqual(DEFAULT_WIDTHS);
   });
+});
+
+test("tree collapse persists per target and defaults to expanded", () => {
+  const storage = fakeStorage();
+  expect(loadTreeCollapsed(storage, "devbox-a")).toBe(false);
+  saveTreeCollapsed(storage, "devbox-a", true);
+  expect(loadTreeCollapsed(storage, "devbox-a")).toBe(true);
+  expect(loadTreeCollapsed(storage, "devbox-b")).toBe(false);
+  saveTreeCollapsed(storage, "devbox-a", false);
+  expect(loadTreeCollapsed(storage, "devbox-a")).toBe(false);
 });

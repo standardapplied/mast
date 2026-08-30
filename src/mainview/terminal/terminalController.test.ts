@@ -195,6 +195,17 @@ describe("TerminalController", () => {
     expect(gridRow(renderer.grid, 0)).toBe("beforeafter");
   });
 
+  test("stream titles reach the title hook — including during replay, where they restore state", async () => {
+    const { controller } = await harness();
+    const titles: string[] = [];
+    controller.hooks.onTitle = (t) => titles.push(t);
+    controller.feed(enc("\x1b]0;dev@box: ~/workspace\x07"));
+    controller.resetForReplay();
+    controller.feed(enc("\x1b]2;dev@box: ~/workspace/mast\x07"));
+    controller.endReplay();
+    expect(titles).toEqual(["dev@box: ~/workspace", "dev@box: ~/workspace/mast"]);
+  });
+
   test("historical OSC 52 in a replay never touches the clipboard; live writes after it do", async () => {
     const { controller } = await harness(40, 4);
     const copied: string[] = [];

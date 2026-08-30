@@ -13,7 +13,7 @@
  */
 
 import { keyEventFor, type KeyStroke } from "./input";
-import { Osc52Scanner } from "./osc52";
+import { OscSignalScanner } from "./oscSignals";
 import { type Selection, selectedText } from "./selection";
 import type { Cursor, GridSnapshot, Scroll, VtCore } from "./vtCore";
 
@@ -37,11 +37,11 @@ export class TerminalController {
   private rows: number;
   private dirty = false;
   private selection: Selection | null = null;
-  private readonly osc52 = new Osc52Scanner();
+  private readonly osc = new OscSignalScanner();
   private replaying = false;
 
   /** Side-channel intents found in the stream; the host wires these to the platform. */
-  readonly hooks: { onClipboard?: (text: string) => void } = {};
+  readonly hooks: { onClipboard?: (text: string) => void; onTitle?: (title: string) => void } = {};
 
   constructor(
     private readonly core: VtCore,
@@ -57,11 +57,15 @@ export class TerminalController {
   /** Feeds pty output bytes into terminal state; a later {@link #frame} paints the result. */
   feed(bytes: Uint8Array): void {
     if (bytes.length > 0) {
-      for (const text of this.osc52.feed(bytes)) {
-        // A replayed OSC 52 is history, not a user action — honoring it would clobber whatever
-        // the user copied since. The scanner still runs so its state tracks the byte stream.
-        if (!this.replaying) {
-          this.hooks.onClipboard?.(text);
+      for (const signal of this.osc.feed(bytes)) {
+        if (signal.kind === "clipboard") {
+          // A replayed OSC 52 is history, not a user action — honoring it would clobber whatever
+          // the user copied since. A replayed TITLE is current state and always applies.
+          if (!this.replaying) {
+            this.hooks.onClipboard?.(signal.text);
+          }
+        } else {
+          this.hooks.onTitle?.(signal.text);
         }
       }
       this.core.write(bytes);
@@ -77,7 +81,7 @@ export class TerminalController {
    */
   resetForReplay(): void {
     this.core.reset();
-    this.osc52.reset();
+    this.osc.reset();
     this.replaying = true;
     this.setSelection(null);
     this.dirty = true;

@@ -31,6 +31,11 @@ describe("paneMenuItems", () => {
       "Color",
       "Close pane agent",
     ]);
+    expect(labelsOf(paneMenuItems(layout, "mast-a.2", base, true, actions, { "mast-a.2": "mast" }))).toEqual([
+      "Rename shell…",
+      "Color",
+      "Close pane mast",
+    ]);
     expect(labelsOf(paneMenuItems(layout, "mast-a", base, false, actions))).toEqual([
       "Rename shell…",
       "Color",

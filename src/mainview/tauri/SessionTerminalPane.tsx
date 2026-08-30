@@ -102,6 +102,8 @@ export interface SessionTerminalProps {
   readonly onStatus?: (status: SessionStatus) => void;
   /** Extra context-menu entries after Copy/Paste (e.g. the pane host's "Close pane"). */
   readonly menuExtras?: MenuNode[];
+  /** The shell announced its title (OSC 0/2) — the pane's default display name. */
+  readonly onTitle?: (title: string) => void;
 }
 
 const noop = () => {};
@@ -131,7 +133,18 @@ export const SessionTerminalPane = forwardRef<
   TerminalHandle,
   SessionTerminalProps
 >(function SessionTerminalPane(
-  { socketPath, token, session, write = true, create, active, visible = true, onStatus, menuExtras },
+  {
+    socketPath,
+    token,
+    session,
+    write = true,
+    create,
+    active,
+    visible = true,
+    onStatus,
+    menuExtras,
+    onTitle,
+  },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -149,6 +162,8 @@ export const SessionTerminalPane = forwardRef<
   visibleRef.current = visible;
   const activeRef = useRef(active !== false);
   activeRef.current = active !== false;
+  const onTitleRef = useRef(onTitle);
+  onTitleRef.current = onTitle;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const themeName = useThemeName();
@@ -362,6 +377,7 @@ export const SessionTerminalPane = forwardRef<
 
       controller.hooks.onClipboard = (text) =>
         void navigator.clipboard?.writeText(text).catch(noop);
+      controller.hooks.onTitle = (title) => onTitleRef.current?.(title);
       cleanups.push(
         // One ordered channel carries bytes AND replay markers: a mid-stream replay means the
         // host dropped part of the stream (flow-control pause) and is re-baselining us — the
@@ -539,12 +555,18 @@ export const SessionTerminalPane = forwardRef<
     }
   };
 
+  const wheelAccRef = useRef(0);
   const onWheel = (e: React.WheelEvent) => {
     const controller = controllerRef.current;
     if (!controller) return;
-    const perLine = e.deltaMode === 1 ? 1 : 24; // line-mode vs ~24px-per-line pixel-mode
-    const lines = e.deltaY < 0 ? Math.floor(e.deltaY / perLine) : Math.ceil(e.deltaY / perLine);
+    // Pixel-accurate: accumulate deltas and emit a line only when a full cell height has passed.
+    // The old round-every-event-to-a-line turned each trackpad tick into a whole line, which read
+    // as far too fast; this tracks the finger 1:1.
+    const cellH = geomRef.current?.ch ?? 20;
+    wheelAccRef.current += e.deltaMode === 1 ? e.deltaY * cellH : e.deltaY;
+    const lines = Math.trunc(wheelAccRef.current / cellH);
     if (lines !== 0) {
+      wheelAccRef.current -= lines * cellH;
       controller.setSelection(null); // the viewport-relative highlight no longer lines up
       controller.wheel(lines);
     }

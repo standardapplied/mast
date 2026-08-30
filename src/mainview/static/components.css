@@ -1454,8 +1454,7 @@ html.is-dragging-active * {
   align-items: center;
   gap: 4px;
   padding: calc(10px + env(safe-area-inset-top)) 0 max(12px, env(safe-area-inset-bottom));
-  background: var(--surface);
-  border-right: 1px solid var(--border);
+  background: var(--chrome-bg);
 }
 
 .rail-brand {
@@ -4542,7 +4541,9 @@ button.room-section-head:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  height: 34px;
+  flex-shrink: 0;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border);
   font: 500 11px/1 var(--font-sans);
   letter-spacing: var(--tracking-eyebrow);
@@ -5152,9 +5153,8 @@ button.room-section-head:hover {
   display: flex;
   align-items: stretch;
   flex-shrink: 0;
-  height: 30px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  height: 44px;
+  background: var(--chrome-bg);
 }
 .topbar__inset {
   width: 8px;
@@ -5209,4 +5209,39 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   background: color-mix(in srgb, var(--background) 40%, transparent);
   pointer-events: none;
   z-index: 1;
+}
+
+/* Collapsed file tree: a slim strip whose header zone matches the pane bar's 34px, so the
+   reopen affordance sits exactly where the tree's header was. Desktop-only — the mobile flip
+   owns panel visibility below 900px, so the collapse is ignored there. */
+.term-split__treestub {
+  flex-shrink: 0;
+  width: 34px;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 7px;
+}
+.term-split__treestub-btn {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  line-height: 1;
+}
+.term-split__treestub-btn:hover {
+  color: var(--foreground);
+}
+@media (min-width: 901px) {
+  .term-split--treecollapsed .file-tree {
+    display: none;
+  }
+}
+@media (max-width: 900px) {
+  .term-split__treestub {
+    display: none;
+  }
 }

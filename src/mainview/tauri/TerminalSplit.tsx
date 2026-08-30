@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Dialog } from "../components/Dialog";
+import { PanelRight } from "../components/icons";
+import { Tooltip } from "../components/Tooltip";
 import { Splitter } from "../components/Splitter";
 import { useToast } from "../components/Toast";
 import { ToggleButton } from "../components/ToggleButton";
@@ -15,7 +17,14 @@ import { duplicateDownloadName } from "./transfers";
 import { TransfersTray } from "./TransfersTray";
 import { ViewerPane } from "./ViewerPane";
 import { ViewerStore, type ViewerFs } from "./viewerStore";
-import { loadWidths, PANE_LIMITS, saveWidths, type PaneWidths } from "./workbenchLayout";
+import {
+  loadTreeCollapsed,
+  loadWidths,
+  PANE_LIMITS,
+  saveTreeCollapsed,
+  saveWidths,
+  type PaneWidths,
+} from "./workbenchLayout";
 
 /**
  * A project's workbench: terminal | file viewer/editor | explorer, one
@@ -92,6 +101,11 @@ export function TerminalSplit({
   const rootRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<TerminalHandle>(null);
   const [widths, setWidths] = useState<PaneWidths>(() => loadWidths(localStorage, target));
+  const [treeCollapsed, setTreeCollapsed] = useState(() => loadTreeCollapsed(localStorage, target));
+  const setTreeCollapsedPersistent = (collapsed: boolean) => {
+    setTreeCollapsed(collapsed);
+    saveTreeCollapsed(localStorage, target, collapsed);
+  };
   const [mobilePane, setMobilePane] = useState<MobilePane>("terminal");
   const [drop, setDrop] = useState<DropTarget | null>(null);
   const [prompt, setPrompt] = useState<Prompt | null>(null);
@@ -354,7 +368,7 @@ export function TerminalSplit({
 
   return (
     <div
-      className="term-split"
+      className={`term-split${treeCollapsed ? " term-split--treecollapsed" : ""}`}
       ref={rootRef}
       data-mobile={mobilePane}
       style={
@@ -395,16 +409,37 @@ export function TerminalSplit({
             />
           </>
         )}
-        <Splitter
-          value={widths.tree}
-          min={PANE_LIMITS.tree.min}
-          max={PANE_LIMITS.tree.max}
-          controls="after"
-          onChange={setPane("tree")}
-          onDragEnd={commitPane("tree")}
-          ariaLabel="Resize file tree"
+        {treeCollapsed && (
+          <div className="term-split__treestub">
+            <Tooltip content="Show the file tree" side="left">
+              <button
+                type="button"
+                className="term-split__treestub-btn"
+                aria-label="Show the file tree"
+                onClick={() => setTreeCollapsedPersistent(false)}
+              >
+                <PanelRight size={15} />
+              </button>
+            </Tooltip>
+          </div>
+        )}
+        {!treeCollapsed && (
+          <Splitter
+            value={widths.tree}
+            min={PANE_LIMITS.tree.min}
+            max={PANE_LIMITS.tree.max}
+            controls="after"
+            onChange={setPane("tree")}
+            onDragEnd={commitPane("tree")}
+            ariaLabel="Resize file tree"
+          />
+        )}
+        <FileTree
+          store={store}
+          dropDir={dropDir}
+          actions={actions}
+          onCollapse={() => setTreeCollapsedPersistent(true)}
         />
-        <FileTree store={store} dropDir={dropDir} actions={actions} />
       </div>
       <TransfersTray />
 
