@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { ContextMenu, type MenuNode } from "../components/ContextMenu";
 import { Dialog } from "../components/Dialog";
 import { cx } from "../components/cx";
 import { Button } from "../components/ui";
@@ -81,7 +82,38 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
     const [closing, setClosing] = useState<string[] | null>(null);
     const [renaming, setRenaming] = useState<string | null>(null);
+    const [chipMenu, setChipMenu] = useState<{ x: number; y: number; group: number } | null>(null);
     const paneRefs = useRef(new Map<string, TerminalHandle>());
+
+    /** The identity actions for one shell — shared by the pane's menu and its chip's menu. */
+    const identityItems = (session: string): MenuNode[] => [
+      {
+        kind: "item",
+        label: "Rename shell…",
+        onSelect: () => setRenaming(session),
+      },
+      {
+        kind: "item",
+        label: "Color",
+        submenu: [
+          {
+            kind: "item",
+            label: "None",
+            onSelect: () => setLayout((l) => l && withPaneMeta(l, session, { color: undefined })),
+          },
+          ...PANE_COLORS.map((hex, index) => ({
+            kind: "item" as const,
+            label: (
+              <>
+                <span className="term-pane-dot" style={{ background: hex }} aria-hidden />
+                {`Color ${index + 1}`}
+              </>
+            ),
+            onSelect: () => setLayout((l) => l && withPaneMeta(l, session, { color: index })),
+          })),
+        ],
+      },
+    ];
 
     // Existence is the host's truth: reconcile the stored arrangement against its live sessions.
     useEffect(() => {
@@ -235,6 +267,10 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                 onDoubleClick={() =>
                   setRenaming(group.panes.includes(focused) ? focused : group.panes[0]!)
                 }
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setChipMenu({ x: e.clientX, y: e.clientY, group: i });
+                }}
               >
                 {unwell && <span className="term-status__dot term-status__dot--warn" aria-hidden />}
                 {group.panes.map((s, p) => {
@@ -326,38 +362,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                         setStatuses((prev) => (prev[session] === s ? prev : { ...prev, [session]: s }))
                       }
                       menuExtras={[
-                        {
-                          kind: "item",
-                          label: "Rename shell…",
-                          onSelect: () => setRenaming(session),
-                        },
-                        {
-                          kind: "item",
-                          label: "Color",
-                          submenu: [
-                            {
-                              kind: "item",
-                              label: "None",
-                              onSelect: () =>
-                                setLayout((l) => l && withPaneMeta(l, session, { color: undefined })),
-                            },
-                            ...PANE_COLORS.map((hex, index) => ({
-                              kind: "item" as const,
-                              label: (
-                                <>
-                                  <span
-                                    className="term-pane-dot"
-                                    style={{ background: hex }}
-                                    aria-hidden
-                                  />
-                                  {`Color ${index + 1}`}
-                                </>
-                              ),
-                              onSelect: () =>
-                                setLayout((l) => l && withPaneMeta(l, session, { color: index })),
-                            })),
-                          ],
-                        },
+                        ...identityItems(session),
                         ...(closable
                           ? [
                               {
@@ -403,6 +408,32 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                 : "These shells and anything running in them will end. Quitting Mast instead leaves every shell running."}
             </p>
           </Dialog>
+        )}
+        {chipMenu && layout.groups[chipMenu.group] && (
+          <ContextMenu
+            x={chipMenu.x}
+            y={chipMenu.y}
+            onClose={() => setChipMenu(null)}
+            items={(() => {
+              const group = layout.groups[chipMenu.group]!;
+              const target = group.panes.includes(focused) ? focused : group.panes[0]!;
+              const label = group.panes.map((s) => titleOf(layout, s, base)).join("·");
+              return [
+                ...identityItems(target),
+                ...(closable
+                  ? [
+                      { kind: "separator" } as MenuNode,
+                      {
+                        kind: "item" as const,
+                        label: `Close shell ${label}`,
+                        danger: true,
+                        onSelect: () => confirmClose([...group.panes]),
+                      },
+                    ]
+                  : []),
+              ];
+            })()}
+          />
         )}
         {renaming && layout && (
           <PromptDialog

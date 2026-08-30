@@ -265,6 +265,25 @@ export function App({
     <ToastProvider>
       {ready && <Notifier gateway={gateway} focusedSpecId={focusedSpecId} />}
       <div className="cockpit">
+        {/* One Slack-style chrome band across the whole window: it is the drag surface (double-
+            click zooms, via the window's drag-region handler), it insets for the macOS traffic
+            lights, and its content is the active view's — the terminal parks its project tabs
+            here through the #topbar-slot portal; other views show their context. */}
+        <header className="topbar" data-tauri-drag-region>
+          <div className="topbar__inset" data-tauri-drag-region aria-hidden />
+          <div
+            id="topbar-slot"
+            className="topbar__slot"
+            data-tauri-drag-region
+            style={{ display: view === "terminal" ? "flex" : "none" }}
+          />
+          {view !== "terminal" && (
+            <div className="topbar__context" data-tauri-drag-region>
+              {navItems.find((item) => item.value === view)?.label ?? "Mast"}
+            </div>
+          )}
+        </header>
+        <div className="cockpit-body">
         <nav className="rail" aria-label="Sections" data-tauri-drag-region>
           <button type="button" className="rail-brand" onClick={goRooms} aria-label="Mast — rooms">
             <Logo size={22} />
@@ -337,6 +356,7 @@ export function App({
             </section>
           )}
         </main>
+        </div>
         {degraded && (
           <div className="connection-banner" role="status" data-state={pillView.state}>
             {pillView.label}

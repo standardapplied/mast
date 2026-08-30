@@ -1432,7 +1432,7 @@ html.is-dragging-active * {
 
 .cockpit {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   height: 100vh;
   /* dvh tracks the *visible* viewport as the mobile URL bar / on-screen keyboard
      move, so the shell isn't clipped behind them; 100vh is the fallback. */
@@ -3764,10 +3764,10 @@ button.room-section-head:hover {
   display: flex;
   align-items: stretch;
   gap: 1px;
-  flex-shrink: 0;
-  padding: 0 8px;
-  background: var(--background);
-  border-bottom: 1px solid var(--border);
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px 0 0;
   overflow-x: auto;
 }
 .term-tab {
@@ -3775,7 +3775,7 @@ button.room-section-head:hover {
   align-items: center;
   gap: 8px;
   padding: 0 8px 0 12px;
-  height: 34px;
+  height: 100%;
   cursor: pointer;
   border-bottom: 2px solid transparent;
   color: var(--muted-foreground);
@@ -5132,13 +5132,46 @@ button.room-section-head:hover {
   vertical-align: middle;
 }
 
-/* Transparent-titlebar chrome (Tauri, macOS): the traffic lights float over the rail's top,
-   so the brand drops below them, and the tab strip indents clear of the zoom button's spill. */
-body[data-chrome="overlay"] .rail {
-  padding-top: calc(40px + env(safe-area-inset-top));
+/* Transparent-titlebar chrome (Tauri, macOS): one full-width band at the window's top edge is
+   the drag surface (double-click zooms) and the traffic lights' home. Its 30px height centers
+   content on the lights' native vertical center (~14px) — AppKit fixes their position, so the
+   bar aligns to them, not the other way around. */
+.topbar {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  height: 30px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
-body[data-chrome="overlay"] .term-tabs {
-  padding-left: 24px;
+.topbar__inset {
+  width: 8px;
+  flex-shrink: 0;
+}
+body[data-chrome="overlay"] .topbar__inset {
+  width: 76px;
+}
+.topbar__slot {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+.topbar__context {
+  display: flex;
+  align-items: center;
+  padding-right: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.cockpit-body {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
 }
 
 .term-overlay--delayed {

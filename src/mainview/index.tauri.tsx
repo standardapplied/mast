@@ -18,8 +18,16 @@ import { browserThemeDeps, createThemeController } from "./theme";
 
 document.documentElement.classList.add("in-shell");
 // The window runs a transparent titlebar (titleBarStyle Overlay): content owns the top strip and
-// the traffic lights float over the rail — CSS keyed on this flag makes room for them.
+// the traffic lights float over the topbar's inset — CSS keyed on this flag makes room for them.
 document.body.dataset.chrome = "overlay";
+
+// A desktop app never shows the webview's own context menu ("Reload"); the app's menus render
+// where they belong. Editable fields keep the native menu for spellcheck and clipboard.
+window.addEventListener("contextmenu", (e) => {
+  const target = e.target as HTMLElement | null;
+  if (target?.closest("input, textarea, [contenteditable='true']")) return;
+  e.preventDefault();
+});
 
 const gateway = createTauriGateway();
 const rosterSources: RosterSources = {
