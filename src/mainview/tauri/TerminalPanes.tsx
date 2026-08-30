@@ -135,18 +135,39 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       }
     }, [layout, base]);
 
-    // Report structurally — worstStatus mints fresh objects and onStatus is an inline closure, so
-    // an identity-based report would ping-pong renders with the workspace forever.
+    // The tab-bar cluster mirrors the worst pane SYNCHRONOUSLY with every pane report — routing
+    // it through render effects left windows where a recovery report could lag or be skipped
+    // (the header stuck on "Disconnected" after a successful reconnect, seen in the field).
+    // Structural comparison, because worstStatus hands back pane-owned objects.
+    const statusesRef = useRef<Record<string, SessionStatus>>({});
+    const layoutRef = useRef<PaneLayout | null>(null);
+    layoutRef.current = layout;
+    const onStatusRef = useRef(onStatus);
+    onStatusRef.current = onStatus;
     const lastReported = useRef<SessionStatus | null>(null);
-    useEffect(() => {
-      if (!layout) return;
+    const reportAggregate = useCallback(() => {
+      const current = layoutRef.current;
+      if (!current) return;
       const worst = worstStatus(
-        sessionsOf(layout).map((s) => statuses[s]).filter((s) => s !== undefined),
+        sessionsOf(current)
+          .map((s) => statusesRef.current[s])
+          .filter((s) => s !== undefined),
       );
       if (lastReported.current && statusEqual(lastReported.current, worst)) return;
       lastReported.current = worst;
-      onStatus?.(worst);
-    }, [layout, statuses, onStatus]);
+      onStatusRef.current?.(worst);
+    }, []);
+    const onPaneStatus = useCallback(
+      (session: string, s: SessionStatus) => {
+        statusesRef.current = { ...statusesRef.current, [session]: s };
+        setStatuses(statusesRef.current);
+        reportAggregate();
+      },
+      [reportAggregate],
+    );
+    useEffect(() => {
+      reportAggregate();
+    }, [layout, reportAggregate]);
 
     const apply = useCallback((next: PaneLayout, focus?: string) => {
       setLayout(next);
@@ -178,11 +199,12 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         void invoke("session_kill", { socketPath: NODE_SOCKET, token: "", session }).catch(noop);
         paneRefs.current.delete(session);
       }
-      setStatuses((prev) => {
-        const next = { ...prev };
+      {
+        const next = { ...statusesRef.current };
         for (const session of sessions) delete next[session];
-        return next;
-      });
+        statusesRef.current = next;
+        setStatuses(next);
+      }
       setTitles((prev) => {
         const next = { ...prev };
         for (const session of sessions) delete next[session];
@@ -343,9 +365,9 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                       create={create}
                       active={active && groupActive && session === focused}
                       visible={active && groupActive}
-                      onStatus={(s) =>
-                        setStatuses((prev) => (prev[session] === s ? prev : { ...prev, [session]: s }))
-                      }
+                      onStatus={(s) => {
+                        if (statusesRef.current[session] !== s) onPaneStatus(session, s);
+                      }}
                       onTitle={(raw) => {
                         const t = shortTitle(raw);
                         setTitles((prev) => (prev[session] === t ? prev : { ...prev, [session]: t }));
