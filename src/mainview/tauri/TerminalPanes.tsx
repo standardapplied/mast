@@ -106,7 +106,12 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         }
         setLayout(next);
         setVisited(new Set([next.groups[next.active]!.id]));
-        setFocused((f) => (sessionsOf(next).includes(f) ? f : next.groups[next.active]!.panes[0]!));
+        // Focus must land in the ACTIVE group — a restored focus in some other group would leave
+        // the visible split entirely unfocused (every pane dimmed, keyboard going nowhere).
+        setFocused((f) => {
+          const panes = next.groups[next.active]!.panes;
+          return panes.includes(f) ? f : panes[0]!;
+        });
       };
       void invoke<Array<{ name: string; live: boolean }>>("session_list", {
         socketPath: NODE_SOCKET,
@@ -316,6 +321,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                     className={cx(
                       "term-panes__cell",
                       group.panes.length > 1 && session === focused && "is-focused",
+                      group.panes.length > 1 && session !== focused && "is-unfocused",
                     )}
                     onPointerDownCapture={() => setFocused(session)}
                   >

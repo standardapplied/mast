@@ -184,6 +184,53 @@ describe("TerminalController", () => {
     expect(sink.writes).toEqual([]);
   });
 
+  test("an OSC 52 clipboard write in the stream reaches the clipboard hook, and still renders around it", async () => {
+    const { controller, renderer } = await harness(40, 4);
+    const copied: string[] = [];
+    controller.hooks.onClipboard = (text) => copied.push(text);
+    const payload = btoa("https://example.test/auth");
+    controller.feed(enc(`before\x1b]52;c;${payload}\x07after`));
+    controller.frame();
+    expect(copied).toEqual(["https://example.test/auth"]);
+    expect(gridRow(renderer.grid, 0)).toBe("beforeafter");
+  });
+
+  test("historical OSC 52 in a replay never touches the clipboard; live writes after it do", async () => {
+    const { controller } = await harness(40, 4);
+    const copied: string[] = [];
+    controller.hooks.onClipboard = (text) => copied.push(text);
+    controller.feed(enc("\x1b]52;c;INCOMPLE")); // the gap cut mid-sequence before the pause
+    controller.resetForReplay();
+    controller.feed(enc(`snapshot\x1b]52;c;${btoa("stale")}\x07more`));
+    controller.endReplay();
+    expect(copied).toEqual([]); // the journal's old copy is history, not a user action
+    controller.feed(enc(`\x1b]52;c;${btoa("fresh")}\x07`));
+    expect(copied).toEqual(["fresh"]);
+  });
+
+  test("resetForReplay wipes state so a journal snapshot lands on a clean terminal", async () => {
+    const { controller, core, renderer } = await harness(40, 4);
+    controller.feed(enc("stale garbage\x1b[?1049h TUI leftovers"));
+    controller.frame();
+    controller.resetForReplay();
+    controller.feed(enc("replayed$ "));
+    controller.frame();
+    expect(core.altScreen()).toBe(false);
+    expect(gridRow(renderer.grid, 0)).toBe("replayed$");
+    expect(gridRow(renderer.grid, 1)).toBe("");
+  });
+
+  test("focus changes reach the pty only when the app asked for them (mode 1004)", async () => {
+    const { controller, core, sink } = await harness();
+    controller.setFocus(false);
+    controller.setFocus(true);
+    expect(sink.writes).toEqual([]);
+    core.write(enc("\x1b[?1004h"));
+    controller.setFocus(false);
+    controller.setFocus(true);
+    expect(sink.writes).toEqual([Array.from(enc("\x1b[O")), Array.from(enc("\x1b[I"))]);
+  });
+
   test("the wheel scrolls scrollback normally, but drives an alternate-screen TUI with arrows", async () => {
     const { controller, core, sink } = await harness();
     controller.wheel(-2); // normal screen: local scrollback, nothing sent

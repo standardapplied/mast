@@ -147,6 +147,8 @@ export const SessionTerminalPane = forwardRef<
   const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
+  const activeRef = useRef(active !== false);
+  activeRef.current = active !== false;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const themeName = useThemeName();
@@ -248,6 +250,32 @@ export const SessionTerminalPane = forwardRef<
   // The retry timer must survive effect re-runs (a theme flip mid-wait) and die with the pane.
   useEffect(() => () => clearTimeout(retryTimer.current), []);
 
+  // Focus reporting (mode 1004): apps like vim and claude-code want CSI I/O on focus changes.
+  // Report pane-focus transitions (never the initial state — an attach is assumed focused) and
+  // window-level blur/focus for whichever pane holds the focus.
+  const prevFocusRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    const focused = active !== false;
+    if (prevFocusRef.current !== null && prevFocusRef.current !== focused) {
+      controllerRef.current?.setFocus(focused);
+    }
+    prevFocusRef.current = focused;
+  }, [active]);
+  useEffect(() => {
+    const onBlur = () => {
+      if (activeRef.current) controllerRef.current?.setFocus(false);
+    };
+    const onFocus = () => {
+      if (activeRef.current) controllerRef.current?.setFocus(true);
+    };
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
+
   // Take keyboard focus when this pane's tab becomes the visible one, so keystrokes land in the
   // terminal instead of being dropped on an unfocused div (the old xterm pane focused itself).
   useEffect(() => {
@@ -332,10 +360,30 @@ export const SessionTerminalPane = forwardRef<
       const controller = new TerminalController(core, renderer, sink);
       controllerRef.current = controller;
 
+      controller.hooks.onClipboard = (text) =>
+        void navigator.clipboard?.writeText(text).catch(noop);
       cleanups.push(
-        await listen<number[]>(`session://data/${id}`, (e) =>
-          controller.feed(new Uint8Array(e.payload)),
-        ),
+        // One ordered channel carries bytes AND replay markers: a mid-stream replay means the
+        // host dropped part of the stream (flow-control pause) and is re-baselining us — the
+        // terminal resets so the snapshot lands clean, then snaps back to the live view.
+        await listen<
+          { kind: "bytes"; data: number[] } | { kind: "replay-begin"; safe: boolean } | { kind: "replay-end" }
+        >(`session://data/${id}`, (e) => {
+          const p = e.payload;
+          if (p.kind === "bytes") {
+            controller.feed(new Uint8Array(p.data));
+          } else if (p.kind === "replay-begin") {
+            controller.resetForReplay();
+          } else if (p.kind === "replay-end") {
+            controller.endReplay();
+            controller.scroll("bottom");
+            // The replay just restored the app's modes; an unfocused pane owes it a focus-lost
+            // report (the attach itself is assumed focused, which is wrong for a split's far side).
+            if (!activeRef.current) {
+              controller.setFocus(false);
+            }
+          }
+        }),
       );
       cleanups.push(await listen(`session://meta/${id}`, noop));
       cleanups.push(await listen<unknown>(`session://exit/${id}`, (e) => onEnd(toSessionEnd(e.payload))));
@@ -404,7 +452,8 @@ export const SessionTerminalPane = forwardRef<
           return;
         }
         try {
-          controller.frame((now - start) % BLINK_MS < BLINK_ON_MS);
+          // Only the focused pane blinks; an unfocused pane holds a steady cursor.
+          controller.frame(activeRef.current ? (now - start) % BLINK_MS < BLINK_ON_MS : true);
         } catch (e) {
           if (!disposed) setStatus({ kind: "failed", reason: e instanceof Error ? e.message : String(e) });
         }

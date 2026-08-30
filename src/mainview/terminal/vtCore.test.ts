@@ -383,6 +383,32 @@ describe("key encoding", () => {
 describe("paste", () => {
   const decode = (b: Uint8Array) => new TextDecoder().decode(b);
 
+  test("reset returns the terminal to a blank ground state — the mid-stream replay baseline", async () => {
+    const core = await track(20, 4);
+    core.write(bytes("garbled\x1b[?2004h\x1b[?1049h leftovers"));
+    expect(core.bracketedPaste()).toBe(true);
+    core.reset();
+    expect(core.bracketedPaste()).toBe(false);
+    expect(core.altScreen()).toBe(false);
+    const text = core
+      .readAll()
+      .rows.map((r) => r.cells.map((c) => c.text).join("").trimEnd())
+      .join("");
+    expect(text).toBe("");
+    core.write(bytes("fresh"));
+    expect(rowText(core, 0)).toBe("fresh");
+  });
+
+  test("focus reporting encodes CSI I / CSI O", async () => {
+    const core = await track();
+    const decode = (b: Uint8Array) => new TextDecoder().decode(b);
+    expect(core.focusReporting()).toBe(false);
+    core.write(bytes("\x1b[?1004h")); // vim, claude-code opt in
+    expect(core.focusReporting()).toBe(true);
+    expect(decode(core.encodeFocus(true))).toBe("\x1b[I");
+    expect(decode(core.encodeFocus(false))).toBe("\x1b[O");
+  });
+
   test("altScreen tracks the application's alternate-screen modes", async () => {
     const core = await track();
     expect(core.altScreen()).toBe(false);

@@ -83,6 +83,11 @@ const DATA_MODE = 37;
 const MODE_BRACKETED_PASTE = 2004;
 /** The alternate-screen modes (1049 modern, 1047/47 legacy) — any one means a full-screen TUI. */
 const MODES_ALT_SCREEN = [1049, 1047, 47] as const;
+/** DEC private mode 1004 — focus event reporting. */
+const MODE_FOCUS_REPORTING = 1004;
+/** GhosttyFocusEvent values. */
+const FOCUS_GAINED = 0;
+const FOCUS_LOST = 1;
 /** GhosttyTerminalModeConfig: u16 mode + bool value, padded (frozen layout). */
 const MODE_CONFIG_SIZE = 4;
 const MODE_CONFIG_VALUE_OFFSET = 2;
@@ -211,6 +216,8 @@ interface GhosttyExports {
   ghostty_key_event_set_utf8(event: number, ptr: number, len: number): void;
   ghostty_key_event_set_unshifted_codepoint(event: number, codepoint: number): void;
   ghostty_terminal_get(term: number, data: number, out: number): number;
+  ghostty_terminal_reset(term: number): void;
+  ghostty_focus_encode(event: number, buf: number, bufLen: number, outWritten: number): number;
   ghostty_paste_encode(
     data: number,
     dataLen: number,
@@ -517,6 +524,29 @@ export class VtCore {
   /** Whether the application enabled bracketed paste (mode 2004) — vim, zsh, claude-code do. */
   bracketedPaste(): boolean {
     return this.modeEnabled(MODE_BRACKETED_PASTE);
+  }
+
+  /** Whether the application asked for focus reports (mode 1004). */
+  focusReporting(): boolean {
+    return this.modeEnabled(MODE_FOCUS_REPORTING);
+  }
+
+  /** The CSI I / CSI O focus report — send only when {@link focusReporting} says the app wants it. */
+  encodeFocus(focused: boolean): Uint8Array {
+    this.requireOpen();
+    return this.encodeWithRetry("encodeFocus", 8, (buf, len, out) =>
+      this.e.ghostty_focus_encode(focused ? FOCUS_GAINED : FOCUS_LOST, buf, len, out),
+    );
+  }
+
+  /**
+   * Full reset to a blank ground state — screen, scrollback, and every mode. The baseline for a
+   * mid-stream journal replay: the incoming snapshot must land on a clean terminal, not on top of
+   * whatever a dropped-bytes gap left behind.
+   */
+  reset(): void {
+    this.requireOpen();
+    this.e.ghostty_terminal_reset(this.term);
   }
 
   /** Whether the application is on the alternate screen (a full-screen TUI, no scrollback). */

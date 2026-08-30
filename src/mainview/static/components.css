@@ -5199,3 +5199,14 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
     opacity: 1;
   }
 }
+
+/* Ghostty-style split dimming: the unfocused pane sits behind a light theme-colored scrim (its
+   cursor also holds steady — the pane stops blinking when it isn't focused). */
+.term-panes__cell.is-unfocused::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--background) 40%, transparent);
+  pointer-events: none;
+  z-index: 1;
+}
