@@ -3895,7 +3895,7 @@ button.room-section-head:hover {
   align-items: center;
   gap: 3px;
   flex-shrink: 0;
-  height: 34px;
+  height: 40px;
   padding: 0 8px;
   background: var(--background);
   border-bottom: 1px solid var(--border);
@@ -3906,7 +3906,7 @@ button.room-section-head:hover {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
+  height: 30px;
   padding: 0 10px;
   background: none;
   border: none;
@@ -4549,7 +4549,7 @@ button.room-section-head:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 34px;
+  height: 40px;
   flex-shrink: 0;
   padding: 0 12px;
   border-bottom: 1px solid var(--border);
@@ -5217,7 +5217,7 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   z-index: 1;
 }
 
-/* Collapsed file tree: a slim strip whose header zone matches the pane bar's 34px, so the
+/* Collapsed file tree: a slim strip whose header zone matches the pane bar's 40px, so the
    reopen affordance sits exactly where the tree's header was. Desktop-only — the mobile flip
    owns panel visibility below 900px, so the collapse is ignored there. */
 .term-split__treestub {
@@ -5228,7 +5228,7 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding-top: 7px;
+  padding-top: 12px;
 }
 .term-split__treestub-btn {
   appearance: none;
