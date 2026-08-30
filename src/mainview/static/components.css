@@ -4161,7 +4161,6 @@ button.room-section-head:hover {
   border-bottom: 1px solid var(--border);
   height: 40px;
   flex-shrink: 0;
-  box-sizing: border-box;
 }
 .viewer__title {
   display: inline-flex;
