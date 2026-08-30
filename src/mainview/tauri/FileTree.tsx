@@ -366,7 +366,7 @@ export function FileTree({
           )}
           {actions && rootPath && (
             <>
-              <Tooltip content="New file in the selected folder" side="bottom">
+              <Tooltip content="New file" side="bottom">
                 <button
                   type="button"
                   className="file-tree__refresh"
@@ -379,7 +379,7 @@ export function FileTree({
                   <PagePlus size={15} />
                 </button>
               </Tooltip>
-              <Tooltip content="New folder in the selected folder" side="bottom">
+              <Tooltip content="New folder" side="bottom">
                 <button
                   type="button"
                   className="file-tree__refresh"
