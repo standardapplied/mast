@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { SnapshotsPanel } from "../board/SnapshotsPanel";
 import { cx } from "../components/cx";
 import type { Gateway } from "../gateway";
-import { isUnwell, type SessionStatus } from "../terminal/connection";
+import { isUnwell, type SessionStatus, statusEqual } from "../terminal/connection";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
 import type { TerminalHandle } from "./SessionTerminalPane";
@@ -100,7 +100,12 @@ export function TerminalWorkspace({
       })}
       target={target}
       active={active}
-      onStatus={(s) => setStatuses((prev) => (prev[key] === s ? prev : { ...prev, [key]: s }))}
+      onStatus={(s) =>
+        setStatuses((prev) => {
+          const known = prev[key];
+          return known !== undefined && statusEqual(known, s) ? prev : { ...prev, [key]: s };
+        })
+      }
     />
   );
 
