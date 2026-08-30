@@ -2029,7 +2029,7 @@ span.checkbox {
   border-radius: 6px;
   overflow: hidden;
   background: var(--background);
-  border: 1px solid var(--border);
+  box-shadow: var(--chrome-card-shadow);
 }
 
 /* Rooms -------------------------------------------------------------------- */

@@ -84,6 +84,7 @@
     color-mix(in srgb, #fc4926 9%, #101216) 0%,
     color-mix(in srgb, #fc4926 4%, #0d1014) 100%
   );
+  --chrome-card-shadow: 0 1px 4px rgba(0, 0, 0, 0.55), 0 0 1px rgba(0, 0, 0, 0.6);
   --surface-hover: rgba(246, 241, 233, 0.06);
   --lane-bg: rgba(246, 241, 233, 0.03);
   --background-deep: #040608;
@@ -121,6 +122,7 @@
 }
 
 [data-theme="light"] {
+  --chrome-card-shadow: 0 1px 3px rgba(14, 18, 23, 0.14), 0 0 1px rgba(14, 18, 23, 0.18);
   --chrome-bg: linear-gradient(
     180deg,
     color-mix(in srgb, #fc4926 6%, #f7f4ee) 0%,
