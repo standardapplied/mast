@@ -131,22 +131,21 @@ export function SnapshotsPanel({
                 </span>
               ) : (
                 <>
-                  <button
-                    type="button"
-                    className="dep-chip"
+                  <Button
+                    variant="ghost"
                     disabled={pending !== null}
                     onClick={() => setConfirm({ action: "restore", name: snapshot.name })}
                   >
                     Restore
-                  </button>
-                  <button
-                    type="button"
-                    className="dep-chip"
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="btn-ghost-danger"
                     disabled={pending !== null}
                     onClick={() => setConfirm({ action: "delete", name: snapshot.name })}
                   >
                     Delete
-                  </button>
+                  </Button>
                 </>
               )}
             </div>
