@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
-import { Folder, FolderPlus, PagePlus } from "../components/icons";
+import { ArrowUp, Folder, FolderPlus, PagePlus, PanelRight, Refresh } from "../components/icons";
+import { Tooltip } from "../components/Tooltip";
 import { parentDir } from "./dropTarget";
 import type { FileEntry, FileTreeStore } from "./fileTreeStore";
 import { clearSelection, click, EMPTY_SELECTION, rangeTo, toggle } from "./selection";
@@ -91,10 +92,13 @@ export function FileTree({
   store,
   dropDir,
   actions,
+  onCollapse,
 }: {
   store: FileTreeStore;
   dropDir?: string | null;
   actions?: FileActions;
+  /** Collapse the panel (the workbench shows a slim reopen strip in its place). */
+  onCollapse?: () => void;
 }) {
   useSyncExternalStore(
     useCallback((cb) => store.subscribe(cb), [store]),
@@ -349,52 +353,69 @@ export function FileTree({
         <span className="file-tree__root">Files</span>
         <span className="file-tree__actions">
           {actions && rootPath && rootPath !== "/" && (
-            <button
-              type="button"
-              className="file-tree__refresh"
-              onClick={() => actions.climbRoot()}
-              aria-label="Up one level"
-              title="Up one level"
-            >
-              ↑
-            </button>
+            <Tooltip content="Up one level" side="bottom">
+              <button
+                type="button"
+                className="file-tree__refresh"
+                onClick={() => actions.climbRoot()}
+                aria-label="Up one level"
+              >
+                <ArrowUp size={15} />
+              </button>
+            </Tooltip>
           )}
           {actions && rootPath && (
             <>
-              <button
-                type="button"
-                className="file-tree__refresh"
-                onClick={() => {
-                  const dir = creationDir();
-                  if (dir) actions.newFile(dir);
-                }}
-                aria-label="New file"
-                title="New file in the selected folder"
-              >
-                <PagePlus size={15} />
-              </button>
-              <button
-                type="button"
-                className="file-tree__refresh"
-                onClick={() => {
-                  const dir = creationDir();
-                  if (dir) actions.newFolder(dir);
-                }}
-                aria-label="New folder"
-                title="New folder in the selected folder"
-              >
-                <FolderPlus size={15} />
-              </button>
+              <Tooltip content="New file in the selected folder" side="bottom">
+                <button
+                  type="button"
+                  className="file-tree__refresh"
+                  onClick={() => {
+                    const dir = creationDir();
+                    if (dir) actions.newFile(dir);
+                  }}
+                  aria-label="New file"
+                >
+                  <PagePlus size={15} />
+                </button>
+              </Tooltip>
+              <Tooltip content="New folder in the selected folder" side="bottom">
+                <button
+                  type="button"
+                  className="file-tree__refresh"
+                  onClick={() => {
+                    const dir = creationDir();
+                    if (dir) actions.newFolder(dir);
+                  }}
+                  aria-label="New folder"
+                >
+                  <FolderPlus size={15} />
+                </button>
+              </Tooltip>
             </>
           )}
-          <button
-            type="button"
-            className={`file-tree__refresh${store.busy ? " file-tree__refresh--busy" : ""}`}
-            onClick={() => store.refresh()}
-            aria-label="Refresh"
-          >
-            ↻
-          </button>
+          <Tooltip content="Refresh" side="bottom">
+            <button
+              type="button"
+              className={`file-tree__refresh${store.busy ? " file-tree__refresh--busy" : ""}`}
+              onClick={() => store.refresh()}
+              aria-label="Refresh"
+            >
+              <Refresh size={15} />
+            </button>
+          </Tooltip>
+          {onCollapse && (
+            <Tooltip content="Hide the file tree" side="bottom">
+              <button
+                type="button"
+                className="file-tree__refresh"
+                onClick={onCollapse}
+                aria-label="Hide the file tree"
+              >
+                <PanelRight size={15} />
+              </button>
+            </Tooltip>
+          )}
         </span>
       </header>
       <div

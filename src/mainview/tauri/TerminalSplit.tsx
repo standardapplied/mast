@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Dialog } from "../components/Dialog";
+import { PanelRight } from "../components/icons";
+import { Tooltip } from "../components/Tooltip";
 import { Splitter } from "../components/Splitter";
 import { useToast } from "../components/Toast";
 import { ToggleButton } from "../components/ToggleButton";
@@ -92,6 +94,23 @@ export function TerminalSplit({
   const rootRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<TerminalHandle>(null);
   const [widths, setWidths] = useState<PaneWidths>(() => loadWidths(localStorage, target));
+  const treeCollapsedKey = `mast.treecollapsed.${target}`;
+  const [treeCollapsed, setTreeCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(treeCollapsedKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setTreeCollapsedPersistent = (collapsed: boolean) => {
+    setTreeCollapsed(collapsed);
+    try {
+      localStorage.setItem(treeCollapsedKey, collapsed ? "1" : "0");
+    } catch {
+      /* preference is best-effort */
+    }
+    scheduleRefit();
+  };
   const [mobilePane, setMobilePane] = useState<MobilePane>("terminal");
   const [drop, setDrop] = useState<DropTarget | null>(null);
   const [prompt, setPrompt] = useState<Prompt | null>(null);
@@ -395,16 +414,38 @@ export function TerminalSplit({
             />
           </>
         )}
-        <Splitter
-          value={widths.tree}
-          min={PANE_LIMITS.tree.min}
-          max={PANE_LIMITS.tree.max}
-          controls="after"
-          onChange={setPane("tree")}
-          onDragEnd={commitPane("tree")}
-          ariaLabel="Resize file tree"
-        />
-        <FileTree store={store} dropDir={dropDir} actions={actions} />
+        {treeCollapsed ? (
+          <div className="term-split__treestub">
+            <Tooltip content="Show the file tree" side="left">
+              <button
+                type="button"
+                className="file-tree__refresh"
+                aria-label="Show the file tree"
+                onClick={() => setTreeCollapsedPersistent(false)}
+              >
+                <PanelRight size={15} />
+              </button>
+            </Tooltip>
+          </div>
+        ) : (
+          <>
+            <Splitter
+              value={widths.tree}
+              min={PANE_LIMITS.tree.min}
+              max={PANE_LIMITS.tree.max}
+              controls="after"
+              onChange={setPane("tree")}
+              onDragEnd={commitPane("tree")}
+              ariaLabel="Resize file tree"
+            />
+            <FileTree
+              store={store}
+              dropDir={dropDir}
+              actions={actions}
+              onCollapse={() => setTreeCollapsedPersistent(true)}
+            />
+          </>
+        )}
       </div>
       <TransfersTray />
 

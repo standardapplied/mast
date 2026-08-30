@@ -18,6 +18,7 @@ import {
   reconcile,
   removePane,
   sessionsOf,
+  shortTitle,
   splitGroup,
   titleOf,
   withPaneMeta,
@@ -78,6 +79,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const [closing, setClosing] = useState<string[] | null>(null);
     const [renaming, setRenaming] = useState<string | null>(null);
     const [chipMenu, setChipMenu] = useState<{ x: number; y: number; group: number } | null>(null);
+    const [titles, setTitles] = useState<Record<string, string>>({});
     const paneRefs = useRef(new Map<string, TerminalHandle>());
 
     /** Menu actions, injected into the tested builders in terminal/paneMenu. */
@@ -234,7 +236,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               const st = statuses[s];
               return st !== undefined && isUnwell(st);
             });
-            const plainLabel = group.panes.map((s) => titleOf(layout, s, base)).join("·");
+            const plainLabel = group.panes.map((s) => titleOf(layout, s, base, titles)).join("·");
             return (
               <button
                 key={group.id}
@@ -262,7 +264,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                           aria-hidden
                         />
                       )}
-                      <span className="term-pane-chip__title">{titleOf(layout, s, base)}</span>
+                      <span className="term-pane-chip__title">{titleOf(layout, s, base, titles)}</span>
                     </span>
                   );
                 })}
@@ -339,7 +341,11 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                       onStatus={(s) =>
                         setStatuses((prev) => (prev[session] === s ? prev : { ...prev, [session]: s }))
                       }
-                      menuExtras={paneMenuItems(layout, session, base, closable, menuActions)}
+                      onTitle={(raw) => {
+                        const t = shortTitle(raw);
+                        setTitles((prev) => (prev[session] === t ? prev : { ...prev, [session]: t }));
+                      }}
+                      menuExtras={paneMenuItems(layout, session, base, closable, menuActions, titles)}
                     />
                   </div>
                 ))}
@@ -353,7 +359,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
             onClose={() => setClosing(null)}
             title={
               closing.length === 1
-                ? `Close shell ${titleOf(layout, closing[0]!, base)}?`
+                ? `Close shell ${titleOf(layout, closing[0]!, base, titles)}?`
                 : `Close ${closing.length} shells?`
             }
             size="sm"
@@ -387,12 +393,13 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               base,
               closable,
               menuActions,
+              titles,
             )}
           />
         )}
         {renaming && layout && (
           <PromptDialog
-            title={`Rename shell ${titleOf(layout, renaming, base)}`}
+            title={`Rename shell ${titleOf(layout, renaming, base, titles)}`}
             label="Name"
             initial={layout.meta?.[renaming]?.label ?? ""}
             confirmLabel="Rename"

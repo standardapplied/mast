@@ -11,6 +11,7 @@ import {
   reconcile,
   removePane,
   sessionsOf,
+  shortTitle,
   splitGroup,
   titleOf,
   withPaneMeta,
@@ -156,11 +157,21 @@ describe("pane identity (rename + color)", () => {
   const base = "mast-a";
   const layout = { groups: [{ id: 1, panes: ["mast-a", "mast-a.2"] }], active: 0, seq: 2 };
 
-  test("a pane's title is its custom label, falling back to the ordinal", () => {
+  test("a pane's title is its custom label, then its live shell title, then the ordinal", () => {
     expect(titleOf(layout, "mast-a", base)).toBe("1");
+    expect(titleOf(layout, "mast-a", base, { "mast-a": "mast" })).toBe("mast");
     const named = withPaneMeta(layout, "mast-a", { label: "agent" });
-    expect(titleOf(named, "mast-a", base)).toBe("agent");
+    expect(titleOf(named, "mast-a", base, { "mast-a": "mast" })).toBe("agent");
     expect(titleOf(named, "mast-a.2", base)).toBe("2");
+  });
+
+  test("shortTitle distills the stock bash title down to the working directory's name", () => {
+    expect(shortTitle("dev@snout: ~/workspace/mast")).toBe("mast");
+    expect(shortTitle("dev@snout: ~")).toBe("~");
+    expect(shortTitle("dev@snout: /")).toBe("/");
+    expect(shortTitle("vim README.md")).toBe("vim README.md");
+    expect(shortTitle("  ")).toBe("");
+    expect(shortTitle("x".repeat(80)).length).toBeLessThanOrEqual(40);
   });
 
   test("renaming to blank clears back to the ordinal; color survives independently", () => {

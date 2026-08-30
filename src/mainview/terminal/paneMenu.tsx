@@ -64,6 +64,7 @@ export function paneMenuItems(
   base: string,
   closable: boolean,
   actions: PaneMenuActions,
+  titles?: Readonly<Record<string, string>>,
 ): MenuNode[] {
   return [
     ...identityItems(session, actions),
@@ -71,7 +72,7 @@ export function paneMenuItems(
       ? [
           {
             kind: "item" as const,
-            label: `Close pane ${titleOf(layout, session, base)}`,
+            label: `Close pane ${titleOf(layout, session, base, titles)}`,
             danger: true,
             onSelect: () => actions.close([session]),
           },
@@ -91,9 +92,10 @@ export function chipMenuItems(
   base: string,
   closable: boolean,
   actions: PaneMenuActions,
+  titles?: Readonly<Record<string, string>>,
 ): MenuNode[] {
   const target = group.panes.includes(focused) ? focused : group.panes[0]!;
-  const label = group.panes.map((s) => titleOf(layout, s, base)).join("·");
+  const label = group.panes.map((s) => titleOf(layout, s, base, titles)).join("·");
   return [
     ...identityItems(target, actions),
     ...(closable

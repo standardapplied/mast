@@ -79,6 +79,11 @@
 :root {
   --background: #0a0e11;
   --surface: #12171b;
+  --chrome-bg: linear-gradient(
+    180deg,
+    color-mix(in srgb, #fc4926 9%, #101216) 0%,
+    color-mix(in srgb, #fc4926 4%, #0d1014) 100%
+  );
   --surface-hover: rgba(246, 241, 233, 0.06);
   --lane-bg: rgba(246, 241, 233, 0.03);
   --background-deep: #040608;
@@ -116,6 +121,11 @@
 }
 
 [data-theme="light"] {
+  --chrome-bg: linear-gradient(
+    180deg,
+    color-mix(in srgb, #fc4926 6%, #f7f4ee) 0%,
+    color-mix(in srgb, #fc4926 2%, #f2efe8) 100%
+  );
   --background: #f8fafc;
   --surface: #fdffff;
   --surface-hover: rgba(14, 18, 23, 0.05);

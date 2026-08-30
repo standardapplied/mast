@@ -58,9 +58,27 @@ export function labelFor(session: string, base: string): string {
   return String(ordinalOf(session, base) ?? "?");
 }
 
-/** What a pane is called: its custom label when set, its ordinal otherwise. */
-export function titleOf(layout: PaneLayout, session: string, base: string): string {
-  return layout.meta?.[session]?.label || labelFor(session, base);
+/** What a pane is called: custom label first, then its live shell title, then the ordinal. */
+export function titleOf(
+  layout: PaneLayout,
+  session: string,
+  base: string,
+  live?: Readonly<Record<string, string>>,
+): string {
+  return layout.meta?.[session]?.label || live?.[session] || labelFor(session, base);
+}
+
+/**
+ * Distills a shell's OSC title into a chip-sized name. The stock bash PS1 emits
+ * `user@host: dir` — the directory's last segment is the part a human scans for (ghostty's
+ * convention); anything else is shown as-is, trimmed and capped.
+ */
+export function shortTitle(raw: string): string {
+  const trimmed = raw.trim();
+  const afterColon = trimmed.match(/^\S+@\S+:\s*(.+)$/)?.[1];
+  const path = afterColon?.trim();
+  const name = path ? (path === "/" ? "/" : (path.split("/").filter(Boolean).pop() ?? path)) : trimmed;
+  return name.length > 40 ? `${name.slice(0, 39)}…` : name;
 }
 
 /**

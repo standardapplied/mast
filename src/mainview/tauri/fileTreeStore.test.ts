@@ -322,3 +322,35 @@ describe("FileTreeStore", () => {
     expect(countFor("/root")).toBe(0);
   });
 });
+
+describe("revalidate under load", () => {
+  test("a revalidate during an inflight fetch is queued, never swallowed (upload-then-no-file bug)", async () => {
+    const { fs, settle, take } = controllableFs();
+    const store = new FileTreeStore(fs);
+    await seedRoot(store, { settle, take }, [{ path: "/root", entries: [file("a.txt")] }]);
+
+    // A background refresh is inflight (slow link, deep walk still running)...
+    store.revalidate("/root");
+    await settle();
+    const slow = take("/root");
+
+    // ...when an upload lands and asks for a refresh. Pre-fix this was dropped on the floor.
+    store.revalidate("/root");
+    await settle();
+
+    // The inflight fetch resolves with a listing that predates the upload.
+    slow.resolve(deep([{ path: "/root", entries: [file("a.txt")] }]));
+    await settle();
+
+    // The queued revalidate must now run and land the post-upload truth.
+    const queued = take("/root");
+    queued.resolve(deep([{ path: "/root", entries: [file("a.txt"), file("dropped.png")] }]));
+    await settle();
+    const node = store.dir("/root");
+    expect(node?.status).toBe("ready");
+    expect(node?.status === "ready" && node.entries.map((e) => e.name)).toEqual([
+      "a.txt",
+      "dropped.png",
+    ]);
+  });
+});
