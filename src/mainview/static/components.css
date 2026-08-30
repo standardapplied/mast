@@ -1434,6 +1434,7 @@ html.is-dragging-active * {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  background: var(--chrome-bg);
   /* dvh tracks the *visible* viewport as the mobile URL bar / on-screen keyboard
      move, so the shell isn't clipped behind them; 100vh is the fallback. */
   height: 100dvh;
@@ -1454,7 +1455,6 @@ html.is-dragging-active * {
   align-items: center;
   gap: 4px;
   padding: calc(10px + env(safe-area-inset-top)) 0 max(12px, env(safe-area-inset-bottom));
-  background: var(--chrome-bg);
 }
 
 .rail-brand {
@@ -2022,6 +2022,14 @@ span.checkbox {
   flex-direction: column;
   /* Keep content clear of the home indicator in PWA-standalone / iOS. */
   padding: 0 0 env(safe-area-inset-bottom);
+  /* The elevated content card floating on the chrome canvas (the Slack construction): the
+     tint paints once on .cockpit — band and rail are transparent regions of it, no seams —
+     and the card sits inset so the chrome peeks through on its left, right, and bottom. */
+  margin: 0 2px 2px 2px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--background);
+  border: 1px solid var(--border);
 }
 
 /* Rooms -------------------------------------------------------------------- */
@@ -5154,7 +5162,6 @@ button.room-section-head:hover {
   align-items: stretch;
   flex-shrink: 0;
   height: 44px;
-  background: var(--chrome-bg);
 }
 .topbar__inset {
   width: 8px;
@@ -5189,7 +5196,6 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   flex: 1;
   min-height: 0;
 }
-
 .term-overlay--delayed {
   opacity: 0;
   animation: term-overlay-reveal 0.2s ease 0.4s forwards;
