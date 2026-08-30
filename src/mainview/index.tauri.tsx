@@ -18,8 +18,32 @@ import { browserThemeDeps, createThemeController } from "./theme";
 
 document.documentElement.classList.add("in-shell");
 // The window runs a transparent titlebar (titleBarStyle Overlay): content owns the top strip and
-// the traffic lights float over the rail — CSS keyed on this flag makes room for them.
+// the traffic lights float over the topbar's inset — CSS keyed on this flag makes room for them.
 document.body.dataset.chrome = "overlay";
+
+// A desktop app never shows the webview's own context menu ("Reload"). Two carve-outs keep the
+// useful native menus: editable fields (spellcheck, clipboard) and any live text selection
+// (Copy / Look Up on read-only text — spec bodies, transcripts, diagnostics — where no app menu
+// exists). The terminal is unaffected: its selection is canvas-drawn, never a DOM selection.
+window.addEventListener("contextmenu", (e) => {
+  const target = e.target as HTMLElement | null;
+  if (target?.closest("input, textarea, [contenteditable='true']")) return;
+  if (window.getSelection()?.toString()) return;
+  e.preventDefault();
+});
+
+// The traffic lights auto-hide in macOS fullscreen; mirror that into a body flag so the topbar's
+// light inset collapses with them.
+const syncFullscreen = () => {
+  void getCurrentWindow()
+    .isFullscreen()
+    .then((fs) => {
+      document.body.dataset.fullscreen = fs ? "true" : "false";
+    })
+    .catch(() => {});
+};
+syncFullscreen();
+void getCurrentWindow().onResized(syncFullscreen);
 
 const gateway = createTauriGateway();
 const rosterSources: RosterSources = {

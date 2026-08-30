@@ -130,9 +130,9 @@ export function Select({
       if (target.closest?.(".dropdown-panel")) return;
       setIsOpen(false);
     };
-    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside, true);
     return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("mousedown", handleClickOutside, true);
       debouncedFetchRef.current?.cancel();
       abortRef.current?.abort();
     };

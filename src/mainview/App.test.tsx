@@ -65,6 +65,34 @@ describe("App cockpit", () => {
     );
   });
 
+  test("the top chrome band is context-aware: label per view, tab slot only in the terminal", async () => {
+    await render(<div data-testid="fake-terminal" />, "rooms");
+    const slot = () => container.querySelector<HTMLElement>("#topbar-slot")!;
+    const label = () => container.querySelector(".topbar__context")?.textContent ?? null;
+
+    expect(container.querySelector(".topbar")).not.toBeNull();
+    expect(label()).toBe("Rooms");
+    expect(slot().style.display).toBe("none");
+
+    await act(async () => navBtn("board")?.click());
+    expect(label()).toBe("Board");
+
+    await act(async () => navBtn("terminal")?.click());
+    await flush();
+    expect(label()).toBeNull(); // the terminal owns the band through the slot
+    expect(slot().style.display).not.toBe("none");
+
+    await act(async () => navBtn("rooms")?.click());
+    expect(label()).toBe("Rooms");
+    expect(slot().style.display).toBe("none"); // the strip stays mounted, just hidden
+  });
+
+  test("the top band is a deep drag region so its empty pixels move the window", async () => {
+    await render(undefined, "rooms");
+    expect(container.querySelector(".topbar")?.getAttribute("data-tauri-drag-region")).toBe("deep");
+    expect(container.querySelector(".rail")?.getAttribute("data-tauri-drag-region")).toBe("deep");
+  });
+
   test("Rooms/Board nav remains reachable when no terminal is injected", async () => {
     await render(undefined, "rooms");
     const labels = navItems().map((button) => button.getAttribute("aria-label"));

@@ -1,4 +1,5 @@
-import { type Ref, useRef, useState } from "react";
+import { type ReactNode, type Ref, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { SnapshotsPanel } from "../board/SnapshotsPanel";
 import { cx } from "../components/cx";
 import type { Gateway } from "../gateway";
@@ -77,6 +78,19 @@ export function TerminalWorkspace({
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
   const paneRefs = useRef(new Map<string, TerminalHandle>());
 
+  // The project tabs live in the app's top chrome band, not in this view: the strip renders
+  // through the #topbar-slot portal (App shows/hides the slot with the active view). The slot is
+  // committed before this view can mount (the terminal opens by navigation), so the initializer
+  // resolves it in zero extra renders; the effect is only the paranoid fallback.
+  const [chromeSlot, setChromeSlot] = useState<Element | null>(() =>
+    document.getElementById("topbar-slot"),
+  );
+  useEffect(() => {
+    setChromeSlot((slot) => slot ?? document.getElementById("topbar-slot"));
+  }, []);
+
+  const intoChrome = (strip: ReactNode) => (chromeSlot ? createPortal(strip, chromeSlot) : null);
+
   /** A tab's durable WebGPU terminals (sub-tabs + splits), reporting into the status cluster. */
   const durablePane = (key: string, target: string | undefined, active: boolean, ref?: Ref<TerminalHandle>) => (
     <TerminalPanes
@@ -107,14 +121,20 @@ export function TerminalWorkspace({
 
   return (
     <div className="term-workspace">
-      {tabs.length > 0 && (
-        <div className="term-tabs" data-tauri-drag-region>
+      {intoChrome(
+        tabs.length === 0 ? (
+          <div className="topbar__context">Terminal</div>
+        ) : (
+        <div className="term-tabs">
+          <div className="term-tabs__scroll" role="tablist">
           {tabs.map((t) => {
             const s = statuses[t.key];
             const unwell = s !== undefined && isUnwell(s);
             return (
               <div
                 key={t.key}
+                role="tab"
+                aria-selected={t.key === activeKey && !adding}
                 className={cx("term-tab", t.key === activeKey && !adding && "is-active")}
                 onClick={() => {
                   setActiveKey(t.key);
@@ -145,6 +165,7 @@ export function TerminalWorkspace({
           >
             ＋
           </button>
+          </div>
           <span className="term-tab__tools">
             {activeStatus && (
               <StatusCluster
@@ -163,6 +184,7 @@ export function TerminalWorkspace({
             )}
           </span>
         </div>
+        ),
       )}
 
       <div className="term-workspace__body">
