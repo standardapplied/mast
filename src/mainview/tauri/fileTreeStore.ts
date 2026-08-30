@@ -40,7 +40,7 @@ export class FileTreeStore {
   private nodes = new Map<string, DirState>();
   private expanded = new Set<string>();
   private inflight = new Set<string>();
-  private refetch = new Set<string>();
+  private refetch = new Map<string, { background: boolean; depth?: number }>();
   private deleting = new Set<string>();
   private listeners = new Set<() => void>();
   private disposed = false;
@@ -171,6 +171,7 @@ export class FileTreeStore {
     this.nodes.clear();
     this.expanded.clear();
     this.inflight.clear();
+    this.refetch.clear();
     void this.loadRoot(dir);
   }
 
@@ -222,15 +223,22 @@ export class FileTreeStore {
     } finally {
       this.inflight.delete(path);
       this.emit();
+      this.drainRefetch(path);
     }
   }
 
   private async fetch(path: string, background: boolean, depth?: number): Promise<void> {
     // A refresh requested while a fetch is inflight must run AFTER it, not vanish: the inflight
     // listing may predate the change (a just-uploaded file) and dropping the request would leave
-    // the tree stale until a manual refresh (the drag-drop field bug).
+    // the tree stale until a manual refresh (the drag-drop field bug). Queued intents merge —
+    // foreground outranks background, deep outranks shallow.
     if (this.inflight.has(path)) {
-      this.refetch.add(path);
+      const queued = this.refetch.get(path);
+      const wantsDeep = depth === undefined || (queued !== undefined && queued.depth === undefined);
+      this.refetch.set(path, {
+        background: background && (queued?.background ?? true),
+        ...(wantsDeep ? {} : { depth }),
+      });
       return;
     }
     this.inflight.add(path);
@@ -249,9 +257,15 @@ export class FileTreeStore {
     } finally {
       this.inflight.delete(path);
       this.emit();
-      if (this.refetch.delete(path) && !this.disposed) {
-        void this.fetch(path, true, 1);
-      }
+      this.drainRefetch(path);
     }
+  }
+
+  private drainRefetch(path: string): void {
+    const queued = this.refetch.get(path);
+    if (queued === undefined) return;
+    this.refetch.delete(path);
+    if (this.disposed) return;
+    void this.fetch(path, queued.background, queued.depth);
   }
 }

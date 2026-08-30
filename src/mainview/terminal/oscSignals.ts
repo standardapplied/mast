@@ -32,15 +32,17 @@ type State =
   | { at: "idle" }
   | { at: "esc" }
   | { at: "code"; digits: string }
-  | { at: "payload"; code: number; bytes: number[]; esc: boolean }
-  | { at: "skip"; esc: boolean };
+  | { at: "payload"; code: number | null; bytes: number[]; esc: boolean };
+
+const IDLE: State = { at: "idle" };
+const ESC_SEEN: State = { at: "esc" };
 
 export class OscSignalScanner {
-  private state: State = { at: "idle" };
+  private state: State = IDLE;
 
   /** Forgets any half-captured sequence — call when the stream itself restarts (a replay). */
   reset(): void {
-    this.state = { at: "idle" };
+    this.state = IDLE;
   }
 
   /** Scans one pty chunk; returns any complete signals it finished, in stream order. */
@@ -50,24 +52,26 @@ export class OscSignalScanner {
       const s = this.state;
       switch (s.at) {
         case "idle":
-          if (byte === ESC) this.state = { at: "esc" };
+          if (byte === ESC) this.state = ESC_SEEN;
           break;
         case "esc":
-          this.state = byte === OSC_OPEN ? { at: "code", digits: "" } : byte === ESC ? s : { at: "idle" };
+          this.state = byte === OSC_OPEN ? { at: "code", digits: "" } : byte === ESC ? s : IDLE;
           break;
         case "code":
           if (byte >= 0x30 && byte <= 0x39 && s.digits.length < MAX_CODE_DIGITS) {
             s.digits += String.fromCharCode(byte);
           } else if (byte === SEMI && s.digits.length > 0) {
             const code = Number(s.digits);
-            this.state =
-              code === 52 || code === 0 || code === 2
-                ? { at: "payload", code, bytes: [], esc: false }
-                : { at: "skip", esc: false };
+            this.state = {
+              at: "payload",
+              code: code === 52 || code === 0 || code === 2 ? code : null,
+              bytes: [],
+              esc: false,
+            };
           } else if (byte === ESC) {
-            this.state = { at: "esc" };
+            this.state = ESC_SEEN;
           } else {
-            this.state = { at: "idle" };
+            this.state = IDLE;
           }
           break;
         case "payload":
@@ -75,26 +79,16 @@ export class OscSignalScanner {
             // The aborting ESC may itself open the next sequence: ESC + ']' is a fresh OSC.
             if (byte === ST_BACKSLASH) this.finish(s, found);
             else if (byte === OSC_OPEN) this.state = { at: "code", digits: "" };
-            else this.state = byte === ESC ? { at: "esc" } : { at: "idle" };
+            else this.state = byte === ESC ? ESC_SEEN : IDLE;
           } else if (byte === BEL) {
             this.finish(s, found);
           } else if (byte === ESC) {
             s.esc = true;
-          } else if (s.bytes.length >= MAX_PAYLOAD) {
-            this.state = { at: "skip", esc: false };
-          } else {
+          } else if (s.code !== null && s.bytes.length < MAX_PAYLOAD) {
             s.bytes.push(byte);
-          }
-          break;
-        case "skip":
-          if (s.esc) {
-            if (byte === ST_BACKSLASH) this.state = { at: "idle" };
-            else if (byte === OSC_OPEN) this.state = { at: "code", digits: "" };
-            else this.state = byte === ESC ? { at: "esc" } : { at: "idle" };
-          } else if (byte === BEL) {
-            this.state = { at: "idle" };
-          } else if (byte === ESC) {
-            s.esc = true;
+          } else if (s.bytes.length >= MAX_PAYLOAD) {
+            s.code = null;
+            s.bytes = [];
           }
           break;
       }
@@ -102,8 +96,9 @@ export class OscSignalScanner {
     return found;
   }
 
-  private finish(s: { code: number; bytes: number[] }, found: OscSignal[]): void {
-    this.state = { at: "idle" };
+  private finish(s: { code: number | null; bytes: number[] }, found: OscSignal[]): void {
+    this.state = IDLE;
+    if (s.code === null) return;
     if (s.code === 52) {
       const text = decodeClipboard(s.bytes);
       if (text !== null) found.push({ kind: "clipboard", text });

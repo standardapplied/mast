@@ -354,3 +354,47 @@ describe("revalidate under load", () => {
     ]);
   });
 });
+
+describe("refetch intent", () => {
+  test("a queued foreground deep request replays with its own intent, not as a shallow background one", async () => {
+    const { fs, settle, take } = controllableFs();
+    const store = new FileTreeStore(fs);
+    await seedRoot(store, { settle, take }, [{ path: "/root", entries: [dir("sub")] }]);
+
+    store.revalidate("/root/sub");
+    await settle();
+    const slow = take("/root/sub");
+    expect(slow.depth).toBe(1);
+
+    store.toggle(dir("sub"));
+    await settle();
+
+    slow.reject(new Error("gone mid-flight"));
+    await settle();
+
+    const replay = take("/root/sub");
+    expect(replay.depth).toBeUndefined();
+    replay.reject(new Error("really gone"));
+    await settle();
+    expect(store.dir("/root/sub")?.status).toBe("error");
+  });
+
+  test("setRoot clears queued refetches so an abandoned subtree never ghost-loads", async () => {
+    const { fs, settle, take, countFor } = controllableFs();
+    const store = new FileTreeStore(fs);
+    await seedRoot(store, { settle, take }, [{ path: "/root", entries: [file("a.txt")] }]);
+
+    store.revalidate("/root");
+    await settle();
+    const orphan = take("/root");
+    store.revalidate("/root");
+    await settle();
+
+    store.setRoot("/other");
+    await settle();
+    const before = countFor("/root");
+    orphan.resolve(deep([{ path: "/root", entries: [file("a.txt")] }]));
+    await settle();
+    expect(countFor("/root")).toBe(before);
+  });
+});

@@ -5212,7 +5212,8 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
 }
 
 /* Collapsed file tree: a slim strip whose header zone matches the pane bar's 34px, so the
-   reopen affordance sits exactly where the tree's header was. */
+   reopen affordance sits exactly where the tree's header was. Desktop-only — the mobile flip
+   owns panel visibility below 900px, so the collapse is ignored there. */
 .term-split__treestub {
   flex-shrink: 0;
   width: 34px;
@@ -5222,4 +5223,25 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   justify-content: center;
   align-items: flex-start;
   padding-top: 7px;
+}
+.term-split__treestub-btn {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  line-height: 1;
+}
+.term-split__treestub-btn:hover {
+  color: var(--foreground);
+}
+@media (min-width: 901px) {
+  .term-split--treecollapsed .file-tree {
+    display: none;
+  }
+}
+@media (max-width: 900px) {
+  .term-split__treestub {
+    display: none;
+  }
 }

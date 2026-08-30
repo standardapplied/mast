@@ -42,3 +42,21 @@ export function loadWidths(storage: KV, target: string): PaneWidths {
 export function saveWidths(storage: KV, target: string, widths: PaneWidths): void {
   storage.setItem(key(target), JSON.stringify(widths));
 }
+
+const collapsedKey = (target: string) => `${key(target)}.tree-collapsed`;
+
+export function loadTreeCollapsed(storage: KV, target: string): boolean {
+  try {
+    return storage.getItem(collapsedKey(target)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveTreeCollapsed(storage: KV, target: string, collapsed: boolean): void {
+  try {
+    storage.setItem(collapsedKey(target), collapsed ? "1" : "0");
+  } catch {
+    /* preference is best-effort */
+  }
+}

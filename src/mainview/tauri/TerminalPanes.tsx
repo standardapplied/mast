@@ -183,6 +183,11 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         for (const session of sessions) delete next[session];
         return next;
       });
+      setTitles((prev) => {
+        const next = { ...prev };
+        for (const session of sessions) delete next[session];
+        return next;
+      });
       const next = sessions.reduce((acc, s) => removePane(acc, s, base), layout);
       const survivors = next.groups[next.active]!.panes;
       apply(next, survivors.includes(focused) ? focused : survivors[0]!);
