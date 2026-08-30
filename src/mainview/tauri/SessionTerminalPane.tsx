@@ -44,6 +44,9 @@ const FONT_PX = 15;
 const LINE_PAD = 0.25;
 const BLINK_MS = 1060;
 const BLINK_ON_MS = 600;
+/** Ghostty-style window padding: breathing room between the pane edge and the first glyph. */
+const PAD_X = 10;
+const PAD_Y = 8;
 
 /** Tracks Mast's resolved theme, re-rendering when the user flips it or the OS scheme changes. */
 function useThemeName(): ThemeName {
@@ -352,7 +355,13 @@ export const SessionTerminalPane = forwardRef<
       cleanups.push(() => renderer.destroy());
 
       const { w: cellW, h: cellH } = renderer.cellSize;
-      const fit = () => gridFor(host.clientWidth * dpr, host.clientHeight * dpr, cellW, cellH);
+      const fit = () =>
+        gridFor(
+          (host.clientWidth - 2 * PAD_X) * dpr,
+          (host.clientHeight - 2 * PAD_Y) * dpr,
+          cellW,
+          cellH,
+        );
       const paint = (cols: number, rows: number) => {
         canvas.style.width = `${(cols * cellW) / dpr}px`;
         canvas.style.height = `${(rows * cellH) / dpr}px`;
@@ -657,6 +666,8 @@ export const SessionTerminalPane = forwardRef<
         overflow: "hidden",
         display: "grid",
         placeItems: "center",
+        padding: `${PAD_Y}px ${PAD_X}px`,
+        boxSizing: "border-box",
         outline: "none",
         background: bgCss,
       }}
