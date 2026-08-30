@@ -23,6 +23,24 @@ function base({ size = 16, ...rest }: IconProps) {
   };
 }
 
+export function SplitColumns(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 5h16v14H4z" />
+      <path d="M12 5v14" />
+    </svg>
+  );
+}
+
+export function Camera(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M3 8.5A1.5 1.5 0 0 1 4.5 7H7l2-2.5h6L17 7h2.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-9z" />
+      <path d="M12 16a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" />
+    </svg>
+  );
+}
+
 export function ArrowUp(props: IconProps) {
   return (
     <svg {...base(props)}>

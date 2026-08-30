@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
+import { IconButton } from "../components/IconButton";
 import { ArrowUp, Folder, FolderPlus, PagePlus, PanelRight, Refresh } from "../components/icons";
-import { Tooltip } from "../components/Tooltip";
 import { parentDir } from "./dropTarget";
 import type { FileEntry, FileTreeStore } from "./fileTreeStore";
 import { clearSelection, click, EMPTY_SELECTION, rangeTo, toggle } from "./selection";
@@ -353,68 +353,43 @@ export function FileTree({
         <span className="file-tree__root">Files</span>
         <span className="file-tree__actions">
           {actions && rootPath && rootPath !== "/" && (
-            <Tooltip content="Up one level" side="bottom">
-              <button
-                type="button"
-                className="file-tree__refresh"
-                onClick={() => actions.climbRoot()}
-                aria-label="Up one level"
-              >
-                <ArrowUp size={15} />
-              </button>
-            </Tooltip>
+            <IconButton label="Up one level" onClick={() => actions.climbRoot()}>
+              <ArrowUp size={15} />
+            </IconButton>
           )}
           {actions && rootPath && (
             <>
-              <Tooltip content="New file" side="bottom">
-                <button
-                  type="button"
-                  className="file-tree__refresh"
-                  onClick={() => {
-                    const dir = creationDir();
-                    if (dir) actions.newFile(dir);
-                  }}
-                  aria-label="New file"
-                >
-                  <PagePlus size={15} />
-                </button>
-              </Tooltip>
-              <Tooltip content="New folder" side="bottom">
-                <button
-                  type="button"
-                  className="file-tree__refresh"
-                  onClick={() => {
-                    const dir = creationDir();
-                    if (dir) actions.newFolder(dir);
-                  }}
-                  aria-label="New folder"
-                >
-                  <FolderPlus size={15} />
-                </button>
-              </Tooltip>
+              <IconButton
+                label="New file"
+                onClick={() => {
+                  const dir = creationDir();
+                  if (dir) actions.newFile(dir);
+                }}
+              >
+                <PagePlus size={15} />
+              </IconButton>
+              <IconButton
+                label="New folder"
+                onClick={() => {
+                  const dir = creationDir();
+                  if (dir) actions.newFolder(dir);
+                }}
+              >
+                <FolderPlus size={15} />
+              </IconButton>
             </>
           )}
-          <Tooltip content="Refresh" side="bottom">
-            <button
-              type="button"
-              className={`file-tree__refresh${store.busy ? " file-tree__refresh--busy" : ""}`}
-              onClick={() => store.refresh()}
-              aria-label="Refresh"
-            >
-              <Refresh size={15} />
-            </button>
-          </Tooltip>
+          <IconButton
+            label="Refresh"
+            className={store.busy ? "icon-btn--busy" : undefined}
+            onClick={() => store.refresh()}
+          >
+            <Refresh size={15} />
+          </IconButton>
           {onCollapse && (
-            <Tooltip content="Hide the file tree" side="bottom">
-              <button
-                type="button"
-                className="file-tree__refresh"
-                onClick={onCollapse}
-                aria-label="Hide the file tree"
-              >
-                <PanelRight size={15} />
-              </button>
-            </Tooltip>
+            <IconButton label="Hide the file tree" onClick={onCollapse}>
+              <PanelRight size={15} />
+            </IconButton>
           )}
         </span>
       </header>

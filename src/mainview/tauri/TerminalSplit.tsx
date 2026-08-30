@@ -2,8 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Dialog } from "../components/Dialog";
+import { IconButton } from "../components/IconButton";
 import { PanelRight } from "../components/icons";
-import { Tooltip } from "../components/Tooltip";
 import { Splitter } from "../components/Splitter";
 import { useToast } from "../components/Toast";
 import { ToggleButton } from "../components/ToggleButton";
@@ -411,16 +411,13 @@ export function TerminalSplit({
         )}
         {treeCollapsed && (
           <div className="term-split__treestub">
-            <Tooltip content="Show the file tree" side="left">
-              <button
-                type="button"
-                className="term-split__treestub-btn"
-                aria-label="Show the file tree"
-                onClick={() => setTreeCollapsedPersistent(false)}
-              >
-                <PanelRight size={15} />
-              </button>
-            </Tooltip>
+            <IconButton
+              label="Show the file tree"
+              side="left"
+              onClick={() => setTreeCollapsedPersistent(false)}
+            >
+              <PanelRight size={15} />
+            </IconButton>
           </div>
         )}
         {!treeCollapsed && (

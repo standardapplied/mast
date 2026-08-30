@@ -1755,8 +1755,11 @@ html.is-dragging-active * {
   padding: 6px 9px;
   background: var(--foreground);
   color: var(--background);
-  font-size: 12px;
-  line-height: 1.45;
+  /* Own typography entirely — a tooltip must never inherit its trigger context's
+     uppercase/tracking/mono (the file-tree header leaked exactly that). */
+  font: 400 12px/1.45 var(--font-sans);
+  text-transform: none;
+  letter-spacing: normal;
   pointer-events: none;
   user-select: none;
   animation: tooltip-in 120ms ease-out;
@@ -3949,14 +3952,6 @@ button.room-section-head:hover {
   color: var(--foreground);
   background: var(--surface-hover);
 }
-.term-pane-chip--tool {
-  color: var(--subtle-foreground);
-  padding: 0 6px;
-}
-.term-pane-chip--tool:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
 .term-pane-chip__close {
   color: var(--subtle-foreground);
   font-size: 12px;
@@ -4162,9 +4157,10 @@ button.room-section-head:hover {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 8px 6px 12px;
+  padding: 0 8px 0 12px;
   border-bottom: 1px solid var(--border);
-  min-height: 36px;
+  height: 40px;
+  flex-shrink: 0;
   box-sizing: border-box;
 }
 .viewer__title {
@@ -4562,18 +4558,6 @@ button.room-section-head:hover {
   display: inline-flex;
   gap: 4px;
 }
-.file-tree__refresh {
-  appearance: none;
-  background: none;
-  border: none;
-  color: var(--muted-foreground);
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-}
-.file-tree__refresh:hover {
-  color: var(--foreground);
-}
 .file-tree__body {
   flex: 1;
   min-height: 0;
@@ -4710,10 +4694,6 @@ button.room-section-head:hover {
 .file-tree__note--error {
   color: var(--error);
 }
-.file-tree__refresh--busy {
-  animation: file-tree-spin 0.8s linear infinite;
-  color: var(--foreground);
-}
 @keyframes file-tree-spin {
   to {
     transform: rotate(360deg);
@@ -4747,7 +4727,7 @@ button.room-section-head:hover {
 }
 @media (prefers-reduced-motion: reduce) {
   .file-tree__skel,
-  .file-tree__refresh--busy {
+  .icon-btn--busy svg {
     animation: none;
   }
   .file-tree__skel {
@@ -5168,7 +5148,7 @@ button.room-section-head:hover {
   flex-shrink: 0;
 }
 body[data-chrome="overlay"] .topbar__inset {
-  width: 76px;
+  width: 96px;
 }
 /* macOS fullscreen auto-hides the traffic lights; the inset collapses with them. */
 body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
@@ -5228,18 +5208,7 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding-top: 12px;
-}
-.term-split__treestub-btn {
-  appearance: none;
-  background: none;
-  border: none;
-  color: var(--muted-foreground);
-  cursor: pointer;
-  line-height: 1;
-}
-.term-split__treestub-btn:hover {
-  color: var(--foreground);
+  padding-top: 7px;
 }
 @media (min-width: 901px) {
   .term-split--treecollapsed .file-tree {
@@ -5250,4 +5219,33 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   .term-split__treestub {
     display: none;
   }
+}
+
+/* The one icon button (components/IconButton): identical size, hover surface, and disabled
+   treatment for every icon-only control in the app. */
+.icon-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  padding: 0;
+}
+.icon-btn:hover {
+  color: var(--foreground);
+  background: var(--surface-hover);
+}
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: none;
+}
+.icon-btn--busy svg {
+  animation: file-tree-spin 0.8s linear infinite;
 }

@@ -5,7 +5,8 @@ import { Dialog } from "../components/Dialog";
 import { cx } from "../components/cx";
 import { Button } from "../components/ui";
 import { isUnwell, type SessionStatus, statusEqual, worstStatus } from "../terminal/connection";
-import { Tooltip } from "../components/Tooltip";
+import { IconButton } from "../components/IconButton";
+import { Plus, SplitColumns } from "../components/icons";
 import {
   baseSessionFor,
   defaultLayout,
@@ -311,28 +312,20 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               </button>
             );
           })}
-          <Tooltip content="New shell — ⌘T" side="bottom">
-            <button
-              type="button"
-              className="term-pane-chip term-pane-chip--tool"
-              aria-label="New shell"
-              onClick={addShell}
-              disabled={layout.groups.length >= MAX_GROUPS}
-            >
-              ＋
-            </button>
-          </Tooltip>
-          <Tooltip content="Split right — ⌘D" side="bottom">
-            <button
-              type="button"
-              className="term-pane-chip term-pane-chip--tool"
-              aria-label="Split right"
-              onClick={split}
-              disabled={layout.groups[layout.active]!.panes.length >= MAX_SPLITS}
-            >
-              ◫
-            </button>
-          </Tooltip>
+          <IconButton
+            label="New shell — ⌘T"
+            onClick={addShell}
+            disabled={layout.groups.length >= MAX_GROUPS}
+          >
+            <Plus size={15} />
+          </IconButton>
+          <IconButton
+            label="Split right — ⌘D"
+            onClick={split}
+            disabled={layout.groups[layout.active]!.panes.length >= MAX_SPLITS}
+          >
+            <SplitColumns size={15} />
+          </IconButton>
         </div>
         <div className="term-panes__body">
           {layout.groups.map((group, i) => {

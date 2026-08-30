@@ -4,6 +4,8 @@ import { SnapshotsPanel } from "../board/SnapshotsPanel";
 import { cx } from "../components/cx";
 import type { Gateway } from "../gateway";
 import { isUnwell, type SessionStatus, statusEqual } from "../terminal/connection";
+import { IconButton } from "../components/IconButton";
+import { Camera } from "../components/icons";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
 import type { TerminalHandle } from "./SessionTerminalPane";
@@ -179,13 +181,9 @@ export function TerminalWorkspace({
               />
             )}
             {gateway && activeTarget && !adding && (
-              <button
-                type="button"
-                className="dep-chip"
-                onClick={() => setSnapshotsFor(activeTarget)}
-              >
-                Snapshots
-              </button>
+              <IconButton label="Snapshots" onClick={() => setSnapshotsFor(activeTarget)}>
+                <Camera size={15} />
+              </IconButton>
             )}
           </span>
         </div>
