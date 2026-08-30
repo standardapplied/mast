@@ -680,11 +680,22 @@ impl Backend {
         let meta_ev = format!("session://meta/{id}");
         let exit_on_error = exit_ev.clone();
         tokio::spawn(async move {
+            // Replay markers ride the DATA channel: a mid-stream resync must reset the client
+            // terminal *before* the snapshot bytes land, and only one ordered channel can
+            // guarantee that sequencing.
             let on_event = |event: crate::pty::SessionEvent| {
                 use crate::pty::SessionEvent;
                 match event {
                     SessionEvent::Output(bytes) => {
-                        let _ = emitter.emit(&data_ev, bytes);
+                        let _ = emitter
+                            .emit(&data_ev, serde_json::json!({ "kind": "bytes", "data": bytes }));
+                    }
+                    SessionEvent::Replaying { safe } => {
+                        let _ = emitter
+                            .emit(&data_ev, serde_json::json!({ "kind": "replay-begin", "safe": safe }));
+                    }
+                    SessionEvent::ReplayDone => {
+                        let _ = emitter.emit(&data_ev, serde_json::json!({ "kind": "replay-end" }));
                     }
                     SessionEvent::Ended(reason) => {
                         let _ = emitter

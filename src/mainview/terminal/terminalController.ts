@@ -13,6 +13,7 @@
  */
 
 import { keyEventFor, type KeyStroke } from "./input";
+import { Osc52Scanner } from "./osc52";
 import { type Selection, selectedText } from "./selection";
 import type { Cursor, GridSnapshot, Scroll, VtCore } from "./vtCore";
 
@@ -36,6 +37,10 @@ export class TerminalController {
   private rows: number;
   private dirty = false;
   private selection: Selection | null = null;
+  private readonly osc52 = new Osc52Scanner();
+
+  /** Side-channel intents found in the stream; the host wires these to the platform. */
+  readonly hooks: { onClipboard?: (text: string) => void } = {};
 
   constructor(
     private readonly core: VtCore,
@@ -51,8 +56,29 @@ export class TerminalController {
   /** Feeds pty output bytes into terminal state; a later {@link #frame} paints the result. */
   feed(bytes: Uint8Array): void {
     if (bytes.length > 0) {
+      for (const text of this.osc52.feed(bytes)) {
+        this.hooks.onClipboard?.(text);
+      }
       this.core.write(bytes);
       this.dirty = true;
+    }
+  }
+
+  /**
+   * Wipes the terminal to a blank ground state ahead of a journal replay. A mid-stream replay
+   * means the host dropped part of the stream (flow-control pause) and is re-baselining us — the
+   * snapshot must land on a clean terminal, not on top of the gap's leftovers.
+   */
+  resetForReplay(): void {
+    this.core.reset();
+    this.setSelection(null);
+    this.dirty = true;
+  }
+
+  /** Reports a focus change to the application — only when it asked (mode 1004). */
+  setFocus(focused: boolean): void {
+    if (this.core.focusReporting()) {
+      this.sink.write(this.core.encodeFocus(focused));
     }
   }
 

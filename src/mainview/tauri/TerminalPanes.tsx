@@ -316,6 +316,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                     className={cx(
                       "term-panes__cell",
                       group.panes.length > 1 && session === focused && "is-focused",
+                      group.panes.length > 1 && session !== focused && "is-unfocused",
                     )}
                     onPointerDownCapture={() => setFocused(session)}
                   >
