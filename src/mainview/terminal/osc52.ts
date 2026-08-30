@@ -22,6 +22,11 @@ type State = { at: "prefix"; matched: number } | { at: "payload"; bytes: number[
 export class Osc52Scanner {
   private state: State = { at: "prefix", matched: 0 };
 
+  /** Forgets any half-captured sequence — call when the stream itself restarts (a replay). */
+  reset(): void {
+    this.state = { at: "prefix", matched: 0 };
+  }
+
   /** Scans one pty chunk; returns any complete clipboard writes it finished, decoded. */
   feed(bytes: Uint8Array): string[] {
     const found: string[] = [];
@@ -42,7 +47,11 @@ export class Osc52Scanner {
         if (byte === ST_BACKSLASH) {
           this.finish(found);
         } else {
-          this.state = { at: "prefix", matched: byte === ESC ? 1 : 0 };
+          // The aborting ESC may itself open the NEXT sequence: ESC + ']' is two prefix bytes in.
+          this.state = {
+            at: "prefix",
+            matched: byte === ESC ? 1 : byte === PREFIX[1] ? 2 : 0,
+          };
         }
         continue;
       }
@@ -67,7 +76,12 @@ export class Osc52Scanner {
     const data = payload.slice(semi + 1);
     if (data.length === 1 && data[0] === 0x3f) return;
     try {
-      const raw = atob(String.fromCharCode(...data));
+      // Chunked: spreading 100K+ args into fromCharCode trips engine argument limits (~64K in JSC).
+      let b64text = "";
+      for (let i = 0; i < data.length; i += 4096) {
+        b64text += String.fromCharCode(...data.slice(i, i + 4096));
+      }
+      const raw = atob(b64text);
       const utf8 = Uint8Array.from(raw, (ch) => ch.charCodeAt(0));
       found.push(new TextDecoder("utf-8", { fatal: true }).decode(utf8));
     } catch {

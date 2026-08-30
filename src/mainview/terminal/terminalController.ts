@@ -38,6 +38,7 @@ export class TerminalController {
   private dirty = false;
   private selection: Selection | null = null;
   private readonly osc52 = new Osc52Scanner();
+  private replaying = false;
 
   /** Side-channel intents found in the stream; the host wires these to the platform. */
   readonly hooks: { onClipboard?: (text: string) => void } = {};
@@ -57,7 +58,11 @@ export class TerminalController {
   feed(bytes: Uint8Array): void {
     if (bytes.length > 0) {
       for (const text of this.osc52.feed(bytes)) {
-        this.hooks.onClipboard?.(text);
+        // A replayed OSC 52 is history, not a user action — honoring it would clobber whatever
+        // the user copied since. The scanner still runs so its state tracks the byte stream.
+        if (!this.replaying) {
+          this.hooks.onClipboard?.(text);
+        }
       }
       this.core.write(bytes);
       this.dirty = true;
@@ -67,12 +72,20 @@ export class TerminalController {
   /**
    * Wipes the terminal to a blank ground state ahead of a journal replay. A mid-stream replay
    * means the host dropped part of the stream (flow-control pause) and is re-baselining us — the
-   * snapshot must land on a clean terminal, not on top of the gap's leftovers.
+   * snapshot must land on a clean terminal (and a clean scanner), not on top of the gap's
+   * leftovers. Clipboard side effects stay off until {@link endReplay}.
    */
   resetForReplay(): void {
     this.core.reset();
+    this.osc52.reset();
+    this.replaying = true;
     this.setSelection(null);
     this.dirty = true;
+  }
+
+  /** The replay bracket closed: bytes are live again, side effects re-arm. */
+  endReplay(): void {
+    this.replaying = false;
   }
 
   /** Reports a focus change to the application — only when it asked (mode 1004). */

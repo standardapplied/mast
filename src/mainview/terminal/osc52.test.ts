@@ -58,6 +58,24 @@ describe("Osc52Scanner", () => {
     expect(s.feed(enc(`\x07after\x1b]52;c;${b64("recovered")}\x07`))).toEqual(["recovered"]);
   });
 
+  test("a large payload within the cap decodes (no engine argument-limit landmine)", () => {
+    const s = new Osc52Scanner();
+    const text = "x".repeat(90_000);
+    expect(s.feed(enc(`\x1b]52;c;${b64(text)}\x07`))).toEqual([text]);
+  });
+
+  test("an unterminated write aborted by the next OSC does not eat that OSC", () => {
+    const s = new Osc52Scanner();
+    expect(s.feed(enc(`\x1b]52;c;AAAA\x1b]52;c;${b64("second")}\x07`))).toEqual(["second"]);
+  });
+
+  test("reset() abandons a half-captured sequence so a fresh stream parses cleanly", () => {
+    const s = new Osc52Scanner();
+    expect(s.feed(enc("\x1b]52;c;INCOMPLETE"))).toEqual([]);
+    s.reset();
+    expect(s.feed(enc(`\x1b]52;c;${b64("clean")}\x07`))).toEqual(["clean"]);
+  });
+
   test("UTF-8 clipboard content survives the round trip", () => {
     const s = new Osc52Scanner();
     const text = "café 🚀 — ünïcode";

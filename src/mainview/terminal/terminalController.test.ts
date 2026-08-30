@@ -195,6 +195,19 @@ describe("TerminalController", () => {
     expect(gridRow(renderer.grid, 0)).toBe("beforeafter");
   });
 
+  test("historical OSC 52 in a replay never touches the clipboard; live writes after it do", async () => {
+    const { controller } = await harness(40, 4);
+    const copied: string[] = [];
+    controller.hooks.onClipboard = (text) => copied.push(text);
+    controller.feed(enc("\x1b]52;c;INCOMPLE")); // the gap cut mid-sequence before the pause
+    controller.resetForReplay();
+    controller.feed(enc(`snapshot\x1b]52;c;${btoa("stale")}\x07more`));
+    controller.endReplay();
+    expect(copied).toEqual([]); // the journal's old copy is history, not a user action
+    controller.feed(enc(`\x1b]52;c;${btoa("fresh")}\x07`));
+    expect(copied).toEqual(["fresh"]);
+  });
+
   test("resetForReplay wipes state so a journal snapshot lands on a clean terminal", async () => {
     const { controller, core, renderer } = await harness(40, 4);
     controller.feed(enc("stale garbage\x1b[?1049h TUI leftovers"));

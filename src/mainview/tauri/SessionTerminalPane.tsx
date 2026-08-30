@@ -375,7 +375,13 @@ export const SessionTerminalPane = forwardRef<
           } else if (p.kind === "replay-begin") {
             controller.resetForReplay();
           } else if (p.kind === "replay-end") {
+            controller.endReplay();
             controller.scroll("bottom");
+            // The replay just restored the app's modes; an unfocused pane owes it a focus-lost
+            // report (the attach itself is assumed focused, which is wrong for a split's far side).
+            if (!activeRef.current) {
+              controller.setFocus(false);
+            }
           }
         }),
       );
