@@ -620,9 +620,15 @@ pub async fn control<S: AsyncRead + AsyncWrite + Unpin>(
     read_frame(&mut stream).await
 }
 
+/// The most sessions a listing drain will accumulate before refusing: a real box holds
+/// dozens, so a listing still growing past this is a broken or hostile host feeding
+/// endless pages, not data worth buffering.
+pub const MAX_LISTED_SESSIONS: usize = 4096;
+
 /// Opens a control connection and drains every page of the host's session listing,
 /// feeding each `next` cursor back until the host reports the last page. A cursor
-/// that fails to advance is refused rather than looped on.
+/// that fails to advance is refused rather than looped on, and the aggregate is
+/// bounded by [`MAX_LISTED_SESSIONS`].
 pub async fn list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     token: &str,
@@ -641,6 +647,14 @@ pub async fn list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
         match read_frame(&mut stream).await? {
             Frame::Sessions { sessions, next } => {
                 all.extend(sessions);
+                if all.len() > MAX_LISTED_SESSIONS {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "the host listed more than {MAX_LISTED_SESSIONS} sessions; refusing an unbounded listing"
+                        ),
+                    ));
+                }
                 if next.is_empty() {
                     return Ok(all);
                 }
@@ -1192,6 +1206,31 @@ mod async_tests {
         let err = list_sessions(client, "tok").await.unwrap_err();
         assert!(err.to_string().contains("cursor went backwards"), "{err}");
         host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_listing_that_never_ends_is_refused_at_the_aggregate_bound() {
+        let (client, mut server) = duplex(65536);
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            let mut page: u32 = 0;
+            loop {
+                if read_frame(&mut server).await.is_err() {
+                    break;
+                }
+                let sessions = (0..PAGE_LIMIT)
+                    .map(|i| listed(&format!("s-{page:04}-{i:02}")))
+                    .collect();
+                page += 1;
+                let reply = Frame::Sessions { sessions, next: format!("s-{page:04}") };
+                if write_frame(&mut server, &reply).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let err = list_sessions(client, "tok").await.unwrap_err();
+        assert!(err.to_string().contains("unbounded"), "{err}");
+        host.abort();
     }
 
     #[tokio::test]

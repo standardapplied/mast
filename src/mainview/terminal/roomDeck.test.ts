@@ -11,6 +11,7 @@ import {
   isResumeSession,
   nextRoomSession,
   observerCount,
+  preAttachClass,
   skewCard,
   skewOf,
   yieldedDispatch,
@@ -147,5 +148,17 @@ describe("yieldedDispatch", () => {
     expect(yieldedDispatch("yielded to dispatch r1")).toEqual({ runId: "r1" });
     expect(yieldedDispatch("exited(0)")).toBe(null);
     expect(yieldedDispatch(undefined)).toBe(null);
+  });
+});
+
+describe("preAttachClass", () => {
+  test("a skew failure parks as refused instead of retrying", () => {
+    expect(preAttachClass("list: pty protocol skew: the box speaks SAILPTY1")).toBe("refused");
+    expect(preAttachClass("pty protocol skew: the box no longer speaks SAILPTY2")).toBe("refused");
+  });
+
+  test("anything else stays a transport failure and reattaches on backoff", () => {
+    expect(preAttachClass("connection reset by peer")).toBe("transport");
+    expect(preAttachClass("channel open refused")).toBe("transport");
   });
 });

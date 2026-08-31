@@ -146,6 +146,26 @@ describe("RoomDeckPanel", () => {
     expect(revived?.command).toEqual(["codex", "resume"]);
   });
 
+  test("a failed dispatch lookup keeps Reopen withheld", async () => {
+    const base = createDemoGateway();
+    const gateway: Gateway = {
+      ...base,
+      listRuns: async () => ({
+        ok: false as const,
+        error: { status: 500, code: "unreachable", message: "backend down" },
+      }),
+    };
+    await renderPanel(gateway, true);
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="deck-chip-resume-demo-run-7"]')
+        ?.click();
+    });
+    await flush();
+    const card = container.querySelector('[data-testid="deck-ended-card"]');
+    expect(card?.textContent).not.toContain("Reopen");
+  });
+
   test("the open-terminal verb mints a room-bound session and attaches in place", async () => {
     terminals.length = 0;
     await renderPanel(createDemoGateway(), true);

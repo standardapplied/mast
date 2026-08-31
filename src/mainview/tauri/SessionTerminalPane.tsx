@@ -9,7 +9,7 @@ import {
   type SessionStatus,
   toSessionEnd,
 } from "../terminal/connection";
-import { skewCard, skewOf } from "../terminal/roomDeck";
+import { preAttachClass, skewCard, skewOf } from "../terminal/roomDeck";
 import { TerminalRenderer } from "../terminal/renderer";
 import { type CellPos, Selection } from "../terminal/selection";
 import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
@@ -453,8 +453,10 @@ export const SessionTerminalPane = forwardRef<
           create: alive || !create ? null : { ...create, cols, rows },
         });
       } catch (e) {
-        // The link (not the pane) is the usual culprit — reattach on the same backoff.
-        onEnd({ klass: "transport", reason: e instanceof Error ? e.message : String(e) });
+        // The link (not the pane) is the usual culprit and reattaches on the same
+        // backoff — but a protocol skew parks on the skew card instead of retrying.
+        const message = e instanceof Error ? e.message : String(e);
+        onEnd({ klass: preAttachClass(message), reason: message });
         return;
       }
       if (disposed) return;

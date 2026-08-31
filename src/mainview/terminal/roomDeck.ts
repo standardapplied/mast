@@ -111,6 +111,16 @@ export function skewOf(reason: string | undefined): SkewSide | null {
   return reason.includes("SAILPTY1") ? "box-older" : "mast-older";
 }
 
+/**
+ * Classifies a pre-attach failure (the session listing or open threw before any
+ * session existed): a protocol skew is a refusal to park on — retrying can only
+ * fail the same way until one side is upgraded — while anything else is the link
+ * and reattaches on the usual backoff.
+ */
+export function preAttachClass(message: string): "refused" | "transport" {
+  return skewOf(message) ? "refused" : "transport";
+}
+
 export function skewCard(side: SkewSide): { title: string; detail: string } {
   return side === "box-older"
     ? {

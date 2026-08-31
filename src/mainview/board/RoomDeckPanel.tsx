@@ -134,12 +134,17 @@ export function RoomDeckPanel({
     return [...sessions, ...pending];
   }, [sessions, opened, me, roomId]);
 
-  /** A yielded corpse reopens only when no dispatch is live on the spec it yielded to. */
+  /**
+   * A yielded corpse reopens only once the dispatch it yielded to is confirmed absent: an
+   * unanswered or failed lookup keeps Reopen withheld (the default reads live), because
+   * reopening over a dispatch we merely failed to see puts two agents on one checkout.
+   */
   const probeDispatch = useCallback(
     (specId: string) => {
       void gateway.listRuns(specId).then((r) => {
         if (!alive.current) return;
-        const running = r.ok && r.value.runs.some((run) => run.status === "running");
+        if (!r.ok) return;
+        const running = r.value.runs.some((run) => run.status === "running");
         setDispatchLive((current) =>
           current[specId] === running ? current : { ...current, [specId]: running },
         );
