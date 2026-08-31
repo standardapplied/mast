@@ -48,7 +48,7 @@ function ptyEvent(over: Partial<SailEvent>): SailEvent {
   };
 }
 
-async function renderPanel(gateway: Gateway, withServices = false) {
+async function renderPanel(gateway: Gateway, withServices = false, active = true) {
   await act(async () => {
     root.render(
       <RoomDeckPanel
@@ -56,6 +56,7 @@ async function renderPanel(gateway: Gateway, withServices = false) {
         roomId="design-talk"
         project="sail-mast"
         title="Design talk"
+        active={active}
         services={withServices ? services : undefined}
         header={(deckControl) => <header data-testid="room-header">{deckControl}</header>}
       >
@@ -268,6 +269,23 @@ describe("RoomDeckPanel", () => {
     await flush();
     expect(container.querySelector('[data-testid="room-stage-bar"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="fake-terminal-room-design-talk"]')).not.toBeNull();
+  });
+
+  test("an inactive (hidden) panel ignores the stage chord", async () => {
+    await renderPanel(createDemoGateway(), true, false);
+    await pickCard("room-design-talk");
+    expect(container.querySelector('[data-testid="room-stage-bar"]')).not.toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "l", metaKey: true, shiftKey: true }),
+      );
+    });
+    await flush();
+    expect(
+      container.querySelector('[data-testid="room-stage-bar"]'),
+      "a keep-mounted hidden room must not react to the global chord",
+    ).not.toBeNull();
   });
 
   test("a yielded resume corpse shows the reason and withholds Reopen while the dispatch runs", async () => {

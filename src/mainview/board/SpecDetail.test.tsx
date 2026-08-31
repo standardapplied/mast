@@ -226,6 +226,7 @@ async function mount(gateway: Gateway) {
           specId="s1"
           onOpenSpec={() => {}}
           onBack={() => {}}
+          active
           eventDebounceMs={0}
         />
       </ToastProvider>,

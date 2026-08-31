@@ -109,6 +109,7 @@ export function SpecDetail({
   onOpenSpec,
   onBack,
   deck,
+  active,
   embedded = false,
   eventDebounceMs = 300,
 }: {
@@ -118,6 +119,8 @@ export function SpecDetail({
   onBack: () => void;
   /** The room deck's terminal edge, injected by the Tauri entry (absent in demo/tests). */
   deck?: DeckServices;
+  /** False while this view is hidden (keep-mounted) — parks the deck's chord and terminals. */
+  active: boolean;
   embedded?: boolean;
   /** Coalescing window for event-driven reloads; tests pass 0. */
   eventDebounceMs?: number;
@@ -482,6 +485,7 @@ export function SpecDetail({
             roomId={spec.room_id ?? spec.id}
             project={spec.project}
             title={spec.title}
+            active={active}
             services={deck}
             header={roomHeader}
           >
