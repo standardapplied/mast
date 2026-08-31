@@ -317,6 +317,8 @@ struct SessionCreate {
     command: Vec<String>,
     cwd: String,
     project: String,
+    #[serde(default)]
+    room: String,
     cols: u32,
     rows: u32,
 }
@@ -343,6 +345,7 @@ async fn session_open(
             command: c.command,
             cwd: c.cwd,
             project: c.project,
+            room: c.room,
             cols: c.cols,
             rows: c.rows,
         }),
@@ -375,32 +378,38 @@ async fn session_close(state: State<'_, AppState>, id: String) -> Result<(), Str
     state.backend().await?.session_close(&id).await.map_err(String::from)
 }
 
-/// List the host's sessions (name, liveness, attached count, current writer).
+/// Claim the write token on an attached session; the grant arrives for every
+/// subscriber as a `writer_changed` meta event, never as a direct reply.
+#[tauri::command]
+async fn session_take_write(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.backend().await?.session_take_write(&id).await.map_err(String::from)
+}
+
+/// List the host's sessions (name, liveness, attached count, current writer, room, command),
+/// draining every page of the host's cursor-paginated listing.
 #[tauri::command]
 async fn session_list(
     state: State<'_, AppState>,
     socket_path: String,
     token: String,
 ) -> Result<serde_json::Value, String> {
-    let reply = state
+    let list = state
         .backend()
         .await?
-        .session_control(socket_path, token, pty::Frame::ListSessions)
+        .session_list(socket_path, token)
         .await
         .map_err(String::from)?;
-    match reply {
-        pty::Frame::Sessions(list) => Ok(json!(list
-            .into_iter()
-            .map(|s| json!({
-                "name": s.name,
-                "live": s.live,
-                "attached": s.attached,
-                "writerFde": s.writer_fde,
-            }))
-            .collect::<Vec<_>>())),
-        pty::Frame::Err(message) => Err(message),
-        other => Err(format!("unexpected session listing reply: {other:?}")),
-    }
+    Ok(json!(list
+        .into_iter()
+        .map(|s| json!({
+            "name": s.name,
+            "live": s.live,
+            "attached": s.attached,
+            "writerFde": s.writer_fde,
+            "room": s.room,
+            "command": s.command,
+        }))
+        .collect::<Vec<_>>()))
 }
 
 /// Create a host-owned session without attaching (a durable named shell).
@@ -417,6 +426,7 @@ async fn session_new(
         command: create.command,
         cwd: create.cwd,
         project: create.project,
+        room: create.room,
         cols: create.cols,
         rows: create.rows,
     };
@@ -515,6 +525,7 @@ pub fn run() {
             session_write,
             session_resize,
             session_close,
+            session_take_write,
             session_list,
             session_new,
             session_kill,
