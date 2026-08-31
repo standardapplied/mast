@@ -64,6 +64,19 @@ async function renderPanel(gateway: Gateway, withServices = false) {
   await flush();
 }
 
+const componentsCss = await Bun.file(
+  new URL("../static/components.css", import.meta.url).pathname,
+).text();
+
+// happy-dom computes no layout, so the stacking contract lives in the stylesheet:
+// the deck strip, and the header above it in chat rooms, stack vertically only
+// because .room-conversation declares a column — without it the strip renders as
+// a collapsed left sliver (the 0.1.70 field bug).
+test("room-conversation stacks its children as a column", () => {
+  const block = componentsCss.match(/\.room-conversation \{[^}]*\}/)?.[0] ?? "";
+  expect(block).toContain("flex-direction: column");
+});
+
 describe("RoomDeckPanel", () => {
   test("lists only the room's sessions as chips, corpse marked ended", async () => {
     await renderPanel(createDemoGateway());
