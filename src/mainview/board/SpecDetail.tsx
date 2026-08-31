@@ -405,64 +405,67 @@ export function SpecDetail({
     setActionMenu({ x: rect.right, y: rect.bottom + 4 });
   };
 
-  return (
-    <div className="detail room-detail">
-      <RoomHeader
-        title={spec.title}
-        eyebrow={spec.id}
-        presence={
-          spec.engagement ? (
-            // An invited agent owns the room's liveness: the roster chip already
-            // says who's here and whether they're thinking. The generic
-            // run-presence pill is for the other case — a dispatched agent
-            // working autonomously with nobody engaged in the room.
-            <RosterChip
-              specId={specId}
-              engagement={spec.engagement}
-              onDismiss={role.canWrite ? () => setDismissConfirm(true) : undefined}
-            />
-          ) : (
-            <PresenceChip specId={specId} verbose />
-          )
-        }
-        drawerOpen={drawerOpen}
-        onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
-        onBack={embedded ? undefined : onBack}
-        actions={
-          <>
-            {(spec.status === "in_progress" || spec.status === "review") && (
-              <Button
-                variant="ghost"
-                disabled={!!logsOwner}
-                title={logsOwner ? `Assigned to ${logsOwner} — logs live on their box.` : undefined}
-                onClick={() => setLogOpen(true)}
-                data-testid="follow-log"
-              >
-                {spec.status === "review" ? "Review log" : "Live log"}
-              </Button>
-            )}
-            {spec.status === "in_progress" && (
-              <Button
-                className="btn-danger"
-                onClick={() => void beginStop()}
-                data-testid="detail-stop"
-              >
-                Stop
-              </Button>
-            )}
+  const roomHeader = (deckControl: React.ReactNode) => (
+    <RoomHeader
+      title={spec.title}
+      eyebrow={spec.id}
+      presence={
+        spec.engagement ? (
+          // An invited agent owns the room's liveness: the roster chip already
+          // says who's here and whether they're thinking. The generic
+          // run-presence pill is for the other case — a dispatched agent
+          // working autonomously with nobody engaged in the room.
+          <RosterChip
+            specId={specId}
+            engagement={spec.engagement}
+            onDismiss={role.canWrite ? () => setDismissConfirm(true) : undefined}
+          />
+        ) : (
+          <PresenceChip specId={specId} verbose />
+        )
+      }
+      drawerOpen={drawerOpen}
+      onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
+      onBack={embedded ? undefined : onBack}
+      actions={
+        <>
+          {deckControl}
+          {(spec.status === "in_progress" || spec.status === "review") && (
             <Button
               variant="ghost"
-              onClick={openActionsMenu}
-              data-testid="detail-actions"
-              aria-haspopup="menu"
+              disabled={!!logsOwner}
+              title={logsOwner ? `Assigned to ${logsOwner} — logs live on their box.` : undefined}
+              onClick={() => setLogOpen(true)}
+              data-testid="follow-log"
             >
-              Actions
-              <CaretDown size={12} />
+              {spec.status === "review" ? "Review log" : "Live log"}
             </Button>
-          </>
-        }
-      />
+          )}
+          {spec.status === "in_progress" && (
+            <Button
+              className="btn-danger"
+              onClick={() => void beginStop()}
+              data-testid="detail-stop"
+            >
+              Stop
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            onClick={openActionsMenu}
+            data-testid="detail-actions"
+            aria-haspopup="menu"
+          >
+            Actions
+            <CaretDown size={12} />
+          </Button>
+        </>
+      }
+    />
+  );
 
+  return (
+    <div className="detail room-detail">
       {actionMenu && (
         <ContextMenu
           x={actionMenu.x}
@@ -478,7 +481,9 @@ export function SpecDetail({
             gateway={gateway}
             roomId={spec.room_id ?? spec.id}
             project={spec.project}
+            title={spec.title}
             services={deck}
+            header={roomHeader}
           >
             <SpecRoom
               gateway={gateway}

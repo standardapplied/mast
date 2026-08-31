@@ -5,6 +5,7 @@ import { Button } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { shortTitle } from "../terminal/paneLayout";
 import {
+  chipTitle,
   commandFor,
   type DeckGlyph,
   type DeckServices,
@@ -17,17 +18,21 @@ import {
   yieldedDispatch,
 } from "../terminal/roomDeck";
 import { coalesce } from "./roomRouting";
-import { DeckAttachUnavailable, DeckEndedCard, DeckStrip } from "./RoomDeck";
+import { DeckAttachUnavailable, DeckEndedCard, DeckMenu, StageBar } from "./RoomDeck";
 
 /**
- * The room deck: the strip of this room's live pty sessions at the top of the room
- * pane, terminals attaching in place of the conversation, and the corpse cards. Data
- * comes from the gateway's session listing (refreshed on the room's pty events and on
- * reconnect); attaching is the injected Tauri terminal — absent in the browser preview,
- * where chips render and attach explains itself.
+ * The room deck: the header-anchored control over this room's live pty sessions, and
+ * the full-bleed stage a picked session attaches into. No session, no reserved space —
+ * just the open-terminal verb in the header. Picking a card (or opening a new
+ * terminal) swaps the room header for the slim stage bar and turns the main pane
+ * into the terminal, edge to edge; the bar's back affordance (and ⌘⇧L) returns to
+ * the conversation, which stays mounted underneath exactly where it was.
  *
- * Opened terminals stay mounted (hidden) once visited so switching between the
- * conversation and a session never detaches it — the app's keep-mounted law.
+ * Data comes from the gateway's session listing (refreshed on the room's pty events
+ * and on reconnect); attaching is the injected Tauri terminal — absent in the browser
+ * preview, where cards render and attach explains itself. Opened terminals stay
+ * mounted (hidden) once visited so switching between the conversation and a session
+ * never detaches it — the app's keep-mounted law.
  */
 
 type OpenedTerminal = {
@@ -39,18 +44,24 @@ export function RoomDeckPanel({
   gateway,
   roomId,
   project,
+  title,
   services,
   active = true,
+  header,
   children,
 }: {
   gateway: Gateway;
   roomId: string;
   project: string;
-  /** The Tauri terminal edge; absent in demo/tests, where chips are data only. */
+  /** The room's display title, carried on the stage bar's back affordance. */
+  title: string;
+  /** The Tauri terminal edge; absent in demo/tests, where cards are data only. */
   services?: DeckServices;
-  /** False while the room is hidden — parks terminal focus and drawing. */
+  /** False while the room is hidden — parks terminal focus, drawing, and the chord. */
   active?: boolean;
-  /** The conversation this deck sits above. */
+  /** The room's header chrome, handed the deck control to place before its actions. */
+  header: (deckControl: ReactNode) => ReactNode;
+  /** The conversation this deck fronts. */
   children: ReactNode;
 }) {
   const [sessions, setSessions] = useState<DeckSession[]>([]);
@@ -62,6 +73,7 @@ export function RoomDeckPanel({
   const [closing, setClosing] = useState<DeckSession | null>(null);
   const [me, setMe] = useState<string | undefined>(undefined);
   const [dispatchLive, setDispatchLive] = useState<Record<string, boolean>>({});
+  const [unread, setUnread] = useState(0);
 
   const alive = useRef(true);
   useEffect(() => {
@@ -117,7 +129,7 @@ export function RoomDeckPanel({
   const reasons = useMemo(() => endedReasons(events), [events]);
   const skew = skewOf(skewReason ?? undefined);
 
-  // Chips are the host's truth plus the sessions we just opened and the listing
+  // Cards are the host's truth plus the sessions we just opened and the listing
   // hasn't confirmed yet — the optimistic entry disappears once the host lists it.
   const chips = useMemo(() => {
     const listed = new Set(sessions.map((s) => s.name));
@@ -154,10 +166,6 @@ export function RoomDeckPanel({
   );
 
   const select = (name: string) => {
-    if (selected === name) {
-      setSelected(null);
-      return;
-    }
     const session = chips.find((s) => s.name === name);
     if (session?.live && services && !opened.has(name)) {
       setOpened((current) => new Map(current).set(name, { command: session.command }));
@@ -198,22 +206,93 @@ export function RoomDeckPanel({
     void gateway.killSession(session.name).finally(() => kick());
   };
 
+  // The way back — explicit, and it clears the "the room kept talking" badge.
+  const lastSelected = useRef<string | null>(null);
+  const back = useCallback(() => {
+    setSelected((current) => {
+      if (current) lastSelected.current = current;
+      return null;
+    });
+    setUnread(0);
+  }, []);
+
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const selectRef = useRef(select);
+  selectRef.current = select;
+  const chipsRef = useRef(chips);
+  chipsRef.current = chips;
+  const openedRef = useRef(opened);
+  openedRef.current = opened;
+
+  // Room messages posted while attached badge the back affordance — the room keeps
+  // talking and the FDE can see it. The server scopes them to the room id lane.
+  useEffect(
+    () =>
+      gateway.onEvent((event) => {
+        if (event.type !== "spec_message_posted" || event.spec !== roomId) return;
+        if (selectedRef.current) setUnread((count) => count + 1);
+      }),
+    [gateway, roomId],
+  );
+
+  // ⌘⇧L toggles the stage: back to the conversation, or return to the last session.
+  // Plain Esc belongs to the shell; the pane lets unclaimed ⌘ chords bubble here.
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.metaKey || !event.shiftKey || event.altKey || event.ctrlKey) return;
+      if (event.key !== "l" && event.key !== "L") return;
+      event.preventDefault();
+      if (selectedRef.current) {
+        back();
+        return;
+      }
+      const name = lastSelected.current;
+      if (
+        name &&
+        (chipsRef.current.some((s) => s.name === name) || openedRef.current.has(name))
+      ) {
+        selectRef.current(name);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, back]);
+
   const selectedChip = selected ? (chips.find((s) => s.name === selected) ?? null) : null;
   const showStage = selectedChip !== null;
-  const displaced = selectedChip && !selectedChip.live ? yieldedDispatch(reasons[selectedChip.name]) : null;
+  const displaced =
+    selectedChip && !selectedChip.live ? yieldedDispatch(reasons[selectedChip.name]) : null;
+
+  const deckControl = (
+    <DeckMenu
+      sessions={chips}
+      roomId={roomId}
+      titles={titles}
+      selected={selected}
+      skew={skew}
+      reasons={reasons}
+      onSelect={select}
+      onKill={(session) => setClosing(session)}
+      onOpen={open}
+    />
+  );
 
   return (
     <>
-      <DeckStrip
-        sessions={chips}
-        roomId={roomId}
-        titles={titles}
-        selected={selected}
-        skew={skew}
-        onSelect={select}
-        onClose={(session) => setClosing(session)}
-        onOpen={open}
-      />
+      {selectedChip ? (
+        <StageBar
+          roomTitle={title}
+          sessionTitle={chipTitle(selectedChip, roomId, titles[selectedChip.name])}
+          unread={unread}
+          onBack={back}
+        >
+          {deckControl}
+        </StageBar>
+      ) : (
+        header(deckControl)
+      )}
       <div className="room-deck-panel__body" style={{ display: showStage ? "none" : "contents" }}>
         {children}
       </div>

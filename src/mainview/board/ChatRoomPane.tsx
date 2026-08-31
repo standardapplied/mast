@@ -67,16 +67,27 @@ export function ChatRoomPane({
   return (
     <div className="room-layout">
       <main className="room-conversation">
-        <RoomHeader
+        <RoomDeckPanel
+          gateway={gateway}
+          roomId={room.id}
+          project={room.project}
           title={room.title}
-          eyebrow={room.id}
-          drawerOpen={drawerOpen}
-          onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
-          actions={
-            engagement && <RosterChip specId={room.id} engagement={engagement} />
-          }
-        />
-        <RoomDeckPanel gateway={gateway} roomId={room.id} project={room.project} services={deck}>
+          services={deck}
+          header={(deckControl) => (
+            <RoomHeader
+              title={room.title}
+              eyebrow={room.id}
+              drawerOpen={drawerOpen}
+              onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
+              actions={
+                <>
+                  {deckControl}
+                  {engagement && <RosterChip specId={room.id} engagement={engagement} />}
+                </>
+              }
+            />
+          )}
+        >
           <SpecRoom
             gateway={gateway}
             specId={room.id}
