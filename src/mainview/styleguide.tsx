@@ -19,7 +19,7 @@ import { Textarea } from "./components/Textarea";
 import { ToastProvider, useToast } from "./components/Toast";
 import { Badge, Button, Card, Eyebrow } from "./components/ui";
 import { RoomList } from "./board/RoomList";
-import { DeckEndedCard, DeckStrip } from "./board/RoomDeck";
+import { DeckEndedCard, DeckMenu, StageBar } from "./board/RoomDeck";
 import type { RoomView } from "./board/rooms";
 import type { DeckSession } from "./terminal/roomDeck";
 import type { TimeValue } from "./lib/date-utils";
@@ -220,22 +220,39 @@ function RoomDeckDemo() {
   const [selected, setSelected] = useState<string | null>("room-design-talk");
   return (
     <div className="room-components-demo">
-      <DeckStrip
-        sessions={DECK_DEMO}
-        roomId="design-talk"
-        titles={{ "room-design-talk": "brainstorm" }}
-        selected={selected}
-        onSelect={(name) => setSelected((s) => (s === name ? null : name))}
-        onClose={() => {}}
-        onOpen={() => {}}
-      />
+      <StageBar
+        roomTitle="Design talk"
+        sessionTitle="brainstorm"
+        unread={2}
+        onBack={() => setSelected(null)}
+      >
+        <DeckMenu
+          sessions={DECK_DEMO}
+          roomId="design-talk"
+          titles={{ "room-design-talk": "brainstorm" }}
+          selected={selected}
+          reasons={{ "resume-run-7": "yielded to dispatch r8 of spec design-talk" }}
+          onSelect={setSelected}
+          onKill={() => {}}
+          onOpen={() => {}}
+        />
+      </StageBar>
+      <div className="room-avatar-demo">
+        <DeckMenu sessions={[]} roomId="design-talk" onSelect={() => {}} onOpen={() => {}} />
+        <DeckMenu
+          sessions={[]}
+          roomId="design-talk"
+          skew="box-older"
+          onSelect={() => {}}
+          onOpen={() => {}}
+        />
+      </div>
       <DeckEndedCard
         session="resume-run-7"
         reason="yielded to dispatch r8 of spec design-talk"
         yielded
         onRestart={() => {}}
       />
-      <DeckStrip sessions={[]} roomId="design-talk" skew="box-older" onSelect={() => {}} onOpen={() => {}} />
     </div>
   );
 }

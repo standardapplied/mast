@@ -335,7 +335,7 @@ export function App({
             {!showWorkspace ? (
               view === "rooms" && connectGate
             ) : (
-              <RoomsScreen gateway={gateway} deck={deck} onFocus={setRoomFocus} />
+              <RoomsScreen gateway={gateway} deck={deck} active={view === "rooms"} onFocus={setRoomFocus} />
             )}
           </section>
           <section
@@ -346,7 +346,7 @@ export function App({
             {!showWorkspace ? (
               view === "board" && connectGate
             ) : specId ? (
-              <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} deck={deck} />
+              <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} deck={deck} active={view === "board"} />
             ) : (
               <BoardScreen
                 gateway={gateway}

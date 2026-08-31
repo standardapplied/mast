@@ -48,14 +48,17 @@ function ptyEvent(over: Partial<SailEvent>): SailEvent {
   };
 }
 
-async function renderPanel(gateway: Gateway, withServices = false) {
+async function renderPanel(gateway: Gateway, withServices = false, active = true) {
   await act(async () => {
     root.render(
       <RoomDeckPanel
         gateway={gateway}
         roomId="design-talk"
         project="sail-mast"
+        title="Design talk"
+        active={active}
         services={withServices ? services : undefined}
+        header={(deckControl) => <header data-testid="room-header">{deckControl}</header>}
       >
         <div data-testid="conversation" />
       </RoomDeckPanel>,
@@ -64,32 +67,104 @@ async function renderPanel(gateway: Gateway, withServices = false) {
   await flush();
 }
 
+/** The deck popover portals to the body; open it through the header trigger. */
+async function openDeck() {
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[data-testid="deck-trigger"]')?.click();
+  });
+  await flush();
+}
+
+async function pickCard(session: string) {
+  await openDeck();
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>(`[data-testid="deck-card-${session}"]`)?.click();
+  });
+  await flush();
+}
+
+function emptyGateway(): Gateway {
+  return { ...createDemoGateway(), listSessions: async () => ({ ok: true, value: [] }) };
+}
+
 const componentsCss = await Bun.file(
   new URL("../static/components.css", import.meta.url).pathname,
 ).text();
 
-// happy-dom computes no layout, so the stacking contract lives in the stylesheet:
-// the deck strip, and the header above it in chat rooms, stack vertically only
-// because .room-conversation declares a column — without it the strip renders as
-// a collapsed left sliver (the 0.1.70 field bug).
-test("room-conversation stacks its children as a column", () => {
-  const block = componentsCss.match(/\.room-conversation \{[^}]*\}/)?.[0] ?? "";
-  expect(block).toContain("flex-direction: column");
+// happy-dom computes no layout, so the geometry contracts live in the stylesheet.
+describe("stylesheet contracts", () => {
+  test("room-conversation stacks its children as a column", () => {
+    const block = componentsCss.match(/\.room-conversation \{[^}]*\}/)?.[0] ?? "";
+    expect(block).toContain("flex-direction: column");
+  });
+
+  test("the always-on strip is gone from the stylesheet", () => {
+    expect(componentsCss).not.toContain(".room-deck {");
+    expect(componentsCss).not.toContain(".room-deck__chip");
+  });
+
+  test("the stage is full-bleed: no intermediary re-shapes the pane host", () => {
+    const stage = componentsCss.match(/\.room-deck-panel__stage \{[^}]*\}/)?.[0] ?? "";
+    expect(stage).toContain("flex: 1");
+    expect(stage).not.toContain("padding");
+    expect(stage).not.toContain("max-width");
+    const terminal = componentsCss.match(/\.room-terminal \{[^}]*\}/)?.[0] ?? "";
+    expect(terminal).toContain("flex: 1");
+    expect(terminal).not.toContain("padding");
+    expect(terminal).not.toContain("max-width");
+  });
+
+  test("the stage bar matches the viewer bar height so borders align", () => {
+    const stageBar = componentsCss.match(/\.room-stage-bar \{[^}]*\}/)?.[0] ?? "";
+    const viewerBar = componentsCss.match(/\.viewer__bar \{[^}]*\}/)?.[0] ?? "";
+    expect(stageBar).toContain("height: 40px");
+    expect(viewerBar).toContain("height: 40px");
+  });
 });
 
 describe("RoomDeckPanel", () => {
-  test("lists only the room's sessions as chips, corpse marked ended", async () => {
+  test("an empty room reserves nothing: just the header verb, click = the picker", async () => {
+    await renderPanel(emptyGateway(), true);
+    const trigger = container.querySelector('[data-testid="deck-trigger"]');
+    expect(trigger?.getAttribute("aria-label")).toBe("Open terminal");
+    expect(container.querySelector('[data-testid="deck-count"]')).toBeNull();
+    expect(document.querySelector('[data-testid="deck-pop"]')).toBeNull();
+    expect(container.querySelector('[data-testid="room-stage-bar"]')).toBeNull();
+    expect(container.querySelector('[data-testid="conversation"]')).not.toBeNull();
+
+    await openDeck();
+    expect(document.querySelector('[data-testid="deck-pop"]'), "no deck to open").toBeNull();
+    const claude = [...document.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find(
+      (item) => item.textContent?.includes("Claude Code"),
+    );
+    expect(claude).not.toBeNull();
+    terminals.length = 0;
+    await act(async () => claude?.click());
+    await flush();
+    const opened = terminals.find((t) => t.session === "room-design-talk");
+    expect(opened?.command).toEqual(["claude"]);
+    expect(container.querySelector('[data-testid="room-stage-bar"]')).not.toBeNull();
+  });
+
+  test("with sessions the trigger becomes the deck: live badge, cards for this room only", async () => {
     await renderPanel(createDemoGateway());
-    expect(container.querySelector('[data-testid="deck-chip-room-design-talk"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="deck-chip-room-design-talk.2"]')).not.toBeNull();
-    const corpse = container.querySelector('[data-testid="deck-chip-resume-demo-run-7"]');
+    const trigger = container.querySelector('[data-testid="deck-trigger"]');
+    expect(trigger?.getAttribute("aria-label")).toBe("Terminals");
+    expect(container.querySelector('[data-testid="deck-count"]')?.textContent).toBe("2");
+
+    await openDeck();
+    expect(document.querySelector('[data-testid="deck-card-room-design-talk"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="deck-card-room-design-talk.2"]')).not.toBeNull();
+    const corpse = document.querySelector('[data-testid="deck-card-resume-demo-run-7"]');
     expect(corpse?.className).toContain("is-ended");
-    expect(corpse?.textContent).toContain("ended");
+    expect(corpse?.textContent).toContain("yielded to dispatch demo-run-8 of spec mast-kanban-board");
     expect(
-      container.querySelector('[data-testid="deck-chip-mast-node"]'),
+      document.querySelector('[data-testid="deck-card-mast-node"]'),
       "sessions bound to no room stay in the Terminal view",
     ).toBeNull();
-    expect(container.querySelector('[data-testid="conversation"]')).not.toBeNull();
+    const writerCard = document.querySelector('[data-testid="deck-card-room-design-talk"]');
+    expect(writerCard?.textContent).toContain("U");
+    expect(writerCard?.textContent).toContain("+1");
   });
 
   test("a session another client opens appears when its pty event lands", async () => {
@@ -100,7 +175,7 @@ describe("RoomDeckPanel", () => {
       listSessions: async () => ({ ok: true, value: [...sessions] }),
     };
     await renderPanel(gateway);
-    expect(container.querySelector('[data-testid="deck-chip-room-design-talk"]')).toBeNull();
+    expect(container.querySelector('[data-testid="deck-count"]')).toBeNull();
 
     sessions.push({
       name: "room-design-talk",
@@ -114,24 +189,114 @@ describe("RoomDeckPanel", () => {
       base.emit(ptyEvent({ data: { room_id: "design-talk", session: "room-design-talk" } }));
     });
     await flush();
-    const chip = container.querySelector('[data-testid="deck-chip-room-design-talk"]');
-    expect(chip, "the deck refreshes on the room's pty events").not.toBeNull();
-    expect(chip?.textContent).toContain("M");
+    expect(
+      container.querySelector('[data-testid="deck-count"]')?.textContent,
+      "the deck refreshes on the room's pty events",
+    ).toBe("1");
+  });
+
+  test("picking a card takes the stage: full view, slim bar, conversation kept mounted", async () => {
+    terminals.length = 0;
+    await renderPanel(createDemoGateway(), true);
+    await pickCard("room-design-talk");
+
+    expect(container.querySelector('[data-testid="fake-terminal-room-design-talk"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="room-header"]'), "the stage replaces the header").toBeNull();
+    const bar = container.querySelector('[data-testid="room-stage-bar"]');
+    expect(bar?.textContent).toContain("Design talk");
+    expect(
+      container.querySelector('[data-testid="conversation"]'),
+      "the conversation stays mounted underneath",
+    ).not.toBeNull();
+
+    // The bar's deck control switches sessions without leaving the stage.
+    await pickCard("room-design-talk.2");
+    expect(container.querySelector('[data-testid="fake-terminal-room-design-talk.2"]')).not.toBeNull();
+    expect(
+      container.querySelector('[data-testid="fake-terminal-room-design-talk"]'),
+      "the first terminal stays mounted — the keep-mounted law",
+    ).not.toBeNull();
+    expect(container.querySelector('[data-testid="room-stage-bar"]')).not.toBeNull();
+
+    // Back returns to the conversation and restores the header.
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="stage-back"]')?.click();
+    });
+    await flush();
+    expect(container.querySelector('[data-testid="room-header"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="room-stage-bar"]')).toBeNull();
+    expect(container.querySelector('[data-testid="fake-terminal-room-design-talk.2"]')).not.toBeNull();
+  });
+
+  test("room messages while attached badge the back affordance; back clears it", async () => {
+    const gateway = createDemoGateway();
+    await renderPanel(gateway, true);
+    await pickCard("room-design-talk");
+    expect(container.querySelector('[data-testid="stage-unread"]')).toBeNull();
+
+    await act(async () => {
+      gateway.emit(ptyEvent({ type: "spec_message_posted", data: { message_id: "m1" } }));
+      gateway.emit(ptyEvent({ type: "spec_message_posted", data: { message_id: "m2" } }));
+    });
+    await flush();
+    expect(container.querySelector('[data-testid="stage-unread"]')?.textContent).toBe("2");
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="stage-back"]')?.click();
+    });
+    await flush();
+    await pickCard("room-design-talk");
+    expect(container.querySelector('[data-testid="stage-unread"]')).toBeNull();
+  });
+
+  test("⌘⇧L toggles the stage: back to the conversation, then back to the session", async () => {
+    await renderPanel(createDemoGateway(), true);
+    await pickCard("room-design-talk");
+    expect(container.querySelector('[data-testid="room-stage-bar"]')).not.toBeNull();
+
+    const chord = () =>
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "l", metaKey: true, shiftKey: true }),
+      );
+    await act(async () => {
+      chord();
+    });
+    await flush();
+    expect(container.querySelector('[data-testid="room-header"]')).not.toBeNull();
+    await act(async () => {
+      chord();
+    });
+    await flush();
+    expect(container.querySelector('[data-testid="room-stage-bar"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="fake-terminal-room-design-talk"]')).not.toBeNull();
+  });
+
+  test("an inactive (hidden) panel ignores the stage chord", async () => {
+    await renderPanel(createDemoGateway(), true, false);
+    await pickCard("room-design-talk");
+    expect(container.querySelector('[data-testid="room-stage-bar"]')).not.toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "l", metaKey: true, shiftKey: true }),
+      );
+    });
+    await flush();
+    expect(
+      container.querySelector('[data-testid="room-stage-bar"]'),
+      "a keep-mounted hidden room must not react to the global chord",
+    ).not.toBeNull();
   });
 
   test("a yielded resume corpse shows the reason and withholds Reopen while the dispatch runs", async () => {
     // The demo yield names mast-kanban-board, whose demo build run is running.
     await renderPanel(createDemoGateway(), true);
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>('[data-testid="deck-chip-resume-demo-run-7"]')
-        ?.click();
-    });
-    await flush();
+    await pickCard("resume-demo-run-7");
     const card = container.querySelector('[data-testid="deck-ended-card"]');
     expect(card?.textContent).toContain("yielded to dispatch demo-run-8 of spec mast-kanban-board");
     expect(card?.textContent).toContain("A dispatch is live");
     expect(card?.textContent).not.toContain("Reopen");
+    expect(container.querySelector('[data-testid="room-stage-bar"]'), "the way back stays visible").not.toBeNull();
   });
 
   test("a yielded corpse reopens once no dispatch is live on its spec", async () => {
@@ -142,12 +307,7 @@ describe("RoomDeckPanel", () => {
     };
     terminals.length = 0;
     await renderPanel(gateway, true);
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>('[data-testid="deck-chip-resume-demo-run-7"]')
-        ?.click();
-    });
-    await flush();
+    await pickCard("resume-demo-run-7");
     const reopen = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent === "Reopen",
     );
@@ -169,27 +329,18 @@ describe("RoomDeckPanel", () => {
       }),
     };
     await renderPanel(gateway, true);
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>('[data-testid="deck-chip-resume-demo-run-7"]')
-        ?.click();
-    });
-    await flush();
+    await pickCard("resume-demo-run-7");
     const card = container.querySelector('[data-testid="deck-ended-card"]');
     expect(card?.textContent).not.toContain("Reopen");
   });
 
-  test("the open-terminal verb mints a room-bound session and attaches in place", async () => {
+  test("the deck's new-terminal rows mint a room-bound session and attach in place", async () => {
     terminals.length = 0;
     await renderPanel(createDemoGateway(), true);
+    await openDeck();
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('[aria-label="Open terminal"]')?.click();
+      document.querySelector<HTMLButtonElement>('[data-testid="deck-new-claude"]')?.click();
     });
-    const claude = [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find(
-      (item) => item.textContent?.includes("Claude Code"),
-    );
-    expect(claude).not.toBeNull();
-    await act(async () => claude?.click());
     await flush();
     // room-design-talk and .2 exist on the host, so the fresh one takes .3.
     const opened = terminals.find((t) => t.session === "room-design-talk.3");
@@ -197,27 +348,32 @@ describe("RoomDeckPanel", () => {
     expect(opened?.command).toEqual(["claude"]);
     expect(opened?.room).toBe("design-talk");
     expect(opened?.project).toBe("sail-mast");
+    expect(container.querySelector('[data-testid="fake-terminal-room-design-talk.3"]')).not.toBeNull();
     expect(
-      container.querySelector('[data-testid="fake-terminal-room-design-talk.3"]'),
-    ).not.toBeNull();
-    expect(
-      container.querySelector('[data-testid="deck-chip-room-design-talk.3"]'),
-      "the fresh session chips optimistically before the host lists it",
+      container.querySelector('[data-testid="room-stage-bar"]'),
+      "a fresh terminal takes the stage immediately",
     ).not.toBeNull();
   });
 
-  test("without the Tauri edge a live chip explains where attaching lives", async () => {
-    await renderPanel(createDemoGateway());
+  test("a card's close verb parks on the kill confirm", async () => {
+    await renderPanel(createDemoGateway(), true);
+    await openDeck();
     await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>('[data-testid="deck-chip-room-design-talk"]')
+      document
+        .querySelector<HTMLElement>('[aria-label="Close session room-design-talk"]')
         ?.click();
     });
     await flush();
+    expect(document.body.textContent).toContain("Close session room-design-talk?");
+  });
+
+  test("without the Tauri edge a live card explains where attaching lives", async () => {
+    await renderPanel(createDemoGateway());
+    await pickCard("room-design-talk");
     expect(container.querySelector('[data-testid="deck-attach-unavailable"]')).not.toBeNull();
   });
 
-  test("a handshake skew replaces the chips with the card naming the older side", async () => {
+  test("a handshake skew becomes the popover card naming the older side", async () => {
     const base = createDemoGateway();
     const gateway: Gateway = {
       ...base,
@@ -231,9 +387,10 @@ describe("RoomDeckPanel", () => {
       }),
     };
     await renderPanel(gateway);
-    const deck = container.querySelector('[data-testid="room-deck"]');
-    expect(deck?.textContent).toContain("This box's sail is older than Mast");
-    expect(deck?.textContent).toContain("sail upgrade");
-    expect(container.querySelector('[data-testid^="deck-chip-"]')).toBeNull();
+    await openDeck();
+    const pop = document.querySelector('[data-testid="deck-pop"]');
+    expect(pop?.textContent).toContain("This box's sail is older than Mast");
+    expect(pop?.textContent).toContain("sail upgrade");
+    expect(document.querySelector('[data-testid^="deck-card-"]')).toBeNull();
   });
 });

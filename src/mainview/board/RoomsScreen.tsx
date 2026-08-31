@@ -28,12 +28,15 @@ export function RoomsScreen({
   gateway,
   storage = localStorage,
   deck,
+  active,
   onFocus,
 }: {
   gateway: Gateway;
   storage?: StorageLike;
   /** The room deck's terminal edge, injected by the Tauri entry (absent in demo/tests). */
   deck?: DeckServices;
+  /** False while this view is hidden (keep-mounted) — parks the deck's chord and terminals. */
+  active: boolean;
   /** Reports the focused room's spec id so app-level notifications can suppress it. */
   onFocus?: (specId: string | null) => void;
 }) {
@@ -164,11 +167,18 @@ export function RoomsScreen({
             }}
             onBack={() => {}}
             deck={deck}
+            active={active}
             embedded
             eventDebounceMs={0}
           />
         ) : selected ? (
-          <ChatRoomPane key={selected.room.id} gateway={gateway} room={selected.room} deck={deck} />
+          <ChatRoomPane
+            key={selected.room.id}
+            gateway={gateway}
+            room={selected.room}
+            deck={deck}
+            active={active}
+          />
         ) : (
           <div className="room-empty-state">
             <Eyebrow>{project || "Your project"}</Eyebrow>

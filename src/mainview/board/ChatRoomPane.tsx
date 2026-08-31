@@ -27,12 +27,15 @@ export function ChatRoomPane({
   gateway,
   room,
   deck,
+  active,
   onOpenLog = () => {},
 }: {
   gateway: Gateway;
   room: ServerRoomView;
   /** The room deck's terminal edge, injected by the Tauri entry (absent in demo/tests). */
   deck?: DeckServices;
+  /** False while this view is hidden (keep-mounted) — parks the deck's chord and terminals. */
+  active: boolean;
   onOpenLog?: () => void;
 }) {
   const [drawerOpen, setDrawerOpen] = useState(() => localStorage.getItem(DRAWER_OPEN_KEY) === "true");
@@ -67,16 +70,28 @@ export function ChatRoomPane({
   return (
     <div className="room-layout">
       <main className="room-conversation">
-        <RoomHeader
+        <RoomDeckPanel
+          gateway={gateway}
+          roomId={room.id}
+          project={room.project}
           title={room.title}
-          eyebrow={room.id}
-          drawerOpen={drawerOpen}
-          onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
-          actions={
-            engagement && <RosterChip specId={room.id} engagement={engagement} />
-          }
-        />
-        <RoomDeckPanel gateway={gateway} roomId={room.id} project={room.project} services={deck}>
+          active={active}
+          services={deck}
+          header={(deckControl) => (
+            <RoomHeader
+              title={room.title}
+              eyebrow={room.id}
+              drawerOpen={drawerOpen}
+              onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
+              actions={
+                <>
+                  {deckControl}
+                  {engagement && <RosterChip specId={room.id} engagement={engagement} />}
+                </>
+              }
+            />
+          )}
+        >
           <SpecRoom
             gateway={gateway}
             specId={room.id}

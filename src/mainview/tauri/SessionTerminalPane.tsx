@@ -9,6 +9,13 @@ import {
   type SessionStatus,
   toSessionEnd,
 } from "../terminal/connection";
+import {
+  TERMINAL_FONT_FAMILY as FONT_FAMILY,
+  TERMINAL_FONT_PX as FONT_PX,
+  TERMINAL_LINE_PAD as LINE_PAD,
+  TERMINAL_PAD_X as PAD_X,
+  TERMINAL_PAD_Y as PAD_Y,
+} from "../terminal/metrics";
 import { preAttachClass, skewCard, skewOf } from "../terminal/roomDeck";
 import { TerminalRenderer } from "../terminal/renderer";
 import { type CellPos, Selection } from "../terminal/selection";
@@ -42,14 +49,8 @@ export type TerminalHandle = {
  * different matter: the pane parks on an "ended" card until the user restarts it.
  */
 
-const FONT_FAMILY = '"JetBrains Mono", ui-monospace, "SF Mono", monospace';
-const FONT_PX = 15;
-const LINE_PAD = 0.25;
 const BLINK_MS = 1060;
 const BLINK_ON_MS = 600;
-/** Ghostty-style window padding: breathing room between the pane edge and the first glyph. */
-const PAD_X = 10;
-const PAD_Y = 8;
 
 /** Tracks Mast's resolved theme, re-rendering when the user flips it or the OS scheme changes. */
 function useThemeName(): ThemeName {
