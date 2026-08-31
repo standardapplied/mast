@@ -717,6 +717,27 @@ describe("SpecRoom", () => {
     expect(rows.some((row) => /terminal opened/i.test(row.textContent ?? ""))).toBe(true);
   });
 
+  test("the room lane's backlog is not hidden by the spec lane's newer event ids", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, "den");
+
+    fake.setHistory([
+      lifecycleEvent(10, "spec_dispatched"),
+      lifecycleEvent(8, "pty_session_started", "den"),
+    ]);
+    act(() => fake.setStream("connected"));
+    act(() => fake.setStream("reconnecting"));
+    act(() => fake.setStream("connected"));
+    await settle();
+
+    const rows = [...container.querySelectorAll(".room-system-row")];
+    expect(rows.some((row) => /dispatched/i.test(row.textContent ?? ""))).toBe(true);
+    expect(
+      rows.some((row) => /terminal opened/i.test(row.textContent ?? "")),
+      "a room event with an id below the spec lane's maximum must still gap-fill",
+    ).toBe(true);
+  });
+
   test("a live message event scoped to the home room refreshes messages for a spec born elsewhere", async () => {
     const fake = makeGateway();
     await mount(fake.gateway, undefined, undefined, "den");
