@@ -291,10 +291,20 @@ export function SpecRoom({
 
   const loadEvents = useCallback(async (): Promise<SailEvent[] | null> => {
     const scoped = await gateway.specEvents(specId, { limit: PAGE_SIZE });
-    if (scoped.ok) return scoped.value.events;
+    if (scoped.ok) {
+      // A decoupled room's pty lifecycle lands under the ROOM id, not the spec's —
+      // fetch that lane too so terminal whispers survive the spec/room split.
+      if (roomId === specId) return scoped.value.events;
+      const roomScoped = await gateway.specEvents(roomId, { limit: PAGE_SIZE });
+      return roomScoped.ok
+        ? mergeEvents(scoped.value.events, roomScoped.value.events)
+        : scoped.value.events;
+    }
     const recent = await gateway.recentEvents(PAGE_SIZE);
-    return recent.ok ? recent.value.events.filter((event) => event.spec === specId) : null;
-  }, [gateway, specId]);
+    return recent.ok
+      ? recent.value.events.filter((event) => event.spec === specId || event.spec === roomId)
+      : null;
+  }, [gateway, specId, roomId]);
 
   const loadRoom = useCallback(async (version: number) => {
     const [messages, events, runs] = await Promise.all([
@@ -510,7 +520,11 @@ export function SpecRoom({
       kick();
     };
     const off = gateway.onEvent((event) => {
-      if (event.spec !== specId) return;
+      // The conversation spans two event lanes since the decouple: spec-scoped lifecycle
+      // (runs, reviews) and room-scoped traffic (pty whispers, and messages — the server
+      // scopes spec_message_posted to the HOME room, which differs from the spec id for a
+      // spec born in another room). Accept both, exactly like the mount backfill does.
+      if (event.spec !== specId && event.spec !== roomId) return;
       if (isTelemetryEvent(event.type)) return;
       if (event.type === "spec_message_posted") {
         const messageId =
@@ -546,53 +560,64 @@ export function SpecRoom({
     refreshReviewsAndRuns,
     refreshRuns,
     specId,
+    roomId,
   ]);
 
   const gapFill = useCallback(async () => {
     const version = loadVersion.current;
-    let since = sources.current.events.reduce<number | undefined>(
+    // Event ids are globally monotonic, so the pre-drain maximum is the right watermark for
+    // BOTH lanes — captured once, before either drain, so the first lane's newer ids can
+    // never hide the second lane's backlog.
+    const start = sources.current.events.reduce<number | undefined>(
       (max, event) =>
         event.id !== undefined && (max === undefined || event.id > max) ? event.id : max,
       undefined,
     );
     let sawMessage = false;
     let sawLifecycle = false;
-    // Page until the server returns a short page: a single request would silently drop every
-    // event past the first PAGE_SIZE of a long disconnect.
-    for (;;) {
-      const result = await gateway.specEvents(
-        specId,
-        since === undefined ? { limit: PAGE_SIZE } : { since, limit: PAGE_SIZE },
-      );
-      if (!result.ok || version !== loadVersion.current) return;
-      const batch = result.value.events;
-      if (batch.length === 0) break;
-      // Message events drive the message list, not the event timeline (as in the live handler);
-      // lifecycle events merge into the timeline and reconcile optimistic decisions.
-      let decisions = sources.current.decisions;
-      const lifecycle: SailEvent[] = [];
-      for (const event of batch) {
-        if (event.id !== undefined && (since === undefined || event.id > since)) since = event.id;
-        if (event.type === "spec_message_posted") {
-          sawMessage = true;
-          continue;
+    // The conversation spans two lanes since the decouple (see the live handler): the spec's
+    // lifecycle and the home room's traffic. Drain each, paging until the server returns a
+    // short page — a single request would silently drop every event past the first PAGE_SIZE
+    // of a long disconnect.
+    const lanes = roomId === specId ? [specId] : [specId, roomId];
+    for (const lane of lanes) {
+      let since = start;
+      for (;;) {
+        const result = await gateway.specEvents(
+          lane,
+          since === undefined ? { limit: PAGE_SIZE } : { since, limit: PAGE_SIZE },
+        );
+        if (!result.ok || version !== loadVersion.current) return;
+        const batch = result.value.events;
+        if (batch.length === 0) break;
+        // Message events drive the message list, not the event timeline (as in the live
+        // handler); lifecycle events merge into the timeline and reconcile optimistic
+        // decisions.
+        let decisions = sources.current.decisions;
+        const lifecycle: SailEvent[] = [];
+        for (const event of batch) {
+          if (event.id !== undefined && (since === undefined || event.id > since)) since = event.id;
+          if (event.type === "spec_message_posted") {
+            sawMessage = true;
+            continue;
+          }
+          sawLifecycle = true;
+          lifecycle.push(event);
+          decisions = reconcileDecisions(decisions, event);
         }
-        sawLifecycle = true;
-        lifecycle.push(event);
-        decisions = reconcileDecisions(decisions, event);
+        applySources(
+          { ...sources.current, events: mergeEvents(sources.current.events, lifecycle), decisions },
+          "live",
+        );
+        if (batch.length < PAGE_SIZE) break;
       }
-      applySources(
-        { ...sources.current, events: mergeEvents(sources.current.events, lifecycle), decisions },
-        "live",
-      );
-      if (batch.length < PAGE_SIZE) break;
     }
     if (version !== loadVersion.current) return;
     // Gap-filled events must trigger the same durable refreshes the live handler runs, or the
     // message list, reviews, and runs stay stale until the next live event.
     if (sawMessage) void refreshMessages(true);
     if (sawLifecycle) void refreshReviewsAndRuns(true);
-  }, [applySources, gateway, refreshMessages, refreshReviewsAndRuns, specId]);
+  }, [applySources, gateway, refreshMessages, refreshReviewsAndRuns, roomId, specId]);
 
   useEffect(() => {
     let previous: string | undefined;

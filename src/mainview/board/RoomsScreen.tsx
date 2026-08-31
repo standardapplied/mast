@@ -4,6 +4,7 @@ import { Splitter } from "../components/Splitter";
 import { useToast } from "../components/Toast";
 import { Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
+import type { DeckServices } from "../terminal/roomDeck";
 import { RoomList } from "./RoomList";
 import { ChatRoomPane } from "./ChatRoomPane";
 import { SpecDetail } from "./SpecDetail";
@@ -26,10 +27,13 @@ function storedWidth(storage: StorageLike): number {
 export function RoomsScreen({
   gateway,
   storage = localStorage,
+  deck,
   onFocus,
 }: {
   gateway: Gateway;
   storage?: StorageLike;
+  /** The room deck's terminal edge, injected by the Tauri entry (absent in demo/tests). */
+  deck?: DeckServices;
   /** Reports the focused room's spec id so app-level notifications can suppress it. */
   onFocus?: (specId: string | null) => void;
 }) {
@@ -159,11 +163,12 @@ export function RoomsScreen({
               }
             }}
             onBack={() => {}}
+            deck={deck}
             embedded
             eventDebounceMs={0}
           />
         ) : selected ? (
-          <ChatRoomPane key={selected.room.id} gateway={gateway} room={selected.room} />
+          <ChatRoomPane key={selected.room.id} gateway={gateway} room={selected.room} deck={deck} />
         ) : (
           <div className="room-empty-state">
             <Eyebrow>{project || "Your project"}</Eyebrow>

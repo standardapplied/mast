@@ -745,13 +745,29 @@ impl Backend {
         self.send_session(id, crate::pty::SessionCmd::Resize { cols, rows }).await
     }
 
+    pub async fn session_take_write(&self, id: &str) -> Result<(), Error> {
+        self.send_session(id, crate::pty::SessionCmd::TakeWrite).await
+    }
+
     pub async fn session_close(&self, id: &str) -> Result<(), Error> {
         let _ = self.send_session(id, crate::pty::SessionCmd::Detach).await;
         self.sessions.lock().await.remove(id);
         Ok(())
     }
 
-    /// A one-shot control request (list/kill/create) over its own streamlocal channel.
+    /// Lists the host's sessions over its own streamlocal channel, draining every page.
+    pub async fn session_list(
+        &self,
+        socket_path: String,
+        token: String,
+    ) -> Result<Vec<crate::pty::SessionInfo>, Error> {
+        let channel = self.open_streamlocal(&socket_path).await?;
+        crate::pty::list_sessions(channel.into_stream(), &token)
+            .await
+            .map_err(|e| Error::PtySession(e.to_string()))
+    }
+
+    /// A one-shot control request (kill/create) over its own streamlocal channel.
     pub async fn session_control(
         &self,
         socket_path: String,

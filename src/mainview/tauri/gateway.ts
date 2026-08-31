@@ -16,6 +16,7 @@ import type { SailResult, SailWireError } from "../../shared/types";
 import { EventStream, type StreamResponse } from "../../shared/sse";
 import { formatRecentErrors, logError } from "../errorLog";
 import type { AgentLogHandle, Gateway } from "../gateway";
+import type { DeckSession } from "../terminal/roomDeck";
 import { AgentLogStream, latestRun, TerminalLogError } from "./agentLogStream";
 
 /**
@@ -363,6 +364,29 @@ export function createTauriGateway(): Gateway {
     createRoom: (request) => read("POST", "/v1/rooms", { body: request }),
     getRoom: (id) => read("GET", `/v1/rooms/${encodeURIComponent(id)}`),
     deleteRoom: (id) => read("DELETE", `/v1/rooms/${encodeURIComponent(id)}`),
+    // The pty lane, not REST: the Rust side drains every SAILPTY2 listing page. A
+    // handshake skew surfaces here as the error message the deck's skew card reads.
+    listSessions: async () => {
+      try {
+        const sessions = await invoke<DeckSession[]>("session_list", {
+          socketPath: "~/.sail/pty.sock",
+          token: "",
+        });
+        return { ok: true, value: sessions };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return { ok: false, error: { status: 0, code: "pty_unreachable", message } };
+      }
+    },
+    killSession: async (session) => {
+      try {
+        await invoke("session_kill", { socketPath: "~/.sail/pty.sock", token: "", session });
+        return { ok: true, value: { session } };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return { ok: false, error: { status: 0, code: "pty_unreachable", message } };
+      }
+    },
     listSpecMessages: (id, options = {}) =>
       read(
         "GET",

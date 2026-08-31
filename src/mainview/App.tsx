@@ -14,6 +14,7 @@ import { Tooltip } from "./components/Tooltip";
 import { Button } from "./components/ui";
 import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
+import type { DeckServices } from "./terminal/roomDeck";
 import type { ThemeController } from "./theme";
 import type { Updater } from "./updater";
 
@@ -114,12 +115,15 @@ export function App({
   gateway,
   theme,
   terminal,
+  deck,
   updater,
 }: {
   gateway: Gateway;
   theme: ThemeController;
   /** The terminal section, injected by the Tauri entry (absent in demo/tests). */
   terminal?: ReactNode;
+  /** The room deck's terminal edge, injected by the Tauri entry (absent in demo/tests). */
+  deck?: DeckServices;
   /** Auto-updater, injected by the Tauri entry (absent on demo/tests). */
   updater?: Updater;
 }) {
@@ -331,7 +335,7 @@ export function App({
             {!showWorkspace ? (
               view === "rooms" && connectGate
             ) : (
-              <RoomsScreen gateway={gateway} onFocus={setRoomFocus} />
+              <RoomsScreen gateway={gateway} deck={deck} onFocus={setRoomFocus} />
             )}
           </section>
           <section
@@ -342,7 +346,7 @@ export function App({
             {!showWorkspace ? (
               view === "board" && connectGate
             ) : specId ? (
-              <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} />
+              <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} deck={deck} />
             ) : (
               <BoardScreen
                 gateway={gateway}

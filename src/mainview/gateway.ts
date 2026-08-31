@@ -46,6 +46,7 @@ import type {
   WhoAmI,
 } from "../shared/sail-models";
 import type { SailResult } from "../shared/types";
+import type { DeckSession } from "./terminal/roomDeck";
 import type { AgentLogLine, AgentLogState } from "./tauri/agentLogStream";
 
 /**
@@ -76,6 +77,11 @@ export type Gateway = {
   getRoom(id: string): Promise<SailResult<ServerRoomView>>;
   /** Delete a room with no attached specs (DELETE /v1/rooms/{id}). */
   deleteRoom(id: string): Promise<SailResult<RoomDeletedResponse>>;
+  /** The box's pty sessions (SAILPTY2 listing over the SSH lane, every page drained);
+   *  the room deck filters by `room`. Rides the pty socket, not the REST API. */
+  listSessions(): Promise<SailResult<DeckSession[]>>;
+  /** End a host-owned session and its process — the deck chip's close verb. */
+  killSession(session: string): Promise<SailResult<{ session: string }>>;
   board(project?: string): Promise<SailResult<GlobalBoardResponse>>;
   getSpec(id: string): Promise<SailResult<GlobalSpecDetailResponse>>;
   createSpec(request: SpecCreateRequest): Promise<SailResult<GlobalSpecDetailResponse>>;
@@ -318,6 +324,78 @@ export function createDemoGateway(): DemoGateway {
   });
   let eventId = 100;
 
+  // Deck data: a brainstorm room with live terminals, and a resume corpse a
+  // dispatch displaced — enough for the preview/styleguide loop without a host.
+  // Timestamps sit before the seeded specs' activity so default selections keep
+  // landing on the chorus rooms the tests pin.
+  chatRooms.push({
+    id: "design-talk",
+    project: "sail-mast",
+    title: "Design talk",
+    members: [],
+    spec_ids: ["mast-kanban-board", "mast-api-client"],
+    created_at: "2026-06-30T10:00:00Z",
+    updated_at: "2026-07-01T08:00:00Z",
+    last_activity_at: "2026-07-01T08:00:00Z",
+  });
+  const demoSessions: DeckSession[] = [
+    {
+      name: "room-design-talk",
+      live: true,
+      attached: 2,
+      writerFde: "uday",
+      room: "design-talk",
+      command: ["claude"],
+    },
+    {
+      name: "room-design-talk.2",
+      live: true,
+      attached: 1,
+      writerFde: "",
+      room: "design-talk",
+      command: ["bash", "-l"],
+    },
+    {
+      name: "resume-demo-run-7",
+      live: false,
+      attached: 0,
+      writerFde: "",
+      room: "design-talk",
+      command: ["codex", "resume"],
+    },
+    { name: "mast-node", live: true, attached: 1, writerFde: "uday", room: "", command: ["bash", "-l"] },
+  ];
+  const ptyEvent = (
+    ts: string,
+    type: string,
+    agent: string,
+    data: Record<string, unknown>,
+  ): SailEvent => ({
+    v: 1,
+    id: eventId++,
+    ts,
+    project: "sail-mast",
+    spec: "design-talk",
+    type,
+    agent,
+    host: "demo",
+    data: { room_id: "design-talk", ...data },
+  });
+  events.push(
+    ptyEvent("2026-07-01T06:30:00Z", "pty_session_started", "uday", {
+      session: "room-design-talk",
+      executable: "claude",
+    }),
+    ptyEvent("2026-07-01T07:00:00Z", "pty_session_started", "uday", {
+      session: "resume-demo-run-7",
+      executable: "codex",
+    }),
+    ptyEvent("2026-07-01T08:00:00Z", "pty_session_ended", "sail", {
+      session: "resume-demo-run-7",
+      reason: "yielded to dispatch demo-run-8 of spec mast-kanban-board",
+    }),
+  );
+
   const ok = <T>(value: T, etag?: string): SailResult<T> => ({ ok: true, value, etag });
   const notFound = <T>(id: string): SailResult<T> => ({
     ok: false,
@@ -398,6 +476,16 @@ export function createDemoGateway(): DemoGateway {
       if (index < 0) return roomNotFound(id);
       chatRooms.splice(index, 1);
       return ok({ id, deleted: true });
+    },
+
+    async listSessions() {
+      return ok([...demoSessions]);
+    },
+
+    async killSession(session) {
+      const index = demoSessions.findIndex((s) => s.name === session);
+      if (index >= 0) demoSessions.splice(index, 1);
+      return ok({ session });
     },
 
     async listSpecs(filter = {}) {

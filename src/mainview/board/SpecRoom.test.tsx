@@ -71,6 +71,7 @@ function makeGateway({
     approved: [] as string[],
     dismissed: [] as string[],
     specEvents: [] as { since?: number; limit?: number }[],
+    eventLanes: [] as string[],
     messageOptions: [] as { before?: string; after?: string; limit?: number }[],
     recent: 0,
     messages: 0,
@@ -139,8 +140,9 @@ function makeGateway({
         value: { limit: 100, returned: globalEvents.length, events: globalEvents },
       };
     },
-    specEvents: async (_id: string, options: { since?: number; limit?: number } = {}) => {
+    specEvents: async (id: string, options: { since?: number; limit?: number } = {}) => {
       calls.specEvents.push(options);
+      calls.eventLanes.push(id);
       if (specEventsError) {
         return {
           ok: false as const,
@@ -148,6 +150,7 @@ function makeGateway({
         };
       }
       const scoped = history
+        .filter((event) => event.spec === id)
         .filter((event) => options.since === undefined || (event.id ?? 0) > options.since)
         .slice(0, options.limit ?? 100);
       return {
@@ -266,7 +269,7 @@ async function settle() {
   await act(async () => {});
 }
 
-async function mount(gateway: Gateway, specStatus?: string, specTitle?: string) {
+async function mount(gateway: Gateway, specStatus?: string, specTitle?: string, roomId?: string) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -276,6 +279,7 @@ async function mount(gateway: Gateway, specStatus?: string, specTitle?: string) 
         <SpecRoom
           gateway={gateway}
           specId="s1"
+          roomId={roomId}
           specStatus={specStatus}
           specTitle={specTitle}
           canWrite
@@ -695,6 +699,45 @@ describe("SpecRoom", () => {
     const rows = [...container.querySelectorAll(".room-system-row")];
     expect(rows.filter((row) => /dispatched/i.test(row.textContent ?? "")).length).toBe(1);
     expect(rows.some((row) => /agent stopped/i.test(row.textContent ?? ""))).toBe(true);
+  });
+
+  test("gap-fill drains the home room's event lane for a spec born in another room", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, "den");
+
+    fake.setHistory([lifecycleEvent(7, "pty_session_started", "den")]);
+    act(() => fake.setStream("connected"));
+    act(() => fake.setStream("reconnecting"));
+    act(() => fake.setStream("connected"));
+    await settle();
+
+    const reconnectLanes = fake.calls.eventLanes.slice(2);
+    expect(reconnectLanes).toEqual(["s1", "den"]);
+    const rows = [...container.querySelectorAll(".room-system-row")];
+    expect(rows.some((row) => /terminal opened/i.test(row.textContent ?? ""))).toBe(true);
+  });
+
+  test("a live message event scoped to the home room refreshes messages for a spec born elsewhere", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, "den");
+    const before = fake.calls.messages;
+
+    act(() =>
+      fake.emit({
+        v: 1,
+        id: 12,
+        ts: "2026-08-31T00:00:00Z",
+        project: "mast",
+        spec: "den",
+        type: "spec_message_posted",
+        agent: "ada",
+        host: "devbox",
+        data: { message_id: "m-room", preview: "hi" },
+      }),
+    );
+    await settle();
+
+    expect(fake.calls.messages - before).toBe(1);
   });
 
   test("gap-fill pages until the server is drained, not just the first 100", async () => {

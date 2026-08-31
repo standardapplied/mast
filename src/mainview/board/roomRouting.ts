@@ -70,6 +70,9 @@ const SELF_CONTAINED_TYPES = new Set([
   "snapshot_created",
   "snapshot_restored",
   "snapshot_deleted",
+  "pty_session_started",
+  "pty_session_attached",
+  "pty_session_ended",
 ]);
 
 export function roomRefreshFor(event: SailEvent): RoomRefresh {

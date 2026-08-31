@@ -253,6 +253,49 @@ describe("review-loop events", () => {
   });
 });
 
+describe("terminal whispers", () => {
+  test("a pty session start is a lifecycle row narrating the executable", () => {
+    const items = assembleTimeline({
+      messages: [],
+      events: [
+        event(1, "pty_session_started", "2026-08-31T10:00:00Z", {
+          session: "room-s1",
+          room_id: "s1",
+          executable: "claude",
+        }),
+      ],
+      reviews: [],
+      runs: [],
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]!.kind).toBe("lifecycle");
+    expect((items[0] as { label: string }).label).toBe("Terminal opened");
+    expect(eventNarration(items[0]!.kind === "lifecycle" ? items[0]!.event : ({} as SailEvent))).toBe(
+      "claude",
+    );
+  });
+
+  test("a yielded ending carries its reason; attach churn stays out of the timeline", () => {
+    const items = assembleTimeline({
+      messages: [],
+      events: [
+        event(2, "pty_session_attached", "2026-08-31T10:01:00Z", { session: "room-s1" }),
+        event(3, "pty_session_ended", "2026-08-31T10:02:00Z", {
+          session: "room-s1",
+          reason: "yielded to dispatch r8 of spec s1",
+        }),
+      ],
+      reviews: [],
+      runs: [],
+    });
+    expect(items).toHaveLength(1);
+    expect((items[0] as { label: string }).label).toBe("Terminal ended");
+    expect(
+      eventNarration(items[0]!.kind === "lifecycle" ? items[0]!.event : ({} as SailEvent)),
+    ).toBe("yielded to dispatch r8 of spec s1");
+  });
+});
+
 describe("eventNarration", () => {
   test("renders detail and severity counts in severity order", () => {
     const narration = eventNarration(

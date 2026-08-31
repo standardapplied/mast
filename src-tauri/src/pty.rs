@@ -8,10 +8,16 @@
 #![allow(dead_code)]
 
 /// Handshake magic; each peer writes it and must read the other's back.
-pub const MAGIC: &[u8; 8] = b"SAILPTY1";
+pub const MAGIC: &[u8; 8] = b"SAILPTY2";
+
+/// The magic an older sail host presents; recognized so the skew can be named.
+const MAGIC_V1: &[u8; 8] = b"SAILPTY1";
 
 /// Frames larger than this are a protocol violation, refused rather than trusted.
 pub const MAX_FRAME: usize = 1 << 20;
+
+/// The host clamps a session listing page to this many entries.
+pub const PAGE_LIMIT: u32 = 16;
 
 /// One session as the host lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +26,8 @@ pub struct SessionInfo {
     pub live: bool,
     pub attached: u32,
     pub writer_fde: String,
+    pub room: String,
+    pub command: Vec<String>,
 }
 
 /// A protocol frame in either direction. The client sends the request forms and
@@ -32,6 +40,7 @@ pub enum Frame {
         command: Vec<String>,
         cwd: String,
         project: String,
+        room: String,
         cols: u32,
         rows: u32,
     },
@@ -49,7 +58,10 @@ pub enum Frame {
     },
     TakeWrite,
     Detach,
-    ListSessions,
+    ListSessions {
+        after: String,
+        limit: u32,
+    },
     Kill(String),
     Output {
         last_input_seq: i64,
@@ -68,7 +80,10 @@ pub enum Frame {
     Continued,
     SessionEnded(String),
     SessionInfo(SessionInfo),
-    Sessions(Vec<SessionInfo>),
+    Sessions {
+        sessions: Vec<SessionInfo>,
+        next: String,
+    },
     Ok,
     Err(String),
 }
@@ -99,17 +114,16 @@ pub fn encode(frame: &Frame) -> Vec<u8> {
             command,
             cwd,
             project,
+            room,
             cols,
             rows,
         } => {
             p.push(1);
             put_str(&mut p, session);
-            put_i32(&mut p, command.len() as i32);
-            for arg in command {
-                put_str(&mut p, arg);
-            }
+            put_str_list(&mut p, command);
             put_str(&mut p, cwd);
             put_str(&mut p, project);
+            put_str(&mut p, room);
             put_i32(&mut p, *cols as i32);
             put_i32(&mut p, *rows as i32);
         }
@@ -130,7 +144,11 @@ pub fn encode(frame: &Frame) -> Vec<u8> {
         }
         Frame::TakeWrite => p.push(5),
         Frame::Detach => p.push(6),
-        Frame::ListSessions => p.push(7),
+        Frame::ListSessions { after, limit } => {
+            p.push(7);
+            put_str(&mut p, after);
+            put_i32(&mut p, *limit as i32);
+        }
         Frame::Kill(session) => {
             p.push(8);
             put_str(&mut p, session);
@@ -167,12 +185,13 @@ pub fn encode(frame: &Frame) -> Vec<u8> {
             p.push(28);
             put_info(&mut p, info);
         }
-        Frame::Sessions(list) => {
+        Frame::Sessions { sessions, next } => {
             p.push(29);
-            put_i32(&mut p, list.len() as i32);
-            for info in list {
+            put_i32(&mut p, sessions.len() as i32);
+            for info in sessions {
                 put_info(&mut p, info);
             }
+            put_str(&mut p, next);
         }
         Frame::Ok => p.push(30),
         Frame::Err(message) => {
@@ -191,22 +210,15 @@ pub fn decode(payload: &[u8]) -> Result<Frame, DecodeError> {
     let mut c = Cursor::new(payload);
     let frame = match c.u8()? {
         9 => Frame::Hello(c.string()?),
-        1 => {
-            let session = c.string()?;
-            let count = c.i32()?;
-            let mut command = Vec::new();
-            for _ in 0..count {
-                command.push(c.string()?);
-            }
-            Frame::Create {
-                session,
-                command,
-                cwd: c.string()?,
-                project: c.string()?,
-                cols: c.i32()? as u32,
-                rows: c.i32()? as u32,
-            }
-        }
+        1 => Frame::Create {
+            session: c.string()?,
+            command: c.string_list()?,
+            cwd: c.string()?,
+            project: c.string()?,
+            room: c.string()?,
+            cols: c.i32()? as u32,
+            rows: c.i32()? as u32,
+        },
         2 => Frame::Attach {
             session: c.string()?,
             write: c.u8()? == 1,
@@ -221,7 +233,10 @@ pub fn decode(payload: &[u8]) -> Result<Frame, DecodeError> {
         },
         5 => Frame::TakeWrite,
         6 => Frame::Detach,
-        7 => Frame::ListSessions,
+        7 => Frame::ListSessions {
+            after: c.string()?,
+            limit: c.i32()? as u32,
+        },
         8 => Frame::Kill(c.string()?),
         20 => Frame::Output {
             last_input_seq: c.i64()?,
@@ -240,11 +255,14 @@ pub fn decode(payload: &[u8]) -> Result<Frame, DecodeError> {
         28 => Frame::SessionInfo(c.info()?),
         29 => {
             let count = c.i32()?;
-            let mut list = Vec::new();
+            let mut sessions = Vec::new();
             for _ in 0..count {
-                list.push(c.info()?);
+                sessions.push(c.info()?);
             }
-            Frame::Sessions(list)
+            Frame::Sessions {
+                sessions,
+                next: c.string()?,
+            }
         }
         30 => Frame::Ok,
         31 => Frame::Err(c.string()?),
@@ -266,11 +284,20 @@ fn put_str(buf: &mut Vec<u8>, s: &str) {
     put_bytes(buf, s.as_bytes());
 }
 
+fn put_str_list(buf: &mut Vec<u8>, list: &[String]) {
+    put_i32(buf, list.len() as i32);
+    for s in list {
+        put_str(buf, s);
+    }
+}
+
 fn put_info(buf: &mut Vec<u8>, info: &SessionInfo) {
     put_str(buf, &info.name);
     buf.push(if info.live { 1 } else { 0 });
     put_i32(buf, info.attached as i32);
     put_str(buf, &info.writer_fde);
+    put_str(buf, &info.room);
+    put_str_list(buf, &info.command);
 }
 
 struct Cursor<'a> {
@@ -317,12 +344,26 @@ impl<'a> Cursor<'a> {
             .map_err(|_| DecodeError("invalid utf-8 in pty frame".into()))
     }
 
+    fn string_list(&mut self) -> Result<Vec<String>, DecodeError> {
+        let count = self.i32()?;
+        if count < 0 {
+            return Err(DecodeError("negative count in pty frame".into()));
+        }
+        let mut list = Vec::new();
+        for _ in 0..count {
+            list.push(self.string()?);
+        }
+        Ok(list)
+    }
+
     fn info(&mut self) -> Result<SessionInfo, DecodeError> {
         Ok(SessionInfo {
             name: self.string()?,
             live: self.u8()? == 1,
             attached: self.i32()? as u32,
             writer_fde: self.string()?,
+            room: self.string()?,
+            command: self.string_list()?,
         })
     }
 }
@@ -353,19 +394,28 @@ pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Frame> {
     decode(&payload).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.0))
 }
 
+/// The version-skew reason strings the webview matches to render a skew card;
+/// keep them in lockstep with `skewOf` in `src/mainview/terminal/roomDeck.ts`.
+pub const SKEW_HOST_OLDER: &str = "pty protocol skew: the box speaks SAILPTY1";
+pub const SKEW_CLIENT_OLDER: &str = "pty protocol skew: the box no longer speaks SAILPTY2";
+
 /// The magic handshake: send ours, require the peer's back. Symmetric, so both ends call it.
+/// A mismatch names which side is behind: an echo of the v1 magic means the box's sail
+/// predates this Mast; anything else means the box has moved past SAILPTY2.
 pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> io::Result<()> {
     s.write_all(MAGIC).await?;
     s.flush().await?;
     let mut peer = [0u8; 8];
     s.read_exact(&mut peer).await?;
-    if &peer != MAGIC {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "peer is not speaking sail pty protocol v1",
-        ));
+    if &peer == MAGIC {
+        return Ok(());
     }
-    Ok(())
+    let skew = if &peer == MAGIC_V1 {
+        SKEW_HOST_OLDER
+    } else {
+        SKEW_CLIENT_OLDER
+    };
+    Err(io::Error::new(io::ErrorKind::InvalidData, skew))
 }
 
 /// What the terminal widget sends toward a session.
@@ -373,6 +423,7 @@ pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> io::Resu
 pub enum SessionCmd {
     Input(Vec<u8>),
     Resize { cols: u32, rows: u32 },
+    TakeWrite,
     Detach,
 }
 
@@ -396,6 +447,7 @@ pub struct CreateSpec {
     pub command: Vec<String>,
     pub cwd: String,
     pub project: String,
+    pub room: String,
     pub cols: u32,
     pub rows: u32,
 }
@@ -438,6 +490,7 @@ where
                 command: spec.command.clone(),
                 cwd: spec.cwd.clone(),
                 project: spec.project.clone(),
+                room: spec.room.clone(),
                 cols: spec.cols,
                 rows: spec.rows,
             },
@@ -512,6 +565,9 @@ where
                 Some(SessionCmd::Resize { cols, rows }) => {
                     write_frame(&mut wr, &Frame::Resize { cols, rows }).await?;
                 }
+                Some(SessionCmd::TakeWrite) => {
+                    write_frame(&mut wr, &Frame::TakeWrite).await?;
+                }
                 Some(SessionCmd::Detach) | None => {
                     let _ = write_frame(&mut wr, &Frame::Detach).await;
                     return Ok(());
@@ -564,6 +620,68 @@ pub async fn control<S: AsyncRead + AsyncWrite + Unpin>(
     read_frame(&mut stream).await
 }
 
+/// The most sessions a listing drain will accumulate before refusing: a real box holds
+/// dozens, so a listing still growing past this is a broken or hostile host feeding
+/// endless pages, not data worth buffering.
+pub const MAX_LISTED_SESSIONS: usize = 4096;
+
+/// Opens a control connection and drains every page of the host's session listing,
+/// feeding each `next` cursor back until the host reports the last page. A cursor
+/// that fails to advance is refused rather than looped on, and the aggregate is
+/// bounded by [`MAX_LISTED_SESSIONS`].
+pub async fn list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
+    mut stream: S,
+    token: &str,
+) -> io::Result<Vec<SessionInfo>> {
+    handshake(&mut stream).await?;
+    write_frame(&mut stream, &Frame::Hello(token.to_string())).await?;
+    expect_ok(&mut stream, "hello").await?;
+    let mut all = Vec::new();
+    let mut after = String::new();
+    loop {
+        let request = Frame::ListSessions {
+            after: after.clone(),
+            limit: PAGE_LIMIT,
+        };
+        write_frame(&mut stream, &request).await?;
+        match read_frame(&mut stream).await? {
+            Frame::Sessions { sessions, next } => {
+                all.extend(sessions);
+                if all.len() > MAX_LISTED_SESSIONS {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "the host listed more than {MAX_LISTED_SESSIONS} sessions; refusing an unbounded listing"
+                        ),
+                    ));
+                }
+                if next.is_empty() {
+                    return Ok(all);
+                }
+                if next <= after {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "the host's session listing cursor went backwards; refusing to loop",
+                    ));
+                }
+                after = next;
+            }
+            Frame::Err(message) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("list: {message}"),
+                ))
+            }
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("list: unexpected reply {other:?}"),
+                ))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -587,6 +705,7 @@ mod tests {
             command: vec!["bash".into(), "-l".into()],
             cwd: "/home/dev".into(),
             project: "chorus".into(),
+            room: "design-talk".into(),
             cols: 132,
             rows: 43,
         });
@@ -601,7 +720,10 @@ mod tests {
         roundtrip(Frame::Resize { cols: 80, rows: 24 });
         roundtrip(Frame::TakeWrite);
         roundtrip(Frame::Detach);
-        roundtrip(Frame::ListSessions);
+        roundtrip(Frame::ListSessions {
+            after: "mast-node".into(),
+            limit: 16,
+        });
         roundtrip(Frame::Kill("s1".into()));
         roundtrip(Frame::Output {
             last_input_seq: 7,
@@ -617,20 +739,27 @@ mod tests {
         roundtrip(Frame::Paused);
         roundtrip(Frame::Continued);
         roundtrip(Frame::SessionEnded("exited(0)".into()));
-        roundtrip(Frame::Sessions(vec![
-            SessionInfo {
-                name: "a".into(),
-                live: true,
-                attached: 2,
-                writer_fde: "uday".into(),
-            },
-            SessionInfo {
-                name: "b".into(),
-                live: false,
-                attached: 0,
-                writer_fde: String::new(),
-            },
-        ]));
+        roundtrip(Frame::Sessions {
+            sessions: vec![
+                SessionInfo {
+                    name: "a".into(),
+                    live: true,
+                    attached: 2,
+                    writer_fde: "uday".into(),
+                    room: "design-talk".into(),
+                    command: vec!["claude".into()],
+                },
+                SessionInfo {
+                    name: "b".into(),
+                    live: false,
+                    attached: 0,
+                    writer_fde: String::new(),
+                    room: String::new(),
+                    command: vec!["bash".into(), "-l".into()],
+                },
+            ],
+            next: "b".into(),
+        });
         roundtrip(Frame::Ok);
         roundtrip(Frame::Err("boom".into()));
     }
@@ -654,6 +783,82 @@ mod tests {
             }),
             vec![0, 0, 0, 15, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, b'h', b'i'],
         );
+    }
+
+    #[test]
+    fn create_bytes_match_the_java_contract() {
+        // type 1, str session, string-list command, str cwd, str project,
+        // str room (v2: between project and cols), i32 cols, i32 rows.
+        let frame = Frame::Create {
+            session: "s".into(),
+            command: vec!["claude".into()],
+            cwd: "/h".into(),
+            project: "p".into(),
+            room: "r".into(),
+            cols: 80,
+            rows: 24,
+        };
+        #[rustfmt::skip]
+        let wire = vec![
+            0, 0, 0, 44,
+            1,
+            0, 0, 0, 1, b's',
+            0, 0, 0, 1,
+            0, 0, 0, 6, b'c', b'l', b'a', b'u', b'd', b'e',
+            0, 0, 0, 2, b'/', b'h',
+            0, 0, 0, 1, b'p',
+            0, 0, 0, 1, b'r',
+            0, 0, 0, 80,
+            0, 0, 0, 24,
+        ];
+        assert_eq!(encode(&frame), wire);
+    }
+
+    #[test]
+    fn list_sessions_bytes_match_the_java_contract() {
+        // type 7, str after (exclusive cursor), i32 limit.
+        let frame = Frame::ListSessions {
+            after: "a".into(),
+            limit: 16,
+        };
+        assert_eq!(
+            encode(&frame),
+            vec![0, 0, 0, 10, 7, 0, 0, 0, 1, b'a', 0, 0, 0, 16],
+        );
+    }
+
+    #[test]
+    fn sessions_bytes_match_the_java_contract() {
+        // type 29, i32 count, then per entry: str name, u8 live, i32 attached,
+        // str writerFde, str room, string-list command; a trailing str next cursor.
+        let frame = Frame::Sessions {
+            sessions: vec![SessionInfo {
+                name: "a".into(),
+                live: true,
+                attached: 2,
+                writer_fde: "u".into(),
+                room: "r".into(),
+                command: vec!["bash".into(), "-l".into()],
+            }],
+            next: "a".into(),
+        };
+        #[rustfmt::skip]
+        let wire = vec![
+            0, 0, 0, 48,
+            29,
+            0, 0, 0, 1,
+            0, 0, 0, 1, b'a',
+            1,
+            0, 0, 0, 2,
+            0, 0, 0, 1, b'u',
+            0, 0, 0, 1, b'r',
+            0, 0, 0, 2,
+            0, 0, 0, 4, b'b', b'a', b's', b'h',
+            0, 0, 0, 2, b'-', b'l',
+            0, 0, 0, 1, b'a',
+        ];
+        assert_eq!(encode(&frame), wire);
+        assert_eq!(decode(&wire[4..]).unwrap(), frame);
     }
 
     #[test]
@@ -715,6 +920,30 @@ mod async_tests {
     }
 
     #[tokio::test]
+    async fn a_v1_peer_is_named_as_the_older_side() {
+        let (mut client, mut host) = duplex(64);
+        let v1 = tokio::spawn(async move {
+            host.write_all(b"SAILPTY1").await.unwrap();
+            host.flush().await.unwrap();
+        });
+        let err = handshake(&mut client).await.unwrap_err();
+        assert_eq!(err.to_string(), SKEW_HOST_OLDER);
+        v1.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_unknown_magic_means_this_client_is_the_older_side() {
+        let (mut client, mut host) = duplex(64);
+        let v3 = tokio::spawn(async move {
+            host.write_all(b"SAILPTY3").await.unwrap();
+            host.flush().await.unwrap();
+        });
+        let err = handshake(&mut client).await.unwrap_err();
+        assert_eq!(err.to_string(), SKEW_CLIENT_OLDER);
+        v3.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn drive_identifies_attaches_replays_streams_and_forwards_input() {
         let (client, mut server) = duplex(4096);
         let host = tokio::spawn(async move {
@@ -760,9 +989,10 @@ mod async_tests {
         let host = tokio::spawn(async move {
             host_handshake_hello(&mut server).await;
             match read_frame(&mut server).await.unwrap() {
-                Frame::Create { session, project, .. } => {
+                Frame::Create { session, project, room, .. } => {
                     assert_eq!(session, "fresh");
                     assert_eq!(project, "acme");
+                    assert_eq!(room, "design-talk");
                 }
                 other => panic!("expected Create, got {other:?}"),
             }
@@ -780,7 +1010,7 @@ mod async_tests {
                 token: "".into(),
                 session: "fresh".into(),
                 write: true,
-                create: Some(CreateSpec { command: vec!["bash".into()], cwd: "/home/dev".into(), project: "acme".into(), cols: 80, rows: 24 }),
+                create: Some(CreateSpec { command: vec!["bash".into()], cwd: "/home/dev".into(), project: "acme".into(), room: "design-talk".into(), cols: 80, rows: 24 }),
             },
             cmd_rx,
             move |ev| { let _ = ev_tx.send(ev); },
@@ -919,15 +1149,117 @@ mod async_tests {
     }
 
     #[tokio::test]
-    async fn control_round_trips_a_list_request() {
+    async fn control_round_trips_a_kill_request() {
         let (client, mut server) = duplex(1024);
         let host = tokio::spawn(async move {
             host_handshake_hello(&mut server).await;
-            assert_eq!(read_frame(&mut server).await.unwrap(), Frame::ListSessions);
-            write_frame(&mut server, &Frame::Sessions(vec![SessionInfo { name: "a".into(), live: true, attached: 1, writer_fde: "uday".into() }])).await.unwrap();
+            assert_eq!(read_frame(&mut server).await.unwrap(), Frame::Kill("a".into()));
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
         });
-        let reply = control(client, "tok", Frame::ListSessions).await.unwrap();
-        assert_eq!(reply, Frame::Sessions(vec![SessionInfo { name: "a".into(), live: true, attached: 1, writer_fde: "uday".into() }]));
+        let reply = control(client, "tok", Frame::Kill("a".into())).await.unwrap();
+        assert_eq!(reply, Frame::Ok);
+        host.await.unwrap();
+    }
+
+    fn listed(name: &str) -> SessionInfo {
+        SessionInfo {
+            name: name.into(),
+            live: true,
+            attached: 1,
+            writer_fde: "uday".into(),
+            room: "design-talk".into(),
+            command: vec!["bash".into(), "-l".into()],
+        }
+    }
+
+    #[tokio::test]
+    async fn list_sessions_drains_every_page_through_the_next_cursor() {
+        let (client, mut server) = duplex(4096);
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            assert_eq!(
+                read_frame(&mut server).await.unwrap(),
+                Frame::ListSessions { after: "".into(), limit: PAGE_LIMIT }
+            );
+            write_frame(&mut server, &Frame::Sessions { sessions: vec![listed("a")], next: "a".into() }).await.unwrap();
+            assert_eq!(
+                read_frame(&mut server).await.unwrap(),
+                Frame::ListSessions { after: "a".into(), limit: PAGE_LIMIT }
+            );
+            write_frame(&mut server, &Frame::Sessions { sessions: vec![listed("b")], next: "".into() }).await.unwrap();
+        });
+        let all = list_sessions(client, "tok").await.unwrap();
+        assert_eq!(all, vec![listed("a"), listed("b")]);
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_listing_cursor_that_never_advances_is_refused() {
+        let (client, mut server) = duplex(4096);
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            read_frame(&mut server).await.unwrap();
+            write_frame(&mut server, &Frame::Sessions { sessions: vec![listed("a")], next: "a".into() }).await.unwrap();
+            read_frame(&mut server).await.unwrap();
+            write_frame(&mut server, &Frame::Sessions { sessions: vec![listed("a")], next: "a".into() }).await.unwrap();
+        });
+        let err = list_sessions(client, "tok").await.unwrap_err();
+        assert!(err.to_string().contains("cursor went backwards"), "{err}");
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_listing_that_never_ends_is_refused_at_the_aggregate_bound() {
+        let (client, mut server) = duplex(65536);
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            let mut page: u32 = 0;
+            loop {
+                if read_frame(&mut server).await.is_err() {
+                    break;
+                }
+                let sessions = (0..PAGE_LIMIT)
+                    .map(|i| listed(&format!("s-{page:04}-{i:02}")))
+                    .collect();
+                page += 1;
+                let reply = Frame::Sessions { sessions, next: format!("s-{page:04}") };
+                if write_frame(&mut server, &reply).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let err = list_sessions(client, "tok").await.unwrap_err();
+        assert!(err.to_string().contains("unbounded"), "{err}");
+        host.abort();
+    }
+
+    #[tokio::test]
+    async fn a_take_write_command_reaches_the_host_and_the_grant_comes_back_as_an_event() {
+        let (client, mut server) = duplex(1024);
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            read_frame(&mut server).await.unwrap(); // Attach
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
+            assert_eq!(read_frame(&mut server).await.unwrap(), Frame::TakeWrite);
+            write_frame(&mut server, &Frame::WriterChanged("uday".into())).await.unwrap();
+            write_frame(&mut server, &Frame::SessionEnded("exited(0)".into())).await.unwrap();
+        });
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+        let driver = tokio::spawn(async move {
+            drive(
+                client,
+                AttachRequest { token: "t".into(), session: "s".into(), write: false, create: None },
+                cmd_rx,
+                move |ev| { let _ = ev_tx.send(ev); },
+            )
+            .await
+        });
+        cmd_tx.send(SessionCmd::TakeWrite).await.unwrap();
+        assert_eq!(ev_rx.recv().await.unwrap(), SessionEvent::WriterChanged("uday".into()));
+        assert_eq!(ev_rx.recv().await.unwrap(), SessionEvent::Ended("exited(0)".into()));
+        driver.await.unwrap().unwrap();
         host.await.unwrap();
     }
 }

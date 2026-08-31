@@ -88,6 +88,9 @@ export const EVENT_REGISTRY: Readonly<Record<string, EventRule>> = {
   agent_stop_nudged: { mode: "row", kind: "lifecycle", label: "Agent nudged" },
   spec_engaged: { mode: "row", kind: "lifecycle", label: "Agent joined the room" },
   spec_disengaged: { mode: "row", kind: "lifecycle", label: "Agent left the room" },
+  pty_session_started: { mode: "row", kind: "lifecycle", label: "Terminal opened" },
+  pty_session_ended: { mode: "row", kind: "lifecycle", label: "Terminal ended" },
+  pty_session_attached: { mode: "overlay", target: "none" },
   spec_engage_failed: { mode: "row", kind: "lifecycle", label: "Engage failed" },
   review_errored: { mode: "row", kind: "lifecycle", label: "Review errored" },
   review_escalated: { mode: "row", kind: "lifecycle", label: "Review escalated" },
@@ -190,7 +193,8 @@ const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
  * the event carries none of them.
  */
 export function eventNarration(event: SailEvent): string {
-  const { detail, findings, reason, action, label, error, agent, mode } = event.data ?? {};
+  const { detail, findings, reason, action, label, error, agent, mode, executable } =
+    event.data ?? {};
   const counts =
     findings && typeof findings === "object"
       ? SEVERITY_ORDER.filter(
@@ -202,6 +206,7 @@ export function eventNarration(event: SailEvent): string {
   return [
     typeof agent === "string" && agent,
     typeof mode === "string" && mode,
+    typeof executable === "string" && executable,
     typeof label === "string" && label,
     typeof detail === "string" && detail,
     counts,
