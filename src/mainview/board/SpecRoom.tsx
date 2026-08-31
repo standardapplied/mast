@@ -291,10 +291,20 @@ export function SpecRoom({
 
   const loadEvents = useCallback(async (): Promise<SailEvent[] | null> => {
     const scoped = await gateway.specEvents(specId, { limit: PAGE_SIZE });
-    if (scoped.ok) return scoped.value.events;
+    if (scoped.ok) {
+      // A decoupled room's pty lifecycle lands under the ROOM id, not the spec's —
+      // fetch that lane too so terminal whispers survive the spec/room split.
+      if (roomId === specId) return scoped.value.events;
+      const roomScoped = await gateway.specEvents(roomId, { limit: PAGE_SIZE });
+      return roomScoped.ok
+        ? mergeEvents(scoped.value.events, roomScoped.value.events)
+        : scoped.value.events;
+    }
     const recent = await gateway.recentEvents(PAGE_SIZE);
-    return recent.ok ? recent.value.events.filter((event) => event.spec === specId) : null;
-  }, [gateway, specId]);
+    return recent.ok
+      ? recent.value.events.filter((event) => event.spec === specId || event.spec === roomId)
+      : null;
+  }, [gateway, specId, roomId]);
 
   const loadRoom = useCallback(async (version: number) => {
     const [messages, events, runs] = await Promise.all([
@@ -510,7 +520,8 @@ export function SpecRoom({
       kick();
     };
     const off = gateway.onEvent((event) => {
-      if (event.spec !== specId) return;
+      const ptyForRoom = event.type.startsWith("pty_session_") && event.spec === roomId;
+      if (event.spec !== specId && !ptyForRoom) return;
       if (isTelemetryEvent(event.type)) return;
       if (event.type === "spec_message_posted") {
         const messageId =
@@ -546,6 +557,7 @@ export function SpecRoom({
     refreshReviewsAndRuns,
     refreshRuns,
     specId,
+    roomId,
   ]);
 
   const gapFill = useCallback(async () => {

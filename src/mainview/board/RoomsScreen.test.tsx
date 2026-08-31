@@ -135,10 +135,14 @@ describe("RoomsScreen", () => {
     expect(container.querySelector('[data-testid="room-fresh-planning-room"]')).not.toBeNull();
     expect(container.querySelector(".detail-title")?.textContent).toBe("Fresh planning room");
     expect(container.querySelector(".room-header-id")?.textContent).toBe("fresh-planning-room");
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="details-toggle"]')?.click();
+    });
+    await act(async () => {});
     expect(
-      container.querySelector('[data-testid="details-toggle"]'),
-      "a chat room has no work-item, so no details drawer",
-    ).toBeNull();
+      container.querySelector("#room-details-drawer")?.textContent,
+      "a chat room's drawer lists the specs born here — empty for a fresh room",
+    ).toContain("None yet");
 
     const listed = await gateway.listRooms("chorus");
     const created = listed.ok

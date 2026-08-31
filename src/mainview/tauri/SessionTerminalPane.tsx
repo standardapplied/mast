@@ -9,6 +9,7 @@ import {
   type SessionStatus,
   toSessionEnd,
 } from "../terminal/connection";
+import { skewCard, skewOf } from "../terminal/roomDeck";
 import { TerminalRenderer } from "../terminal/renderer";
 import { type CellPos, Selection } from "../terminal/selection";
 import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
@@ -23,6 +24,8 @@ export type TerminalHandle = {
   refit: () => void;
   /** Reattach a dead link now, or restart an ended shell. */
   revive?: () => void;
+  /** Claim the write token; the grant arrives as the host's WriterChanged broadcast. */
+  takeWrite?: () => void;
 };
 
 /**
@@ -79,6 +82,8 @@ export interface SessionCreate {
   readonly command: string[];
   readonly cwd: string;
   readonly project: string;
+  /** Bind the session to a room; the host gates admission and refuses verbatim. */
+  readonly room?: string;
   readonly cols: number;
   readonly rows: number;
 }
@@ -107,6 +112,8 @@ export interface SessionTerminalProps {
   readonly menuExtras?: MenuNode[];
   /** The shell announced its title (OSC 0/2) — the pane's default display name. */
   readonly onTitle?: (title: string) => void;
+  /** The write token moved (the host's WriterChanged broadcast); "" means released. */
+  readonly onWriter?: (fde: string) => void;
 }
 
 const noop = () => {};
@@ -147,6 +154,7 @@ export const SessionTerminalPane = forwardRef<
     onStatus,
     menuExtras,
     onTitle,
+    onWriter,
   },
   ref,
 ) {
@@ -167,6 +175,9 @@ export const SessionTerminalPane = forwardRef<
   activeRef.current = active !== false;
   const onTitleRef = useRef(onTitle);
   onTitleRef.current = onTitle;
+  const onWriterRef = useRef(onWriter);
+  onWriterRef.current = onWriter;
+  const attachIdRef = useRef<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const themeName = useThemeName();
@@ -230,6 +241,10 @@ export const SessionTerminalPane = forwardRef<
       paste: (text: string) => controllerRef.current?.paste(text, { force: true }),
       refit: () => {},
       revive,
+      takeWrite: () => {
+        const id = attachIdRef.current;
+        if (id) void invoke("session_take_write", { id }).catch(noop);
+      },
     }),
     [revive],
   );
@@ -309,6 +324,7 @@ export const SessionTerminalPane = forwardRef<
     let raf = 0;
     const cleanups: Array<() => void> = [];
     const id = crypto.randomUUID();
+    attachIdRef.current = id;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
     /** The session is over for this attach; decide between auto-reattach and parking. */
@@ -410,7 +426,13 @@ export const SessionTerminalPane = forwardRef<
           }
         }),
       );
-      cleanups.push(await listen(`session://meta/${id}`, noop));
+      cleanups.push(
+        await listen<{ kind: string; fde?: string }>(`session://meta/${id}`, (e) => {
+          if (e.payload.kind === "writer_changed") {
+            onWriterRef.current?.(e.payload.fde ?? "");
+          }
+        }),
+      );
       cleanups.push(await listen<unknown>(`session://exit/${id}`, (e) => onEnd(toSessionEnd(e.payload))));
 
       try {
@@ -789,13 +811,21 @@ function overlayFor(status: SessionStatus): {
         action: "Restart shell",
         tone: "muted",
       };
-    case "failed":
+    case "failed": {
+      // A protocol skew is not a fault to retry into — name the older side and
+      // the fix; the pane recovers only after one end is upgraded.
+      const skew = skewOf(status.reason);
+      if (skew) {
+        const card = skewCard(skew);
+        return { title: card.title, reason: card.detail, tone: "warn" };
+      }
       return {
         title: "Terminal failed",
         reason: status.reason,
         action: "Retry",
         tone: "warn",
       };
+    }
   }
 }
 

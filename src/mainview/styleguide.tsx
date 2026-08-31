@@ -19,7 +19,9 @@ import { Textarea } from "./components/Textarea";
 import { ToastProvider, useToast } from "./components/Toast";
 import { Badge, Button, Card, Eyebrow } from "./components/ui";
 import { RoomList } from "./board/RoomList";
+import { DeckEndedCard, DeckStrip } from "./board/RoomDeck";
 import type { RoomView } from "./board/rooms";
+import type { DeckSession } from "./terminal/roomDeck";
 import type { TimeValue } from "./lib/date-utils";
 import type { ThemeController, ThemeMode } from "./theme";
 
@@ -183,6 +185,57 @@ function RoomListDemo() {
         onShowArchive={() => {}}
         onCreate={async () => true}
       />
+    </div>
+  );
+}
+
+const DECK_DEMO: DeckSession[] = [
+  {
+    name: "room-design-talk",
+    live: true,
+    attached: 3,
+    writerFde: "uday",
+    room: "design-talk",
+    command: ["claude"],
+  },
+  {
+    name: "room-design-talk.2",
+    live: true,
+    attached: 1,
+    writerFde: "",
+    room: "design-talk",
+    command: ["bash", "-l"],
+  },
+  {
+    name: "resume-run-7",
+    live: false,
+    attached: 0,
+    writerFde: "",
+    room: "design-talk",
+    command: ["codex", "resume"],
+  },
+];
+
+function RoomDeckDemo() {
+  const [selected, setSelected] = useState<string | null>("room-design-talk");
+  return (
+    <div className="room-components-demo">
+      <DeckStrip
+        sessions={DECK_DEMO}
+        roomId="design-talk"
+        titles={{ "room-design-talk": "brainstorm" }}
+        selected={selected}
+        onSelect={(name) => setSelected((s) => (s === name ? null : name))}
+        onClose={() => {}}
+        onOpen={() => {}}
+      />
+      <DeckEndedCard
+        session="resume-run-7"
+        reason="yielded to dispatch r8 of spec design-talk"
+        yielded
+        onRestart={() => {}}
+      />
+      <DeckStrip sessions={[]} roomId="design-talk" skew="box-older" onSelect={() => {}} onOpen={() => {}} />
     </div>
   );
 }
@@ -574,6 +627,10 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
 
         <Section index="10c" title="Room conversation">
           <RoomConversationDemo />
+        </Section>
+
+        <Section index="10d" title="Room deck">
+          <RoomDeckDemo />
         </Section>
 
         <Section index="11" title="Splitter">

@@ -24,7 +24,9 @@ import { useToast } from "../components/Toast";
 import { Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
+import type { DeckServices } from "../terminal/roomDeck";
 import { DispatchDialog } from "./DispatchDialog";
+import { RoomDeckPanel } from "./RoomDeckPanel";
 import { EngageDialog } from "./EngageDialog";
 import { InviteDialog } from "./InviteDialog";
 import { RosterChip } from "./RosterChip";
@@ -106,6 +108,7 @@ export function SpecDetail({
   specId,
   onOpenSpec,
   onBack,
+  deck,
   embedded = false,
   eventDebounceMs = 300,
 }: {
@@ -113,6 +116,8 @@ export function SpecDetail({
   specId: string;
   onOpenSpec: (id: string) => void;
   onBack: () => void;
+  /** The room deck's terminal edge, injected by the Tauri entry (absent in demo/tests). */
+  deck?: DeckServices;
   embedded?: boolean;
   /** Coalescing window for event-driven reloads; tests pass 0. */
   eventDebounceMs?: number;
@@ -469,25 +474,32 @@ export function SpecDetail({
 
       <div className="room-layout">
         <main className="room-conversation">
-          <SpecRoom
+          <RoomDeckPanel
             gateway={gateway}
-            engagement={spec.engagement}
-            specId={spec.id}
             roomId={spec.room_id ?? spec.id}
-            specStatus={spec.status}
-            specTitle={spec.title}
-            canWrite={
-              role.canWrite &&
-              spec.status !== "done" &&
-              spec.status !== "cancelled" &&
-              spec.status !== "archived"
-            }
-            currentUser={role.fde}
-            onOpenLog={(role) => {
-              setLogRole(role ?? null);
-              setLogOpen(true);
-            }}
-          />
+            project={spec.project}
+            services={deck}
+          >
+            <SpecRoom
+              gateway={gateway}
+              engagement={spec.engagement}
+              specId={spec.id}
+              roomId={spec.room_id ?? spec.id}
+              specStatus={spec.status}
+              specTitle={spec.title}
+              canWrite={
+                role.canWrite &&
+                spec.status !== "done" &&
+                spec.status !== "cancelled" &&
+                spec.status !== "archived"
+              }
+              currentUser={role.fde}
+              onOpenLog={(role) => {
+                setLogRole(role ?? null);
+                setLogOpen(true);
+              }}
+            />
+          </RoomDeckPanel>
         </main>
 
         {drawerOpen && (
