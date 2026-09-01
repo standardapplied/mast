@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { GlobalSpecView, SpecFilter, SpecStatus } from "../../shared/sail-models";
 import type { SailWireError } from "../../shared/types";
 import type { Gateway } from "../gateway";
+import { CatalogStore, catalogStore, connectCatalog } from "./catalogStore";
 
-export type MoveOutcome = "ok" | "conflict" | "blocked" | "error";
-export type MoveResult = { outcome: MoveOutcome; error?: SailWireError };
+export type { MoveOutcome, MoveResult } from "./catalogStore";
 
 export type BoardData = {
   specs: GlobalSpecView[];
@@ -14,108 +14,45 @@ export type BoardData = {
   error: SailWireError | null;
 };
 
-const RELOAD_EVENT_TYPES = /^(spec_|board_updated)/;
-
 /**
- * Board state for one project + filter: loads specs and the summary, refreshes
- * on relevant SSE events (event-driven, not polling), and moves specs with
- * If-Match built from the updated_at captured at load — a concurrent writer
- * surfaces as a "conflict" outcome and a fresh reload, never an overwrite.
+ * The board's selector over the app-wide catalog store: one world spec list,
+ * filtered client-side per project + filter (mirroring the server's filter
+ * semantics), so switching scope is instant and no surface holds a second
+ * copy. Moves route through the store, which builds If-Match from the row it
+ * owns — a concurrent writer surfaces as a "conflict" outcome and a scoped
+ * refetch of that spec, never an overwrite.
  *
  * The project list is the synced catalog (`GET /v1/projects`) unioned with the
  * projects the specs reference, so a catalogued project with no specs still
  * shows and a catalog outage degrades to the specs-derived list.
  */
-export function useBoard(gateway: Gateway, project: string | undefined, filter: SpecFilter) {
-  const [data, setData] = useState<BoardData>({
-    specs: [],
-    projects: [],
-    repos: [],
-    loading: true,
-    error: null,
-  });
-  const generation = useRef(0);
+export function useBoard(
+  gateway: Gateway,
+  project: string | undefined,
+  filter: SpecFilter,
+  store: CatalogStore = catalogStore,
+) {
+  useEffect(() => connectCatalog(gateway, store), [gateway, store]);
+  const version = useSyncExternalStore(store.subscribe, () => store.version);
 
   const filterKey = `${filter.assignee ?? ""}|${filter.q ?? ""}|${filter.repo ?? ""}`;
 
-  const refresh = useCallback(async () => {
-    const gen = ++generation.current;
-    let all, scoped, catalog;
-    try {
-      [all, scoped, catalog] = await Promise.all([
-        gateway.listSpecs({}),
-        gateway.listSpecs({ ...filter, project }),
-        catalogProjects(gateway),
-      ]);
-    } catch (error) {
-      // A rejecting RPC (bridge failure) must not leave "Loading specs" forever.
-      if (gen !== generation.current) return;
-      setData((prev) => ({
-        ...prev,
-        loading: false,
-        error: { status: 0, code: "bridge", message: message(error) },
-      }));
-      return;
-    }
-    if (gen !== generation.current) return;
+  const data = useMemo<BoardData>(() => {
+    const all = store.specList();
+    return {
+      specs: all.filter((spec) => matchesFilter(spec, { ...filter, project }, store.me)),
+      projects: [...new Set([...store.projects(), ...all.map((spec) => spec.project)])].sort(),
+      repos: [...new Set(all.flatMap((spec) => spec.repos ?? []))].sort(),
+      loading: !store.seeded && store.boardError === null,
+      error: store.boardError,
+    };
+    // version is the store's change signal; the selectors read fresh state through it.
+  }, [store, version, project, filterKey]);
 
-    if (!scoped.ok) {
-      setData((prev) => ({ ...prev, loading: false, error: scoped.error }));
-      return;
-    }
-    const specProjects = all.ok ? all.value.specs.map((s) => s.project) : [];
-    const projects = [...new Set([...catalog, ...specProjects])].sort();
-    const repos = all.ok
-      ? [...new Set(all.value.specs.flatMap((s) => s.repos ?? []))].sort()
-      : [];
-    setData({
-      specs: scoped.value.specs,
-      projects,
-      repos,
-      loading: false,
-      error: null,
-    });
-  }, [gateway, project, filterKey]);
-
-  useEffect(() => {
-    setData((prev) => ({ ...prev, loading: true }));
-    void refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    let queued = false;
-    return gateway.onEvent((event) => {
-      if (!RELOAD_EVENT_TYPES.test(event.type)) return;
-      if (queued) return;
-      queued = true;
-      queueMicrotask(() => {
-        queued = false;
-        void refresh();
-      });
-    });
-  }, [gateway, refresh]);
-
+  const refresh = useCallback(() => store.refreshAll(), [store]);
   const move = useCallback(
-    async (id: string, to: SpecStatus): Promise<MoveResult> => {
-      const spec = data.specs.find((s) => s.id === id);
-      if (!spec) return { outcome: "error" };
-
-      const result = await gateway.updateSpec(id, { status: to }, `"${spec.updated_at}"`);
-      if (result.ok) {
-        setData((prev) => ({
-          ...prev,
-          specs: prev.specs.map((s) => (s.id === id ? result.value.spec : s)),
-        }));
-        void refresh();
-        return { outcome: "ok" };
-      }
-      if (result.error.status === 412) {
-        void refresh();
-        return { outcome: "conflict", error: result.error };
-      }
-      return { outcome: "error", error: result.error };
-    },
-    [gateway, data.specs, refresh],
+    (id: string, to: SpecStatus) => store.moveSpec(id, to),
+    [store],
   );
 
   const byStatus = useMemo(() => {
@@ -132,6 +69,28 @@ export function useBoard(gateway: Gateway, project: string | undefined, filter: 
   }, [data.specs]);
 
   return { data, byStatus, refresh, move };
+}
+
+/**
+ * The server's spec-filter semantics applied client-side: project/status/repo
+ * exact, `q` substring on id+title, assignee exact with "me" resolved to the
+ * caller's handle — and matching nobody until that handle is known, so an
+ * unresolved "me" never means "everyone".
+ */
+export function matchesFilter(
+  spec: GlobalSpecView,
+  filter: SpecFilter,
+  me: string | undefined,
+): boolean {
+  if (filter.assignee === "me" && !me) return false;
+  const assignee = filter.assignee === "me" ? me : filter.assignee;
+  return (
+    (!filter.project || spec.project === filter.project) &&
+    (!filter.status || spec.status === filter.status) &&
+    (!assignee || spec.assignee === assignee) &&
+    (!filter.repo || spec.repos?.includes(filter.repo) === true) &&
+    (!filter.q || `${spec.id} ${spec.title}`.toLowerCase().includes(filter.q.toLowerCase()))
+  );
 }
 
 /** Reverse edges: which specs depend on `id` (blocked-by view for detail). */
@@ -159,19 +118,4 @@ export function unmetDependencies(spec: GlobalSpecView, all: GlobalSpecView[]): 
     const target = all.find((s) => s.id === dep);
     return !target || target.status !== "done";
   });
-}
-
-/** Catalog names, or [] on any failure — the roster must never break the board. */
-async function catalogProjects(gateway: Gateway): Promise<string[]> {
-  try {
-    const result = await gateway.listProjects();
-    if (!result.ok || !Array.isArray(result.value.projects)) return [];
-    return result.value.projects.map((p) => p.name);
-  } catch {
-    return [];
-  }
-}
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

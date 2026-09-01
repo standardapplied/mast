@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode, useRef } from "react";
 import type { ConnectionStatus, WhoAmI } from "../shared/sail-models";
 import { BoardScreen } from "./board/BoardScreen";
+import { connectCatalog } from "./board/catalogStore";
 import { notification } from "./board/notifyPolicy";
 import { connectPresence, presenceStore } from "./board/presenceStore";
 import { RoomsScreen } from "./board/RoomsScreen";
@@ -176,10 +177,11 @@ export function App({
   // Presence rides the app-wide event stream — no polling. One runs listing on
   // connect seeds chips for agents already mid-work (or mid-silence); after
   // that, progress and agent_presence events keep the store live. The session
-  // inventory connects beside it: one owner, seeded by a listing, accelerated
-  // (never carried) by pty events.
+  // inventory and the rooms/specs/projects catalog connect beside it: one
+  // owner each, seeded by a listing, accelerated (never carried) by events.
   useEffect(() => {
     if (!ready) return;
+    connectCatalog(gateway);
     const disconnectPresence = connectPresence(gateway, presenceStore);
     const disconnectSessions = connectSessions(gateway, sessionStore);
     return () => {

@@ -1,12 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { GlobalSpecView, SailEvent } from "../../shared/sail-models";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { SailWireError } from "../../shared/types";
 import type { Gateway } from "../gateway";
+import { CatalogStore, catalogStore, connectCatalog } from "./catalogStore";
 import {
   assembleRooms,
-  isRoomActivityEvent,
   readRoomWatermarks,
-  roomIdFromTitle,
   visitRoom,
   type RoomView,
   type StorageLike,
@@ -19,187 +17,46 @@ type RoomsData = {
   error: SailWireError | null;
 };
 
-const EMPTY_DATA: RoomsData = {
-  rooms: [],
-  projects: [],
-  loading: true,
-  error: null,
-};
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function mergeEvents(events: readonly SailEvent[]): SailEvent[] {
-  const byId = new Map<string, SailEvent>();
-  for (const event of events) {
-    const key = event.id === undefined
-      ? `${event.type}:${event.ts}:${event.spec ?? ""}:${event.agent}`
-      : String(event.id);
-    byId.set(key, event);
-  }
-  return [...byId.values()];
-}
-
-async function projectNames(gateway: Gateway): Promise<string[]> {
-  try {
-    const result = await gateway.listProjects();
-    return result.ok && Array.isArray(result.value.projects)
-      ? result.value.projects.map((project) => project.name)
-      : [];
-  } catch {
-    return [];
-  }
-}
-
+/**
+ * The rooms sidebar's selector over the app-wide {@link catalogStore}: the
+ * room+spec join assembled per render from the store's records, with unread
+ * watermarks applied from localStorage — persistence remembers what you've
+ * seen, never what exists. Mounting adopts the gateway into the store, so the
+ * screen self-seeds when App hasn't wired the connection (tests, previews).
+ */
 export function useRooms(
   gateway: Gateway,
   storage: StorageLike = localStorage,
+  store: CatalogStore = catalogStore,
 ) {
-  const [data, setData] = useState<RoomsData>(EMPTY_DATA);
+  useEffect(() => connectCatalog(gateway, store), [gateway, store]);
+  const version = useSyncExternalStore(store.subscribe, () => store.version);
   const [watermarks, setWatermarks] = useState(() => readRoomWatermarks(storage));
-  const watermarksRef = useRef(watermarks);
-  watermarksRef.current = watermarks;
-  const generation = useRef(0);
 
-  const refresh = useCallback(async () => {
-    const current = ++generation.current;
-    const recentPromise = gateway.recentEvents(500).catch(() => null);
-    const catalogPromise = projectNames(gateway);
-    let roomsResult;
-    let specsResult;
-    try {
-      [roomsResult, specsResult] = await Promise.all([
-        gateway.listRooms(),
-        gateway.listSpecs({}),
-      ]);
-    } catch (error) {
-      if (current !== generation.current) return;
-      setData((previous) => ({
-        ...previous,
-        loading: false,
-        error: { status: 0, code: "bridge", message: errorMessage(error) },
-      }));
-      return;
-    }
-    if (current !== generation.current) return;
-    if (!roomsResult.ok) {
-      setData((previous) => ({ ...previous, loading: false, error: roomsResult.error }));
-      return;
-    }
-    if (!specsResult.ok) {
-      setData((previous) => ({ ...previous, loading: false, error: specsResult.error }));
-      return;
-    }
-
-    const serverRooms = roomsResult.value.rooms;
-    const specs = specsResult.value.specs;
-    setData({
-      rooms: assembleRooms(serverRooms, specs, [], watermarksRef.current),
-      projects: [...new Set(serverRooms.map((room) => room.project))].sort(),
-      loading: false,
-      error: null,
-    });
-
-    const [recentResult, catalog] = await Promise.all([recentPromise, catalogPromise]);
-    if (current !== generation.current) return;
-    const projects = [
-      ...new Set([...catalog, ...serverRooms.map((room) => room.project)]),
-    ].sort();
-    setData({
-      rooms: assembleRooms(
-        serverRooms,
-        specs,
-        recentResult?.ok ? mergeEvents(recentResult.value.events) : [],
-        watermarksRef.current,
-      ),
-      projects,
-      loading: false,
-      error: null,
-    });
-  }, [gateway]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    let queued = false;
-    return gateway.onEvent((event) => {
-      if (
-        event.type !== "board_updated" &&
-        event.type !== "spec_message_posted" &&
-        !isRoomActivityEvent(event)
-      ) return;
-      if (queued) return;
-      queued = true;
-      queueMicrotask(() => {
-        queued = false;
-        void refresh();
-      });
-    });
-  }, [gateway, refresh]);
-
-  const open = useCallback((room: RoomView) => {
-    setWatermarks(visitRoom(storage, room));
-  }, [storage]);
-
-  const create = useCallback(async (title: string, project: string, agent?: string) => {
-    const trimmed = title.trim();
-    if (!trimmed) {
-      return {
-        ok: false as const,
-        error: { status: 0, code: "invalid_title", message: "Enter a room title." },
-      };
-    }
-    if (!project) {
-      return {
-        ok: false as const,
-        error: { status: 0, code: "invalid_project", message: "Choose a project." },
-      };
-    }
-    const existingIds = new Set(data.rooms.map((room) => room.room.id));
-    let id: string;
-    try {
-      id = roomIdFromTitle(trimmed, existingIds);
-    } catch (error) {
-      return {
-        ok: false as const,
-        error: { status: 0, code: "invalid_title", message: errorMessage(error) },
-      };
-    }
-    for (let attempt = 0; attempt < 10; attempt++) {
-      const result = await gateway.createRoom({ id, project, title: trimmed });
-      if (result.ok) {
-        let engageError: string | undefined;
-        if (agent) {
-          const engaged = await gateway.engage(id, { agent });
-          if (!engaged.ok) engageError = engaged.error.message;
-        }
-        await refresh();
-        return engageError ? { ...result, engageError } : result;
-      }
-      if (result.error.status !== 409) return result;
-      existingIds.add(id);
-      id = roomIdFromTitle(trimmed, existingIds);
-    }
+  const data = useMemo<RoomsData>(() => {
+    const serverRooms = store.roomList();
     return {
-      ok: false as const,
-      error: {
-        status: 409,
-        code: "conflict",
-        message: "Could not allocate a unique room ID. Try again.",
-      },
+      rooms: assembleRooms(serverRooms ?? [], store.specList(), store.activityMap(), watermarks),
+      projects: [
+        ...new Set([...store.projects(), ...(serverRooms ?? []).map((room) => room.project)]),
+      ].sort(),
+      loading: store.loading,
+      error: store.error,
     };
-  }, [data.rooms, gateway, refresh]);
+    // version is the store's change signal; the selectors read fresh state through it.
+  }, [store, version, watermarks]);
 
-  const rooms = useMemo(
-    () => data.rooms.map((room) => ({
-      ...room,
-      unread: room.unread && watermarks[room.room.id] !== room.activityAt,
-    })),
-    [data.rooms, watermarks],
+  const refresh = useCallback(() => store.refreshAll(), [store]);
+
+  const open = useCallback(
+    (room: RoomView) => setWatermarks(visitRoom(storage, room)),
+    [storage],
   );
 
-  return { data: { ...data, rooms }, refresh, open, create };
+  const create = useCallback(
+    (title: string, project: string, agent?: string) => store.createRoom(title, project, agent),
+    [store],
+  );
+
+  return { data, refresh, open, create };
 }

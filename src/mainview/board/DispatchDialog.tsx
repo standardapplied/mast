@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { GlobalSpecView } from "../../shared/sail-models";
 import { Dialog } from "../components/Dialog";
 import { Button } from "../components/ui";
 import type { Gateway } from "../gateway";
+import { catalogStore, connectCatalog } from "./catalogStore";
 import { unmetDependencies } from "./useBoard";
 
 /**
@@ -41,6 +42,7 @@ export function DispatchDialog({
   onResult: (message: string, ok: boolean) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  useEffect(() => connectCatalog(gateway), [gateway]);
 
   const unmet = depsKnown ? unmetDependencies(spec, allSpecs) : [];
   const blocked = depsKnown && unmet.length > 0;
@@ -51,7 +53,7 @@ export function DispatchDialog({
   // state rather than flashing back to an actionable one for a frame.
   const run = async () => {
     setBusy(true);
-    const result = await gateway.dispatch(spec.project, {
+    const result = await catalogStore.dispatch(spec.project, {
       spec_id: spec.id,
       mode: "background",
       ...(restart ? { restart: true } : {}),

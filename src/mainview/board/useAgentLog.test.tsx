@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { AgentLogRole, SailEvent } from "../../shared/sail-models";
 import type { Gateway } from "../gateway";
 import type { AgentLogLine, AgentLogState } from "../tauri/agentLogStream";
+import { catalogLaneStubs } from "../../../test/catalogStubs";
 import { useAgentLog, type AgentLogView } from "./useAgentLog";
 
 let root: Root;
@@ -29,6 +30,7 @@ function makeFake(opts: { snapshotError?: string } = {}) {
   let eventListener: ((e: SailEvent) => void) | null = null;
 
   const gateway = {
+    ...catalogLaneStubs(),
     listRuns: async (spec: string) => ({
       ok: true as const,
       value: {
