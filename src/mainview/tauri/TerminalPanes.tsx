@@ -219,7 +219,12 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         return;
       }
       const inventory = sessionStore.sessions();
-      if (inventory === null && sessionStore.connected) return;
+      // A failed first listing (skew, unreachable) settles empty like a listing
+      // would — stored panes still recreate in place; only a store that is
+      // connected and silent is worth waiting on.
+      if (inventory === null && sessionStore.connected && sessionStore.skewReason() === null) {
+        return;
+      }
       settle(restore((inventory ?? []).filter((s) => s.live).map((s) => s.name)));
       settledBase.current = base;
     }, [base, restore, settle, storeVersion]);
