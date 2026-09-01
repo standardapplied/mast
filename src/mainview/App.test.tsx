@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { App } from "./App";
 import { createDemoGateway, type DemoGateway } from "./gateway";
 import { dispatchPush } from "./push";
+import { sessionStore } from "./terminal/sessionStore";
 import { browserThemeDeps, createThemeController } from "./theme";
 
 let root: Root;
@@ -20,6 +21,7 @@ beforeEach(() => {
   localStorage.removeItem("mast.rooms.watermarks");
   localStorage.removeItem("mast.rooms.selections");
   localStorage.removeItem("mast.rooms.archive.open");
+  sessionStore.reset();
 });
 
 async function render(

@@ -23,6 +23,8 @@ export interface RoomTerminalProps {
   readonly command: string[];
   /** Kill the corpse first — the ended-card revive flow re-minting the same name. */
   readonly killFirst?: boolean;
+  /** A refused close for this session, rendered inline where the pane lives. */
+  readonly refusal?: string;
   readonly active: boolean;
   readonly visible: boolean;
   /** The caller's FDE, to tell "I hold write" from "someone else does". */
@@ -42,6 +44,7 @@ export const RoomTerminal = forwardRef<TerminalHandle, RoomTerminalProps>(functi
     room,
     command,
     killFirst,
+    refusal,
     active,
     visible,
     me,
@@ -86,6 +89,11 @@ export const RoomTerminal = forwardRef<TerminalHandle, RoomTerminalProps>(functi
   const observing = !!writer && !!me && writer !== me;
   return (
     <div className="room-terminal">
+      {refusal && (
+        <div className="room-terminal__refusal" data-testid={`refusal-${session}`}>
+          Close refused — {refusal}
+        </div>
+      )}
       {observing && (
         <div className="room-terminal__banner" data-testid="observer-banner">
           <span>{writer} holds write — you are observing</span>

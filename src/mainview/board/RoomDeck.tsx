@@ -6,7 +6,6 @@ import { Dialog } from "../components/Dialog";
 import { DropdownPanel } from "../components/DropdownPanel";
 import { Tooltip } from "../components/Tooltip";
 import { Button } from "../components/ui";
-import type { Gateway } from "../gateway";
 import {
   chipTitle,
   DECK_LAUNCHERS,
@@ -16,6 +15,7 @@ import {
   glyphFor,
   observerCount,
   type RoomSessionGroup,
+  type SessionEntry,
   skewCard,
   type SkewSide,
 } from "../terminal/roomDeck";
@@ -116,18 +116,16 @@ export function RoomDeckCards({
   );
 }
 
-/** The card strip wired to the live listing — what room headers actually mount. */
+/** The card strip wired to the session store — what room headers actually mount. */
 export function RoomDeckStrip({
-  gateway,
   roomId,
   onSelect,
 }: {
-  gateway: Gateway;
   roomId: string;
   /** A card was clicked — navigate to the route focused on this session. */
   onSelect: (name: string) => void;
 }) {
-  const { sessions, skew, reasons } = useRoomSessions(gateway, roomId);
+  const { sessions, skew, reasons } = useRoomSessions(roomId);
   return (
     <RoomDeckCards
       sessions={sessions ?? []}
@@ -201,19 +199,21 @@ export function DeckAttachUnavailable({ session }: { session: string }) {
  * sessions visible, collapsed behind one trigger. Rows are grouped by room with the
  * room's title; clicking a row JUMPS to that room's terminal route — its home
  * surface — instead of attaching in place. Kill stays available with the usual
- * confirm: the operator's escape hatch for an orphaned agent shell.
+ * confirm: the operator's escape hatch for an orphaned agent shell. A refused kill
+ * renders inline on the row that asked for it (the panel stays open through the
+ * confirm so the refusal is seen where the click happened).
  */
 export function RoomsInventory({
   groups,
   onJump,
   onKill,
 }: {
-  groups: RoomSessionGroup[];
-  onJump: (group: RoomSessionGroup, session: DeckSession) => void;
-  onKill: (session: DeckSession) => void;
+  groups: Array<RoomSessionGroup<SessionEntry>>;
+  onJump: (group: RoomSessionGroup<SessionEntry>, session: SessionEntry) => void;
+  onKill: (session: SessionEntry) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [closing, setClosing] = useState<DeckSession | null>(null);
+  const [closing, setClosing] = useState<SessionEntry | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -279,13 +279,21 @@ export function RoomsInventory({
                       {chipTitle(session, group.roomId)}
                     </span>
                     {!session.live && <span className="deck-card__state">ended</span>}
+                    {session.refusal && (
+                      <span
+                        className="rooms-inventory__refusal"
+                        data-testid={`refusal-${session.name}`}
+                        title={session.refusal}
+                      >
+                        {session.refusal}
+                      </span>
+                    )}
                     <span
                       role="button"
                       aria-label={`Close session ${session.name}`}
                       className="deck-card__close"
                       onClick={(event) => {
                         event.stopPropagation();
-                        setOpen(false);
                         setClosing(session);
                       }}
                     >

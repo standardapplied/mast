@@ -5,6 +5,7 @@ import type { GlobalSpecView, RunView, SailEvent, StopRunResponse } from "../../
 import type { SailResult } from "../../shared/types";
 import { ToastProvider } from "../components/Toast";
 import type { Gateway } from "../gateway";
+import { sessionStore } from "../terminal/sessionStore";
 import { SpecDetail } from "./SpecDetail";
 
 /**
@@ -222,6 +223,7 @@ async function mount(gateway: Gateway) {
   document.body.appendChild(container);
   root = createRoot(container);
   terminalRequests.length = 0;
+  sessionStore.connect(gateway, "test-box");
   act(() =>
     root.render(
       <ToastProvider>
@@ -262,6 +264,7 @@ beforeEach(() => {
   localStorage.removeItem("mast.room.details.rooms.open");
   localStorage.removeItem("mast.room.details.board.open");
   localStorage.removeItem("mast.room.details.width");
+  sessionStore.reset();
 });
 
 afterEach(() => {

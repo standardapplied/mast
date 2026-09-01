@@ -1,5 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { DeckEndedCard } from "../board/RoomDeck";
 import { ContextMenu } from "../components/ContextMenu";
 import { Dialog } from "../components/Dialog";
@@ -34,13 +41,14 @@ import {
   commandFor,
   DECK_LAUNCHERS,
   type DeckGlyph,
-  type DeckSession,
   GLYPH_MARKS,
   type LaunchSpec,
   panePlan,
   roomSessionBase,
+  type SessionEntry,
   yieldedDispatch,
 } from "../terminal/roomDeck";
+import { sessionStore } from "../terminal/sessionStore";
 import { PromptDialog } from "./PromptDialog";
 import { RoomTerminal } from "./RoomTerminal";
 import { type SessionCreate, SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane";
@@ -79,8 +87,8 @@ const noop = () => {};
 export interface RoomScope {
   readonly roomId: string;
   readonly project: string;
-  /** The room's host listing (live sessions and corpses), kept fresh by the owner. */
-  readonly sessions: readonly DeckSession[];
+  /** The room's slice of the session store (live sessions and corpses). */
+  readonly sessions: readonly SessionEntry[];
   /** Ended reasons by session, from the room's pty event history. */
   readonly reasons: Readonly<Record<string, string>>;
   /** specId → a dispatch is live there (Reopen withheld until confirmed absent). */
@@ -155,7 +163,14 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const restore = useCallback(
       (live: readonly string[], adopt?: ReadonlySet<string>): PaneLayout => {
         try {
-          return reconcile(parseLayout(localStorage.getItem(storageKey(base))), live, base, adopt);
+          const dead = new Set(sessionStore.deaths().keys());
+          return reconcile(
+            parseLayout(localStorage.getItem(storageKey(base))),
+            live,
+            base,
+            adopt,
+            dead,
+          );
         } catch {
           // A poisoned stored value must never blank the tab forever — heal to the default.
           try {
@@ -169,10 +184,14 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       [base],
     );
 
-    // Existence is the host's truth: reconcile the stored arrangement against its live sessions.
-    // A project tab asks the pty-host; a room route already carries its listing and honors the
-    // entry request — focus the picked card's session, or mint the launched one.
+    // Existence is the session store's truth: reconcile the stored arrangement against
+    // its inventory (a room route reads its own slice and honors the entry request —
+    // focus the picked card's session, or mint the launched one). A project tab waits
+    // for the store's first listing; a store that never connected settles empty.
+    const storeVersion = useSyncExternalStore(sessionStore.subscribe, () => sessionStore.version);
+    const settledBase = useRef<string | null>(null);
     useEffect(() => {
+      if (settledBase.current === base) return;
       const entry = roomRef.current;
       if (entry) {
         const names = entry.sessions.map((s) => s.name);
@@ -191,39 +210,40 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
             names.length === 0 && parseLayout(localStorage.getItem(storageKey(base))) === null;
           const name = filler ? base : nextSessionName([...sessionsOf(next), ...names], base);
           setLaunched((m) => new Map(m).set(name, { command }));
+          sessionStore.noteLaunch(name, command, entry.roomId);
           if (!filler) next = newGroup(next, name);
           focusPane = name;
         }
         settle(next, focusPane);
+        settledBase.current = base;
         return;
       }
-      let cancelled = false;
-      void invoke<Array<{ name: string; live: boolean }>>("session_list", {
-        socketPath: NODE_SOCKET,
-        token: "",
-      })
-        .then((list) => {
-          if (!cancelled) settle(restore(list.filter((s) => s.live).map((s) => s.name)));
-        })
-        .catch(() => {
-          if (!cancelled) settle(restore([]));
-        });
-      return () => {
-        cancelled = true;
-      };
-    }, [base, restore, settle]);
+      const inventory = sessionStore.sessions();
+      if (inventory === null && sessionStore.connected) return;
+      settle(restore((inventory ?? []).filter((s) => s.live).map((s) => s.name)));
+      settledBase.current = base;
+    }, [base, restore, settle, storeVersion]);
 
     // The room keeps living while the route is up: sessions opened elsewhere (another
     // Mac, `sail agent attach`) join the layout as their own sub-tabs on each listing.
     // Only LIVE strays join here — corpses were adopted once on entry, and re-adopting
     // them would resurrect a group the user just closed the moment its kill is listed.
+    // The store's death records prune the other direction: a stored pane whose session
+    // was watched dying and is no longer listed must not survive the arrangement.
     const roomSessions = room?.sessions;
     useEffect(() => {
       if (!roomSessions) return;
       setLayout((current) => {
         if (!current) return current;
         const live = roomSessions.filter((s) => s.live).map((s) => s.name);
-        const next = reconcile(current, live, base, new Set(roomSessions.map((s) => s.name)));
+        const dead = new Set(sessionStore.deaths().keys());
+        const next = reconcile(
+          current,
+          live,
+          base,
+          new Set(roomSessions.map((s) => s.name)),
+          dead,
+        );
         return JSON.stringify(next.groups) === JSON.stringify(current.groups) ? current : next;
       });
     }, [roomSessions, base]);
@@ -293,6 +313,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       if (room) {
         setLastGlyph(glyph);
         setLaunched((m) => new Map(m).set(name, { command: commandFor(glyph) }));
+        sessionStore.noteLaunch(name, commandFor(glyph), room.roomId);
       }
       apply(newGroup(layout, name), name);
     };
@@ -300,7 +321,10 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const split = () => {
       if (!layout || layout.groups[layout.active]!.panes.length >= MAX_SPLITS) return;
       const name = nextSessionName(takenNames(), base);
-      if (room) setLaunched((m) => new Map(m).set(name, { command: commandFor("shell") }));
+      if (room) {
+        setLaunched((m) => new Map(m).set(name, { command: commandFor("shell") }));
+        sessionStore.noteLaunch(name, commandFor("shell"), room.roomId);
+      }
       apply(splitGroup(layout, layout.active, name), name);
     };
 
@@ -320,12 +344,12 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         const revive = !room && resurrected.has(session)
           ? () => paneRefs.current.get(session)?.revive?.()
           : noop;
-        void invoke("session_kill", { socketPath: NODE_SOCKET, token: "", session })
-          .catch(noop)
-          .finally(() => {
-            revive();
-            roomRef.current?.refresh();
-          });
+        // The store's kill path: optimistic transition, ack, death record, re-list —
+        // every surface converges through it. The route resolved its room on entry,
+        // so in-room closes skip the inventory's fail-closed guard.
+        void sessionStore
+          .kill(session, room ? { resolvedRoom: room.roomId } : {})
+          .finally(revive);
         if (!resurrected.has(session)) {
           paneRefs.current.delete(session);
         }
@@ -393,7 +417,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     /** A room pane's content: the terminal, or the shipped ended card with yield gating. */
     const roomCell = (session: string, groupActive: boolean) => {
       const scope = room!;
-      const plan = panePlan(session, scope.sessions, launched);
+      const plan = panePlan(session, scope.sessions, launched, sessionStore.deaths());
       if (plan.kind === "ended") {
         const displaced = yieldedDispatch(scope.reasons[session]);
         return (
@@ -405,15 +429,17 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               dispatchLive={
                 displaced?.specId ? (scope.dispatchLive[displaced.specId] ?? true) : false
               }
-              onRestart={() =>
+              onRestart={() => {
                 setLaunched((m) =>
                   new Map(m).set(session, { command: plan.restartCommand, killFirst: true }),
-                )
-              }
+                );
+                sessionStore.noteLaunch(session, plan.restartCommand, scope.roomId);
+              }}
             />
           </div>
         );
       }
+      const refusal = scope.sessions.find((s) => s.name === session)?.refusal;
       return (
         <RoomTerminal
           ref={(h) => {
@@ -425,12 +451,16 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
           room={scope.roomId}
           command={plan.command}
           killFirst={plan.killFirst}
+          refusal={refusal}
           active={active && groupActive && session === focused}
           visible={active && groupActive}
           me={scope.me}
           writerFde={plan.writerFde}
           onStatus={(s) => {
             if (statusesRef.current[session] !== s) onPaneStatus(session, s);
+            // An attach ack is a mutation ack — the create is real, take the
+            // reconcile listing so every surface sees it without any event.
+            if (s.kind === "up") scope.refresh();
             // The shell (or agent) is gone: hand the pane to the listing, which parks it
             // on the ended card with the host's reason.
             if (s.kind === "ended") {
@@ -562,6 +592,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                         visible={active && groupActive}
                         onStatus={(s) => {
                           if (statusesRef.current[session] !== s) onPaneStatus(session, s);
+                          if (s.kind === "up") sessionStore.refresh();
                         }}
                         onTitle={(raw) => {
                           const t = shortTitle(raw);

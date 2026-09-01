@@ -90,7 +90,6 @@ export function ChatRoomPane({
           actions={
             <>
               <RoomDeckStrip
-                gateway={gateway}
                 roomId={room.id}
                 onSelect={(name) => openTerminal({ focus: name })}
               />

@@ -30,6 +30,30 @@ dependencies on either side without explicit approval.
 - `tauri dev`/`tauri build` run only on macOS. CI (`macos-15`) is the verification path for
   the app bundle. Everything else must pass locally with `bun test` and `bun run typecheck`.
 
+## State architecture
+
+Law, not preference — review against these:
+
+- **One owner per shared domain.** State read by more than one surface lives in exactly one
+  store (the presenceStore mold: class singleton, `useSyncExternalStore`, a `connectX`
+  seeding function wired in App). Components hold render-local state only; a second private
+  cache of a shared domain is a bug even when it works.
+- **Mutations route through the owner, loud.** The store applies the optimistic transition,
+  issues the gateway call, and reconciles on the ack. A refusal or error renders where the
+  intent originated — inline on the card/row/chip — and is never swallowed. No
+  fire-and-forget gateway calls from components.
+- **Events accelerate, they never carry.** Live events may fold in optimistically and kick a
+  refetch, but correctness must hold with the event lane fully dead: every mutation ack,
+  surface enter/leave, window focus, and stream reconnect is a deterministic reconcile
+  point.
+- **Persistence stores arrangement, never existence.** localStorage may remember how things
+  were laid out, never whether they exist — existence is the backend's truth, checked
+  against the owner's records (a session the store watched dying is never resurrected by a
+  stored layout).
+- **Scope refetches to what the event names.** An event refreshes the state it identifies,
+  not the world; anything outside the vocabulary falls back to the conservative refresh so
+  a new server event type is never silently dropped.
+
 ## Releasing
 
 Bump `version` in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and

@@ -26,7 +26,7 @@ export function RoomWorkbench({
   focus,
   launch,
 }: RoomWorkbenchProps) {
-  const { sessions, skew, reasons, refresh } = useRoomSessions(gateway, roomId);
+  const { sessions, skew, reasons, refresh } = useRoomSessions(roomId);
   const [me, setMe] = useState<string | undefined>(undefined);
   const [dispatchLive, setDispatchLive] = useState<Record<string, boolean>>({});
 

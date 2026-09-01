@@ -5,6 +5,7 @@ import type { ServerRoomView } from "../../shared/sail-models";
 import { ToastProvider } from "../components/Toast";
 import { createDemoGateway } from "../gateway";
 import type { RoomTerminalRequest } from "../terminal/roomDeck";
+import { sessionStore } from "../terminal/sessionStore";
 import { ChatRoomPane } from "./ChatRoomPane";
 
 let container: HTMLDivElement;
@@ -38,11 +39,14 @@ const room: ServerRoomView = {
 };
 
 async function render(requests: RoomTerminalRequest[]) {
+  const gateway = createDemoGateway();
+  sessionStore.reset();
+  sessionStore.connect(gateway, "test-box");
   await act(async () => {
     root.render(
       <ToastProvider>
         <ChatRoomPane
-          gateway={createDemoGateway()}
+          gateway={gateway}
           room={room}
           onOpenTerminal={(request) => requests.push(request)}
         />

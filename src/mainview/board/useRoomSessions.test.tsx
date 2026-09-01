@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { Gateway } from "../gateway";
 import type { DeckSession } from "../terminal/roomDeck";
+import { SessionStore } from "../terminal/sessionStore";
 import { useRoomSessions } from "./useRoomSessions";
 
 let root: Root;
@@ -72,9 +73,9 @@ function makeEventlessGateway(hostSessions: DeckSession[]) {
 }
 
 /** Two live surfaces over the same room: the header deck and the route's workbench. */
-function Surfaces({ gateway }: { gateway: Gateway }) {
-  const deck = useRoomSessions(gateway, "design-talk");
-  const route = useRoomSessions(gateway, "design-talk");
+function Surfaces({ store }: { store: SessionStore }) {
+  const deck = useRoomSessions("design-talk", store);
+  const route = useRoomSessions("design-talk", store);
   return (
     <div>
       <div data-testid="deck-names">
@@ -95,9 +96,10 @@ const deckNames = () =>
 describe("one owner for the session inventory (field round 2026-09-01)", () => {
   test("a session created via the route seam reaches the deck with the event lane dead", async () => {
     const host: DeckSession[] = [];
-    const gateway = makeEventlessGateway(host);
+    const store = new SessionStore();
+    store.connect(makeEventlessGateway(host), "devbox");
     await act(async () => {
-      root.render(<Surfaces gateway={gateway} />);
+      root.render(<Surfaces store={store} />);
     });
     await flush();
     expect(deckNames()).toBe("");
@@ -120,20 +122,16 @@ describe("one owner for the session inventory (field round 2026-09-01)", () => {
 
   test("a kill observed by one surface converges every other surface without any event", async () => {
     const host: DeckSession[] = [session({})];
-    const gateway = makeEventlessGateway(host);
+    const store = new SessionStore();
+    store.connect(makeEventlessGateway(host), "devbox");
     await act(async () => {
-      root.render(<Surfaces gateway={gateway} />);
+      root.render(<Surfaces store={store} />);
     });
     await flush();
     expect(deckNames()).toBe("room-design-talk");
 
     await act(async () => {
-      await gateway.killSession("room-design-talk");
-    });
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>('[data-testid="route-reconcile"]')
-        ?.click();
+      await store.kill("room-design-talk", { resolvedRoom: "design-talk" });
     });
     await flush();
 
@@ -141,5 +139,30 @@ describe("one owner for the session inventory (field round 2026-09-01)", () => {
       deckNames(),
       "the deck must drop the killed session another surface observed",
     ).toBe("");
+  });
+
+  test("leaving a surface takes a reconcile — the route-leave lane of decision 4", async () => {
+    const host: DeckSession[] = [session({})];
+    const store = new SessionStore();
+    const gateway = makeEventlessGateway(host);
+    let listings = 0;
+    const listSessions = gateway.listSessions.bind(gateway);
+    gateway.listSessions = () => {
+      listings++;
+      return listSessions();
+    };
+    store.connect(gateway, "devbox");
+    await act(async () => {
+      root.render(<Surfaces store={store} />);
+    });
+    await flush();
+    const before = listings;
+    await act(async () => {
+      root.render(<div />);
+    });
+    await flush();
+    expect(listings, "unmount re-lists so the surfaces left behind converge").toBeGreaterThan(
+      before,
+    );
   });
 });

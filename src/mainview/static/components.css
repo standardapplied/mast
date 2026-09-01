@@ -5568,6 +5568,25 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   flex-direction: column;
   align-items: stretch;
 }
+.rooms-inventory__refusal {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--error);
+}
+
+.room-terminal__refusal {
+  flex-shrink: 0;
+  padding: 6px 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--error);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
 .room-terminal__banner {
   display: flex;
   align-items: center;
