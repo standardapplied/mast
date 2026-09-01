@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import { cx } from "../components/cx";
 import { CaretLeft } from "../components/icons";
 import { Tooltip } from "../components/Tooltip";
 import type { Gateway } from "../gateway";
@@ -39,9 +41,21 @@ export function RoomTerminalRoute({
     [gateway, request.roomId],
   );
 
-  return (
-    <div className="room-route" data-testid="room-route">
-      <div className="room-route__bar" data-testid="room-route-bar">
+  // One line of chrome, not two: in the app the bar rides the window's topbar band
+  // through the #topbar-route-slot portal (the Terminal view's tab-strip pattern);
+  // standalone mounts (tests, previews without the shell) keep it inline.
+  const [chromeSlot, setChromeSlot] = useState<HTMLElement | null>(() =>
+    typeof document === "undefined" ? null : document.getElementById("topbar-route-slot"),
+  );
+  useLayoutEffect(() => {
+    setChromeSlot((slot) => slot ?? document.getElementById("topbar-route-slot"));
+  }, []);
+
+  const bar = (
+    <div
+      className={cx("room-route__bar", chromeSlot && "room-route__bar--chrome")}
+      data-testid="room-route-bar"
+    >
         <Tooltip content="Back to the room">
           <button
             type="button"
@@ -62,7 +76,12 @@ export function RoomTerminalRoute({
         <span className="room-route__context" data-testid="route-context">
           {request.roomId} · {request.project}
         </span>
-      </div>
+    </div>
+  );
+
+  return (
+    <div className="room-route" data-testid="room-route">
+      {chromeSlot ? createPortal(bar, chromeSlot) : bar}
       <div className="room-route__body">
         {services ? (
           <services.Workbench

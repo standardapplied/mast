@@ -305,13 +305,16 @@ export function App({
             className="topbar__slot"
             style={{ display: view === "terminal" && !roomRoute ? "flex" : "none" }}
           />
-          {(view !== "terminal" || roomRoute) && (
+          <div
+            id="topbar-route-slot"
+            className="topbar__slot"
+            style={{ display: roomRoute ? "flex" : "none" }}
+          />
+          {view !== "terminal" && !roomRoute && (
             <div className="topbar__context">
-              {roomRoute
-                ? roomRoute.title
-                : showWorkspace
-                  ? (navItems.find((item) => item.value === view)?.label ?? "Mast")
-                  : "Mast"}
+              {showWorkspace
+                ? (navItems.find((item) => item.value === view)?.label ?? "Mast")
+                : "Mast"}
             </div>
           )}
         </header>

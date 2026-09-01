@@ -22,6 +22,46 @@ export type MenuNode =
     }
   | { kind: "separator" };
 
+/**
+ * Which side a submenu opens on: right of its row when it fits, left when the
+ * viewport edge would clip it — the Actions menu lives at the window's right
+ * edge, where a right-opening submenu is unreachable.
+ */
+export function submenuSide(
+  rowRight: number,
+  submenuWidth: number,
+  viewportWidth: number,
+): "right" | "left" {
+  return rowRight + submenuWidth > viewportWidth - 8 ? "left" : "right";
+}
+
+function Submenu({ items, onClose }: { items: MenuNode[]; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [side, setSide] = useState<"right" | "left">("right");
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const row = el.parentElement;
+    if (!row) return;
+    setSide(
+      submenuSide(
+        row.getBoundingClientRect().right,
+        el.getBoundingClientRect().width,
+        window.innerWidth,
+      ),
+    );
+  }, []);
+  return (
+    <div
+      ref={ref}
+      className={cx("context-submenu", side === "left" && "context-submenu--left")}
+      data-side={side}
+    >
+      <MenuPanel items={items} onClose={onClose} />
+    </div>
+  );
+}
+
 function MenuPanel({ items, onClose }: { items: MenuNode[]; onClose: () => void }) {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   return (
@@ -51,9 +91,7 @@ function MenuPanel({ items, onClose }: { items: MenuNode[]; onClose: () => void 
               {item.submenu && <CaretRight size={12} className="context-menu-caret" />}
             </button>
             {item.submenu && openIndex === index && (
-              <div className="context-submenu">
-                <MenuPanel items={item.submenu} onClose={onClose} />
-              </div>
+              <Submenu items={item.submenu} onClose={onClose} />
             )}
           </div>
         ),

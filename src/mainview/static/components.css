@@ -1741,6 +1741,11 @@ html.is-dragging-active * {
   top: -5px;
 }
 
+.context-submenu--left {
+  left: auto;
+  right: 100%;
+}
+
 /* Tooltip -------------------------------------------------------------------- */
 
 .tooltip-trigger {
@@ -3824,10 +3829,22 @@ button.room-section-head:hover {
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
-  padding: 2px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 3px;
+  visibility: hidden;
+}
+.term-tab:hover .term-tab__close,
+.term-tab__close:focus-visible {
+  visibility: visible;
 }
 .term-tab__close:hover {
   color: var(--foreground);
+  background: var(--surface-hover);
 }
 .term-tab__add {
   appearance: none;
@@ -5373,6 +5390,15 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   padding: 0 8px 0 6px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
+}
+
+.room-route__bar--chrome {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border-bottom: none;
+  background: transparent;
+  padding: 0 12px 0 0;
 }
 .room-route__back {
   appearance: none;

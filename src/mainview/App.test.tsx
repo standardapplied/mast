@@ -181,7 +181,10 @@ describe("App cockpit", () => {
 
     const route = container.querySelector('[data-testid="view-room-terminal"]');
     expect(route).not.toBeNull();
-    expect(route?.textContent).toContain("Invoice review UI");
+    expect(
+      container.querySelector("#topbar-route-slot")?.textContent,
+      "the route's title lives in the chrome band, once",
+    ).toContain("Invoice review UI");
     expect(
       route?.querySelector('[data-testid="deck-attach-unavailable"]'),
       "without the Tauri edge the route explains itself",
@@ -189,7 +192,13 @@ describe("App cockpit", () => {
     const board = container.querySelector('[data-testid="view-board"]') as HTMLElement;
     expect(board.style.display).toBe("none");
     expect(board.querySelector(".detail"), "the spec detail stays mounted underneath").not.toBeNull();
-    expect(container.querySelector(".topbar__context")?.textContent).toBe("Invoice review UI");
+    const routeSlot = container.querySelector<HTMLElement>("#topbar-route-slot");
+    expect(routeSlot?.style.display).toBe("flex");
+    expect(
+      routeSlot?.querySelector('[data-testid="route-back"]'),
+      "the route bar rides the chrome band, not a second bar",
+    ).not.toBeNull();
+    expect(container.querySelector(".topbar__context"), "no duplicate title label").toBeNull();
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>('[data-testid="route-back"]')?.click();
