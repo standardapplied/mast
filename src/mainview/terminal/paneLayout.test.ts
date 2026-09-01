@@ -110,6 +110,40 @@ describe("reconcile", () => {
     const out = reconcile(stored, ["room-r"], "room-r", new Set(["resume-run-7"]));
     expect(out.groups).toEqual(stored.groups);
   });
+
+  test("a stored pane with a death record and no listing is pruned — a kill is never undone", () => {
+    const stored = {
+      groups: [{ id: 1, panes: ["room-r"] }, { id: 2, panes: ["room-r.2"] }],
+      active: 0,
+      seq: 3,
+    };
+    const out = reconcile(stored, ["room-r"], "room-r", new Set(["room-r"]), new Set(["room-r.2"]));
+    expect(out.groups).toEqual([{ id: 1, panes: ["room-r"] }]);
+  });
+
+  test("a dead name the host still lists as a corpse keeps its pane (the ended card renders there)", () => {
+    const stored = { groups: [{ id: 1, panes: ["room-r"] }], active: 0, seq: 2 };
+    const out = reconcile(stored, [], "room-r", new Set(["room-r"]), new Set(["room-r"]));
+    expect(out.groups).toEqual(stored.groups);
+  });
+
+  test("pruning the last dead pane heals to the default base — whose own record parks it on the ended card", () => {
+    const stored = { groups: [{ id: 1, panes: ["room-r"] }], active: 0, seq: 2 };
+    const out = reconcile(stored, [], "room-r", new Set(), new Set(["room-r"]));
+    expect(out).toEqual(defaultLayout("room-r"));
+  });
+
+  test("pruning the last dead adopted pane keeps that death as the fallback — never a fresh base shell", () => {
+    const stored = { groups: [{ id: 1, panes: ["resume-run-7"] }], active: 0, seq: 2 };
+    const out = reconcile(stored, [], "room-r", new Set(), new Set(["resume-run-7"]));
+    expect(out).toEqual(defaultLayout("resume-run-7"));
+  });
+
+  test("pruning the last dead ordinal pane falls back to its own death, not the recordless base", () => {
+    const stored = { groups: [{ id: 1, panes: ["room-r.2"] }], active: 0, seq: 2 };
+    const out = reconcile(stored, [], "room-r", new Set(), new Set(["room-r.2"]));
+    expect(out).toEqual(defaultLayout("room-r.2"));
+  });
 });
 
 describe("parseLayout", () => {

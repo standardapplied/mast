@@ -3,14 +3,21 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { SailEvent } from "../../shared/sail-models";
 import { createDemoGateway, type Gateway } from "../gateway";
-import type { DeckGlyph, DeckSession, RoomSessionGroup } from "../terminal/roomDeck";
+import type {
+  DeckGlyph,
+  RoomSessionGroup,
+  SessionEntry,
+} from "../terminal/roomDeck";
+import { connectSessions, sessionStore } from "../terminal/sessionStore";
 import { openTerminalMenu, RoomDeckStrip, RoomsInventory } from "./RoomDeck";
 
 let container: HTMLDivElement;
 let root: Root;
+let disconnect: (() => void) | null = null;
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStore.reset();
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -19,6 +26,8 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  disconnect?.();
+  disconnect = null;
 });
 
 const flush = async () => {
@@ -94,8 +103,9 @@ describe("openTerminalMenu", () => {
 
 describe("RoomDeckStrip", () => {
   async function renderStrip(gateway: Gateway, onSelect: (name: string) => void = () => {}) {
+    disconnect = connectSessions(gateway, sessionStore);
     await act(async () => {
-      root.render(<RoomDeckStrip gateway={gateway} roomId="design-talk" onSelect={onSelect} />);
+      root.render(<RoomDeckStrip roomId="design-talk" onSelect={onSelect} />);
     });
     await flush();
   }
@@ -135,7 +145,7 @@ describe("RoomDeckStrip", () => {
 
   test("a session another client opens appears when its pty event lands", async () => {
     const base = createDemoGateway();
-    const sessions: DeckSession[] = [];
+    const sessions: SessionEntry[] = [];
     const gateway: Gateway = {
       ...base,
       listSessions: async () => ({ ok: true, value: [...sessions] }),
@@ -206,8 +216,8 @@ describe("RoomsInventory", () => {
   ];
 
   async function renderInventory(
-    onJump: (group: RoomSessionGroup, session: DeckSession) => void = () => {},
-    onKill: (session: DeckSession) => void = () => {},
+    onJump: (group: RoomSessionGroup<SessionEntry>, session: SessionEntry) => void = () => {},
+    onKill: (session: SessionEntry) => void = () => {},
   ) {
     await act(async () => {
       root.render(<RoomsInventory groups={groups} onJump={onJump} onKill={onKill} />);
@@ -279,7 +289,50 @@ describe("RoomsInventory", () => {
     const confirm = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent === "Close" && button.className.includes("btn-danger"),
     );
+    // A real press dispatches pointerdown before click; the dialog portals outside
+    // the panel, so this is exactly the sequence that must not dismiss it.
+    await act(async () => {
+      confirm?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
     await act(async () => confirm?.click());
     expect(killed).toEqual(["room-design-talk"]);
+    expect(
+      document.querySelector('[data-testid="rooms-inventory"]'),
+      "the panel stays open so a refusal lands where the click happened",
+    ).not.toBeNull();
+  });
+
+  test("a refused kill renders inline on the row that asked for it", async () => {
+    const refused: Array<RoomSessionGroup<SessionEntry>> = [
+      {
+        roomId: "design-talk",
+        title: "Design talk",
+        project: "sail-mast",
+        sessions: [
+          {
+            name: "room-design-talk",
+            live: true,
+            attached: 1,
+            writerFde: "uday",
+            room: "design-talk",
+            command: ["claude"],
+            refusal: "room design-talk unresolved: no room 'design-talk'",
+          },
+        ],
+      },
+    ];
+    await act(async () => {
+      root.render(<RoomsInventory groups={refused} onJump={() => {}} onKill={() => {}} />);
+    });
+    await flush();
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="rooms-inventory-trigger"]')
+        ?.click();
+    });
+    await flush();
+    expect(
+      document.querySelector('[data-testid="refusal-room-design-talk"]')?.textContent,
+    ).toContain("no room 'design-talk'");
   });
 });

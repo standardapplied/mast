@@ -16,6 +16,7 @@ import { Button } from "./components/ui";
 import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
 import type { DeckServices, RoomTerminalRequest } from "./terminal/roomDeck";
+import { connectSessions, sessionStore } from "./terminal/sessionStore";
 import type { ThemeController } from "./theme";
 import type { Updater } from "./updater";
 
@@ -174,10 +175,17 @@ export function App({
 
   // Presence rides the app-wide event stream — no polling. One runs listing on
   // connect seeds chips for agents already mid-work (or mid-silence); after
-  // that, progress and agent_presence events keep the store live.
+  // that, progress and agent_presence events keep the store live. The session
+  // inventory connects beside it: one owner, seeded by a listing, accelerated
+  // (never carried) by pty events.
   useEffect(() => {
     if (!ready) return;
-    return connectPresence(gateway, presenceStore);
+    const disconnectPresence = connectPresence(gateway, presenceStore);
+    const disconnectSessions = connectSessions(gateway, sessionStore);
+    return () => {
+      disconnectPresence();
+      disconnectSessions();
+    };
   }, [gateway, ready]);
 
   useEffect(() => {

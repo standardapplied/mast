@@ -1,84 +1,46 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { SailEvent } from "../../shared/sail-models";
-import type { Gateway } from "../gateway";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import {
-  type DeckSession,
   deckSessions,
-  endedReasons,
-  isDeckEvent,
+  type SessionEntry,
   type SkewSide,
   skewOf,
 } from "../terminal/roomDeck";
-import { coalesce } from "./roomRouting";
+import { SessionStore, sessionStore } from "../terminal/sessionStore";
 
 /**
- * One room's slice of the host's pty inventory, kept live: the listing refreshes
- * on the room's pty events and on reconnect (coalesced — an observer storm never
- * turns into a listing per event), and the room's event history supplies each
- * corpse's ended reason. Shared by the header's deck cards and the terminal
- * route's workbench.
+ * One room's slice of the box's session inventory — a thin selector over the
+ * app-wide {@link sessionStore} (wired to the gateway in App). Mounting and
+ * unmounting are the room/route enter-and-leave reconcile points: each takes a
+ * coalesced re-list, so a session created or killed on another surface reaches
+ * this one even with the event lane fully dead.
  */
 export function useRoomSessions(
-  gateway: Gateway,
   roomId: string,
+  store: SessionStore = sessionStore,
 ): {
   /** Null until the first listing lands. */
-  sessions: DeckSession[] | null;
+  sessions: SessionEntry[] | null;
   skew: SkewSide | null;
-  /** Ended reasons by session, from the room's pty event history. */
+  /** Ended reasons by session: death records first, event history second. */
   reasons: Record<string, string>;
   refresh: () => void;
 } {
-  const [sessions, setSessions] = useState<DeckSession[] | null>(null);
-  const [skewReason, setSkewReason] = useState<string | null>(null);
-  const [events, setEvents] = useState<SailEvent[]>([]);
+  const version = useSyncExternalStore(store.subscribe, () => store.version);
 
-  const alive = useRef(true);
   useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
+    store.ensureHistory(roomId);
+    store.refresh();
+    return () => store.refresh();
+  }, [store, roomId]);
+
+  return useMemo(() => {
+    const all = store.sessions();
+    return {
+      sessions: all === null ? null : deckSessions(all, roomId),
+      skew: skewOf(store.skewReason() ?? undefined),
+      reasons: store.reasons(),
+      refresh: () => store.refresh(),
     };
-  }, []);
-
-  const load = useCallback(async () => {
-    const result = await gateway.listSessions();
-    if (!alive.current) return;
-    if (result.ok) {
-      setSessions(deckSessions(result.value, roomId));
-      setSkewReason(null);
-    } else {
-      setSkewReason(result.error.message);
-    }
-  }, [gateway, roomId]);
-
-  const refresh = useMemo(() => coalesce(load), [load]);
-
-  useEffect(() => {
-    refresh();
-    void gateway.specEvents(roomId).then((r) => {
-      if (alive.current && r.ok) setEvents(r.value.events);
-    });
-  }, [gateway, roomId, refresh]);
-
-  useEffect(
-    () =>
-      gateway.onEvent((event) => {
-        if (!isDeckEvent(event, roomId)) return;
-        setEvents((current) => [...current, event]);
-        refresh();
-      }),
-    [gateway, roomId, refresh],
-  );
-
-  useEffect(
-    () =>
-      gateway.onConnectionStatus((status) => {
-        if (status.phase === "ready") refresh();
-      }),
-    [gateway, refresh],
-  );
-
-  const reasons = useMemo(() => endedReasons(events), [events]);
-  return { sessions, skew: skewOf(skewReason ?? undefined), reasons, refresh };
+    // version is the store's change signal; the selectors read fresh state through it.
+  }, [store, roomId, version]);
 }

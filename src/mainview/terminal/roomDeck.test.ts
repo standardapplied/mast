@@ -3,12 +3,13 @@ import type { SailEvent } from "../../shared/sail-models";
 import {
   chipTitle,
   commandFor,
+  type DeathRecord,
   deckSessions,
   type DeckSession,
+  endedCardModel,
   endedReasons,
-  foldInventory,
   glyphFor,
-  isDeckEvent,
+  isPtyEvent,
   isResumeSession,
   nextRoomSession,
   observerCount,
@@ -120,16 +121,30 @@ const event = (over: Partial<SailEvent>): SailEvent => ({
   ...over,
 });
 
+describe("endedCardModel", () => {
+  test("a pending death fails closed: holding copy, no restart", () => {
+    const model = endedCardModel(
+      { reason: "ended", at: 1, room: "design-talk", historyPending: true },
+      "ended",
+    );
+    expect(model.restartable).toBe(false);
+    expect(model.reason).toContain("Checking");
+  });
+
+  test("a settled death passes the recorded reason through, restartable", () => {
+    expect(endedCardModel({ reason: "exited(0)", at: 1 }, "exited(0)")).toEqual({
+      reason: "exited(0)",
+      restartable: true,
+    });
+    expect(endedCardModel(undefined, "ended")).toEqual({ reason: "ended", restartable: true });
+  });
+});
+
 describe("deck events", () => {
-  test("pty events for the room refresh the deck; others do not", () => {
-    expect(isDeckEvent(event({ spec: "design-talk" }), "design-talk")).toBe(true);
-    expect(
-      isDeckEvent(event({ data: { room_id: "design-talk" } }), "design-talk"),
-    ).toBe(true);
-    expect(isDeckEvent(event({ spec: "another" }), "design-talk")).toBe(false);
-    expect(
-      isDeckEvent(event({ type: "spec_message_posted", spec: "design-talk" }), "design-talk"),
-    ).toBe(false);
+  test("pty lifecycle events are the store's refresh cue; others are not", () => {
+    expect(isPtyEvent(event({ spec: "design-talk" }))).toBe(true);
+    expect(isPtyEvent(event({ type: "pty_session_ended" }))).toBe(true);
+    expect(isPtyEvent(event({ type: "spec_message_posted" }))).toBe(false);
   });
 
   test("the last ended reason per session wins", () => {
@@ -172,12 +187,11 @@ describe("panePlan", () => {
     session({ name: "resume-run-7", live: false, command: ["codex", "resume"] }),
   ];
 
-  test("an explicit launch attaches with its picked command, revive killing first", () => {
-    const launched = new Map([["room-design-talk.2", { command: ["codex"], killFirst: true }]]);
+  test("an explicit launch attaches with its picked command", () => {
+    const launched = new Map([["room-design-talk.2", { command: ["codex"] }]]);
     expect(panePlan("room-design-talk.2", listed, launched)).toEqual({
       kind: "attach",
       command: ["codex"],
-      killFirst: true,
       writerFde: undefined,
     });
   });
@@ -186,7 +200,6 @@ describe("panePlan", () => {
     expect(panePlan("room-design-talk", listed, new Map())).toEqual({
       kind: "attach",
       command: ["claude"],
-      killFirst: false,
       writerFde: "mady",
     });
   });
@@ -195,7 +208,6 @@ describe("panePlan", () => {
     expect(panePlan("room-design-talk.3", listed, new Map())).toEqual({
       kind: "attach",
       command: ["bash", "-l"],
-      killFirst: false,
     });
   });
 
@@ -205,29 +217,19 @@ describe("panePlan", () => {
       restartCommand: ["codex", "resume"],
     });
   });
-});
 
-describe("foldInventory", () => {
-  const current = {
-    sessions: [session({})],
-    rooms: [{ id: "design-talk", title: "Design talk", project: "sail-mast" }],
-  };
-
-  test("a successful refresh replaces both sides, keeping only room-bound sessions", () => {
-    const next = foldInventory(
-      current,
-      [session({ name: "room-zeta", room: "zeta" }), session({ name: "mast-node", room: "" })],
-      [{ id: "zeta", title: "Zeta", project: "api" }],
-    );
-    expect(next.sessions.map((s) => s.name)).toEqual(["room-zeta"]);
-    expect(next.rooms).toEqual([{ id: "zeta", title: "Zeta", project: "api" }]);
-  });
-
-  test("a failed side keeps its last good value — a rooms outage never blanks the catalog", () => {
-    const next = foldInventory(current, [session({ name: "room-design-talk.2" })], null);
-    expect(next.sessions.map((s) => s.name)).toEqual(["room-design-talk.2"]);
-    expect(next.rooms).toBe(current.rooms);
-    expect(foldInventory(current, null, null)).toEqual(current);
+  test("an absent session the store watched dying parks on the ended card, revive command from the record", () => {
+    const deaths = new Map<string, DeathRecord>([
+      ["room-design-talk.3", { reason: "closed from Mast", at: 1, command: ["claude"] }],
+    ]);
+    expect(panePlan("room-design-talk.3", listed, new Map(), deaths)).toEqual({
+      kind: "ended",
+      restartCommand: ["claude"],
+    });
+    expect(
+      panePlan("room-design-talk.4", listed, new Map(), deaths),
+      "no record — the genuine host-restart case still recreates a shell",
+    ).toEqual({ kind: "attach", command: ["bash", "-l"] });
   });
 });
 

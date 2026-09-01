@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import type { MenuNode } from "../components/ContextMenu";
 import type { SessionStatus } from "../terminal/connection";
 import { SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane";
@@ -13,7 +12,6 @@ import { SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane"
  */
 
 const NODE_SOCKET = "~/.sail/pty.sock";
-const noop = () => {};
 
 export interface RoomTerminalProps {
   readonly session: string;
@@ -21,8 +19,8 @@ export interface RoomTerminalProps {
   readonly room: string;
   /** argv to create the session with when it does not exist on the host. */
   readonly command: string[];
-  /** Kill the corpse first — the ended-card revive flow re-minting the same name. */
-  readonly killFirst?: boolean;
+  /** A refused close for this session, rendered inline where the pane lives. */
+  readonly refusal?: string;
   readonly active: boolean;
   readonly visible: boolean;
   /** The caller's FDE, to tell "I hold write" from "someone else does". */
@@ -41,7 +39,7 @@ export const RoomTerminal = forwardRef<TerminalHandle, RoomTerminalProps>(functi
     project,
     room,
     command,
-    killFirst,
+    refusal,
     active,
     visible,
     me,
@@ -52,8 +50,6 @@ export const RoomTerminal = forwardRef<TerminalHandle, RoomTerminalProps>(functi
   },
   ref,
 ) {
-  // The revive flow: clear the corpse before the pane's create-then-attach runs.
-  const [ready, setReady] = useState(!killFirst);
   const [writer, setWriter] = useState(writerFde ?? "");
   const paneRef = useRef<TerminalHandle>(null);
 
@@ -68,24 +64,14 @@ export const RoomTerminal = forwardRef<TerminalHandle, RoomTerminalProps>(functi
     [],
   );
 
-  useEffect(() => {
-    if (!killFirst) return;
-    let cancelled = false;
-    void invoke("session_kill", { socketPath: NODE_SOCKET, token: "", session })
-      .catch(noop)
-      .finally(() => {
-        if (!cancelled) setReady(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [killFirst, session]);
-
-  if (!ready) return <div className="room-terminal" />;
-
   const observing = !!writer && !!me && writer !== me;
   return (
     <div className="room-terminal">
+      {refusal && (
+        <div className="room-terminal__refusal" data-testid={`refusal-${session}`}>
+          Close refused — {refusal}
+        </div>
+      )}
       {observing && (
         <div className="room-terminal__banner" data-testid="observer-banner">
           <span>{writer} holds write — you are observing</span>

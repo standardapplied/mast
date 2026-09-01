@@ -1,4 +1,12 @@
-import { type ReactNode, type Ref, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  type Ref,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { createPortal } from "react-dom";
 import { RoomsInventory } from "../board/RoomDeck";
 import { coalesce } from "../board/roomRouting";
@@ -6,13 +14,8 @@ import { SnapshotsPanel } from "../board/SnapshotsPanel";
 import { cx } from "../components/cx";
 import type { Gateway } from "../gateway";
 import { isUnwell, type SessionStatus, statusEqual } from "../terminal/connection";
-import {
-  foldInventory,
-  isPtyEvent,
-  type RoomInventory,
-  roomGroups,
-  type RoomTerminalRequest,
-} from "../terminal/roomDeck";
+import { roomGroups, type RoomTerminalRequest } from "../terminal/roomDeck";
+import { sessionStore } from "../terminal/sessionStore";
 import { IconButton } from "../components/IconButton";
 import { Camera } from "../components/icons";
 import { ProjectPicker } from "./ProjectPicker";
@@ -92,37 +95,31 @@ export function TerminalWorkspace({
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
   const paneRefs = useRef(new Map<string, TerminalHandle>());
 
-  // The whole-box inventory keeps room sessions visible here — grouped, collapsed,
-  // and jumping to their home surface — refreshed on any pty lifecycle event.
-  const [roomInventory, setRoomInventory] = useState<RoomInventory>({ sessions: [], rooms: [] });
+  // The whole-box inventory reads the session store — one owner, no private
+  // listing loop here. Only the rooms catalog (titles, projects) is fetched
+  // locally, refreshed whenever the inventory changes; a failed fetch keeps the
+  // last good catalog so a rooms outage never strips projects off live sessions.
+  const storeVersion = useSyncExternalStore(sessionStore.subscribe, () => sessionStore.version);
+  const [rooms, setRooms] = useState<Array<{ id: string; title: string; project: string }>>([]);
   const reloadRooms = useMemo(
     () =>
       coalesce(async () => {
         if (!gateway) return;
-        const [sessions, rooms] = await Promise.all([gateway.listSessions(), gateway.listRooms()]);
-        setRoomInventory((current) =>
-          foldInventory(
-            current,
-            sessions.ok ? sessions.value : null,
-            rooms.ok
-              ? rooms.value.rooms.map((r) => ({ id: r.id, title: r.title, project: r.project }))
-              : null,
-          ),
-        );
+        const result = await gateway.listRooms();
+        if (result.ok) {
+          setRooms(result.value.rooms.map((r) => ({ id: r.id, title: r.title, project: r.project })));
+        }
       }),
     [gateway],
   );
   useEffect(() => {
     if (!gateway || !onOpenRoom) return;
     reloadRooms();
-    return gateway.onEvent((event) => {
-      if (isPtyEvent(event)) reloadRooms();
-    });
-  }, [gateway, onOpenRoom, reloadRooms]);
+  }, [gateway, onOpenRoom, reloadRooms, storeVersion]);
 
   const inventory = onOpenRoom && gateway && (
     <RoomsInventory
-      groups={roomGroups(roomInventory.sessions, roomInventory.rooms)}
+      groups={roomGroups(sessionStore.sessions() ?? [], rooms)}
       onJump={(group, session) =>
         // The route creates sessions in the room's project container, so the jump
         // resolves the room fresh instead of trusting the inventory's snapshot —
@@ -137,14 +134,9 @@ export function TerminalWorkspace({
           });
         })
       }
-      onKill={(session) =>
-        // Kill rides the owner pty lane, so it gets the same fail-closed guard as the
-        // jump: a session whose room the control plane can't resolve is left alone.
-        void gateway.getRoom(session.room).then((room) => {
-          if (!room.ok || room.value.id !== session.room) return;
-          return gateway.killSession(session.name).finally(() => reloadRooms());
-        })
-      }
+      // The store's kill path carries the fail-closed room guard; a refusal
+      // renders inline on the row that asked (see SessionStore.kill).
+      onKill={(session) => void sessionStore.kill(session.name)}
     />
   );
 

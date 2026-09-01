@@ -170,21 +170,30 @@ export function parseLayout(raw: string | null): PaneLayout | null {
 /**
  * Merges the stored arrangement with the host's live session list. Stored panes are kept even when
  * their session died — reopening the tab recreates the shell in place, which is how a layout
- * survives a host reboot. Live sessions the client has never seen (opened from another Mac, or an
- * older client) are appended as their own tabs in ordinal order. Anything on the socket that isn't
- * this tab's base or `base.<n>` is someone else's and is ignored — except names in `adopt`, which
- * belong to this scope despite foreign naming (a room's `resume-*` agent sessions) and are appended
- * after the ordinal strays, in name order.
+ * survives a host reboot. That recreate-on-absent survives only without a death record: a name in
+ * `dead` that the host no longer lists at all (not in `live` or `adopt`) was watched dying, and
+ * keeping its pane would resurrect a session the user deliberately killed — it is pruned instead
+ * (persistence stores arrangement, never existence). Live sessions the client has never seen
+ * (opened from another Mac, or an older client) are appended as their own tabs in ordinal order.
+ * Anything on the socket that isn't this tab's base or `base.<n>` is someone else's and is
+ * ignored — except names in `adopt`, which belong to this scope despite foreign naming (a room's
+ * `resume-*` agent sessions) and are appended after the ordinal strays, in name order. When
+ * death pruning empties the layout entirely, the healed default pane represents one of those
+ * deaths rather than the base — a recordless base name would read as a host-restart loss and
+ * silently create a shell nobody asked for, where the dead name parks on its ended card.
  */
 export function reconcile(
   stored: PaneLayout | null,
   live: readonly string[],
   base: string,
   adopt?: ReadonlySet<string>,
+  dead?: ReadonlySet<string>,
 ): PaneLayout {
   const ours = (s: string) => ordinalOf(s, base) !== null || (adopt?.has(s) ?? false);
+  const listed = new Set([...live, ...(adopt ?? [])]);
+  const keep = (s: string) => ours(s) && !(dead?.has(s) && !listed.has(s));
   const groups: PaneGroup[] = (stored?.groups ?? [])
-    .map((g) => ({ id: g.id, panes: g.panes.filter(ours) }))
+    .map((g) => ({ id: g.id, panes: g.panes.filter(keep) }))
     .filter((g) => g.panes.length > 0);
   let seq = Math.max(stored?.seq ?? 1, ...groups.map((g) => g.id + 1));
   const seen = new Set(groups.flatMap((g) => g.panes));
@@ -199,7 +208,10 @@ export function reconcile(
     groups.push({ id: seq++, panes: [s] });
   }
   if (groups.length === 0) {
-    return defaultLayout(base);
+    const ended = stored?.groups
+      .flatMap((group) => group.panes)
+      .find((session) => dead?.has(session));
+    return defaultLayout(ended ?? base);
   }
   const active = Math.min(Math.max(stored?.active ?? 0, 0), groups.length - 1);
   const meta = pruneMeta(stored?.meta, new Set(groups.flatMap((g) => g.panes)));

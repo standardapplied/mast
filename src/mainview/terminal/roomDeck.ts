@@ -21,6 +21,48 @@ export type DeckSession = {
   readonly command: string[];
 };
 
+/**
+ * A session as the store's inventory holds it: the listing truth plus the
+ * store's own transitions — a create not yet listed, a kill in flight, and a
+ * mutation the box refused, rendered inline where the click happened.
+ */
+export type SessionEntry = DeckSession & {
+  readonly pending?: boolean;
+  readonly dying?: boolean;
+  readonly refusal?: string;
+};
+
+/**
+ * An observed death: a local kill ack, a pty_session_ended event, or a listing
+ * that dropped a previously-live name. Layout reconcile may recreate an absent
+ * session ONLY when no record exists (the genuine host-restart case); `command`
+ * is what ran, kept so a revive can re-mint it.
+ */
+export type DeathRecord = {
+  readonly reason: string;
+  readonly at: number;
+  readonly command?: string[];
+  /** The room whose durable history settles this record's reason. */
+  readonly room?: string;
+  /** True until a fresh history read confirms or replaces the generic reason. */
+  readonly historyPending?: boolean;
+};
+
+/**
+ * The ended card's model: a death still awaiting its durable reason fails
+ * closed — the reason gates the dispatch-yield Reopen check, so until the
+ * fresh history read lands the card shows a holding line and no restart.
+ */
+export function endedCardModel(
+  death: DeathRecord | undefined,
+  reason: string | undefined,
+): { reason: string | undefined; restartable: boolean } {
+  if (death?.historyPending) {
+    return { reason: "Checking why this session ended…", restartable: false };
+  }
+  return { reason, restartable: true };
+}
+
 export type DeckGlyph = "claude" | "codex" | "shell";
 
 /** The mark a glyph draws on cards, picker rows, and inventory rows. */
@@ -63,8 +105,6 @@ export type DeckServices = {
 /** What a route pane the client opened (or revived) attaches with. */
 export type LaunchSpec = {
   readonly command: string[];
-  /** Kill the corpse first — the ended-card revive flow re-minting the same name. */
-  readonly killFirst?: boolean;
 };
 
 /**
@@ -72,62 +112,41 @@ export type LaunchSpec = {
  * command; a live listed session attaches with the command it runs; a session absent
  * from the host entirely (reboot, pruned) is recreated in place as a plain shell —
  * the Terminal view's layout-survives-a-reboot behavior, safe because no agent can
- * be displaced by a shell. Only a listed corpse parks on the ended card: recreating
- * a dead agent session unasked could put two agents on one checkout.
+ * be displaced by a shell. An absent session the store watched die parks on the
+ * ended card with the recorded reason — recreating it would undo the kill — and a
+ * listed corpse parks the same way: recreating a dead agent session unasked could
+ * put two agents on one checkout.
  */
 export function panePlan(
   session: string,
   listed: readonly DeckSession[],
   launched: ReadonlyMap<string, LaunchSpec>,
+  deaths?: ReadonlyMap<string, DeathRecord>,
 ):
-  | { kind: "attach"; command: string[]; killFirst: boolean; writerFde?: string }
+  | { kind: "attach"; command: string[]; writerFde?: string }
   | { kind: "ended"; restartCommand: string[] } {
   const listing = listed.find((s) => s.name === session);
   const opened = launched.get(session);
   if (opened) {
-    return {
-      kind: "attach",
-      command: opened.command,
-      killFirst: opened.killFirst ?? false,
-      writerFde: listing?.writerFde,
-    };
+    return { kind: "attach", command: opened.command, writerFde: listing?.writerFde };
   }
-  if (!listing) return { kind: "attach", command: ["bash", "-l"], killFirst: false };
+  if (!listing) {
+    const death = deaths?.get(session);
+    if (death) return { kind: "ended", restartCommand: death.command ?? ["bash", "-l"] };
+    return { kind: "attach", command: ["bash", "-l"] };
+  }
   if (listing.live) {
-    return { kind: "attach", command: listing.command, killFirst: false, writerFde: listing.writerFde };
+    return { kind: "attach", command: listing.command, writerFde: listing.writerFde };
   }
   return { kind: "ended", restartCommand: listing.command };
 }
 
-/** The Terminal view's whole-box room state: the session listing and the room catalog. */
-export type RoomInventory = {
-  readonly sessions: DeckSession[];
-  readonly rooms: Array<{ id: string; title: string; project: string }>;
-};
-
-/**
- * Folds one refresh into the inventory. A failed side keeps its last good value
- * instead of blanking: a transient rooms-catalog outage must never strip projects
- * off live sessions — a fabricated empty project would route a jumped-to room's
- * new panes onto the node itself instead of its project container.
- */
-export function foldInventory(
-  current: RoomInventory,
-  sessions: readonly DeckSession[] | null,
-  rooms: RoomInventory["rooms"] | null,
-): RoomInventory {
-  return {
-    sessions: sessions ? sessions.filter((s) => s.room) : current.sessions,
-    rooms: rooms ?? current.rooms,
-  };
-}
-
 /** One room's sessions in the Terminal view's inventory. */
-export type RoomSessionGroup = {
+export type RoomSessionGroup<S extends DeckSession = DeckSession> = {
   readonly roomId: string;
   readonly title: string;
   readonly project: string;
-  readonly sessions: DeckSession[];
+  readonly sessions: S[];
 };
 
 /**
@@ -136,10 +155,10 @@ export type RoomSessionGroup = {
  * listing — an unknown room falls back to its id, never disappears from the
  * operator's whole-box inventory.
  */
-export function roomGroups(
-  all: readonly DeckSession[],
+export function roomGroups<S extends DeckSession>(
+  all: readonly S[],
   rooms: ReadonlyArray<{ id: string; title: string; project: string }>,
-): RoomSessionGroup[] {
+): Array<RoomSessionGroup<S>> {
   const ids = [...new Set(all.filter((s) => s.room).map((s) => s.room))].sort();
   return ids.map((roomId) => {
     const room = rooms.find((r) => r.id === roomId);
@@ -153,7 +172,7 @@ export function roomGroups(
 }
 
 /** The room's slice of the host listing: live sessions first, stable name order inside. */
-export function deckSessions(all: readonly DeckSession[], roomId: string): DeckSession[] {
+export function deckSessions<S extends DeckSession>(all: readonly S[], roomId: string): S[] {
   return all
     .filter((s) => s.room === roomId)
     .sort((a, b) => Number(b.live) - Number(a.live) || a.name.localeCompare(b.name));
@@ -248,28 +267,38 @@ const PTY_EVENT_TYPES = new Set([
   "pty_session_ended",
 ]);
 
-/** True for any session-lifecycle event — the whole-box inventory's refresh cue. */
+/** True for any session-lifecycle event — the session store's refresh cue. */
 export function isPtyEvent(event: SailEvent): boolean {
   return PTY_EVENT_TYPES.has(event.type);
 }
 
-/** True when a live event should refresh this room's deck. */
-export function isDeckEvent(event: SailEvent, roomId: string): boolean {
-  return isPtyEvent(event) && (event.spec === roomId || event.data?.room_id === roomId);
-}
-
 /** Each session's last recorded ended reason, from the room's pty event history. */
-export function endedReasons(events: readonly SailEvent[]): Record<string, string> {
-  const reasons: Record<string, string> = {};
+/**
+ * Each name's newest ended event in the history, with its monotonic event id —
+ * the incarnation identity the store needs: an id lets a consumer prove an
+ * event is newer than everything a name's previous life already accounted for.
+ * Events an old server ships without ids carry -1 (provably-newer never holds).
+ */
+export function endedEvents(
+  events: readonly SailEvent[],
+): Record<string, { reason: string; id: number }> {
+  const ends: Record<string, { reason: string; id: number }> = {};
   for (const event of events) {
     if (event.type !== "pty_session_ended") continue;
     const session = event.data?.session;
     const reason = event.data?.reason;
-    if (typeof session === "string" && typeof reason === "string") {
-      reasons[session] = reason;
-    }
+    if (typeof session !== "string" || typeof reason !== "string") continue;
+    const id = typeof event.id === "number" ? event.id : -1;
+    const known = ends[session];
+    if (!known || id >= known.id) ends[session] = { reason, id };
   }
-  return reasons;
+  return ends;
+}
+
+export function endedReasons(events: readonly SailEvent[]): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(endedEvents(events)).map(([name, end]) => [name, end.reason]),
+  );
 }
 
 /** The dispatch a yield notice names, when the reason is a dispatch displacement. */

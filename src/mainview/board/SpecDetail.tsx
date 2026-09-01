@@ -434,11 +434,7 @@ export function SpecDetail({
       onBack={embedded ? undefined : onBack}
       actions={
         <>
-          <RoomDeckStrip
-            gateway={gateway}
-            roomId={roomId}
-            onSelect={(name) => openTerminal({ focus: name })}
-          />
+          <RoomDeckStrip roomId={roomId} onSelect={(name) => openTerminal({ focus: name })} />
           {(spec.status === "in_progress" || spec.status === "review") && (
             <Button
               variant="ghost"
