@@ -137,7 +137,14 @@ export function TerminalWorkspace({
           });
         })
       }
-      onKill={(session) => void gateway.killSession(session.name).finally(() => reloadRooms())}
+      onKill={(session) =>
+        // Kill rides the owner pty lane, so it gets the same fail-closed guard as the
+        // jump: a session whose room the control plane can't resolve is left alone.
+        void gateway.getRoom(session.room).then((room) => {
+          if (!room.ok || room.value.id !== session.room) return;
+          return gateway.killSession(session.name).finally(() => reloadRooms());
+        })
+      }
     />
   );
 
