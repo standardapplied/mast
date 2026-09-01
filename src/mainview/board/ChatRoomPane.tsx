@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import type { EngagementView, GlobalSpecView, ServerRoomView } from "../../shared/sail-models";
+import { ContextMenu } from "../components/ContextMenu";
 import { DetailsDrawer } from "../components/DetailsDrawer";
+import { CaretDown } from "../components/icons";
 import { RoomHeader } from "../components/RoomHeader";
-import type { DeckServices } from "../terminal/roomDeck";
+import { Button } from "../components/ui";
+import type { RoomTerminalRequest } from "../terminal/roomDeck";
 import { statusLabel } from "./lifecycle";
-import { RoomDeckPanel } from "./RoomDeckPanel";
+import { openTerminalMenu, RoomDeckStrip } from "./RoomDeck";
 import { RosterChip } from "./RosterChip";
 import { SpecRoom } from "./SpecRoom";
 import type { Gateway } from "../gateway";
@@ -19,28 +22,26 @@ function storedWidth(): number {
 
 /**
  * The conversation pane of a room with no attached spec: the same chat surface as a
- * spec's room, with the room's own identity in the header, the terminal deck on top,
- * and a drawer listing the specs born here — the room shows what the brainstorm
- * produced; dispatch stays where the spec lives.
+ * spec's room, with the room's own identity in the header, the terminal deck's cards
+ * before the actions, and a drawer listing the specs born here — the room shows what
+ * the brainstorm produced; dispatch stays where the spec lives.
  */
 export function ChatRoomPane({
   gateway,
   room,
-  deck,
-  active,
+  onOpenTerminal,
   onOpenLog = () => {},
 }: {
   gateway: Gateway;
   room: ServerRoomView;
-  /** The room deck's terminal edge, injected by the Tauri entry (absent in demo/tests). */
-  deck?: DeckServices;
-  /** False while this view is hidden (keep-mounted) — parks the deck's chord and terminals. */
-  active: boolean;
+  /** Navigate to the room's full-screen terminal route. */
+  onOpenTerminal: (request: RoomTerminalRequest) => void;
   onOpenLog?: () => void;
 }) {
   const [drawerOpen, setDrawerOpen] = useState(() => localStorage.getItem(DRAWER_OPEN_KEY) === "true");
   const [drawerWidth, setDrawerWidth] = useState(storedWidth);
   const [specs, setSpecs] = useState<GlobalSpecView[]>([]);
+  const [actionMenu, setActionMenu] = useState<{ x: number; y: number } | null>(null);
 
   const setDetailsOpen = (open: boolean) => {
     setDrawerOpen(open);
@@ -60,6 +61,9 @@ export function ChatRoomPane({
     };
   }, [gateway, drawerOpen, room.spec_ids]);
 
+  const openTerminal = (request: { focus?: string; launch?: RoomTerminalRequest["launch"] }) =>
+    onOpenTerminal({ roomId: room.id, project: room.project, title: room.title, ...request });
+
   const member = room.members[0];
   const engagement: EngagementView | undefined = member && {
     agent: member.agent,
@@ -69,39 +73,52 @@ export function ChatRoomPane({
   };
   return (
     <div className="room-layout">
+      {actionMenu && (
+        <ContextMenu
+          x={actionMenu.x}
+          y={actionMenu.y}
+          items={[openTerminalMenu((glyph) => openTerminal({ launch: glyph }))]}
+          onClose={() => setActionMenu(null)}
+        />
+      )}
       <main className="room-conversation">
-        <RoomDeckPanel
-          gateway={gateway}
-          roomId={room.id}
-          project={room.project}
+        <RoomHeader
           title={room.title}
-          active={active}
-          services={deck}
-          header={(deckControl) => (
-            <RoomHeader
-              title={room.title}
-              eyebrow={room.id}
-              drawerOpen={drawerOpen}
-              onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
-              actions={
-                <>
-                  {deckControl}
-                  {engagement && <RosterChip specId={room.id} engagement={engagement} />}
-                </>
-              }
-            />
-          )}
-        >
-          <SpecRoom
-            gateway={gateway}
-            specId={room.id}
-            roomId={room.id}
-            specTitle={room.title}
-            canWrite
-            engagement={engagement}
-            onOpenLog={onOpenLog}
-          />
-        </RoomDeckPanel>
+          eyebrow={room.id}
+          drawerOpen={drawerOpen}
+          onToggleDrawer={() => setDetailsOpen(!drawerOpen)}
+          actions={
+            <>
+              <RoomDeckStrip
+                gateway={gateway}
+                roomId={room.id}
+                onSelect={(name) => openTerminal({ focus: name })}
+              />
+              {engagement && <RosterChip specId={room.id} engagement={engagement} />}
+              <Button
+                variant="ghost"
+                onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  setActionMenu({ x: rect.right, y: rect.bottom + 4 });
+                }}
+                data-testid="room-actions"
+                aria-haspopup="menu"
+              >
+                Actions
+                <CaretDown size={12} />
+              </Button>
+            </>
+          }
+        />
+        <SpecRoom
+          gateway={gateway}
+          specId={room.id}
+          roomId={room.id}
+          specTitle={room.title}
+          canWrite
+          engagement={engagement}
+          onOpenLog={onOpenLog}
+        />
       </main>
       {drawerOpen && (
         <DetailsDrawer

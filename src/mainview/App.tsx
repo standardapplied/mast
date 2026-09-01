@@ -4,6 +4,7 @@ import { BoardScreen } from "./board/BoardScreen";
 import { notification } from "./board/notifyPolicy";
 import { connectPresence, presenceStore } from "./board/presenceStore";
 import { RoomsScreen } from "./board/RoomsScreen";
+import { RoomTerminalRoute } from "./board/RoomTerminalRoute";
 import { SpecDetail } from "./board/SpecDetail";
 import { Diagnostics } from "./components/Diagnostics";
 import { cx } from "./components/cx";
@@ -14,7 +15,7 @@ import { Tooltip } from "./components/Tooltip";
 import { Button } from "./components/ui";
 import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
-import type { DeckServices } from "./terminal/roomDeck";
+import type { DeckServices, RoomTerminalRequest } from "./terminal/roomDeck";
 import type { ThemeController } from "./theme";
 import type { Updater } from "./updater";
 
@@ -120,9 +121,10 @@ export function App({
 }: {
   gateway: Gateway;
   theme: ThemeController;
-  /** The terminal section, injected by the Tauri entry (absent in demo/tests). */
-  terminal?: ReactNode;
-  /** The room deck's terminal edge, injected by the Tauri entry (absent in demo/tests). */
+  /** The terminal section, injected by the Tauri entry (absent in demo/tests); handed
+   *  the room-route navigation so its Rooms inventory can jump to a session's home. */
+  terminal?: (openRoomTerminal: (request: RoomTerminalRequest) => void) => ReactNode;
+  /** The room workbench the terminal route mounts, injected by the Tauri entry. */
   deck?: DeckServices;
   /** Auto-updater, injected by the Tauri entry (absent on demo/tests). */
   updater?: Updater;
@@ -139,6 +141,10 @@ export function App({
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [identity, setIdentity] = useState<WhoAmI | null>(null);
   const [roomFocus, setRoomFocus] = useState<string | null>(null);
+  // The room terminal route: a full-screen surface you reach through a room, laid
+  // over whichever view opened it. Back (or any rail navigation) clears it; the
+  // views underneath stay mounted, so the room is exactly where it was.
+  const [roomRoute, setRoomRoute] = useState<RoomTerminalRequest | null>(null);
 
   useEffect(
     () =>
@@ -178,7 +184,10 @@ export function App({
     const onHashChange = () => {
       const next = specIdFromHash(location.hash);
       setSpecId(next);
-      if (next) setView("board");
+      if (next) {
+        setView("board");
+        setRoomRoute(null);
+      }
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -194,15 +203,18 @@ export function App({
   };
 
   const goBoard = () => {
+    setRoomRoute(null);
     setView("board");
     backToBoard();
   };
   const goRooms = () => {
+    setRoomRoute(null);
     setView("rooms");
     location.hash = "#/";
     setSpecId(null);
   };
   const goTerminal = () => {
+    setRoomRoute(null);
     setTerminalOpened(true);
     setView("terminal");
   };
@@ -225,8 +237,11 @@ export function App({
 
   const pillView = status ? pill(status) : { label: "Connecting…", state: "connecting" };
 
-  const focusedSpecId =
-    view === "rooms" ? roomFocus : view === "board" ? specId : null;
+  // While the route is up you are still "in" the room — it badges unread instead
+  // of paging toasts for its own conversation.
+  const focusedSpecId = roomRoute
+    ? roomRoute.roomId
+    : view === "rooms" ? roomFocus : view === "board" ? specId : null;
 
   // The workspace renders once we've ever been ready — transient degradation keeps the
   // last view (pill carries the truth) instead of yanking it to a full-screen
@@ -281,11 +296,15 @@ export function App({
           <div
             id="topbar-slot"
             className="topbar__slot"
-            style={{ display: view === "terminal" ? "flex" : "none" }}
+            style={{ display: view === "terminal" && !roomRoute ? "flex" : "none" }}
           />
-          {view !== "terminal" && (
+          {(view !== "terminal" || roomRoute) && (
             <div className="topbar__context">
-              {showWorkspace ? (navItems.find((item) => item.value === view)?.label ?? "Mast") : "Mast"}
+              {roomRoute
+                ? roomRoute.title
+                : showWorkspace
+                  ? (navItems.find((item) => item.value === view)?.label ?? "Mast")
+                  : "Mast"}
             </div>
           )}
         </header>
@@ -330,23 +349,23 @@ export function App({
           <section
             className="cockpit-view"
             data-testid="view-rooms"
-            style={{ display: view === "rooms" ? "flex" : "none" }}
+            style={{ display: view === "rooms" && !roomRoute ? "flex" : "none" }}
           >
             {!showWorkspace ? (
               view === "rooms" && connectGate
             ) : (
-              <RoomsScreen gateway={gateway} deck={deck} active={view === "rooms"} onFocus={setRoomFocus} />
+              <RoomsScreen gateway={gateway} onOpenTerminal={setRoomRoute} onFocus={setRoomFocus} />
             )}
           </section>
           <section
             className="cockpit-view"
             data-testid="view-board"
-            style={{ display: view === "board" ? "flex" : "none" }}
+            style={{ display: view === "board" && !roomRoute ? "flex" : "none" }}
           >
             {!showWorkspace ? (
               view === "board" && connectGate
             ) : specId ? (
-              <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} deck={deck} active={view === "board"} />
+              <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} onOpenTerminal={setRoomRoute} />
             ) : (
               <BoardScreen
                 gateway={gateway}
@@ -357,8 +376,26 @@ export function App({
             )}
           </section>
           {terminal && terminalOpened && (
-            <section className="cockpit-view" style={{ display: view === "terminal" ? "flex" : "none" }}>
-              {terminal}
+            <section
+              className="cockpit-view"
+              style={{ display: view === "terminal" && !roomRoute ? "flex" : "none" }}
+            >
+              {terminal(setRoomRoute)}
+            </section>
+          )}
+          {roomRoute && (
+            <section
+              className="cockpit-view"
+              data-testid="view-room-terminal"
+              style={{ display: "flex" }}
+            >
+              <RoomTerminalRoute
+                gateway={gateway}
+                request={roomRoute}
+                services={deck}
+                active
+                onBack={() => setRoomRoute(null)}
+              />
             </section>
           )}
         </main>

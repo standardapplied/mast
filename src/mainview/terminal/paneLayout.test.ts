@@ -32,10 +32,11 @@ describe("session naming", () => {
     expect(nextSessionName(["mast-a", "mast-a.3"], "mast-a")).toBe("mast-a.2");
   });
 
-  test("labels are the ordinal", () => {
+  test("labels are the ordinal; an adopted foreign session shows its raw name", () => {
     expect(labelFor("mast-a", "mast-a")).toBe("1");
     expect(labelFor("mast-a.2", "mast-a")).toBe("2");
     expect(labelFor("mast-a.17", "mast-a")).toBe("17");
+    expect(labelFor("resume-run-7", "room-design-talk")).toBe("resume-run-7");
   });
 });
 
@@ -85,6 +86,28 @@ describe("reconcile", () => {
     const stored = { groups: [{ id: 9, panes: ["mast-a"] }], active: 0, seq: 2 };
     const out = reconcile(stored, ["mast-a.2"], "mast-a");
     expect(out.groups[1]!.id).toBe(10);
+  });
+
+  test("adopted names join despite foreign naming — ordinal strays first, then by name", () => {
+    const adopt = new Set(["resume-run-7", "resume-run-2"]);
+    const out = reconcile(
+      null,
+      ["resume-run-7", "room-r.2", "room-r", "resume-run-2", "other"],
+      "room-r",
+      adopt,
+    );
+    expect(out.groups.map((g) => g.panes)).toEqual([
+      ["room-r"],
+      ["room-r.2"],
+      ["resume-run-2"],
+      ["resume-run-7"],
+    ]);
+  });
+
+  test("a stored adopted pane survives reconciliation instead of being purged", () => {
+    const stored = { groups: [{ id: 1, panes: ["room-r", "resume-run-7"] }], active: 0, seq: 2 };
+    const out = reconcile(stored, ["room-r"], "room-r", new Set(["resume-run-7"]));
+    expect(out.groups).toEqual(stored.groups);
   });
 });
 

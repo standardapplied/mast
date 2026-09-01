@@ -15,7 +15,7 @@ async function render(gateway: DemoGateway = createDemoGateway()) {
   act(() =>
     root.render(
       <ToastProvider>
-        <RoomsScreen gateway={gateway} active />
+        <RoomsScreen gateway={gateway} onOpenTerminal={() => {}} />
       </ToastProvider>,
     ),
   );

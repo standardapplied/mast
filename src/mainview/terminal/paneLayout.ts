@@ -54,8 +54,10 @@ function ordinalOf(session: string, base: string): number | null {
   return Number.isInteger(n) && n >= 2 ? n : null;
 }
 
+/** A pane's ordinal label, or the raw name for an adopted foreign session (`resume-*`). */
 export function labelFor(session: string, base: string): string {
-  return String(ordinalOf(session, base) ?? "?");
+  const ordinal = ordinalOf(session, base);
+  return ordinal === null ? session : String(ordinal);
 }
 
 /** What a pane is called: custom label first, then its live shell title, then the ordinal. */
@@ -170,21 +172,29 @@ export function parseLayout(raw: string | null): PaneLayout | null {
  * their session died — reopening the tab recreates the shell in place, which is how a layout
  * survives a host reboot. Live sessions the client has never seen (opened from another Mac, or an
  * older client) are appended as their own tabs in ordinal order. Anything on the socket that isn't
- * this tab's base or `base.<n>` is someone else's and is ignored.
+ * this tab's base or `base.<n>` is someone else's and is ignored — except names in `adopt`, which
+ * belong to this scope despite foreign naming (a room's `resume-*` agent sessions) and are appended
+ * after the ordinal strays, in name order.
  */
 export function reconcile(
   stored: PaneLayout | null,
   live: readonly string[],
   base: string,
+  adopt?: ReadonlySet<string>,
 ): PaneLayout {
+  const ours = (s: string) => ordinalOf(s, base) !== null || (adopt?.has(s) ?? false);
   const groups: PaneGroup[] = (stored?.groups ?? [])
-    .map((g) => ({ id: g.id, panes: g.panes.filter((s) => ordinalOf(s, base) !== null) }))
+    .map((g) => ({ id: g.id, panes: g.panes.filter(ours) }))
     .filter((g) => g.panes.length > 0);
   let seq = Math.max(stored?.seq ?? 1, ...groups.map((g) => g.id + 1));
   const seen = new Set(groups.flatMap((g) => g.panes));
   const strays = live
-    .filter((s) => ordinalOf(s, base) !== null && !seen.has(s))
-    .sort((a, b) => ordinalOf(a, base)! - ordinalOf(b, base)!);
+    .filter((s) => ours(s) && !seen.has(s))
+    .sort(
+      (a, b) =>
+        (ordinalOf(a, base) ?? Infinity) - (ordinalOf(b, base) ?? Infinity) ||
+        a.localeCompare(b),
+    );
   for (const s of strays) {
     groups.push({ id: seq++, panes: [s] });
   }

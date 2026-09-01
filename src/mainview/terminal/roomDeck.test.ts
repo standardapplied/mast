@@ -11,7 +11,9 @@ import {
   isResumeSession,
   nextRoomSession,
   observerCount,
+  panePlan,
   preAttachClass,
+  roomGroups,
   skewCard,
   skewOf,
   yieldedDispatch,
@@ -160,5 +162,68 @@ describe("preAttachClass", () => {
   test("anything else stays a transport failure and reattaches on backoff", () => {
     expect(preAttachClass("connection reset by peer")).toBe("transport");
     expect(preAttachClass("channel open refused")).toBe("transport");
+  });
+});
+
+describe("panePlan", () => {
+  const listed = [
+    session({ name: "room-design-talk", command: ["claude"], writerFde: "mady" }),
+    session({ name: "resume-run-7", live: false, command: ["codex", "resume"] }),
+  ];
+
+  test("an explicit launch attaches with its picked command, revive killing first", () => {
+    const launched = new Map([["room-design-talk.2", { command: ["codex"], killFirst: true }]]);
+    expect(panePlan("room-design-talk.2", listed, launched)).toEqual({
+      kind: "attach",
+      command: ["codex"],
+      killFirst: true,
+      writerFde: undefined,
+    });
+  });
+
+  test("a live listed session attaches with the command it runs and its writer", () => {
+    expect(panePlan("room-design-talk", listed, new Map())).toEqual({
+      kind: "attach",
+      command: ["claude"],
+      killFirst: false,
+      writerFde: "mady",
+    });
+  });
+
+  test("a session absent from the host recreates in place as a plain shell", () => {
+    expect(panePlan("room-design-talk.3", listed, new Map())).toEqual({
+      kind: "attach",
+      command: ["bash", "-l"],
+      killFirst: false,
+    });
+  });
+
+  test("a listed corpse parks on the ended card — never a silent agent recreate", () => {
+    expect(panePlan("resume-run-7", listed, new Map())).toEqual({
+      kind: "ended",
+      restartCommand: ["codex", "resume"],
+    });
+  });
+});
+
+describe("roomGroups", () => {
+  test("groups room sessions by room with titles, ignoring unbound sessions", () => {
+    const all = [
+      session({ name: "mast-node", room: "" }),
+      session({ name: "room-zeta", room: "zeta" }),
+      session({ name: "room-design-talk.2", live: false }),
+      session({ name: "room-design-talk" }),
+    ];
+    const groups = roomGroups(all, [
+      { id: "design-talk", title: "Design talk", project: "sail-mast" },
+    ]);
+    expect(groups.map((g) => g.roomId)).toEqual(["design-talk", "zeta"]);
+    expect(groups[0]).toMatchObject({ title: "Design talk", project: "sail-mast" });
+    expect(groups[0]!.sessions.map((s) => s.name)).toEqual([
+      "room-design-talk",
+      "room-design-talk.2",
+    ]);
+    // An unknown room never disappears from the inventory — it falls back to its id.
+    expect(groups[1]).toMatchObject({ title: "zeta", project: "" });
   });
 });

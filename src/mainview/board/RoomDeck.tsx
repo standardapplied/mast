@@ -1,310 +1,141 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Avatar } from "../components/Avatar";
-import { ContextMenu } from "../components/ContextMenu";
+import type { MenuNode } from "../components/ContextMenu";
 import { cx } from "../components/cx";
+import { Dialog } from "../components/Dialog";
 import { DropdownPanel } from "../components/DropdownPanel";
-import { CaretLeft, Terminal } from "../components/icons";
 import { Tooltip } from "../components/Tooltip";
-import { createPeek, type PeekScheduler, type PeekState } from "../terminal/peek";
+import { Button } from "../components/ui";
+import type { Gateway } from "../gateway";
 import {
   chipTitle,
+  DECK_LAUNCHERS,
   type DeckGlyph,
   type DeckSession,
+  GLYPH_MARKS,
   glyphFor,
   observerCount,
+  type RoomSessionGroup,
   skewCard,
   type SkewSide,
 } from "../terminal/roomDeck";
+import { useRoomSessions } from "./useRoomSessions";
 
 /**
- * The room deck's presentation: the header trigger (the open-terminal verb when the
- * room has no sessions, the deck popover's handle once it does), the popover of
- * session cards, the full-bleed stage's slim context bar, and the ended-session
- * card. Pure props in, callbacks out — the panel owns data and the Tauri edge owns
- * attaching.
+ * The room deck's presentation: the header's card strip (one Ghostty-style card per
+ * session, clicking one navigates to the room's terminal route), the Actions menu's
+ * "Open terminal" submenu, the ended-session card the route's panes park on, and
+ * the Terminal view's "Rooms" inventory. Pure props in, callbacks out — navigation
+ * and attaching live above.
  */
 
-const GLYPH_MARKS: Record<DeckGlyph, string> = { claude: "✳", codex: "◆", shell: "❯" };
-
-const PICKER: Array<{ glyph: DeckGlyph; label: string }> = [
-  { glyph: "shell", label: "Shell" },
-  { glyph: "claude", label: "Claude Code" },
-  { glyph: "codex", label: "Codex" },
-];
+/** The Actions menu's "Open terminal ▸ Shell / Claude Code / Codex" submenu node. */
+export function openTerminalMenu(onOpen: (glyph: DeckGlyph) => void): MenuNode {
+  return {
+    kind: "item",
+    label: "Open terminal",
+    submenu: DECK_LAUNCHERS.map(({ glyph, label }) => ({
+      kind: "item" as const,
+      label: (
+        <span className="deck-menu-launcher" data-testid={`deck-new-${glyph}`}>
+          <span className={`deck-card__glyph deck-card__glyph--${glyph}`} aria-hidden>
+            {GLYPH_MARKS[glyph]}
+          </span>
+          {label}
+        </span>
+      ),
+      onSelect: () => onOpen(glyph),
+    })),
+  };
+}
 
 /**
- * The header slot: a bare `>_` that opens the shell/agent picker while the room has
- * no terminals — zero reserved space, attend is a primitive — and becomes the deck
- * trigger once sessions exist: live count badged on the glyph, click opening the
- * card popover, hover peeking it after a short delay with a grace path into the
- * panel. A pty handshake skew replaces the cards — the listing itself is unknowable.
+ * The header's deck: one card per session (live first, corpses dimmed with their
+ * reason), rendered inline before the room's actions. No sessions, no cards, no
+ * reserved space. A pty handshake skew renders as a single warn card — the listing
+ * itself is unknowable until one side is upgraded.
  */
-export function DeckMenu({
+export function RoomDeckCards({
   sessions,
   roomId,
-  titles = {},
-  selected,
   skew,
   reasons = {},
   onSelect,
-  onKill,
-  onOpen,
-  schedule,
 }: {
   sessions: DeckSession[];
   roomId: string;
-  /** Live OSC titles by session name, from panes attached in this app. */
-  titles?: Record<string, string>;
-  selected?: string | null;
   skew?: SkewSide | null;
   /** Ended reasons by session, carried on the dimmed cards. */
   reasons?: Record<string, string>;
   onSelect: (name: string) => void;
-  onKill?: (session: DeckSession) => void;
-  onOpen: (glyph: DeckGlyph) => void;
-  /** Test seam for the hover-peek timers. */
-  schedule?: PeekScheduler;
 }) {
-  const [state, setState] = useState<PeekState>("closed");
-  const [picker, setPicker] = useState<{ x: number; y: number } | null>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const peek = useMemo(() => createPeek(setState, schedule), [schedule]);
-  useEffect(() => () => peek.dispose(), [peek]);
-
-  const hasDeck = sessions.length > 0 || !!skew;
-  const liveCount = sessions.filter((s) => s.live).length;
-  const open = hasDeck && state !== "closed";
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return;
-      peek.dismiss();
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") peek.dismiss();
-    };
-    document.addEventListener("pointerdown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open, peek]);
-
-  const trigger = (
-    <button
-      ref={triggerRef}
-      type="button"
-      className={cx("deck-trigger", open && "is-open")}
-      aria-label={hasDeck ? "Terminals" : "Open terminal"}
-      aria-haspopup="menu"
-      aria-expanded={open}
-      data-testid="deck-trigger"
-      onClick={(event) => {
-        if (hasDeck) {
-          peek.click();
-          return;
-        }
-        const rect = event.currentTarget.getBoundingClientRect();
-        setPicker({ x: rect.left, y: rect.bottom + 4 });
-      }}
-      onMouseEnter={hasDeck ? () => peek.enterTrigger() : undefined}
-      onMouseLeave={hasDeck ? () => peek.leave() : undefined}
-    >
-      <Terminal size={15} />
-      {liveCount > 0 && (
-        <span className="deck-trigger__count" data-testid="deck-count">
-          {liveCount}
-        </span>
-      )}
-      {liveCount > 0 && <span className="deck-trigger__dot" aria-hidden />}
-      {skew && <span className="deck-trigger__dot deck-trigger__dot--warn" aria-hidden />}
-    </button>
-  );
-
+  if (skew) {
+    const card = skewCard(skew);
+    return (
+      <span className="deck-strip" data-testid="deck-strip">
+        <Tooltip content={card.detail}>
+          <span className="deck-skew-chip" data-testid="deck-skew">
+            {card.title}
+          </span>
+        </Tooltip>
+      </span>
+    );
+  }
+  if (sessions.length === 0) return null;
   return (
-    <>
-      {hasDeck ? trigger : <Tooltip content="Open terminal">{trigger}</Tooltip>}
-      <DropdownPanel triggerRef={triggerRef} isOpen={open} align="right" minWidth={300} maxHeight={480}>
-        <div
-          ref={panelRef}
-          className="deck-pop"
-          data-testid="deck-pop"
-          onMouseEnter={() => peek.enterPanel()}
-          onMouseLeave={() => peek.leave()}
-        >
-          {skew ? (
-            <DeckSkew side={skew} />
-          ) : (
-            <>
-              {sessions.map((session) => (
-                <DeckCard
-                  key={session.name}
-                  session={session}
-                  title={chipTitle(session, roomId, titles[session.name])}
-                  active={selected === session.name}
-                  reason={reasons[session.name]}
-                  onSelect={() => {
-                    peek.dismiss();
-                    onSelect(session.name);
-                  }}
-                  onKill={
-                    onKill &&
-                    (() => {
-                      peek.dismiss();
-                      onKill(session);
-                    })
-                  }
-                />
-              ))}
-              <div className="deck-pop__new">
-                {PICKER.map(({ glyph, label }) => (
-                  <button
-                    key={glyph}
-                    type="button"
-                    className="deck-pop__new-item"
-                    data-testid={`deck-new-${glyph}`}
-                    onClick={() => {
-                      peek.dismiss();
-                      onOpen(glyph);
-                    }}
-                  >
-                    <span className={`deck-card__glyph deck-card__glyph--${glyph}`} aria-hidden>
-                      {GLYPH_MARKS[glyph]}
-                    </span>
-                    <span>{label}</span>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </DropdownPanel>
-      {picker && (
-        <ContextMenu
-          x={picker.x}
-          y={picker.y}
-          onClose={() => setPicker(null)}
-          items={PICKER.map(({ glyph, label }) => ({
-            kind: "item" as const,
-            label,
-            onSelect: () => onOpen(glyph),
-          }))}
-        />
-      )}
-    </>
+    <span className="deck-strip" data-testid="deck-strip">
+      {sessions.map((session) => {
+        const glyph = glyphFor(session.command);
+        const observers = observerCount(session);
+        const title = chipTitle(session, roomId);
+        return (
+          <Tooltip
+            key={session.name}
+            content={session.live ? session.name : (reasons[session.name] ?? "ended")}
+          >
+            <button
+              type="button"
+              className={cx("deck-card", !session.live && "is-ended")}
+              data-testid={`deck-card-${session.name}`}
+              onClick={() => onSelect(session.name)}
+            >
+              <span className={`deck-card__glyph deck-card__glyph--${glyph}`} aria-hidden>
+                {GLYPH_MARKS[glyph]}
+              </span>
+              <span className="deck-card__title">{title}</span>
+              {!session.live && <span className="deck-card__state">ended</span>}
+              {session.live && session.writerFde && <Avatar author={session.writerFde} />}
+              {session.live && observers > 0 && (
+                <span className="deck-card__observers">+{observers}</span>
+              )}
+            </button>
+          </Tooltip>
+        );
+      })}
+    </span>
   );
 }
 
-/** One session in the popover: glyph, title, writer, observers — dimmed with its reason once ended. */
-function DeckCard({
-  session,
-  title,
-  active,
-  reason,
+/** The card strip wired to the live listing — what room headers actually mount. */
+export function RoomDeckStrip({
+  gateway,
+  roomId,
   onSelect,
-  onKill,
 }: {
-  session: DeckSession;
-  title: string;
-  active: boolean;
-  reason?: string;
-  onSelect: () => void;
-  onKill?: () => void;
+  gateway: Gateway;
+  roomId: string;
+  /** A card was clicked — navigate to the route focused on this session. */
+  onSelect: (name: string) => void;
 }) {
-  const glyph = glyphFor(session.command);
-  const observers = observerCount(session);
+  const { sessions, skew, reasons } = useRoomSessions(gateway, roomId);
   return (
-    <button
-      type="button"
-      className={cx("deck-card", active && "is-active", !session.live && "is-ended")}
-      data-testid={`deck-card-${session.name}`}
-      onClick={onSelect}
-    >
-      <span className={`deck-card__glyph deck-card__glyph--${glyph}`} aria-hidden>
-        {GLYPH_MARKS[glyph]}
-      </span>
-      <span className="deck-card__body">
-        <span className="deck-card__title">{title}</span>
-        {!session.live && <span className="deck-card__reason">{reason ?? "ended"}</span>}
-      </span>
-      {!session.live && <span className="deck-card__state">ended</span>}
-      {session.live && session.writerFde && <Avatar author={session.writerFde} />}
-      {session.live && observers > 0 && <span className="deck-card__observers">+{observers}</span>}
-      {onKill && (
-        <span
-          role="button"
-          aria-label={`Close session ${session.name}`}
-          className="deck-card__close"
-          onClick={(event) => {
-            event.stopPropagation();
-            onKill();
-          }}
-        >
-          ×
-        </span>
-      )}
-    </button>
-  );
-}
-
-function DeckSkew({ side }: { side: SkewSide }) {
-  const card = skewCard(side);
-  return (
-    <div className="deck-pop__skew" data-testid="deck-skew">
-      <span className="deck-pop__skew-title">{card.title}</span>
-      <span className="deck-pop__skew-detail">{card.detail}</span>
-    </div>
-  );
-}
-
-/**
- * The slim context bar above the full-bleed stage — the explicit, always-visible way
- * back: chevron + room title returns to the conversation (⌘⇧L does the same), the
- * session's title says where you are, and the deck control rides along so switching
- * sessions never requires leaving. Room messages posted while attached badge the
- * back affordance. Height matches viewer__bar so pane borders align.
- */
-export function StageBar({
-  roomTitle,
-  sessionTitle,
-  unread = 0,
-  onBack,
-  children,
-}: {
-  roomTitle: string;
-  sessionTitle: string;
-  unread?: number;
-  onBack: () => void;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="room-stage-bar" data-testid="room-stage-bar">
-      <Tooltip content="Back to the conversation (⌘⇧L)">
-        <button
-          type="button"
-          className="room-stage-bar__back"
-          data-testid="stage-back"
-          aria-label={`Back to ${roomTitle}`}
-          onClick={onBack}
-        >
-          <CaretLeft size={14} />
-          <span className="room-stage-bar__room">{roomTitle}</span>
-          {unread > 0 && (
-            <span className="room-stage-bar__unread" data-testid="stage-unread">
-              {unread}
-            </span>
-          )}
-        </button>
-      </Tooltip>
-      <span className="room-stage-bar__session" data-testid="stage-session">
-        {sessionTitle}
-      </span>
-      {children}
-    </div>
+    <RoomDeckCards
+      sessions={sessions ?? []}
+      roomId={roomId}
+      skew={skew}
+      reasons={reasons}
+      onSelect={onSelect}
+    />
   );
 }
 
@@ -344,6 +175,17 @@ export function DeckEndedCard({
   );
 }
 
+/** The skew card the route parks on when the listing itself is unknowable. */
+export function DeckSkewCard({ side }: { side: SkewSide }) {
+  const card = skewCard(side);
+  return (
+    <div className="room-deck-card" data-testid="deck-skew-card">
+      <div className="room-deck-card__title">{card.title}</div>
+      <div className="room-deck-card__reason">{card.detail}</div>
+    </div>
+  );
+}
+
 /** The demo/browser stand-in for a live attach: the deck is data, terminals are the app's. */
 export function DeckAttachUnavailable({ session }: { session: string }) {
   return (
@@ -351,5 +193,141 @@ export function DeckAttachUnavailable({ session }: { session: string }) {
       <div className="room-deck-card__title">{session}</div>
       <div className="room-deck-card__reason">Terminals attach in the Mast app.</div>
     </div>
+  );
+}
+
+/**
+ * The Terminal view's "Rooms" group: the operator's whole-box inventory keeps room
+ * sessions visible, collapsed behind one trigger. Rows are grouped by room with the
+ * room's title; clicking a row JUMPS to that room's terminal route — its home
+ * surface — instead of attaching in place. Kill stays available with the usual
+ * confirm: the operator's escape hatch for an orphaned agent shell.
+ */
+export function RoomsInventory({
+  groups,
+  onJump,
+  onKill,
+}: {
+  groups: RoomSessionGroup[];
+  onJump: (group: RoomSessionGroup, session: DeckSession) => void;
+  onKill: (session: DeckSession) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [closing, setClosing] = useState<DeckSession | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  if (groups.length === 0) return null;
+  const liveCount = groups.reduce(
+    (n, group) => n + group.sessions.filter((s) => s.live).length,
+    0,
+  );
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={cx("rooms-inventory-trigger", open && "is-active")}
+        data-testid="rooms-inventory-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        Rooms
+        {liveCount > 0 && <span className="rooms-inventory-trigger__count">{liveCount}</span>}
+      </button>
+      <DropdownPanel triggerRef={triggerRef} isOpen={open} minWidth={280} maxHeight={480}>
+        <div className="rooms-inventory" data-testid="rooms-inventory" ref={panelRef}>
+          {groups.map((group) => (
+            <div key={group.roomId} className="rooms-inventory__group">
+              <div className="rooms-inventory__room">{group.title}</div>
+              {group.sessions.map((session) => {
+                const glyph = glyphFor(session.command);
+                return (
+                  <button
+                    key={session.name}
+                    type="button"
+                    className={cx("rooms-inventory__row", !session.live && "is-ended")}
+                    data-testid={`inventory-${session.name}`}
+                    onClick={() => {
+                      setOpen(false);
+                      onJump(group, session);
+                    }}
+                  >
+                    <span className={`deck-card__glyph deck-card__glyph--${glyph}`} aria-hidden>
+                      {GLYPH_MARKS[glyph]}
+                    </span>
+                    <span className="rooms-inventory__name">
+                      {chipTitle(session, group.roomId)}
+                    </span>
+                    {!session.live && <span className="deck-card__state">ended</span>}
+                    <span
+                      role="button"
+                      aria-label={`Close session ${session.name}`}
+                      className="deck-card__close"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setOpen(false);
+                        setClosing(session);
+                      }}
+                    >
+                      ×
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </DropdownPanel>
+      {closing && (
+        <Dialog
+          isOpen
+          onClose={() => setClosing(null)}
+          title={`Close session ${closing.name}?`}
+          size="sm"
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setClosing(null)}>
+                Cancel
+              </Button>
+              <Button
+                className="btn-danger"
+                onClick={() => {
+                  const session = closing;
+                  setClosing(null);
+                  onKill(session);
+                }}
+              >
+                Close
+              </Button>
+            </>
+          }
+        >
+          <p>
+            The session and anything running in it will end for everyone in the room.
+            Detaching instead leaves it running.
+          </p>
+        </Dialog>
+      )}
+    </>
   );
 }
