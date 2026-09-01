@@ -234,6 +234,71 @@ describe("App cockpit", () => {
     expect(activeNav()).toBe("Terminal");
   });
 
+  test("losing authentication tears down the room route, and re-login does not restore it", async () => {
+    type Status = Awaited<ReturnType<DemoGateway["connection"]>>;
+    gateway = createDemoGateway();
+    gateway.listSessions = async () => ({
+      ok: true,
+      value: [
+        {
+          name: "room-chorus-invoice-ui",
+          live: true,
+          attached: 1,
+          writerFde: "uday",
+          room: "chorus-invoice-ui",
+          command: ["claude"],
+        },
+      ],
+    });
+    const listeners = new Set<(s: Status) => void>();
+    const base = await gateway.connection();
+    const push = async (phase: Status["phase"]) => {
+      await act(async () => {
+        for (const l of listeners) l({ ...base, phase });
+      });
+      await flush();
+    };
+    const authGateway = {
+      ...gateway,
+      onConnectionStatus: (l: (s: Status) => void) => {
+        listeners.add(l);
+        l(base);
+        return () => listeners.delete(l);
+      },
+    };
+    const theme = createThemeController(browserThemeDeps(() => {}));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root.render(<App gateway={authGateway as never} theme={theme} />));
+    await flush();
+    await act(async () => navBtn("board")?.click());
+    await flush();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="card-chorus-invoice-ui"]')?.click();
+    });
+    await flush();
+    await flush();
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="deck-card-room-chorus-invoice-ui"]')
+        ?.click();
+    });
+    await flush();
+    expect(container.querySelector('[data-testid="view-room-terminal"]')).not.toBeNull();
+
+    // Logout (or token expiry) must unmount the interactive PTY surface with
+    // everything else — the gate owns the whole window.
+    await push("unauthenticated");
+    expect(container.querySelector('[data-testid="view-room-terminal"]')).toBeNull();
+    expect(container.querySelector('[data-testid="connect-screen"]')).not.toBeNull();
+
+    await push("ready");
+    expect(container.querySelector('[data-testid="connect-screen"]')).toBeNull();
+    expect(container.querySelector('[data-testid="view-room-terminal"]')).toBeNull();
+  });
+
   test("shows a blocked card with its unmet dependencies", async () => {
     await render();
     const blocked = container.querySelector('[data-testid="card-chorus-ledger-sync"]');

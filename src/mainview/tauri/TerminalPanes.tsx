@@ -17,7 +17,7 @@ import {
   parseLayout,
   projectFor,
   reconcile,
-  removePane,
+  removePanes,
   sessionsOf,
   shortTitle,
   splitGroup,
@@ -309,11 +309,12 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const doClose = (sessions: string[]) => {
       setClosing(null);
       if (!layout) return;
-      const next = sessions.reduce((acc, s) => removePane(acc, s, base), layout);
       // Closing the LAST shell heals the layout back to the same base session name — the pane
       // stays mounted, so after the kill it must revive into a fresh shell instead of parking
-      // on the corpse's "ended" card. A room never auto-revives: its listing refresh parks the
-      // killed pane honestly (fresh names recreate as plain shells via panePlan).
+      // on the corpse's "ended" card. A room never auto-revives: closing its last pane parks
+      // the killed session itself (see removePanes), so the listing refresh lands it on the
+      // ended card instead of a healed base name minting an unasked-for replacement shell.
+      const next = removePanes(layout, sessions, base, !!room);
       const resurrected = new Set(sessions.filter((s) => sessionsOf(next).includes(s)));
       for (const session of sessions) {
         const revive = !room && resurrected.has(session)

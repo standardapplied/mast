@@ -99,6 +99,29 @@ export function panePlan(
   return { kind: "ended", restartCommand: listing.command };
 }
 
+/** The Terminal view's whole-box room state: the session listing and the room catalog. */
+export type RoomInventory = {
+  readonly sessions: DeckSession[];
+  readonly rooms: Array<{ id: string; title: string; project: string }>;
+};
+
+/**
+ * Folds one refresh into the inventory. A failed side keeps its last good value
+ * instead of blanking: a transient rooms-catalog outage must never strip projects
+ * off live sessions — a fabricated empty project would route a jumped-to room's
+ * new panes onto the node itself instead of its project container.
+ */
+export function foldInventory(
+  current: RoomInventory,
+  sessions: readonly DeckSession[] | null,
+  rooms: RoomInventory["rooms"] | null,
+): RoomInventory {
+  return {
+    sessions: sessions ? sessions.filter((s) => s.room) : current.sessions,
+    rooms: rooms ?? current.rooms,
+  };
+}
+
 /** One room's sessions in the Terminal view's inventory. */
 export type RoomSessionGroup = {
   readonly roomId: string;

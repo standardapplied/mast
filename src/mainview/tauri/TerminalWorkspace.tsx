@@ -7,8 +7,9 @@ import { cx } from "../components/cx";
 import type { Gateway } from "../gateway";
 import { isUnwell, type SessionStatus, statusEqual } from "../terminal/connection";
 import {
-  type DeckSession,
+  foldInventory,
   isPtyEvent,
+  type RoomInventory,
   roomGroups,
   type RoomTerminalRequest,
 } from "../terminal/roomDeck";
@@ -93,21 +94,21 @@ export function TerminalWorkspace({
 
   // The whole-box inventory keeps room sessions visible here — grouped, collapsed,
   // and jumping to their home surface — refreshed on any pty lifecycle event.
-  const [roomInventory, setRoomInventory] = useState<{
-    sessions: DeckSession[];
-    rooms: Array<{ id: string; title: string; project: string }>;
-  }>({ sessions: [], rooms: [] });
+  const [roomInventory, setRoomInventory] = useState<RoomInventory>({ sessions: [], rooms: [] });
   const reloadRooms = useMemo(
     () =>
       coalesce(async () => {
         if (!gateway) return;
         const [sessions, rooms] = await Promise.all([gateway.listSessions(), gateway.listRooms()]);
-        setRoomInventory({
-          sessions: sessions.ok ? sessions.value.filter((s) => s.room) : [],
-          rooms: rooms.ok
-            ? rooms.value.rooms.map((r) => ({ id: r.id, title: r.title, project: r.project }))
-            : [],
-        });
+        setRoomInventory((current) =>
+          foldInventory(
+            current,
+            sessions.ok ? sessions.value : null,
+            rooms.ok
+              ? rooms.value.rooms.map((r) => ({ id: r.id, title: r.title, project: r.project }))
+              : null,
+          ),
+        );
       }),
     [gateway],
   );
@@ -123,11 +124,17 @@ export function TerminalWorkspace({
     <RoomsInventory
       groups={roomGroups(roomInventory.sessions, roomInventory.rooms)}
       onJump={(group, session) =>
-        onOpenRoom({
-          roomId: group.roomId,
-          project: group.project,
-          title: group.title,
-          focus: session.name,
+        // The route creates sessions in the room's project container, so the jump
+        // resolves the room fresh instead of trusting the inventory's snapshot —
+        // an unknown or deleted room must never fail open onto the node itself.
+        void gateway.getRoom(group.roomId).then((room) => {
+          if (!room.ok) return;
+          onOpenRoom({
+            roomId: room.value.id,
+            project: room.value.project,
+            title: room.value.title,
+            focus: session.name,
+          });
         })
       }
       onKill={(session) => void gateway.killSession(session.name).finally(() => reloadRooms())}

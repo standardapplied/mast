@@ -10,6 +10,7 @@ import {
   projectFor,
   reconcile,
   removePane,
+  removePanes,
   sessionsOf,
   shortTitle,
   splitGroup,
@@ -167,6 +168,33 @@ describe("editing", () => {
   test("removing the last pane falls back to the default layout", () => {
     const one = { groups: [{ id: 5, panes: ["a"] }], active: 0, seq: 6 };
     expect(removePane(one, "a", "mast-x")).toEqual(defaultLayout("mast-x"));
+  });
+
+  test("removePanes without parkLast heals an emptied layout to the base", () => {
+    const one = { groups: [{ id: 5, panes: ["a"] }], active: 0, seq: 6 };
+    expect(removePanes(one, ["a"], "mast-x")).toEqual(defaultLayout("mast-x"));
+  });
+
+  test("removePanes with parkLast keeps the killed session when nothing else remains", () => {
+    const one = { groups: [{ id: 5, panes: ["resume-run-7"] }], active: 0, seq: 6 };
+    expect(removePanes(one, ["resume-run-7"], "room-x", true)).toEqual(
+      defaultLayout("resume-run-7"),
+    );
+  });
+
+  test("removePanes parkLast keeps one killed pane when closing a whole split", () => {
+    const split = { groups: [{ id: 1, panes: ["room-x", "room-x.2"] }], active: 0, seq: 2 };
+    expect(sessionsOf(removePanes(split, ["room-x", "room-x.2"], "room-x", true))).toEqual([
+      "room-x",
+    ]);
+  });
+
+  test("removePanes parkLast leaves survivors alone — no fallback needed", () => {
+    expect(removePanes(two, ["b"], "room-x", true)).toEqual({
+      groups: [{ id: 1, panes: ["a"] }],
+      active: 0,
+      seq: 3,
+    });
   });
 
   test("paneCount and sessionsOf see every pane across groups", () => {

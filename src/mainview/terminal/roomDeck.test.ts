@@ -6,6 +6,7 @@ import {
   deckSessions,
   type DeckSession,
   endedReasons,
+  foldInventory,
   glyphFor,
   isDeckEvent,
   isResumeSession,
@@ -203,6 +204,30 @@ describe("panePlan", () => {
       kind: "ended",
       restartCommand: ["codex", "resume"],
     });
+  });
+});
+
+describe("foldInventory", () => {
+  const current = {
+    sessions: [session({})],
+    rooms: [{ id: "design-talk", title: "Design talk", project: "sail-mast" }],
+  };
+
+  test("a successful refresh replaces both sides, keeping only room-bound sessions", () => {
+    const next = foldInventory(
+      current,
+      [session({ name: "room-zeta", room: "zeta" }), session({ name: "mast-node", room: "" })],
+      [{ id: "zeta", title: "Zeta", project: "api" }],
+    );
+    expect(next.sessions.map((s) => s.name)).toEqual(["room-zeta"]);
+    expect(next.rooms).toEqual([{ id: "zeta", title: "Zeta", project: "api" }]);
+  });
+
+  test("a failed side keeps its last good value — a rooms outage never blanks the catalog", () => {
+    const next = foldInventory(current, [session({ name: "room-design-talk.2" })], null);
+    expect(next.sessions.map((s) => s.name)).toEqual(["room-design-talk.2"]);
+    expect(next.rooms).toBe(current.rooms);
+    expect(foldInventory(current, null, null)).toEqual(current);
   });
 });
 

@@ -237,6 +237,24 @@ export function removePane(layout: PaneLayout, session: string, base: string): P
   return meta ? { ...next, meta } : next;
 }
 
+/**
+ * Removes a set of panes at once. When the removal empties the layout, the healed
+ * default pane is the base session — except with `parkLast`, where the first removed
+ * session stays instead: a room's close is a kill, and keeping the killed name lets
+ * the listing refresh park it on its ended card rather than the healed base name
+ * silently creating a replacement shell.
+ */
+export function removePanes(
+  layout: PaneLayout,
+  sessions: readonly string[],
+  base: string,
+  parkLast = false,
+): PaneLayout {
+  const emptied = sessionsOf(layout).every((s) => sessions.includes(s));
+  const fallback = parkLast && emptied ? (sessions[0] ?? base) : base;
+  return sessions.reduce((acc, session) => removePane(acc, session, fallback), layout);
+}
+
 export function paneCount(layout: PaneLayout): number {
   return layout.groups.reduce((n, g) => n + g.panes.length, 0);
 }

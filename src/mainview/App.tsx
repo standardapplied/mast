@@ -193,6 +193,14 @@ export function App({
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
+  // Losing authentication takes down every workspace surface, the room-terminal
+  // route included — and forgets the route, so a later sign-in can't restore a
+  // full-screen PTY the signed-out user was never shown.
+  const needsLogin = status?.phase === "unauthenticated";
+  useEffect(() => {
+    if (needsLogin) setRoomRoute(null);
+  }, [needsLogin]);
+
   const openSpec = (id: string) => {
     location.hash = `#/spec/${encodeURIComponent(id)}`;
     setSpecId(id);
@@ -247,7 +255,6 @@ export function App({
   // last view (pill carries the truth) instead of yanking it to a full-screen
   // error. Only a genuinely unusable state takes over the whole surface:
   // unauthenticated (needs sign-in), or first-connect probing/failure.
-  const needsLogin = status?.phase === "unauthenticated";
   const firstConnectBlocking =
     !everReady && (!status || status.phase !== "ready");
   const showWorkspace = !needsLogin && !firstConnectBlocking;
@@ -344,59 +351,63 @@ export function App({
         </nav>
         {/* Workspace views stay mounted once ready and hide via display:none — the
             terminal's session-preserving pattern applied to rooms and board, so a
-            tab switch never cold-boots the view it left. */}
+            tab switch never cold-boots the view it left. An unusable connection is
+            the one exception: the gate replaces EVERY surface, so a signed-out
+            window can never keep an interactive PTY mounted behind it. */}
         <main className="cockpit-main">
-          <section
-            className="cockpit-view"
-            data-testid="view-rooms"
-            style={{ display: view === "rooms" && !roomRoute ? "flex" : "none" }}
-          >
-            {!showWorkspace ? (
-              view === "rooms" && connectGate
-            ) : (
-              <RoomsScreen gateway={gateway} onOpenTerminal={setRoomRoute} onFocus={setRoomFocus} />
-            )}
-          </section>
-          <section
-            className="cockpit-view"
-            data-testid="view-board"
-            style={{ display: view === "board" && !roomRoute ? "flex" : "none" }}
-          >
-            {!showWorkspace ? (
-              view === "board" && connectGate
-            ) : specId ? (
-              <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} onOpenTerminal={setRoomRoute} />
-            ) : (
-              <BoardScreen
-                gateway={gateway}
-                onOpenSpec={openSpec}
-                server={status?.server}
-                tokenPresent={status?.tokenPresent ?? true}
-              />
-            )}
-          </section>
-          {terminal && terminalOpened && (
-            <section
-              className="cockpit-view"
-              style={{ display: view === "terminal" && !roomRoute ? "flex" : "none" }}
-            >
-              {terminal(setRoomRoute)}
+          {!showWorkspace ? (
+            <section className="cockpit-view" style={{ display: "flex" }}>
+              {connectGate}
             </section>
-          )}
-          {roomRoute && (
-            <section
-              className="cockpit-view"
-              data-testid="view-room-terminal"
-              style={{ display: "flex" }}
-            >
-              <RoomTerminalRoute
-                gateway={gateway}
-                request={roomRoute}
-                services={deck}
-                active
-                onBack={() => setRoomRoute(null)}
-              />
-            </section>
+          ) : (
+            <>
+              <section
+                className="cockpit-view"
+                data-testid="view-rooms"
+                style={{ display: view === "rooms" && !roomRoute ? "flex" : "none" }}
+              >
+                <RoomsScreen gateway={gateway} onOpenTerminal={setRoomRoute} onFocus={setRoomFocus} />
+              </section>
+              <section
+                className="cockpit-view"
+                data-testid="view-board"
+                style={{ display: view === "board" && !roomRoute ? "flex" : "none" }}
+              >
+                {specId ? (
+                  <SpecDetail gateway={gateway} specId={specId} onOpenSpec={openSpec} onBack={backToBoard} onOpenTerminal={setRoomRoute} />
+                ) : (
+                  <BoardScreen
+                    gateway={gateway}
+                    onOpenSpec={openSpec}
+                    server={status?.server}
+                    tokenPresent={status?.tokenPresent ?? true}
+                  />
+                )}
+              </section>
+              {terminal && terminalOpened && (
+                <section
+                  className="cockpit-view"
+                  style={{ display: view === "terminal" && !roomRoute ? "flex" : "none" }}
+                >
+                  {terminal(setRoomRoute)}
+                </section>
+              )}
+              {roomRoute && (
+                <section
+                  className="cockpit-view"
+                  data-testid="view-room-terminal"
+                  style={{ display: "flex" }}
+                >
+                  <RoomTerminalRoute
+                    gateway={gateway}
+                    request={roomRoute}
+                    services={deck}
+                    active
+                    onBack={() => setRoomRoute(null)}
+                  />
+                </section>
+              )}
+            </>
           )}
         </main>
         </div>
