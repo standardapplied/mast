@@ -91,12 +91,21 @@ export class CatalogStore {
 
   private runsBySpec = new Map<string, RunView[]>();
   private runHolds = new Map<string, number>();
+  /** Per-spec slice generation, bumped at every invalidation boundary so a
+   *  listing that started before the boundary can never repopulate the cache. */
+  private runsGen = new Map<string, number>();
 
   private specRefreshers = new Map<string, () => void>();
   private roomRefreshers = new Map<string, () => void>();
   private runRefreshers = new Map<string, () => void>();
   private worldRefresher: () => void = () => {};
   private gen = 0;
+  /** Bumped by reset(): every async completion checks it before writing, so a
+   *  request begun under one sign-in can never land in the next one's store.
+   *  Gateway object identity is not enough — App reuses one Gateway object
+   *  across logout/login, so an account-A request resolving after account B
+   *  reconnects would pass an identity check. */
+  private epoch = 0;
   /** Bumped on every accepted scoped merge (upsert or 404 removal) so a full
    *  snapshot that overlapped one knows its presence/absence verdicts are
    *  stale and re-runs instead of undoing the newer scoped state. */
@@ -143,6 +152,7 @@ export class CatalogStore {
     this.gateway = null;
     this.worldRefresher = () => {};
     this.gen++;
+    this.epoch++;
     this.roomsById = null;
     this.specsById = new Map();
     this.specsSeeded = false;
@@ -154,6 +164,7 @@ export class CatalogStore {
     this.specsError = null;
     this.runsBySpec = new Map();
     this.runHolds = new Map();
+    this.runsGen = new Map();
     this.specRefreshers = new Map();
     this.roomRefreshers = new Map();
     this.runRefreshers = new Map();
@@ -169,8 +180,9 @@ export class CatalogStore {
     for (const specId of this.runHolds.keys()) this.kickRuns(specId);
     const gateway = this.gateway;
     if (!gateway) return;
+    const epoch = this.epoch;
     void gateway.whoami().then((result) => {
-      if (this.gateway !== gateway || !result.ok || this.fde === result.value.fde) return;
+      if (this.epoch !== epoch || !result.ok || this.fde === result.value.fde) return;
       this.fde = result.value.fde;
       this.emit();
     });
@@ -315,13 +327,19 @@ export class CatalogStore {
     if (!gateway) {
       return { ok: false, error: { status: 0, code: "bridge", message: "no gateway connected" } };
     }
+    const epoch = this.epoch;
     const result = await gateway.getSpec(id);
-    if (this.gateway !== gateway) return result;
+    if (this.epoch !== epoch) return result;
     if (!result.ok) {
-      if (result.error.status === 404 && this.specsById.delete(id)) {
-        this.etags.delete(id);
+      if (result.error.status === 404) {
+        // An authoritative absence verdict even when the row was never here:
+        // a full-list snapshot in flight may still carry the dead spec, and
+        // only the revision bump stops it from inserting a ghost.
         this.recordRevision++;
-        this.emit();
+        if (this.specsById.delete(id)) {
+          this.etags.delete(id);
+          this.emit();
+        }
       }
       return result;
     }
@@ -334,17 +352,29 @@ export class CatalogStore {
   private async fetchRoom(id: string): Promise<void> {
     const gateway = this.gateway;
     if (!gateway || this.roomsById === null) return;
+    const epoch = this.epoch;
     const result = await gateway.getRoom(id);
-    if (this.gateway !== gateway || this.roomsById === null || !result.ok) return;
+    if (this.epoch !== epoch || this.roomsById === null || !result.ok) return;
     this.upsertRoom(result.value);
+  }
+
+  /** Forgets a spec's cached run list so the next read is unknown, and bumps
+   *  the slice generation so a listing already in flight when the boundary
+   *  passed cannot repopulate the cache with a pre-boundary answer. */
+  private invalidateRuns(specId: string): void {
+    this.runsGen.set(specId, (this.runsGen.get(specId) ?? 0) + 1);
+    if (this.runsBySpec.delete(specId)) this.emit();
   }
 
   private async fetchRuns(specId: string): Promise<void> {
     const gateway = this.gateway;
     if (!gateway) return;
-    if (this.runsBySpec.delete(specId)) this.emit();
+    this.invalidateRuns(specId);
+    const epoch = this.epoch;
+    const gen = this.runsGen.get(specId);
     const result = await gateway.listRuns(specId);
-    if (this.gateway !== gateway || !result.ok || !Array.isArray(result.value.runs)) return;
+    if (this.epoch !== epoch || this.runsGen.get(specId) !== gen) return;
+    if (!result.ok || !Array.isArray(result.value.runs)) return;
     this.runsBySpec.set(specId, result.value.runs);
     this.emit();
   }
@@ -429,29 +459,34 @@ export class CatalogStore {
     return this.activity;
   }
 
-  /** Null until a listing for the spec has landed, and again while a refresh
-   *  is in flight or after one fails — a stale list must never stand as
-   *  evidence that no dispatch is active. Consumers gating on runs (Reopen
-   *  after a yielded dispatch) fail closed on null and the store retries at
-   *  every reconcile point. */
+  /** Null while the spec is unheld, until a listing lands under the current
+   *  hold, and again while a refresh is in flight or after one fails — a
+   *  stale or leftover list must never stand as evidence that no dispatch is
+   *  active. Consumers gating on runs (Reopen after a yielded dispatch) fail
+   *  closed on null and the store retries at every reconcile point. */
   runsOf(specId: string): RunView[] | null {
-    return this.runsBySpec.get(specId) ?? null;
+    return this.runHolds.has(specId) ? (this.runsBySpec.get(specId) ?? null) : null;
   }
 
   /**
    * Declares interest in one spec's run list: fetches it, keeps it fresh on
    * run events and reconcile points while held, and returns the release.
+   * Both hold boundaries invalidate the slice — the answer a previous holder
+   * saw is not evidence for the next one.
    */
   retainRuns(specId: string): () => void {
+    const firstHold = !this.runHolds.has(specId);
     this.runHolds.set(specId, (this.runHolds.get(specId) ?? 0) + 1);
+    if (firstHold) this.invalidateRuns(specId);
     this.kickRuns(specId);
     let released = false;
     return () => {
       if (released) return;
       released = true;
       const holds = (this.runHolds.get(specId) ?? 1) - 1;
-      if (holds <= 0) this.runHolds.delete(specId);
-      else this.runHolds.set(specId, holds);
+      if (holds > 0) return void this.runHolds.set(specId, holds);
+      this.runHolds.delete(specId);
+      this.invalidateRuns(specId);
     };
   }
 
@@ -490,15 +525,16 @@ export class CatalogStore {
         error: { status: 0, code: "invalid_title", message: message(error) },
       };
     }
+    const epoch = this.epoch;
     for (let attempt = 0; attempt < 10; attempt++) {
       const result = await gateway.createRoom({ id, project, title: trimmed });
       if (result.ok) {
-        this.upsertRoom(result.value);
+        if (this.epoch === epoch) this.upsertRoom(result.value);
         let engageError: string | undefined;
         if (agent) {
           const engaged = await gateway.engage(id, { agent });
           if (!engaged.ok) engageError = engaged.error.message;
-          this.kickRoom(id);
+          if (this.epoch === epoch) this.kickRoom(id);
         }
         return engageError ? { ...result, engageError } : result;
       }
@@ -526,8 +562,9 @@ export class CatalogStore {
     if (!gateway) {
       return { ok: false, error: { status: 0, code: "bridge", message: "no gateway connected" } };
     }
+    const epoch = this.epoch;
     const result = await gateway.updateSpec(id, request, ifMatch);
-    if (result.ok && this.gateway === gateway) this.upsertSpec(result.value.spec, result.etag);
+    if (result.ok && this.epoch === epoch) this.upsertSpec(result.value.spec, result.etag);
     return result;
   }
 
@@ -554,8 +591,9 @@ export class CatalogStore {
     if (!gateway) {
       return { ok: false, error: { status: 0, code: "bridge", message: "no gateway connected" } };
     }
+    const epoch = this.epoch;
     const result = await gateway.restoreSpec(id, rev);
-    if (result.ok && this.gateway === gateway) this.upsertSpec(result.value.spec, result.etag);
+    if (result.ok && this.epoch === epoch) this.upsertSpec(result.value.spec, result.etag);
     return result;
   }
 
@@ -568,8 +606,9 @@ export class CatalogStore {
     if (!gateway) {
       return { ok: false, error: { status: 0, code: "bridge", message: "no gateway connected" } };
     }
+    const epoch = this.epoch;
     const result = await gateway.dispatch(project, request);
-    if (result.ok && this.gateway === gateway && request.spec_id) {
+    if (result.ok && this.epoch === epoch && request.spec_id) {
       this.kickSpec(request.spec_id);
       this.kickHeldRuns(request.spec_id);
     }
@@ -582,8 +621,9 @@ export class CatalogStore {
     if (!gateway) {
       return { ok: false, error: { status: 0, code: "bridge", message: "no gateway connected" } };
     }
+    const epoch = this.epoch;
     const result = await gateway.engage(roomId, request);
-    if (result.ok && this.gateway === gateway) this.reconcileRoom(roomId);
+    if (result.ok && this.epoch === epoch) this.reconcileRoom(roomId);
     return result;
   }
 
@@ -593,8 +633,9 @@ export class CatalogStore {
     if (!gateway) {
       return { ok: false, error: { status: 0, code: "bridge", message: "no gateway connected" } };
     }
+    const epoch = this.epoch;
     const result = await gateway.disengage(roomId);
-    if (result.ok && this.gateway === gateway) this.reconcileRoom(roomId);
+    if (result.ok && this.epoch === epoch) this.reconcileRoom(roomId);
     return result;
   }
 
@@ -604,8 +645,9 @@ export class CatalogStore {
     if (!gateway) {
       return { ok: false, error: { status: 0, code: "bridge", message: "no gateway connected" } };
     }
+    const epoch = this.epoch;
     const result = await gateway.stopRun(runId);
-    if (result.ok && this.gateway === gateway) {
+    if (result.ok && this.epoch === epoch) {
       this.kickSpec(specId);
       this.kickHeldRuns(specId);
     }

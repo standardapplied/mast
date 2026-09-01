@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { SailEvent } from "../../shared/sail-models";
+import type { RunView, SailEvent } from "../../shared/sail-models";
 import { createDemoGateway, type DemoGateway, type Gateway } from "../gateway";
 import { CatalogStore } from "./catalogStore";
 
@@ -59,6 +59,17 @@ async function seededQuiet() {
   await settle();
   return { gateway, counts, store };
 }
+
+const demoRun = (specId: string, status: string): RunView => ({
+  id: `run-${specId}-${status}`,
+  project: "chorus",
+  spec_id: specId,
+  node: "demo",
+  role: "build",
+  agent: "claude-code",
+  status,
+  started_at: "2026-07-08T11:30:00Z",
+});
 
 const event = (partial: Partial<SailEvent>): SailEvent => ({
   v: 1,
@@ -295,6 +306,45 @@ describe("CatalogStore event merging", () => {
     await settle();
     expect(store.specOf("chorus-billing-export")).toBeUndefined();
   });
+
+  test("a 404 for a row the store never held still beats the in-flight seed", async () => {
+    const gateway = createDemoGateway();
+    const realList = gateway.listSpecs.bind(gateway);
+    const realGetSpec = gateway.getSpec.bind(gateway);
+    let releaseSeed: (() => void) | undefined;
+    let listings = 0;
+    gateway.listSpecs = async (query) => {
+      const result = await realList(query);
+      if (++listings === 1) {
+        await new Promise<void>((resolve) => {
+          releaseSeed = resolve;
+        });
+        return result;
+      }
+      if (!result.ok) return result;
+      const specs = result.value.specs.filter((spec) => spec.id !== "chorus-billing-export");
+      return { ...result, value: { specs, total: specs.length } };
+    };
+    gateway.getSpec = (id) =>
+      id === "chorus-billing-export"
+        ? Promise.resolve({
+            ok: false as const,
+            error: { status: 404, code: "spec_not_found", message: "gone" },
+          })
+        : realGetSpec(id);
+    const store = new CatalogStore();
+    store.connect(gateway);
+    await Promise.resolve();
+    await store.refreshSpec("chorus-billing-export");
+    expect(store.specOf("chorus-billing-export")).toBeUndefined();
+
+    releaseSeed!();
+    await settle();
+    await settle();
+    expect(store.seeded).toBe(true);
+    expect(store.specOf("chorus-billing-export")).toBeUndefined();
+    expect(store.specList().length).toBe(10);
+  });
 });
 
 describe("CatalogStore runs slice", () => {
@@ -354,6 +404,48 @@ describe("CatalogStore runs slice", () => {
     store.noteEvent(event({ type: "agent_session_started", spec: "chorus-invoice-ui" }));
     await settle();
     expect(store.runsOf("chorus-invoice-ui")).toBeNull();
+  });
+
+  test("re-retaining a released slice never trusts cached absence", async () => {
+    const { gateway, store } = await seeded();
+    let runs: RunView[] = [];
+    gateway.listRuns = async () => ({ ok: true as const, value: { runs } });
+    const release = store.retainRuns("chorus-billing-export");
+    await settle();
+    expect(store.runsOf("chorus-billing-export")).toEqual([]);
+    release();
+    expect(store.runsOf("chorus-billing-export")).toBeNull();
+
+    runs = [demoRun("chorus-billing-export", "running")];
+    store.retainRuns("chorus-billing-export");
+    expect(store.runsOf("chorus-billing-export")).toBeNull();
+    await settle();
+    expect(store.runsOf("chorus-billing-export")?.map((run) => run.status)).toEqual(["running"]);
+  });
+
+  test("a listing that started before release cannot repopulate the cache", async () => {
+    const { gateway, store } = await seeded();
+    const pending: Array<(runs: RunView[]) => void> = [];
+    gateway.listRuns = () =>
+      new Promise((resolve) => {
+        pending.push((runs) => resolve({ ok: true, value: { runs } }));
+      });
+    const release = store.retainRuns("chorus-billing-export");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(pending.length).toBe(1);
+
+    release();
+    store.retainRuns("chorus-billing-export");
+    pending.shift()!([]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.runsOf("chorus-billing-export")).toBeNull();
+
+    await settle();
+    pending.shift()!([demoRun("chorus-billing-export", "running")]);
+    await settle();
+    expect(store.runsOf("chorus-billing-export")?.map((run) => run.status)).toEqual(["running"]);
   });
 
   test("a run event without a spec conservatively refreshes every held list", async () => {
@@ -469,5 +561,67 @@ describe("CatalogStore mutations", () => {
     await settle();
     expect(result.ok).toBe(true);
     expect(store.specOf("chorus-invoice-ui")?.status).toBe("cancelled");
+  });
+});
+
+/**
+ * The logout boundary: App reuses one Gateway object across sign-out/sign-in,
+ * so gateway identity cannot fence off the previous account's in-flight
+ * requests — only the reset epoch can. A request begun under account A must
+ * never land in account B's store.
+ */
+describe("CatalogStore reset epoch", () => {
+  test("a spec fetch begun before reset cannot leak into the next sign-in", async () => {
+    const { gateway, store } = await seeded();
+    const realGetSpec = gateway.getSpec.bind(gateway);
+    let releaseStale: (() => void) | undefined;
+    gateway.getSpec = async (id) => {
+      const result = await realGetSpec(id);
+      await new Promise<void>((resolve) => {
+        releaseStale = resolve;
+      });
+      return result;
+    };
+    const stale = store.refreshSpec("chorus-billing-export");
+
+    store.reset();
+    gateway.getSpec = realGetSpec;
+    gateway.listSpecs = async () => ({ ok: true as const, value: { specs: [], total: 0 } });
+    store.connect(gateway);
+    await settle();
+    expect(store.specList()).toEqual([]);
+
+    releaseStale!();
+    await stale;
+    await settle();
+    expect(store.specOf("chorus-billing-export")).toBeUndefined();
+    expect(store.specList()).toEqual([]);
+  });
+
+  test("a whoami begun before reset cannot overwrite the next account's identity", async () => {
+    const { gateway, store } = await seeded();
+    const realWhoami = gateway.whoami.bind(gateway);
+    let releaseStale: (() => void) | undefined;
+    gateway.whoami = async () => {
+      await new Promise<void>((resolve) => {
+        releaseStale = resolve;
+      });
+      return realWhoami();
+    };
+    store.refreshAll();
+    await Promise.resolve();
+
+    store.reset();
+    gateway.whoami = async () => {
+      const result = await realWhoami();
+      return result.ok ? { ...result, value: { ...result.value, fde: "new-user" } } : result;
+    };
+    store.connect(gateway);
+    await settle();
+    expect(store.me).toBe("new-user");
+
+    releaseStale!();
+    await settle();
+    expect(store.me).toBe("new-user");
   });
 });
