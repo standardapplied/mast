@@ -24,9 +24,9 @@ import { useToast } from "../components/Toast";
 import { Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
-import type { DeckServices } from "../terminal/roomDeck";
+import type { RoomTerminalRequest } from "../terminal/roomDeck";
 import { DispatchDialog } from "./DispatchDialog";
-import { RoomDeckPanel } from "./RoomDeckPanel";
+import { openTerminalMenu, RoomDeckStrip } from "./RoomDeck";
 import { EngageDialog } from "./EngageDialog";
 import { InviteDialog } from "./InviteDialog";
 import { RosterChip } from "./RosterChip";
@@ -108,8 +108,7 @@ export function SpecDetail({
   specId,
   onOpenSpec,
   onBack,
-  deck,
-  active,
+  onOpenTerminal,
   embedded = false,
   eventDebounceMs = 300,
 }: {
@@ -117,10 +116,8 @@ export function SpecDetail({
   specId: string;
   onOpenSpec: (id: string) => void;
   onBack: () => void;
-  /** The room deck's terminal edge, injected by the Tauri entry (absent in demo/tests). */
-  deck?: DeckServices;
-  /** False while this view is hidden (keep-mounted) — parks the deck's chord and terminals. */
-  active: boolean;
+  /** Navigate to the room's full-screen terminal route. */
+  onOpenTerminal: (request: RoomTerminalRequest) => void;
   embedded?: boolean;
   /** Coalescing window for event-driven reloads; tests pass 0. */
   eventDebounceMs?: number;
@@ -371,8 +368,12 @@ export function SpecDetail({
     </div>
   );
 
+  const roomId = spec.room_id ?? spec.id;
+  const openTerminal = (request: { focus?: string; launch?: RoomTerminalRequest["launch"] }) =>
+    onOpenTerminal({ roomId, project: spec.project, title: spec.title, ...request });
+
   // Live log and Stop stay inline while an agent runs; the lifecycle actions —
-  // dispatch, invite, edit — collapse into this one Actions menu.
+  // dispatch, invite, open terminal, edit — collapse into this one Actions menu.
   const actionItems: MenuNode[] = [
     ...(spec.status === "draft"
       ? []
@@ -389,6 +390,7 @@ export function SpecDetail({
           onSelect: () => setEngageOpen(true),
         }]),
     { kind: "item", label: "Run a task", onSelect: () => setInviteOpen(true) },
+    openTerminalMenu((glyph) => openTerminal({ launch: glyph })),
     { kind: "item", label: "Edit", onSelect: startEdit },
   ];
 
@@ -408,7 +410,7 @@ export function SpecDetail({
     setActionMenu({ x: rect.right, y: rect.bottom + 4 });
   };
 
-  const roomHeader = (deckControl: React.ReactNode) => (
+  const roomHeader = (
     <RoomHeader
       title={spec.title}
       eyebrow={spec.id}
@@ -432,7 +434,11 @@ export function SpecDetail({
       onBack={embedded ? undefined : onBack}
       actions={
         <>
-          {deckControl}
+          <RoomDeckStrip
+            gateway={gateway}
+            roomId={roomId}
+            onSelect={(name) => openTerminal({ focus: name })}
+          />
           {(spec.status === "in_progress" || spec.status === "review") && (
             <Button
               variant="ghost"
@@ -480,35 +486,26 @@ export function SpecDetail({
 
       <div className="room-layout">
         <main className="room-conversation">
-          <RoomDeckPanel
+          {roomHeader}
+          <SpecRoom
             gateway={gateway}
-            roomId={spec.room_id ?? spec.id}
-            project={spec.project}
-            title={spec.title}
-            active={active}
-            services={deck}
-            header={roomHeader}
-          >
-            <SpecRoom
-              gateway={gateway}
-              engagement={spec.engagement}
-              specId={spec.id}
-              roomId={spec.room_id ?? spec.id}
-              specStatus={spec.status}
-              specTitle={spec.title}
-              canWrite={
-                role.canWrite &&
-                spec.status !== "done" &&
-                spec.status !== "cancelled" &&
-                spec.status !== "archived"
-              }
-              currentUser={role.fde}
-              onOpenLog={(role) => {
-                setLogRole(role ?? null);
-                setLogOpen(true);
-              }}
-            />
-          </RoomDeckPanel>
+            engagement={spec.engagement}
+            specId={spec.id}
+            roomId={roomId}
+            specStatus={spec.status}
+            specTitle={spec.title}
+            canWrite={
+              role.canWrite &&
+              spec.status !== "done" &&
+              spec.status !== "cancelled" &&
+              spec.status !== "archived"
+            }
+            currentUser={role.fde}
+            onOpenLog={(role) => {
+              setLogRole(role ?? null);
+              setLogOpen(true);
+            }}
+          />
         </main>
 
         {drawerOpen && (

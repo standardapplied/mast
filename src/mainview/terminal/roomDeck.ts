@@ -1,12 +1,13 @@
 import type { ComponentType } from "react";
 import type { SailEvent } from "../../shared/sail-models";
-import type { SessionStatus } from "./connection";
+import type { Gateway } from "../gateway";
 import { labelFor, nextSessionName } from "./paneLayout";
 
 /**
  * The room deck's model: which of a host's pty sessions belong to a room, what each
- * chip says (glyph, title, writer, observers), how room sessions are named, and how
- * a SAILPTY version skew or a dispatch yield reads. Pure data + functions — the deck
+ * card says (glyph, title, writer, observers), how room sessions are named, what a
+ * route pane does with a session (attach vs the ended card), and how a SAILPTY
+ * version skew or a dispatch yield reads. Pure data + functions — the deck
  * components and the Tauri terminal edge are thin skins over these.
  */
 
@@ -22,28 +23,134 @@ export type DeckSession = {
 
 export type DeckGlyph = "claude" | "codex" | "shell";
 
-/** The terminal picks a room's sessions attach into; injected by the Tauri entry only. */
-export type RoomTerminalProps = {
-  readonly session: string;
+/** The mark a glyph draws on cards, picker rows, and inventory rows. */
+export const GLYPH_MARKS: Record<DeckGlyph, string> = { claude: "✳", codex: "◆", shell: "❯" };
+
+/** What ＋ (and the Actions submenu) can launch in a room, in menu order. */
+export const DECK_LAUNCHERS: ReadonlyArray<{ glyph: DeckGlyph; label: string }> = [
+  { glyph: "shell", label: "Shell" },
+  { glyph: "claude", label: "Claude Code" },
+  { glyph: "codex", label: "Codex" },
+];
+
+/** A navigation to the room's terminal route: where it is and what to do on entry. */
+export type RoomTerminalRequest = {
+  readonly roomId: string;
   readonly project: string;
-  readonly room: string;
-  /** argv to create the session with when it does not exist on the host. */
-  readonly command: string[];
-  /** Kill the corpse first — the ended-card revive flow re-minting the same name. */
-  readonly killFirst?: boolean;
+  /** The room's display title, carried on the route bar's back affordance. */
+  readonly title: string;
+  /** Focus this session on entry (a deck card was clicked). */
+  readonly focus?: string;
+  /** Open a fresh session of this glyph on entry (Actions ▸ Open terminal ▸ …). */
+  readonly launch?: DeckGlyph;
+};
+
+/** The full-screen room workbench; injected by the Tauri entry only. */
+export type RoomWorkbenchProps = {
+  readonly gateway: Gateway;
+  readonly roomId: string;
+  readonly project: string;
+  /** False while the route is hidden — parks terminal focus and drawing. */
   readonly active: boolean;
-  readonly visible: boolean;
-  /** The caller's FDE, to tell "I hold write" from "someone else does". */
-  readonly me?: string;
-  /** The write holder as last listed, seeding the banner before any writer event. */
-  readonly writerFde?: string;
-  readonly onStatus?: (status: SessionStatus) => void;
-  readonly onTitle?: (title: string) => void;
+  readonly focus?: string;
+  readonly launch?: DeckGlyph;
 };
 
 export type DeckServices = {
-  readonly Terminal: ComponentType<RoomTerminalProps>;
+  readonly Workbench: ComponentType<RoomWorkbenchProps>;
 };
+
+/** What a route pane the client opened (or revived) attaches with. */
+export type LaunchSpec = {
+  readonly command: string[];
+  /** Kill the corpse first — the ended-card revive flow re-minting the same name. */
+  readonly killFirst?: boolean;
+};
+
+/**
+ * What a route pane shows for a session. Explicit launches attach with their picked
+ * command; a live listed session attaches with the command it runs; a session absent
+ * from the host entirely (reboot, pruned) is recreated in place as a plain shell —
+ * the Terminal view's layout-survives-a-reboot behavior, safe because no agent can
+ * be displaced by a shell. Only a listed corpse parks on the ended card: recreating
+ * a dead agent session unasked could put two agents on one checkout.
+ */
+export function panePlan(
+  session: string,
+  listed: readonly DeckSession[],
+  launched: ReadonlyMap<string, LaunchSpec>,
+):
+  | { kind: "attach"; command: string[]; killFirst: boolean; writerFde?: string }
+  | { kind: "ended"; restartCommand: string[] } {
+  const listing = listed.find((s) => s.name === session);
+  const opened = launched.get(session);
+  if (opened) {
+    return {
+      kind: "attach",
+      command: opened.command,
+      killFirst: opened.killFirst ?? false,
+      writerFde: listing?.writerFde,
+    };
+  }
+  if (!listing) return { kind: "attach", command: ["bash", "-l"], killFirst: false };
+  if (listing.live) {
+    return { kind: "attach", command: listing.command, killFirst: false, writerFde: listing.writerFde };
+  }
+  return { kind: "ended", restartCommand: listing.command };
+}
+
+/** The Terminal view's whole-box room state: the session listing and the room catalog. */
+export type RoomInventory = {
+  readonly sessions: DeckSession[];
+  readonly rooms: Array<{ id: string; title: string; project: string }>;
+};
+
+/**
+ * Folds one refresh into the inventory. A failed side keeps its last good value
+ * instead of blanking: a transient rooms-catalog outage must never strip projects
+ * off live sessions — a fabricated empty project would route a jumped-to room's
+ * new panes onto the node itself instead of its project container.
+ */
+export function foldInventory(
+  current: RoomInventory,
+  sessions: readonly DeckSession[] | null,
+  rooms: RoomInventory["rooms"] | null,
+): RoomInventory {
+  return {
+    sessions: sessions ? sessions.filter((s) => s.room) : current.sessions,
+    rooms: rooms ?? current.rooms,
+  };
+}
+
+/** One room's sessions in the Terminal view's inventory. */
+export type RoomSessionGroup = {
+  readonly roomId: string;
+  readonly title: string;
+  readonly project: string;
+  readonly sessions: DeckSession[];
+};
+
+/**
+ * The Terminal view's "Rooms" inventory: every room-bound session grouped by room
+ * (rooms in id order, the deck's live-first order inside), titled from the rooms
+ * listing — an unknown room falls back to its id, never disappears from the
+ * operator's whole-box inventory.
+ */
+export function roomGroups(
+  all: readonly DeckSession[],
+  rooms: ReadonlyArray<{ id: string; title: string; project: string }>,
+): RoomSessionGroup[] {
+  const ids = [...new Set(all.filter((s) => s.room).map((s) => s.room))].sort();
+  return ids.map((roomId) => {
+    const room = rooms.find((r) => r.id === roomId);
+    return {
+      roomId,
+      title: room?.title ?? roomId,
+      project: room?.project ?? "",
+      sessions: deckSessions(all, roomId),
+    };
+  });
+}
 
 /** The room's slice of the host listing: live sessions first, stable name order inside. */
 export function deckSessions(all: readonly DeckSession[], roomId: string): DeckSession[] {
@@ -141,12 +248,14 @@ const PTY_EVENT_TYPES = new Set([
   "pty_session_ended",
 ]);
 
+/** True for any session-lifecycle event — the whole-box inventory's refresh cue. */
+export function isPtyEvent(event: SailEvent): boolean {
+  return PTY_EVENT_TYPES.has(event.type);
+}
+
 /** True when a live event should refresh this room's deck. */
 export function isDeckEvent(event: SailEvent, roomId: string): boolean {
-  return (
-    PTY_EVENT_TYPES.has(event.type) &&
-    (event.spec === roomId || event.data?.room_id === roomId)
-  );
+  return isPtyEvent(event) && (event.spec === roomId || event.data?.room_id === roomId);
 }
 
 /** Each session's last recorded ended reason, from the room's pty event history. */

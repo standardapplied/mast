@@ -192,6 +192,7 @@ function makeGateway(
       await enrichGate;
       return { ok: true as const, value: { specs: [main, dep], total: 2 } };
     },
+    listSessions: async () => ({ ok: true as const, value: [] }),
     onEvent: (l: (e: SailEvent) => void) => {
       listeners.add(l);
       return () => listeners.delete(l);
@@ -214,10 +215,13 @@ function makeGateway(
   };
 }
 
+const terminalRequests: unknown[] = [];
+
 async function mount(gateway: Gateway) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
+  terminalRequests.length = 0;
   act(() =>
     root.render(
       <ToastProvider>
@@ -226,7 +230,7 @@ async function mount(gateway: Gateway) {
           specId="s1"
           onOpenSpec={() => {}}
           onBack={() => {}}
-          active
+          onOpenTerminal={(request) => terminalRequests.push(request)}
           eventDebounceMs={0}
         />
       </ToastProvider>,
@@ -579,5 +583,55 @@ describe("SpecDetail room findings", () => {
     expect(text()).toContain("Off-by-one in retry cap");
     expect(text()).toContain("src/x.ts:3");
     expect(text()).toContain("The loop retries one time fewer than configured.");
+  });
+});
+
+describe("SpecDetail terminal entries", () => {
+  test("Actions ▸ Open terminal ▸ Claude Code navigates with the launch request", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    await openActions();
+    const openRow = [...document.querySelectorAll<HTMLElement>(".context-menu-row")].find((row) =>
+      row.textContent?.includes("Open terminal"),
+    );
+    expect(openRow, "the room's Actions menu carries the submenu").not.toBeUndefined();
+    await act(async () => {
+      openRow?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+    await settle();
+    await act(async () => {
+      document.querySelector<HTMLElement>('[data-testid="deck-new-claude"]')?.click();
+    });
+    expect(terminalRequests).toEqual([
+      { roomId: "s1", project: "chorus", title: "s1", launch: "claude" },
+    ]);
+    expect(
+      container.querySelector('[data-testid="deck-strip"]'),
+      "no sessions, nothing terminal-shaped in the header",
+    ).toBeNull();
+  });
+
+  test("live sessions surface as header cards that navigate focused on the session", async () => {
+    const fake = makeGateway();
+    (fake.gateway as { listSessions: unknown }).listSessions = async () => ({
+      ok: true as const,
+      value: [
+        {
+          name: "room-s1",
+          live: true,
+          attached: 1,
+          writerFde: "uday",
+          room: "s1",
+          command: ["claude"],
+        },
+      ],
+    });
+    await mount(fake.gateway);
+    const card = container.querySelector<HTMLButtonElement>('[data-testid="deck-card-room-s1"]');
+    expect(card).not.toBeNull();
+    await act(async () => card?.click());
+    expect(terminalRequests).toEqual([
+      { roomId: "s1", project: "chorus", title: "s1", focus: "room-s1" },
+    ]);
   });
 });

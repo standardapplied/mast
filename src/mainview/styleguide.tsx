@@ -19,7 +19,8 @@ import { Textarea } from "./components/Textarea";
 import { ToastProvider, useToast } from "./components/Toast";
 import { Badge, Button, Card, Eyebrow } from "./components/ui";
 import { RoomList } from "./board/RoomList";
-import { DeckEndedCard, DeckMenu, StageBar } from "./board/RoomDeck";
+import { DeckEndedCard, RoomDeckCards, RoomsInventory } from "./board/RoomDeck";
+import { CaretLeft } from "./components/icons";
 import type { RoomView } from "./board/rooms";
 import type { DeckSession } from "./terminal/roomDeck";
 import type { TimeValue } from "./lib/date-utils";
@@ -217,34 +218,39 @@ const DECK_DEMO: DeckSession[] = [
 ];
 
 function RoomDeckDemo() {
-  const [selected, setSelected] = useState<string | null>("room-design-talk");
   return (
     <div className="room-components-demo">
-      <StageBar
-        roomTitle="Design talk"
-        sessionTitle="brainstorm"
-        unread={2}
-        onBack={() => setSelected(null)}
-      >
-        <DeckMenu
+      {/* The route bar: the single-level way back from the full-screen terminal route. */}
+      <div className="room-route__bar">
+        <button type="button" className="room-route__back">
+          <CaretLeft size={14} />
+          <span className="room-route__room">Design talk</span>
+          <span className="room-route__unread">2</span>
+        </button>
+        <span className="room-route__context">design-talk · sail-mast</span>
+      </div>
+      {/* The header's deck: one card per session, corpses dimmed with their reason. */}
+      <div className="room-avatar-demo">
+        <RoomDeckCards
           sessions={DECK_DEMO}
           roomId="design-talk"
-          titles={{ "room-design-talk": "brainstorm" }}
-          selected={selected}
           reasons={{ "resume-run-7": "yielded to dispatch r8 of spec design-talk" }}
-          onSelect={setSelected}
-          onKill={() => {}}
-          onOpen={() => {}}
-        />
-      </StageBar>
-      <div className="room-avatar-demo">
-        <DeckMenu sessions={[]} roomId="design-talk" onSelect={() => {}} onOpen={() => {}} />
-        <DeckMenu
-          sessions={[]}
-          roomId="design-talk"
-          skew="box-older"
           onSelect={() => {}}
-          onOpen={() => {}}
+        />
+      </div>
+      <div className="room-avatar-demo">
+        <RoomDeckCards sessions={[]} roomId="design-talk" skew="box-older" onSelect={() => {}} />
+        <RoomsInventory
+          groups={[
+            {
+              roomId: "design-talk",
+              title: "Design talk",
+              project: "sail-mast",
+              sessions: DECK_DEMO,
+            },
+          ]}
+          onJump={() => {}}
+          onKill={() => {}}
         />
       </div>
       <DeckEndedCard

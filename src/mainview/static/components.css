@@ -2756,6 +2756,7 @@ button.room-section-head:hover {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .room-header-actions {
@@ -5259,71 +5260,34 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   animation: file-tree-spin 0.8s linear infinite;
 }
 
-/* ---- Room deck: the header trigger, its popover, and the full-bleed stage ---- */
+/* ---- Room deck: the header's card strip, the route, and the Rooms inventory ---- */
 
-.deck-trigger {
-  appearance: none;
-  position: relative;
+.deck-strip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 8px;
-  background: none;
-  border: none;
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--muted-foreground);
-  cursor: pointer;
-}
-.deck-trigger:hover,
-.deck-trigger.is-open {
-  color: var(--foreground);
-  background: var(--surface-hover);
-}
-.deck-trigger__count {
-  min-width: 12px;
-  text-align: center;
-  line-height: 1;
-}
-.deck-trigger__dot {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--success);
-}
-.deck-trigger__dot--warn {
-  background: var(--warning);
-}
-
-.deck-pop {
-  display: grid;
-  padding: 4px;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
 }
 .deck-card {
   appearance: none;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  background: none;
-  border: none;
-  border-radius: 4px;
-  font: inherit;
+  gap: 6px;
+  height: 28px;
+  max-width: 180px;
+  min-width: 0;
+  padding: 0 9px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
   letter-spacing: 0.04em;
   color: var(--muted-foreground);
   cursor: pointer;
-  text-align: left;
 }
-.deck-card:hover,
-.deck-card.is-active {
+.deck-card:hover {
   color: var(--foreground);
   background: var(--surface-hover);
 }
@@ -5343,23 +5307,10 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
 .deck-card__glyph--shell {
   color: var(--subtle-foreground);
 }
-.deck-card__body {
-  display: grid;
-  flex: 1;
-  gap: 2px;
-  min-width: 0;
-}
 .deck-card__title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.deck-card__reason {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10px;
-  color: var(--subtle-foreground);
 }
 .deck-card__state {
   color: var(--subtle-foreground);
@@ -5383,51 +5334,37 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   padding: 0 1px;
   visibility: hidden;
 }
-.deck-card:hover .deck-card__close {
-  visibility: visible;
-}
 .deck-card__close:hover {
   color: var(--foreground);
 }
-.deck-pop__new {
-  display: grid;
-  margin-top: 4px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
+.deck-skew-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--warning);
+  white-space: nowrap;
 }
-.deck-pop__new-item {
-  appearance: none;
-  display: flex;
+.deck-menu-launcher {
+  display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
-  background: none;
-  border: none;
-  border-radius: 4px;
-  font: inherit;
-  color: var(--muted-foreground);
-  cursor: pointer;
-  text-align: left;
-}
-.deck-pop__new-item:hover {
-  color: var(--foreground);
-  background: var(--surface-hover);
-}
-.deck-pop__skew {
-  display: grid;
-  gap: 6px;
-  padding: 10px 12px;
-}
-.deck-pop__skew-title {
-  color: var(--warning);
-}
-.deck-pop__skew-detail {
-  color: var(--muted-foreground);
 }
 
-/* The slim context bar above the full-bleed stage; height matches .viewer__bar so
-   pane borders align. */
-.room-stage-bar {
+/* The room terminal route: the single-level back bar over the full workbench.
+   Bar height matches .viewer__bar so pane borders align. */
+.room-route {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.room-route__bar {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -5437,7 +5374,7 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   border-bottom: 1px solid var(--border);
   background: var(--background);
 }
-.room-stage-bar__back {
+.room-route__back {
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -5452,23 +5389,23 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   cursor: pointer;
   min-width: 0;
 }
-.room-stage-bar__back:hover {
+.room-route__back:hover {
   color: var(--foreground);
   background: var(--surface-hover);
 }
-.room-stage-bar__room {
+.room-route__room {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.room-stage-bar__unread {
+.room-route__unread {
   padding: 1px 6px;
   border: 1px solid var(--primary);
   border-radius: 8px;
   font: 500 10px var(--font-mono);
   color: var(--primary);
 }
-.room-stage-bar__session {
+.room-route__context {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5478,14 +5415,96 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   color: var(--subtle-foreground);
   text-align: right;
 }
-
-.room-deck-panel__stage {
+.room-route__body {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: stretch;
 }
+.room-workbench-gate {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* The Terminal view's collapsed "Rooms" group: the whole-box inventory's room slice. */
+.rooms-inventory-trigger {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.rooms-inventory-trigger:hover,
+.rooms-inventory-trigger.is-active {
+  color: var(--foreground);
+  background: var(--surface-hover);
+}
+.rooms-inventory-trigger__count {
+  min-width: 12px;
+  text-align: center;
+  line-height: 1;
+  color: var(--subtle-foreground);
+}
+.rooms-inventory {
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.rooms-inventory__room {
+  padding: 6px 10px 2px;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--subtle-foreground);
+}
+.rooms-inventory__row {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  font: inherit;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  text-align: left;
+}
+.rooms-inventory__row:hover {
+  color: var(--foreground);
+  background: var(--surface-hover);
+}
+.rooms-inventory__row.is-ended {
+  opacity: 0.6;
+}
+.rooms-inventory__row:hover .deck-card__close {
+  visibility: visible;
+}
+.rooms-inventory__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .room-deck-card {
   margin: auto;
   display: flex;
@@ -5511,9 +5530,17 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
 
 .room-terminal {
   flex: 1;
+  height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+.room-pane-ended {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
 }
 .room-terminal__banner {
   display: flex;

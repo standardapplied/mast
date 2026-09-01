@@ -4,7 +4,7 @@ import { Splitter } from "../components/Splitter";
 import { useToast } from "../components/Toast";
 import { Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
-import type { DeckServices } from "../terminal/roomDeck";
+import type { RoomTerminalRequest } from "../terminal/roomDeck";
 import { RoomList } from "./RoomList";
 import { ChatRoomPane } from "./ChatRoomPane";
 import { SpecDetail } from "./SpecDetail";
@@ -27,16 +27,13 @@ function storedWidth(storage: StorageLike): number {
 export function RoomsScreen({
   gateway,
   storage = localStorage,
-  deck,
-  active,
+  onOpenTerminal,
   onFocus,
 }: {
   gateway: Gateway;
   storage?: StorageLike;
-  /** The room deck's terminal edge, injected by the Tauri entry (absent in demo/tests). */
-  deck?: DeckServices;
-  /** False while this view is hidden (keep-mounted) — parks the deck's chord and terminals. */
-  active: boolean;
+  /** Navigate to a room's full-screen terminal route. */
+  onOpenTerminal: (request: RoomTerminalRequest) => void;
   /** Reports the focused room's spec id so app-level notifications can suppress it. */
   onFocus?: (specId: string | null) => void;
 }) {
@@ -166,8 +163,7 @@ export function RoomsScreen({
               }
             }}
             onBack={() => {}}
-            deck={deck}
-            active={active}
+            onOpenTerminal={onOpenTerminal}
             embedded
             eventDebounceMs={0}
           />
@@ -176,8 +172,7 @@ export function RoomsScreen({
             key={selected.room.id}
             gateway={gateway}
             room={selected.room}
-            deck={deck}
-            active={active}
+            onOpenTerminal={onOpenTerminal}
           />
         ) : (
           <div className="room-empty-state">

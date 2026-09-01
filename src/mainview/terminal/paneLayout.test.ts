@@ -10,6 +10,7 @@ import {
   projectFor,
   reconcile,
   removePane,
+  removePanes,
   sessionsOf,
   shortTitle,
   splitGroup,
@@ -32,10 +33,11 @@ describe("session naming", () => {
     expect(nextSessionName(["mast-a", "mast-a.3"], "mast-a")).toBe("mast-a.2");
   });
 
-  test("labels are the ordinal", () => {
+  test("labels are the ordinal; an adopted foreign session shows its raw name", () => {
     expect(labelFor("mast-a", "mast-a")).toBe("1");
     expect(labelFor("mast-a.2", "mast-a")).toBe("2");
     expect(labelFor("mast-a.17", "mast-a")).toBe("17");
+    expect(labelFor("resume-run-7", "room-design-talk")).toBe("resume-run-7");
   });
 });
 
@@ -85,6 +87,28 @@ describe("reconcile", () => {
     const stored = { groups: [{ id: 9, panes: ["mast-a"] }], active: 0, seq: 2 };
     const out = reconcile(stored, ["mast-a.2"], "mast-a");
     expect(out.groups[1]!.id).toBe(10);
+  });
+
+  test("adopted names join despite foreign naming — ordinal strays first, then by name", () => {
+    const adopt = new Set(["resume-run-7", "resume-run-2"]);
+    const out = reconcile(
+      null,
+      ["resume-run-7", "room-r.2", "room-r", "resume-run-2", "other"],
+      "room-r",
+      adopt,
+    );
+    expect(out.groups.map((g) => g.panes)).toEqual([
+      ["room-r"],
+      ["room-r.2"],
+      ["resume-run-2"],
+      ["resume-run-7"],
+    ]);
+  });
+
+  test("a stored adopted pane survives reconciliation instead of being purged", () => {
+    const stored = { groups: [{ id: 1, panes: ["room-r", "resume-run-7"] }], active: 0, seq: 2 };
+    const out = reconcile(stored, ["room-r"], "room-r", new Set(["resume-run-7"]));
+    expect(out.groups).toEqual(stored.groups);
   });
 });
 
@@ -144,6 +168,33 @@ describe("editing", () => {
   test("removing the last pane falls back to the default layout", () => {
     const one = { groups: [{ id: 5, panes: ["a"] }], active: 0, seq: 6 };
     expect(removePane(one, "a", "mast-x")).toEqual(defaultLayout("mast-x"));
+  });
+
+  test("removePanes without parkLast heals an emptied layout to the base", () => {
+    const one = { groups: [{ id: 5, panes: ["a"] }], active: 0, seq: 6 };
+    expect(removePanes(one, ["a"], "mast-x")).toEqual(defaultLayout("mast-x"));
+  });
+
+  test("removePanes with parkLast keeps the killed session when nothing else remains", () => {
+    const one = { groups: [{ id: 5, panes: ["resume-run-7"] }], active: 0, seq: 6 };
+    expect(removePanes(one, ["resume-run-7"], "room-x", true)).toEqual(
+      defaultLayout("resume-run-7"),
+    );
+  });
+
+  test("removePanes parkLast keeps one killed pane when closing a whole split", () => {
+    const split = { groups: [{ id: 1, panes: ["room-x", "room-x.2"] }], active: 0, seq: 2 };
+    expect(sessionsOf(removePanes(split, ["room-x", "room-x.2"], "room-x", true))).toEqual([
+      "room-x",
+    ]);
+  });
+
+  test("removePanes parkLast leaves survivors alone — no fallback needed", () => {
+    expect(removePanes(two, ["b"], "room-x", true)).toEqual({
+      groups: [{ id: 1, panes: ["a"] }],
+      active: 0,
+      seq: 3,
+    });
   });
 
   test("paneCount and sessionsOf see every pane across groups", () => {

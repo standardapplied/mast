@@ -6,7 +6,7 @@ import { App } from "./App";
 import { Styleguide } from "./styleguide";
 import { createTauriGateway } from "./tauri/gateway";
 import type { RosterSources } from "./tauri/projectRoster";
-import { tauriDeckServices } from "./tauri/RoomTerminal";
+import { tauriDeckServices } from "./tauri/RoomWorkbench";
 import { TerminalWorkspace } from "./tauri/TerminalWorkspace";
 import { createTauriUpdater } from "./tauri/updater";
 import { browserThemeDeps, createThemeController } from "./theme";
@@ -92,7 +92,13 @@ createRoot(container).render(
       <App
         gateway={gateway}
         theme={theme}
-        terminal={<TerminalWorkspace sources={rosterSources} gateway={gateway} />}
+        terminal={(openRoomTerminal) => (
+          <TerminalWorkspace
+            sources={rosterSources}
+            gateway={gateway}
+            onOpenRoom={openRoomTerminal}
+          />
+        )}
         deck={tauriDeckServices}
         updater={createTauriUpdater()}
       />

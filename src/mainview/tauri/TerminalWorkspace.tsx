@@ -1,9 +1,18 @@
-import { type ReactNode, type Ref, useEffect, useRef, useState } from "react";
+import { type ReactNode, type Ref, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { RoomsInventory } from "../board/RoomDeck";
+import { coalesce } from "../board/roomRouting";
 import { SnapshotsPanel } from "../board/SnapshotsPanel";
 import { cx } from "../components/cx";
 import type { Gateway } from "../gateway";
 import { isUnwell, type SessionStatus, statusEqual } from "../terminal/connection";
+import {
+  foldInventory,
+  isPtyEvent,
+  type RoomInventory,
+  roomGroups,
+  type RoomTerminalRequest,
+} from "../terminal/roomDeck";
 import { IconButton } from "../components/IconButton";
 import { Camera } from "../components/icons";
 import { ProjectPicker } from "./ProjectPicker";
@@ -69,9 +78,12 @@ function statusView(
 export function TerminalWorkspace({
   sources,
   gateway,
+  onOpenRoom,
 }: {
   sources: RosterSources;
   gateway?: Gateway;
+  /** Jump to a room's terminal route — a Rooms-inventory row's home surface. */
+  onOpenRoom?: (request: RoomTerminalRequest) => void;
 }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -79,6 +91,62 @@ export function TerminalWorkspace({
   const [snapshotsFor, setSnapshotsFor] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
   const paneRefs = useRef(new Map<string, TerminalHandle>());
+
+  // The whole-box inventory keeps room sessions visible here — grouped, collapsed,
+  // and jumping to their home surface — refreshed on any pty lifecycle event.
+  const [roomInventory, setRoomInventory] = useState<RoomInventory>({ sessions: [], rooms: [] });
+  const reloadRooms = useMemo(
+    () =>
+      coalesce(async () => {
+        if (!gateway) return;
+        const [sessions, rooms] = await Promise.all([gateway.listSessions(), gateway.listRooms()]);
+        setRoomInventory((current) =>
+          foldInventory(
+            current,
+            sessions.ok ? sessions.value : null,
+            rooms.ok
+              ? rooms.value.rooms.map((r) => ({ id: r.id, title: r.title, project: r.project }))
+              : null,
+          ),
+        );
+      }),
+    [gateway],
+  );
+  useEffect(() => {
+    if (!gateway || !onOpenRoom) return;
+    reloadRooms();
+    return gateway.onEvent((event) => {
+      if (isPtyEvent(event)) reloadRooms();
+    });
+  }, [gateway, onOpenRoom, reloadRooms]);
+
+  const inventory = onOpenRoom && gateway && (
+    <RoomsInventory
+      groups={roomGroups(roomInventory.sessions, roomInventory.rooms)}
+      onJump={(group, session) =>
+        // The route creates sessions in the room's project container, so the jump
+        // resolves the room fresh instead of trusting the inventory's snapshot —
+        // an unknown or deleted room must never fail open onto the node itself.
+        void gateway.getRoom(group.roomId).then((room) => {
+          if (!room.ok) return;
+          onOpenRoom({
+            roomId: room.value.id,
+            project: room.value.project,
+            title: room.value.title,
+            focus: session.name,
+          });
+        })
+      }
+      onKill={(session) =>
+        // Kill rides the owner pty lane, so it gets the same fail-closed guard as the
+        // jump: a session whose room the control plane can't resolve is left alone.
+        void gateway.getRoom(session.room).then((room) => {
+          if (!room.ok || room.value.id !== session.room) return;
+          return gateway.killSession(session.name).finally(() => reloadRooms());
+        })
+      }
+    />
+  );
 
   // The project tabs live in the app's top chrome band, not in this view: the strip renders
   // through the #topbar-slot portal (App shows/hides the slot with the active view). The slot is
@@ -130,7 +198,10 @@ export function TerminalWorkspace({
     <div className="term-workspace">
       {intoChrome(
         tabs.length === 0 ? (
-          <div className="topbar__context">Terminal</div>
+          <>
+            <div className="topbar__context">Terminal</div>
+            {inventory}
+          </>
         ) : (
         <div className="term-tabs">
           <div className="term-tabs__scroll" role="tablist">
@@ -174,6 +245,7 @@ export function TerminalWorkspace({
           </button>
           </div>
           <span className="term-tab__tools">
+            {inventory}
             {activeStatus && (
               <StatusCluster
                 status={activeStatus}

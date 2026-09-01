@@ -31,7 +31,11 @@ async function render(
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  act(() => root.render(<App gateway={gateway} theme={theme} terminal={terminal} />));
+  act(() =>
+    root.render(
+      <App gateway={gateway} theme={theme} terminal={terminal ? () => terminal : undefined} />,
+    ),
+  );
   await flush();
   if (initialView === "board") {
     await act(async () => navBtn("board")?.click());
@@ -145,6 +149,154 @@ describe("App cockpit", () => {
     expect(roomsView().style.display).toBe("flex");
     expect(roomsView().querySelector(".rooms-sidebar")).not.toBeNull();
     expect(refetches).toBe(0);
+  });
+
+  test("a deck card opens the full-screen terminal route; back lands on the spec detail untouched", async () => {
+    await render();
+    gateway.listSessions = async () => ({
+      ok: true,
+      value: [
+        {
+          name: "room-chorus-invoice-ui",
+          live: true,
+          attached: 1,
+          writerFde: "uday",
+          room: "chorus-invoice-ui",
+          command: ["claude"],
+        },
+      ],
+    });
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="card-chorus-invoice-ui"]')?.click();
+    });
+    await flush();
+    await flush();
+
+    const card = container.querySelector<HTMLButtonElement>(
+      '[data-testid="deck-card-room-chorus-invoice-ui"]',
+    );
+    expect(card, "the room's sessions surface as header cards").not.toBeNull();
+    await act(async () => card?.click());
+    await flush();
+
+    const route = container.querySelector('[data-testid="view-room-terminal"]');
+    expect(route).not.toBeNull();
+    expect(route?.textContent).toContain("Invoice review UI");
+    expect(
+      route?.querySelector('[data-testid="deck-attach-unavailable"]'),
+      "without the Tauri edge the route explains itself",
+    ).not.toBeNull();
+    const board = container.querySelector('[data-testid="view-board"]') as HTMLElement;
+    expect(board.style.display).toBe("none");
+    expect(board.querySelector(".detail"), "the spec detail stays mounted underneath").not.toBeNull();
+    expect(container.querySelector(".topbar__context")?.textContent).toBe("Invoice review UI");
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="route-back"]')?.click();
+    });
+    await flush();
+    expect(container.querySelector('[data-testid="view-room-terminal"]')).toBeNull();
+    expect(board.style.display).toBe("flex");
+    expect(board.querySelector(".detail-title")?.textContent).toBe("Invoice review UI");
+  });
+
+  test("rail navigation while the route is open leaves it — no stacked surfaces", async () => {
+    await render(<div data-testid="term-stub">TERM</div>);
+    gateway.listSessions = async () => ({
+      ok: true,
+      value: [
+        {
+          name: "room-chorus-invoice-ui",
+          live: true,
+          attached: 1,
+          writerFde: "uday",
+          room: "chorus-invoice-ui",
+          command: ["claude"],
+        },
+      ],
+    });
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="card-chorus-invoice-ui"]')?.click();
+    });
+    await flush();
+    await flush();
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="deck-card-room-chorus-invoice-ui"]')
+        ?.click();
+    });
+    await flush();
+    expect(container.querySelector('[data-testid="view-room-terminal"]')).not.toBeNull();
+
+    await act(async () => navBtn("terminal")!.click());
+    await flush();
+    expect(container.querySelector('[data-testid="view-room-terminal"]')).toBeNull();
+    expect(activeNav()).toBe("Terminal");
+  });
+
+  test("losing authentication tears down the room route, and re-login does not restore it", async () => {
+    type Status = Awaited<ReturnType<DemoGateway["connection"]>>;
+    gateway = createDemoGateway();
+    gateway.listSessions = async () => ({
+      ok: true,
+      value: [
+        {
+          name: "room-chorus-invoice-ui",
+          live: true,
+          attached: 1,
+          writerFde: "uday",
+          room: "chorus-invoice-ui",
+          command: ["claude"],
+        },
+      ],
+    });
+    const listeners = new Set<(s: Status) => void>();
+    const base = await gateway.connection();
+    const push = async (phase: Status["phase"]) => {
+      await act(async () => {
+        for (const l of listeners) l({ ...base, phase });
+      });
+      await flush();
+    };
+    const authGateway = {
+      ...gateway,
+      onConnectionStatus: (l: (s: Status) => void) => {
+        listeners.add(l);
+        l(base);
+        return () => listeners.delete(l);
+      },
+    };
+    const theme = createThemeController(browserThemeDeps(() => {}));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root.render(<App gateway={authGateway as never} theme={theme} />));
+    await flush();
+    await act(async () => navBtn("board")?.click());
+    await flush();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="card-chorus-invoice-ui"]')?.click();
+    });
+    await flush();
+    await flush();
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="deck-card-room-chorus-invoice-ui"]')
+        ?.click();
+    });
+    await flush();
+    expect(container.querySelector('[data-testid="view-room-terminal"]')).not.toBeNull();
+
+    // Logout (or token expiry) must unmount the interactive PTY surface with
+    // everything else — the gate owns the whole window.
+    await push("unauthenticated");
+    expect(container.querySelector('[data-testid="view-room-terminal"]')).toBeNull();
+    expect(container.querySelector('[data-testid="connect-screen"]')).not.toBeNull();
+
+    await push("ready");
+    expect(container.querySelector('[data-testid="connect-screen"]')).toBeNull();
+    expect(container.querySelector('[data-testid="view-room-terminal"]')).toBeNull();
   });
 
   test("shows a blocked card with its unmet dependencies", async () => {
