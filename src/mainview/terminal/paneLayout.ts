@@ -177,7 +177,10 @@ export function parseLayout(raw: string | null): PaneLayout | null {
  * (opened from another Mac, or an older client) are appended as their own tabs in ordinal order.
  * Anything on the socket that isn't this tab's base or `base.<n>` is someone else's and is
  * ignored — except names in `adopt`, which belong to this scope despite foreign naming (a room's
- * `resume-*` agent sessions) and are appended after the ordinal strays, in name order.
+ * `resume-*` agent sessions) and are appended after the ordinal strays, in name order. When
+ * death pruning empties the layout entirely, the healed default pane represents one of those
+ * deaths rather than the base — a recordless base name would read as a host-restart loss and
+ * silently create a shell nobody asked for, where the dead name parks on its ended card.
  */
 export function reconcile(
   stored: PaneLayout | null,
@@ -205,7 +208,10 @@ export function reconcile(
     groups.push({ id: seq++, panes: [s] });
   }
   if (groups.length === 0) {
-    return defaultLayout(base);
+    const ended = stored?.groups
+      .flatMap((group) => group.panes)
+      .find((session) => dead?.has(session));
+    return defaultLayout(ended ?? base);
   }
   const active = Math.min(Math.max(stored?.active ?? 0, 0), groups.length - 1);
   const meta = pruneMeta(stored?.meta, new Set(groups.flatMap((g) => g.panes)));

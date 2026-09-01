@@ -188,7 +188,7 @@ describe("death records", () => {
     ).toEqual(["claude"]);
   });
 
-  test("a first-load corpse is recorded; history backfill upgrades its generic reason", async () => {
+  test("a first-load corpse takes its room's history read unasked; the durable reason lands", async () => {
     const fake = makeGateway([session({ name: "resume-run-7", live: false, command: ["codex"] })]);
     fake.setSpecEvents([
       ptyEvent({
@@ -199,11 +199,45 @@ describe("death records", () => {
     const store = new SessionStore();
     store.connect(fake.gateway, "devbox");
     await flush();
-    expect(store.deaths().get("resume-run-7")?.reason).toBe("ended");
-    store.ensureHistory("design-talk");
-    await flush();
     expect(store.deaths().get("resume-run-7")?.reason).toBe("yielded to dispatch r8 of spec s1");
     expect(store.reasons()["resume-run-7"]).toBe("yielded to dispatch r8 of spec s1");
+  });
+
+  test("a corpse discovered after the room's history load takes one fresh read for its durable reason", async () => {
+    const box = await connected([session({ name: "resume-run-7", command: ["codex"] })]);
+    box.store.ensureHistory("design-talk");
+    await flush();
+    box.setSpecEvents([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "yielded to dispatch r8 of spec s1" },
+      }),
+    ]);
+    box.host.splice(0, 1, session({ name: "resume-run-7", live: false, command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    expect(
+      box.store.deaths().get("resume-run-7")?.reason,
+      "a generic 'ended' here bypasses the dispatch-yield gate — Restart could double an agent",
+    ).toBe("yielded to dispatch r8 of spec s1");
+  });
+
+  test("a listing drop after the room's history load refreshes the durable reason the same way", async () => {
+    const box = await connected([session({ name: "resume-run-7", command: ["codex"] })]);
+    box.store.ensureHistory("design-talk");
+    await flush();
+    box.setSpecEvents([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "yielded to dispatch r8 of spec s1" },
+      }),
+    ]);
+    box.host.length = 0;
+    box.store.refresh();
+    await flush();
+    expect(box.store.deaths().get("resume-run-7")?.reason).toBe(
+      "yielded to dispatch r8 of spec s1",
+    );
   });
 
   test("a pty_session_ended event records the server's reason, dims the entry, and outranks the generic drop", async () => {

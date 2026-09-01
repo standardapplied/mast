@@ -132,6 +132,18 @@ describe("reconcile", () => {
     const out = reconcile(stored, [], "room-r", new Set(), new Set(["room-r"]));
     expect(out).toEqual(defaultLayout("room-r"));
   });
+
+  test("pruning the last dead adopted pane keeps that death as the fallback — never a fresh base shell", () => {
+    const stored = { groups: [{ id: 1, panes: ["resume-run-7"] }], active: 0, seq: 2 };
+    const out = reconcile(stored, [], "room-r", new Set(), new Set(["resume-run-7"]));
+    expect(out).toEqual(defaultLayout("resume-run-7"));
+  });
+
+  test("pruning the last dead ordinal pane falls back to its own death, not the recordless base", () => {
+    const stored = { groups: [{ id: 1, panes: ["room-r.2"] }], active: 0, seq: 2 };
+    const out = reconcile(stored, [], "room-r", new Set(), new Set(["room-r.2"]));
+    expect(out).toEqual(defaultLayout("room-r.2"));
+  });
 });
 
 describe("parseLayout", () => {

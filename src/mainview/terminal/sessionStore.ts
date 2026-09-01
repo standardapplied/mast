@@ -196,8 +196,11 @@ export class SessionStore {
    * previously-live name it dropped is an observed death, and so is any corpse
    * it lists — first-load corpses and live-to-dead transitions included, so a
    * later listing that drops the corpse can never read as an ordinary
-   * host-restart loss and resurrect the pane. Records are made once, never
-   * overwriting a richer reason; a name listed live again is alive — its
+   * host-restart loss and resurrect the pane. A death recorded with only the
+   * generic reason takes one fresh durable-history read for its room — the
+   * room's history was loaded before this death existed, and the durable
+   * reason gates the dispatch-yield Reopen safety check. Records are made
+   * once, never overwriting a richer reason; a name listed live again is alive — its
    * death record is cleared so an external recreate is never pruned. Pending
    * creates ride until listed; one that two whole generations never confirmed
    * was a create that never happened and is dropped rather than haunting the
@@ -206,21 +209,27 @@ export class SessionStore {
   private noteListing(key: string, sessions: readonly DeckSession[]): void {
     const box = this.boxes.get(key)!;
     const next = new Map(sessions.map((s) => [s.name, s]));
+    const staleRooms = new Set<string>();
+    const recordDeath = (name: string, room: string, command: string[]) => {
+      const reason = box.historyReasons.get(name) ?? "ended";
+      box.deaths.set(name, { reason, at: Date.now(), command });
+      if (reason === "ended" && room) staleRooms.add(room);
+    };
     for (const [name, prev] of box.listed ?? []) {
       if (prev.live && !next.has(name) && !box.deaths.has(name)) {
-        box.deaths.set(name, { reason: "ended", at: Date.now(), command: prev.command });
+        recordDeath(name, prev.room, prev.command);
       }
     }
     for (const s of sessions) {
       if (s.live) {
         box.deaths.delete(s.name);
       } else if (!box.deaths.has(s.name)) {
-        box.deaths.set(s.name, {
-          reason: box.historyReasons.get(s.name) ?? "ended",
-          at: Date.now(),
-          command: s.command,
-        });
+        recordDeath(s.name, s.room, s.command);
       }
+    }
+    for (const room of staleRooms) {
+      box.historyLoaded.delete(room);
+      this.ensureHistory(room, key);
     }
     box.listed = next;
     box.gen++;
