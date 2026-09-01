@@ -20,9 +20,12 @@ function session(over: Partial<DeckSession>): DeckSession {
   };
 }
 
+let nextEventId = 1000;
+
 function ptyEvent(over: Partial<SailEvent>): SailEvent {
   return {
     v: 1,
+    id: nextEventId++,
     ts: "2026-09-01T12:00:00Z",
     project: "sail-mast",
     spec: "design-talk",
@@ -284,6 +287,82 @@ describe("death records", () => {
     ).toBe("yielded to dispatch r2 of spec s2");
   });
 
+  test("history that still ends with the prior incarnation cannot settle the new death", async () => {
+    const box = await connected([]);
+    box.setSpecEvents([
+      ptyEvent({
+        id: 10,
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "yielded to dispatch r1 of spec s1" },
+      }),
+    ]);
+    box.store.ensureHistory("design-talk");
+    await flush();
+    box.store.noteLaunch("resume-run-7", ["codex"], "design-talk");
+    box.host.push(session({ name: "resume-run-7", command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    box.host.splice(0, 1, session({ name: "resume-run-7", live: false, command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    const death = box.store.deaths().get("resume-run-7");
+    expect(death?.historyPending, "the read completed — proven absence settles the record").toBeFalsy();
+    expect(
+      death?.reason,
+      "history's newest event predates this incarnation; its yield must not gate this corpse",
+    ).toBe("ended");
+  });
+
+  test("a post-incarnation event in the fresh read settles the death with its reason", async () => {
+    const box = await connected([]);
+    const prior = ptyEvent({
+      id: 10,
+      type: "pty_session_ended",
+      data: { session: "resume-run-7", reason: "yielded to dispatch r1 of spec s1" },
+    });
+    box.setSpecEvents([prior]);
+    box.store.ensureHistory("design-talk");
+    await flush();
+    box.store.noteLaunch("resume-run-7", ["codex"], "design-talk");
+    box.host.push(session({ name: "resume-run-7", command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    const reads = box.deferSpecEvents();
+    box.host.splice(0, 1, session({ name: "resume-run-7", live: false, command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    reads.at(-1)!.resolve([
+      prior,
+      ptyEvent({
+        id: 12,
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "yielded to dispatch r2 of spec s2" },
+      }),
+    ]);
+    await flush();
+    expect(box.store.deaths().get("resume-run-7")?.reason).toBe("yielded to dispatch r2 of spec s2");
+  });
+
+  test("a live session's name never carries its previous incarnation's reason", async () => {
+    const box = await connected([]);
+    box.setSpecEvents([
+      ptyEvent({
+        id: 10,
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "exited(1)" },
+      }),
+    ]);
+    box.store.ensureHistory("design-talk");
+    await flush();
+    box.host.push(session({ name: "resume-run-7", command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    expect(
+      box.store.reasons()["resume-run-7"],
+      "reasons speak only for the dead — a revived name has no reason",
+    ).toBeUndefined();
+  });
+
   test("a listing-discovered death is pending until its fresh history read settles it", async () => {
     const box = await connected([session({ name: "resume-run-7", command: ["codex"] })]);
     const reads = box.deferSpecEvents();
@@ -365,7 +444,9 @@ describe("death records", () => {
   test("history asked for before the box connects is remembered and drained on connect", async () => {
     const store = new SessionStore();
     store.ensureHistory("design-talk");
-    const fake = makeGateway([]);
+    const fake = makeGateway([
+      session({ name: "resume-run-7", live: false, command: ["codex"] }),
+    ]);
     fake.setSpecEvents([
       ptyEvent({
         type: "pty_session_ended",
@@ -374,12 +455,18 @@ describe("death records", () => {
     ]);
     store.connect(fake.gateway, "devbox");
     await flush();
-    expect(store.reasons()["resume-run-7"]).toBe("exited(0)");
+    expect(
+      store.reasons()["resume-run-7"],
+      "the pre-connect ask drains on connect and settles the corpse's record",
+    ).toBe("exited(0)");
   });
 
-  test("history backfill supplies reasons for deaths observed before this instance; death records win", async () => {
-    const box = await connected([]);
-    box.setSpecEvents([
+  test("history backfill settles corpse records; a newer end event outranks it", async () => {
+    const fake = makeGateway([
+      session({ name: "resume-run-7", live: false, command: ["codex"] }),
+      session({ name: "room-design-talk", live: false }),
+    ]);
+    fake.setSpecEvents([
       ptyEvent({
         type: "pty_session_ended",
         data: { session: "resume-run-7", reason: "yielded to dispatch r8" },
@@ -389,9 +476,12 @@ describe("death records", () => {
         data: { session: "room-design-talk", reason: "exited(1)" },
       }),
     ]);
-    box.store.ensureHistory("design-talk");
+    const store = new SessionStore();
+    store.connect(fake.gateway, "devbox");
     await flush();
+    const box = { ...fake, store };
     expect(box.store.reasons()["resume-run-7"]).toBe("yielded to dispatch r8");
+    expect(box.store.reasons()["room-design-talk"]).toBe("exited(1)");
     box.store.noteEvent(
       ptyEvent({
         type: "pty_session_ended",
@@ -475,6 +565,18 @@ describe("creates", () => {
 });
 
 describe("the kill path (field bug: a kill that does nothing, silently)", () => {
+  test("concurrent closes collapse into one destructive kill", async () => {
+    const box = await connected([session({ name: "room-design-talk.2" })]);
+    const [a, b] = await Promise.all([
+      box.store.kill("room-design-talk.2", { resolvedRoom: "design-talk" }),
+      box.store.kill("room-design-talk.2", { resolvedRoom: "design-talk" }),
+    ]);
+    expect(box.calls.kill, "one name, one wire kill").toEqual(["room-design-talk.2"]);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+  });
+
+
   test("a room the control plane can't resolve refuses the kill INLINE — the session is left alone", async () => {
     const box = await connected([session({})]);
     box.failRooms("no room 'design-talk'");

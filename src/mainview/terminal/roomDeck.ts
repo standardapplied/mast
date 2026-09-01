@@ -273,17 +273,32 @@ export function isPtyEvent(event: SailEvent): boolean {
 }
 
 /** Each session's last recorded ended reason, from the room's pty event history. */
-export function endedReasons(events: readonly SailEvent[]): Record<string, string> {
-  const reasons: Record<string, string> = {};
+/**
+ * Each name's newest ended event in the history, with its monotonic event id —
+ * the incarnation identity the store needs: an id lets a consumer prove an
+ * event is newer than everything a name's previous life already accounted for.
+ * Events an old server ships without ids carry -1 (provably-newer never holds).
+ */
+export function endedEvents(
+  events: readonly SailEvent[],
+): Record<string, { reason: string; id: number }> {
+  const ends: Record<string, { reason: string; id: number }> = {};
   for (const event of events) {
     if (event.type !== "pty_session_ended") continue;
     const session = event.data?.session;
     const reason = event.data?.reason;
-    if (typeof session === "string" && typeof reason === "string") {
-      reasons[session] = reason;
-    }
+    if (typeof session !== "string" || typeof reason !== "string") continue;
+    const id = typeof event.id === "number" ? event.id : -1;
+    const known = ends[session];
+    if (!known || id >= known.id) ends[session] = { reason, id };
   }
-  return reasons;
+  return ends;
+}
+
+export function endedReasons(events: readonly SailEvent[]): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(endedEvents(events)).map(([name, end]) => [name, end.reason]),
+  );
 }
 
 /** The dispatch a yield notice names, when the reason is a dispatch displacement. */

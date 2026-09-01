@@ -4,7 +4,7 @@ import { coalesce } from "../board/roomRouting";
 import {
   type DeathRecord,
   type DeckSession,
-  endedReasons,
+  endedEvents,
   isPtyEvent,
   type SessionEntry,
 } from "./roomDeck";
@@ -50,7 +50,12 @@ type BoxState = {
   /** Listing generation counter — bumped per completed listing. */
   gen: number;
   /** Ended reasons from event history, the backfill for deaths observed before this app instance. */
-  historyReasons: Map<string, string>;
+  /** Each name's newest known ended event — reason plus its monotonic id. */
+  historyEnds: Map<string, { reason: string; id: number }>;
+  /** Per name: the highest ended-event id already accounted to a PAST incarnation. */
+  consumed: Map<string, number>;
+  /** In-flight kills by name — concurrent closes share one destructive call. */
+  kills: Map<string, Promise<{ ok: boolean; refusal?: string }>>;
   historyLoaded: Set<string>;
   /** Per-room issue counter for history reads; only the newest read's response lands. */
   historyRevisions: Map<string, number>;
@@ -99,7 +104,9 @@ export class SessionStore {
           deaths: new Map(),
           skewReason: null,
           gen: 0,
-          historyReasons: new Map(),
+          historyEnds: new Map(),
+          consumed: new Map(),
+          kills: new Map(),
           historyLoaded: new Set(),
           historyRevisions: new Map(),
           refresh: () => {},
@@ -181,11 +188,11 @@ export class SessionStore {
     return this.box(key ?? undefined)?.deaths ?? new Map();
   }
 
-  /** Ended reasons by session: death records first (authoritative), event history second. */
+  /** Ended reasons by session — death records only: the dead speak, a revived name says nothing. */
   reasons(key = this.active): Record<string, string> {
     const box = this.box(key ?? undefined);
     if (!box) return {};
-    const merged: Record<string, string> = Object.fromEntries(box.historyReasons);
+    const merged: Record<string, string> = {};
     for (const [name, death] of box.deaths) merged[name] = death.reason;
     return merged;
   }
@@ -223,6 +230,12 @@ export class SessionStore {
       });
       if (room) staleRooms.add(room);
     };
+    const consume = (name: string) => {
+      const known = box.historyEnds.get(name);
+      if (known && known.id >= 0) {
+        box.consumed.set(name, Math.max(box.consumed.get(name) ?? -1, known.id));
+      }
+    };
     for (const [name, prev] of box.listed ?? []) {
       if (prev.live && !next.has(name) && !box.deaths.has(name)) {
         recordDeath(name, prev.room, prev.command);
@@ -231,6 +244,7 @@ export class SessionStore {
     for (const s of sessions) {
       if (s.live) {
         box.deaths.delete(s.name);
+        consume(s.name);
       } else if (!box.deaths.has(s.name)) {
         recordDeath(s.name, s.room, s.command);
       }
@@ -277,6 +291,10 @@ export class SessionStore {
       const pending = box.pending.get(name);
       box.pending.delete(name);
       const command = known?.command ?? pending?.command;
+      if (typeof event.id === "number") {
+        const known = box.historyEnds.get(name);
+        if (!known || event.id >= known.id) box.historyEnds.set(name, { reason, id: event.id });
+      }
       box.deaths.set(name, {
         reason,
         at: Date.now(),
@@ -288,6 +306,12 @@ export class SessionStore {
     }
     if (event.type === "pty_session_started") {
       box.deaths.delete(name);
+      {
+        const known = box.historyEnds.get(name);
+        if (known && known.id >= 0) {
+          box.consumed.set(name, Math.max(box.consumed.get(name) ?? -1, known.id));
+        }
+      }
       if (!box.listed?.has(name) && !box.pending.has(name)) {
         const room =
           typeof event.data?.room_id === "string"
@@ -339,13 +363,30 @@ export class SessionStore {
   ): Promise<{ ok: boolean; refusal?: string }> {
     const box = this.box(key ?? undefined);
     if (!box) return { ok: false, refusal: "no box connected" };
+    const inflight = box.kills.get(name);
+    if (inflight) return inflight;
+    const run = this.killOnce(box, name, opts);
+    box.kills.set(name, run);
+    try {
+      return await run;
+    } finally {
+      box.kills.delete(name);
+    }
+  }
+
+  /** The single destructive pass for one name; {@link kill} serializes callers onto it. */
+  private async killOnce(
+    box: BoxState,
+    name: string,
+    opts: { resolvedRoom?: string },
+  ): Promise<{ ok: boolean; refusal?: string }> {
     const refuse = (refusal: string) => {
       box.dying.delete(name);
       box.refusals.set(name, refusal);
       this.emit();
       return { ok: false, refusal };
     };
-    const entry = this.byName(name, key);
+    const entry = box.listed?.get(name);
     box.refusals.delete(name);
     box.dying.add(name);
     this.emit();
@@ -404,14 +445,27 @@ export class SessionStore {
         box.historyLoaded.delete(roomId);
         return;
       }
-      const durable = endedReasons(result.value.events);
-      for (const [name, reason] of Object.entries(durable)) box.historyReasons.set(name, reason);
+      const durable = endedEvents(result.value.events);
+      for (const [name, end] of Object.entries(durable)) {
+        const known = box.historyEnds.get(name);
+        if (!known || end.id >= known.id) box.historyEnds.set(name, end);
+      }
+      // An event settles a death only when it is provably NEWER than everything
+      // this name's previous incarnation already accounted for — a reused name
+      // must never inherit its predecessor's reason from an append-only history.
+      const freshFor = (name: string) => {
+        const end = box.historyEnds.get(name);
+        if (!end || end.id < 0) return null;
+        return end.id > (box.consumed.get(name) ?? -1) ? end : null;
+      };
       for (const [name, death] of box.deaths) {
-        if (death.room === roomId && death.historyPending) {
+        if (death.room !== roomId) continue;
+        if (death.historyPending) {
           const { historyPending: _settled, ...record } = death;
-          box.deaths.set(name, { ...record, reason: durable[name] ?? death.reason });
-        } else if (death.reason === "ended" && durable[name]) {
-          box.deaths.set(name, { ...death, reason: durable[name]! });
+          box.deaths.set(name, { ...record, reason: freshFor(name)?.reason ?? death.reason });
+        } else if (death.reason === "ended") {
+          const fresh = freshFor(name);
+          if (fresh) box.deaths.set(name, { ...death, reason: fresh.reason });
         }
       }
       this.emit();
