@@ -217,8 +217,11 @@ export function RoomsInventory({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  // Dismissal suspends while the confirm dialog is up: the dialog portals outside
+  // panelRef, so its buttons would otherwise read as outside clicks and close the
+  // panel before the refusal it exists to show can land.
   useEffect(() => {
-    if (!open) return;
+    if (!open || closing) return;
     const onDown = (event: PointerEvent) => {
       const target = event.target as Node;
       if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return;
@@ -233,7 +236,7 @@ export function RoomsInventory({
       document.removeEventListener("pointerdown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [open, closing]);
 
   if (groups.length === 0) return null;
   const liveCount = groups.reduce(

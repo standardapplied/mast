@@ -289,6 +289,11 @@ describe("RoomsInventory", () => {
     const confirm = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent === "Close" && button.className.includes("btn-danger"),
     );
+    // A real press dispatches pointerdown before click; the dialog portals outside
+    // the panel, so this is exactly the sequence that must not dismiss it.
+    await act(async () => {
+      confirm?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
     await act(async () => confirm?.click());
     expect(killed).toEqual(["room-design-talk"]);
     expect(

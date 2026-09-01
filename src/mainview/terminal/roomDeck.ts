@@ -86,8 +86,6 @@ export type DeckServices = {
 /** What a route pane the client opened (or revived) attaches with. */
 export type LaunchSpec = {
   readonly command: string[];
-  /** Kill the corpse first — the ended-card revive flow re-minting the same name. */
-  readonly killFirst?: boolean;
 };
 
 /**
@@ -106,25 +104,20 @@ export function panePlan(
   launched: ReadonlyMap<string, LaunchSpec>,
   deaths?: ReadonlyMap<string, DeathRecord>,
 ):
-  | { kind: "attach"; command: string[]; killFirst: boolean; writerFde?: string }
+  | { kind: "attach"; command: string[]; writerFde?: string }
   | { kind: "ended"; restartCommand: string[] } {
   const listing = listed.find((s) => s.name === session);
   const opened = launched.get(session);
   if (opened) {
-    return {
-      kind: "attach",
-      command: opened.command,
-      killFirst: opened.killFirst ?? false,
-      writerFde: listing?.writerFde,
-    };
+    return { kind: "attach", command: opened.command, writerFde: listing?.writerFde };
   }
   if (!listing) {
     const death = deaths?.get(session);
     if (death) return { kind: "ended", restartCommand: death.command ?? ["bash", "-l"] };
-    return { kind: "attach", command: ["bash", "-l"], killFirst: false };
+    return { kind: "attach", command: ["bash", "-l"] };
   }
   if (listing.live) {
-    return { kind: "attach", command: listing.command, killFirst: false, writerFde: listing.writerFde };
+    return { kind: "attach", command: listing.command, writerFde: listing.writerFde };
   }
   return { kind: "ended", restartCommand: listing.command };
 }

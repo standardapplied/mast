@@ -423,10 +423,16 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const roomCell = (session: string, groupActive: boolean) => {
       const scope = room!;
       const plan = panePlan(session, scope.sessions, launched, sessionStore.deaths());
+      const refusal = scope.sessions.find((s) => s.name === session)?.refusal;
       if (plan.kind === "ended") {
         const displaced = yieldedDispatch(scope.reasons[session]);
         return (
           <div className="room-pane-ended">
+            {refusal && (
+              <div className="room-terminal__refusal" data-testid={`refusal-${session}`}>
+                Close refused — {refusal}
+              </div>
+            )}
             <DeckEndedCard
               session={session}
               reason={scope.reasons[session]}
@@ -435,16 +441,22 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                 displaced?.specId ? (scope.dispatchLive[displaced.specId] ?? true) : false
               }
               onRestart={() => {
-                setLaunched((m) =>
-                  new Map(m).set(session, { command: plan.restartCommand, killFirst: true }),
-                );
-                sessionStore.noteLaunch(session, plan.restartCommand, scope.roomId);
+                // The store owns the destructive step: a listed corpse must be
+                // KILLED through it (a refusal lands inline above, and no launch
+                // intent clears the tombstone) before the revive re-mints the name.
+                const revive = () => {
+                  setLaunched((m) => new Map(m).set(session, { command: plan.restartCommand }));
+                  sessionStore.noteLaunch(session, plan.restartCommand, scope.roomId);
+                };
+                if (!scope.sessions.some((s) => s.name === session)) return revive();
+                void sessionStore.kill(session, { resolvedRoom: scope.roomId }).then((result) => {
+                  if (result.ok) revive();
+                });
               }}
             />
           </div>
         );
       }
-      const refusal = scope.sessions.find((s) => s.name === session)?.refusal;
       return (
         <RoomTerminal
           ref={(h) => {
@@ -455,14 +467,18 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
           project={scope.project}
           room={scope.roomId}
           command={plan.command}
-          killFirst={plan.killFirst}
           refusal={refusal}
           active={active && groupActive && session === focused}
           visible={active && groupActive}
           me={scope.me}
           writerFde={plan.writerFde}
           onStatus={(s) => {
-            if (statusesRef.current[session] !== s) onPaneStatus(session, s);
+            // The pane re-reports its unchanged status whenever this callback's
+            // identity changes; acting on a non-transition would loop —
+            // refresh → new listing → rerender → new callback → same report.
+            const known = statusesRef.current[session];
+            if (known && statusEqual(known, s)) return;
+            onPaneStatus(session, s);
             // An attach ack is a mutation ack — the create is real, take the
             // reconcile listing so every surface sees it without any event.
             if (s.kind === "up") scope.refresh();
@@ -596,7 +612,9 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                         active={active && groupActive && session === focused}
                         visible={active && groupActive}
                         onStatus={(s) => {
-                          if (statusesRef.current[session] !== s) onPaneStatus(session, s);
+                          const known = statusesRef.current[session];
+                          if (known && statusEqual(known, s)) return;
+                          onPaneStatus(session, s);
                           if (s.kind === "up") sessionStore.refresh();
                         }}
                         onTitle={(raw) => {

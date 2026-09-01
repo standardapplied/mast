@@ -167,12 +167,11 @@ describe("panePlan", () => {
     session({ name: "resume-run-7", live: false, command: ["codex", "resume"] }),
   ];
 
-  test("an explicit launch attaches with its picked command, revive killing first", () => {
-    const launched = new Map([["room-design-talk.2", { command: ["codex"], killFirst: true }]]);
+  test("an explicit launch attaches with its picked command", () => {
+    const launched = new Map([["room-design-talk.2", { command: ["codex"] }]]);
     expect(panePlan("room-design-talk.2", listed, launched)).toEqual({
       kind: "attach",
       command: ["codex"],
-      killFirst: true,
       writerFde: undefined,
     });
   });
@@ -181,7 +180,6 @@ describe("panePlan", () => {
     expect(panePlan("room-design-talk", listed, new Map())).toEqual({
       kind: "attach",
       command: ["claude"],
-      killFirst: false,
       writerFde: "mady",
     });
   });
@@ -190,7 +188,6 @@ describe("panePlan", () => {
     expect(panePlan("room-design-talk.3", listed, new Map())).toEqual({
       kind: "attach",
       command: ["bash", "-l"],
-      killFirst: false,
     });
   });
 
@@ -212,7 +209,7 @@ describe("panePlan", () => {
     expect(
       panePlan("room-design-talk.4", listed, new Map(), deaths),
       "no record — the genuine host-restart case still recreates a shell",
-    ).toEqual({ kind: "attach", command: ["bash", "-l"], killFirst: false });
+    ).toEqual({ kind: "attach", command: ["bash", "-l"] });
   });
 });
 

@@ -173,6 +173,39 @@ describe("death records", () => {
     expect(box.store.deaths().has("room-design-talk")).toBe(false);
   });
 
+  test("a live-to-dead listing transition records the death, and the record survives the corpse being dropped", async () => {
+    const box = await connected([session({ command: ["claude"] })]);
+    box.host.splice(0, 1, session({ live: false, command: ["claude"] }));
+    box.store.refresh();
+    await flush();
+    expect(box.store.deaths().get("room-design-talk")?.reason).toBe("ended");
+    box.host.length = 0;
+    box.store.refresh();
+    await flush();
+    expect(
+      box.store.deaths().get("room-design-talk")?.command,
+      "the drop must read as a known death, never a host-restart loss that recreates a shell",
+    ).toEqual(["claude"]);
+  });
+
+  test("a first-load corpse is recorded; history backfill upgrades its generic reason", async () => {
+    const fake = makeGateway([session({ name: "resume-run-7", live: false, command: ["codex"] })]);
+    fake.setSpecEvents([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "yielded to dispatch r8 of spec s1" },
+      }),
+    ]);
+    const store = new SessionStore();
+    store.connect(fake.gateway, "devbox");
+    await flush();
+    expect(store.deaths().get("resume-run-7")?.reason).toBe("ended");
+    store.ensureHistory("design-talk");
+    await flush();
+    expect(store.deaths().get("resume-run-7")?.reason).toBe("yielded to dispatch r8 of spec s1");
+    expect(store.reasons()["resume-run-7"]).toBe("yielded to dispatch r8 of spec s1");
+  });
+
   test("a pty_session_ended event records the server's reason, dims the entry, and outranks the generic drop", async () => {
     const box = await connected([session({})]);
     box.store.noteEvent(

@@ -193,8 +193,11 @@ export class SessionStore {
 
   /**
    * Folds one completed listing in. The listing is the box's truth: a
-   * previously-live name it dropped is an observed death (recorded once, never
-   * overwriting a richer reason), a name it lists live again is alive — its
+   * previously-live name it dropped is an observed death, and so is any corpse
+   * it lists — first-load corpses and live-to-dead transitions included, so a
+   * later listing that drops the corpse can never read as an ordinary
+   * host-restart loss and resurrect the pane. Records are made once, never
+   * overwriting a richer reason; a name listed live again is alive — its
    * death record is cleared so an external recreate is never pruned. Pending
    * creates ride until listed; one that two whole generations never confirmed
    * was a create that never happened and is dropped rather than haunting the
@@ -209,7 +212,15 @@ export class SessionStore {
       }
     }
     for (const s of sessions) {
-      if (s.live) box.deaths.delete(s.name);
+      if (s.live) {
+        box.deaths.delete(s.name);
+      } else if (!box.deaths.has(s.name)) {
+        box.deaths.set(s.name, {
+          reason: box.historyReasons.get(s.name) ?? "ended",
+          at: Date.now(),
+          command: s.command,
+        });
+      }
     }
     box.listed = next;
     box.gen++;
@@ -357,6 +368,10 @@ export class SessionStore {
       }
       for (const [name, reason] of Object.entries(endedReasons(result.value.events))) {
         box.historyReasons.set(name, reason);
+        // A corpse recorded before its room's history loaded carries the generic
+        // reason; the durable one is richer (it gates the dispatch-yield Reopen).
+        const death = box.deaths.get(name);
+        if (death?.reason === "ended") box.deaths.set(name, { ...death, reason });
       }
       this.emit();
     });
