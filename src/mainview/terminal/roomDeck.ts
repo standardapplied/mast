@@ -42,7 +42,26 @@ export type DeathRecord = {
   readonly reason: string;
   readonly at: number;
   readonly command?: string[];
+  /** The room whose durable history settles this record's reason. */
+  readonly room?: string;
+  /** True until a fresh history read confirms or replaces the generic reason. */
+  readonly historyPending?: boolean;
 };
+
+/**
+ * The ended card's model: a death still awaiting its durable reason fails
+ * closed — the reason gates the dispatch-yield Reopen check, so until the
+ * fresh history read lands the card shows a holding line and no restart.
+ */
+export function endedCardModel(
+  death: DeathRecord | undefined,
+  reason: string | undefined,
+): { reason: string | undefined; restartable: boolean } {
+  if (death?.historyPending) {
+    return { reason: "Checking why this session ended…", restartable: false };
+  }
+  return { reason, restartable: true };
+}
 
 export type DeckGlyph = "claude" | "codex" | "shell";
 

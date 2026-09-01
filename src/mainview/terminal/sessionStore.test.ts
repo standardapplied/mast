@@ -108,6 +108,21 @@ function makeGateway(host: DeckSession[]) {
         value: { spec: id, limit: 100, returned: events.length, events },
       });
     },
+    deferSpecEvents: () => {
+      const reads: Array<{ id: string; resolve: (events: SailEvent[]) => void }> = [];
+      gateway.specEvents = (id: string) =>
+        new Promise((res) => {
+          reads.push({
+            id,
+            resolve: (events) =>
+              res({
+                ok: true as const,
+                value: { spec: id, limit: 100, returned: events.length, events },
+              }),
+          });
+        });
+      return reads;
+    },
   };
 }
 
@@ -240,6 +255,100 @@ describe("death records", () => {
     );
   });
 
+  test("a reused name never inherits its previous incarnation's reason", async () => {
+    const box = await connected([]);
+    box.setSpecEvents([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "exited(0)" },
+      }),
+    ]);
+    box.store.ensureHistory("design-talk");
+    await flush();
+    box.store.noteLaunch("resume-run-7", ["codex"], "design-talk");
+    box.host.push(session({ name: "resume-run-7", command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    box.setSpecEvents([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "yielded to dispatch r2 of spec s2" },
+      }),
+    ]);
+    box.host.splice(0, 1, session({ name: "resume-run-7", live: false, command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    expect(
+      box.store.deaths().get("resume-run-7")?.reason,
+      "the first incarnation's exited(0) would bypass the live-dispatch guard on Reopen",
+    ).toBe("yielded to dispatch r2 of spec s2");
+  });
+
+  test("a listing-discovered death is pending until its fresh history read settles it", async () => {
+    const box = await connected([session({ name: "resume-run-7", command: ["codex"] })]);
+    const reads = box.deferSpecEvents();
+    box.host.splice(0, 1, session({ name: "resume-run-7", live: false, command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    expect(
+      box.store.deaths().get("resume-run-7")?.historyPending,
+      "an ungated Restart here could double an agent while the yield reason is loading",
+    ).toBe(true);
+    reads.at(-1)!.resolve([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "yielded to dispatch r8 of spec s1" },
+      }),
+    ]);
+    await flush();
+    const settled = box.store.deaths().get("resume-run-7");
+    expect(settled?.historyPending).toBeFalsy();
+    expect(settled?.reason).toBe("yielded to dispatch r8 of spec s1");
+  });
+
+  test("a read that finds no durable reason settles the record too — the generic reason stands verified", async () => {
+    const box = await connected([session({})]);
+    box.host.length = 0;
+    box.store.refresh();
+    await flush();
+    const death = box.store.deaths().get("room-design-talk");
+    expect(death?.historyPending).toBeFalsy();
+    expect(death?.reason).toBe("ended");
+  });
+
+  test("an older in-flight history response cannot settle a newer death", async () => {
+    const box = await connected([]);
+    const reads = box.deferSpecEvents();
+    box.store.ensureHistory("design-talk");
+    box.store.noteLaunch("resume-run-7", ["codex"], "design-talk");
+    box.host.push(session({ name: "resume-run-7", command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    box.host.splice(0, 1, session({ name: "resume-run-7", live: false, command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    reads[0]!.resolve([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "exited(0)" },
+      }),
+    ]);
+    await flush();
+    const death = box.store.deaths().get("resume-run-7");
+    expect(death?.historyPending, "the stale response must not verify the record").toBe(true);
+    expect(death?.reason).toBe("ended");
+    reads[1]!.resolve([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "yielded to dispatch r8 of spec s1" },
+      }),
+    ]);
+    await flush();
+    expect(box.store.deaths().get("resume-run-7")?.reason).toBe(
+      "yielded to dispatch r8 of spec s1",
+    );
+  });
+
   test("a pty_session_ended event records the server's reason, dims the entry, and outranks the generic drop", async () => {
     const box = await connected([session({})]);
     box.store.noteEvent(
@@ -340,6 +449,28 @@ describe("creates", () => {
     const entry = box.store.byName("room-design-talk");
     expect(entry?.room).toBe("design-talk");
     expect(entry?.command).toEqual(["claude"]);
+  });
+
+  test("an end event before any listing cancels the optimistic start — the corpse cannot read as live", async () => {
+    const box = await connected([]);
+    box.store.noteEvent(
+      ptyEvent({
+        data: { session: "room-design-talk", room_id: "design-talk", executable: "claude" },
+      }),
+    );
+    box.store.noteEvent(
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "room-design-talk", reason: "exited(1)" },
+      }),
+    );
+    expect(
+      box.store.byName("room-design-talk"),
+      "a live entry here mounts a create-capable pane that resurrects the dead session",
+    ).toBeUndefined();
+    const death = box.store.deaths().get("room-design-talk");
+    expect(death?.reason).toBe("exited(1)");
+    expect(death?.command).toEqual(["claude"]);
   });
 });
 

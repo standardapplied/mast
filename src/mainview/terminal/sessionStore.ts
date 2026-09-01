@@ -52,6 +52,8 @@ type BoxState = {
   /** Ended reasons from event history, the backfill for deaths observed before this app instance. */
   historyReasons: Map<string, string>;
   historyLoaded: Set<string>;
+  /** Per-room issue counter for history reads; only the newest read's response lands. */
+  historyRevisions: Map<string, number>;
   refresh: () => void;
 };
 
@@ -99,6 +101,7 @@ export class SessionStore {
           gen: 0,
           historyReasons: new Map(),
           historyLoaded: new Set(),
+          historyRevisions: new Map(),
           refresh: () => {},
         };
     box.refresh = coalesce(async () => {
@@ -196,10 +199,11 @@ export class SessionStore {
    * previously-live name it dropped is an observed death, and so is any corpse
    * it lists — first-load corpses and live-to-dead transitions included, so a
    * later listing that drops the corpse can never read as an ordinary
-   * host-restart loss and resurrect the pane. A death recorded with only the
-   * generic reason takes one fresh durable-history read for its room — the
-   * room's history was loaded before this death existed, and the durable
-   * reason gates the dispatch-yield Reopen safety check. Records are made
+   * host-restart loss and resurrect the pane. Every newly observed death is
+   * recorded with the generic reason and tied to a fresh history read for its
+   * room — never the name-wide reason cache, which a reused name would inherit
+   * from its previous incarnation; the record stays `historyPending` (the
+   * ended card fails closed) until that read settles it. Records are made
    * once, never overwriting a richer reason; a name listed live again is alive — its
    * death record is cleared so an external recreate is never pruned. Pending
    * creates ride until listed; one that two whole generations never confirmed
@@ -211,9 +215,13 @@ export class SessionStore {
     const next = new Map(sessions.map((s) => [s.name, s]));
     const staleRooms = new Set<string>();
     const recordDeath = (name: string, room: string, command: string[]) => {
-      const reason = box.historyReasons.get(name) ?? "ended";
-      box.deaths.set(name, { reason, at: Date.now(), command });
-      if (reason === "ended" && room) staleRooms.add(room);
+      box.deaths.set(name, {
+        reason: "ended",
+        at: Date.now(),
+        command,
+        ...(room ? { room, historyPending: true } : {}),
+      });
+      if (room) staleRooms.add(room);
     };
     for (const [name, prev] of box.listed ?? []) {
       if (prev.live && !next.has(name) && !box.deaths.has(name)) {
@@ -227,10 +235,13 @@ export class SessionStore {
         recordDeath(s.name, s.room, s.command);
       }
     }
-    for (const room of staleRooms) {
-      box.historyLoaded.delete(room);
-      this.ensureHistory(room, key);
+    for (const [, death] of box.deaths) {
+      // A pending record whose read failed retries at the next reconcile point.
+      if (death.historyPending && death.room && !box.historyLoaded.has(death.room)) {
+        staleRooms.add(death.room);
+      }
     }
+    for (const room of staleRooms) this.refreshHistory(box, room);
     box.listed = next;
     box.gen++;
     for (const [name, spec] of box.pending) {
@@ -261,10 +272,15 @@ export class SessionStore {
     if (event.type === "pty_session_ended") {
       const reason = typeof event.data?.reason === "string" ? event.data.reason : "ended";
       const known = box.listed?.get(name);
+      // The end cancels any optimistic start: a surviving pending entry would
+      // read as live and mount a create-capable pane over the corpse.
+      const pending = box.pending.get(name);
+      box.pending.delete(name);
+      const command = known?.command ?? pending?.command;
       box.deaths.set(name, {
         reason,
         at: Date.now(),
-        ...(known ? { command: known.command } : {}),
+        ...(command ? { command } : {}),
       });
       if (known?.live) box.listed!.set(name, { ...known, live: false });
       this.emit();
@@ -365,22 +381,38 @@ export class SessionStore {
       return;
     }
     if (box.historyLoaded.has(roomId)) return;
-    box.historyLoaded.add(roomId);
-    this.loadHistory(box, roomId);
+    this.refreshHistory(box, roomId);
   }
 
-  private loadHistory(box: BoxState, roomId: string): void {
+  /**
+   * One fresh history read for a room, revision-tagged: a response that is not
+   * the room's newest issued read is discarded whole — a death recorded while
+   * it was in flight forced a newer read, and the older response could pin a
+   * reused name to its previous incarnation's reason. The surviving response
+   * settles every pending death in the room: the durable reason when the
+   * history holds one, else the generic reason stands verified; either way the
+   * pending mark clears and the ended card ungates. A failed read keeps the
+   * mark (fail closed) and retries at the next reconcile point.
+   */
+  private refreshHistory(box: BoxState, roomId: string): void {
+    const revision = (box.historyRevisions.get(roomId) ?? 0) + 1;
+    box.historyRevisions.set(roomId, revision);
+    box.historyLoaded.add(roomId);
     void box.gateway.specEvents(roomId).then((result) => {
+      if (box.historyRevisions.get(roomId) !== revision) return;
       if (!result.ok) {
         box.historyLoaded.delete(roomId);
         return;
       }
-      for (const [name, reason] of Object.entries(endedReasons(result.value.events))) {
-        box.historyReasons.set(name, reason);
-        // A corpse recorded before its room's history loaded carries the generic
-        // reason; the durable one is richer (it gates the dispatch-yield Reopen).
-        const death = box.deaths.get(name);
-        if (death?.reason === "ended") box.deaths.set(name, { ...death, reason });
+      const durable = endedReasons(result.value.events);
+      for (const [name, reason] of Object.entries(durable)) box.historyReasons.set(name, reason);
+      for (const [name, death] of box.deaths) {
+        if (death.room === roomId && death.historyPending) {
+          const { historyPending: _settled, ...record } = death;
+          box.deaths.set(name, { ...record, reason: durable[name] ?? death.reason });
+        } else if (death.reason === "ended" && durable[name]) {
+          box.deaths.set(name, { ...death, reason: durable[name]! });
+        }
       }
       this.emit();
     });

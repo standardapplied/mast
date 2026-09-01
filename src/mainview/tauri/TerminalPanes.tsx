@@ -41,6 +41,7 @@ import {
   commandFor,
   DECK_LAUNCHERS,
   type DeckGlyph,
+  endedCardModel,
   GLYPH_MARKS,
   type LaunchSpec,
   panePlan,
@@ -422,10 +423,27 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     /** A room pane's content: the terminal, or the shipped ended card with yield gating. */
     const roomCell = (session: string, groupActive: boolean) => {
       const scope = room!;
-      const plan = panePlan(session, scope.sessions, launched, sessionStore.deaths());
+      const deaths = sessionStore.deaths();
+      const plan = panePlan(session, scope.sessions, launched, deaths);
       const refusal = scope.sessions.find((s) => s.name === session)?.refusal;
       if (plan.kind === "ended") {
-        const displaced = yieldedDispatch(scope.reasons[session]);
+        // A death awaiting its durable reason fails closed: the reason gates
+        // the dispatch-yield check, so no Restart until the history read lands.
+        const card = endedCardModel(deaths.get(session), scope.reasons[session]);
+        const displaced = card.restartable ? yieldedDispatch(card.reason) : null;
+        const restart = () => {
+          // The store owns the destructive step: a listed corpse must be
+          // KILLED through it (a refusal lands inline above, and no launch
+          // intent clears the tombstone) before the revive re-mints the name.
+          const revive = () => {
+            setLaunched((m) => new Map(m).set(session, { command: plan.restartCommand }));
+            sessionStore.noteLaunch(session, plan.restartCommand, scope.roomId);
+          };
+          if (!scope.sessions.some((s) => s.name === session)) return revive();
+          void sessionStore.kill(session, { resolvedRoom: scope.roomId }).then((result) => {
+            if (result.ok) revive();
+          });
+        };
         return (
           <div className="room-pane-ended">
             {refusal && (
@@ -435,24 +453,12 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
             )}
             <DeckEndedCard
               session={session}
-              reason={scope.reasons[session]}
+              reason={card.reason}
               yielded={displaced !== null}
               dispatchLive={
                 displaced?.specId ? (scope.dispatchLive[displaced.specId] ?? true) : false
               }
-              onRestart={() => {
-                // The store owns the destructive step: a listed corpse must be
-                // KILLED through it (a refusal lands inline above, and no launch
-                // intent clears the tombstone) before the revive re-mints the name.
-                const revive = () => {
-                  setLaunched((m) => new Map(m).set(session, { command: plan.restartCommand }));
-                  sessionStore.noteLaunch(session, plan.restartCommand, scope.roomId);
-                };
-                if (!scope.sessions.some((s) => s.name === session)) return revive();
-                void sessionStore.kill(session, { resolvedRoom: scope.roomId }).then((result) => {
-                  if (result.ok) revive();
-                });
-              }}
+              onRestart={card.restartable ? restart : undefined}
             />
           </div>
         );

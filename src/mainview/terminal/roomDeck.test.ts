@@ -6,6 +6,7 @@ import {
   type DeathRecord,
   deckSessions,
   type DeckSession,
+  endedCardModel,
   endedReasons,
   glyphFor,
   isPtyEvent,
@@ -118,6 +119,25 @@ const event = (over: Partial<SailEvent>): SailEvent => ({
   agent: "uday",
   host: "devbox",
   ...over,
+});
+
+describe("endedCardModel", () => {
+  test("a pending death fails closed: holding copy, no restart", () => {
+    const model = endedCardModel(
+      { reason: "ended", at: 1, room: "design-talk", historyPending: true },
+      "ended",
+    );
+    expect(model.restartable).toBe(false);
+    expect(model.reason).toContain("Checking");
+  });
+
+  test("a settled death passes the recorded reason through, restartable", () => {
+    expect(endedCardModel({ reason: "exited(0)", at: 1 }, "exited(0)")).toEqual({
+      reason: "exited(0)",
+      restartable: true,
+    });
+    expect(endedCardModel(undefined, "ended")).toEqual({ reason: "ended", restartable: true });
+  });
 });
 
 describe("deck events", () => {
