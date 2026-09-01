@@ -130,6 +130,28 @@ describe("CatalogStore seeding", () => {
     expect(store.error?.message).toContain("bridge died");
   });
 
+  test("a transient whoami failure recovers at the next reconcile point", async () => {
+    const gateway = createDemoGateway();
+    const realWhoami = gateway.whoami.bind(gateway);
+    let broken = true;
+    gateway.whoami = () =>
+      broken
+        ? Promise.resolve({
+            ok: false as const,
+            error: { status: 503, code: "unavailable", message: "down" },
+          })
+        : realWhoami();
+    const store = new CatalogStore();
+    store.connect(gateway);
+    await settle();
+    expect(store.me).toBeUndefined();
+
+    broken = false;
+    store.refreshAll();
+    await settle();
+    expect(store.me).toBe("uday");
+  });
+
   test("a stream reconnect is a reconcile point: ready refetches the world", async () => {
     const gateway = createDemoGateway();
     const statusListeners: Array<Parameters<DemoGateway["onConnectionStatus"]>[0]> = [];
@@ -230,6 +252,39 @@ describe("CatalogStore event merging", () => {
     expect(store.activityMap().get("design-talk")).toBe("2026-07-02T12:00:00Z");
   });
 
+  test("a stale full list cannot undo a newer scoped event merge", async () => {
+    const { gateway, store } = await seeded();
+    const realList = gateway.listSpecs.bind(gateway);
+    let releaseStale: (() => void) | undefined;
+    let stalled = false;
+    gateway.listSpecs = async (query) => {
+      const result = await realList(query);
+      if (!stalled) {
+        stalled = true;
+        await new Promise<void>((resolve) => {
+          releaseStale = resolve;
+        });
+      }
+      return result;
+    };
+    store.noteEvent(event({ type: "board_updated" }));
+    await settle();
+
+    await gateway.createSpec({
+      id: "from-cli",
+      project: "sail-mast",
+      title: "Created mid-refresh",
+      status: "draft",
+    });
+    await settle();
+    expect(store.specOf("from-cli")).toBeDefined();
+
+    releaseStale!();
+    await settle();
+    await settle();
+    expect(store.specOf("from-cli")).toBeDefined();
+  });
+
   test("a spec the backend no longer knows is removed, not kept as a ghost", async () => {
     const { gateway, store } = await seeded();
     gateway.getSpec = async () => ({
@@ -283,6 +338,22 @@ describe("CatalogStore runs slice", () => {
     store.refreshAll();
     await settle();
     expect(store.runsOf("chorus-invoice-ui")).not.toBeNull();
+  });
+
+  test("a failing refresh invalidates the retained list — stale runs are never evidence", async () => {
+    const { gateway, store } = await seeded();
+    store.retainRuns("chorus-invoice-ui");
+    await settle();
+    expect(store.runsOf("chorus-invoice-ui")).not.toBeNull();
+
+    gateway.listRuns = () =>
+      Promise.resolve({
+        ok: false as const,
+        error: { status: 503, code: "unavailable", message: "down" },
+      });
+    store.noteEvent(event({ type: "agent_session_started", spec: "chorus-invoice-ui" }));
+    await settle();
+    expect(store.runsOf("chorus-invoice-ui")).toBeNull();
   });
 
   test("a run event without a spec conservatively refreshes every held list", async () => {

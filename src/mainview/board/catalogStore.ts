@@ -97,6 +97,10 @@ export class CatalogStore {
   private runRefreshers = new Map<string, () => void>();
   private worldRefresher: () => void = () => {};
   private gen = 0;
+  /** Bumped on every accepted scoped merge (upsert or 404 removal) so a full
+   *  snapshot that overlapped one knows its presence/absence verdicts are
+   *  stale and re-runs instead of undoing the newer scoped state. */
+  private recordRevision = 0;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -130,11 +134,6 @@ export class CatalogStore {
       () => window.removeEventListener("focus", onFocus),
     ];
     this.refreshAll();
-    void gateway.whoami().then((result) => {
-      if (this.gateway !== gateway || !result.ok) return;
-      this.fde = result.value.fde;
-      this.emit();
-    });
   }
 
   /** Test seam: drops the gateway wiring and every record. */
@@ -161,10 +160,20 @@ export class CatalogStore {
     this.emit();
   }
 
-  /** Coalesced re-seed of the whole aggregate — the conservative reconcile verb. */
+  /** Coalesced re-seed of the whole aggregate — the conservative reconcile
+   *  verb. Identity rides along: "assignee: me" matches nobody until whoami
+   *  lands, so a transient failure must retry here, not stay broken for the
+   *  connection's lifetime. */
   refreshAll(): void {
     this.worldRefresher();
     for (const specId of this.runHolds.keys()) this.kickRuns(specId);
+    const gateway = this.gateway;
+    if (!gateway) return;
+    void gateway.whoami().then((result) => {
+      if (this.gateway !== gateway || !result.ok || this.fde === result.value.fde) return;
+      this.fde = result.value.fde;
+      this.emit();
+    });
   }
 
   /**
@@ -174,6 +183,7 @@ export class CatalogStore {
    */
   private async fetchWorld(gateway: Gateway): Promise<void> {
     const gen = ++this.gen;
+    const revision = this.recordRevision;
     const recentPromise = gateway.recentEvents(500).catch(() => null);
     const catalogPromise = gateway
       .listProjects()
@@ -195,6 +205,11 @@ export class CatalogStore {
       return;
     }
     if (gen !== this.gen) return;
+    // A scoped merge that landed while the lists were in flight already knows
+    // more than this snapshot about what exists: the older lists must not
+    // drop an event-inserted record or resurrect a 404-removed one, so the
+    // whole snapshot is discarded and refetched.
+    if (revision !== this.recordRevision) return this.worldRefresher();
     // Rooms and specs fail independently: the board must survive a rooms
     // endpoint that errors (or predates this app), and vice versa — whichever
     // listing landed is applied, the other lane carries its own error.
@@ -305,6 +320,7 @@ export class CatalogStore {
     if (!result.ok) {
       if (result.error.status === 404 && this.specsById.delete(id)) {
         this.etags.delete(id);
+        this.recordRevision++;
         this.emit();
       }
       return result;
@@ -326,6 +342,7 @@ export class CatalogStore {
   private async fetchRuns(specId: string): Promise<void> {
     const gateway = this.gateway;
     if (!gateway) return;
+    if (this.runsBySpec.delete(specId)) this.emit();
     const result = await gateway.listRuns(specId);
     if (this.gateway !== gateway || !result.ok || !Array.isArray(result.value.runs)) return;
     this.runsBySpec.set(specId, result.value.runs);
@@ -336,6 +353,7 @@ export class CatalogStore {
     if (!fresherOrSame(this.specsById.get(spec.id), spec)) return;
     this.specsById.set(spec.id, spec);
     if (etag !== undefined) this.etags.set(spec.id, etag);
+    this.recordRevision++;
     this.emit();
   }
 
@@ -343,6 +361,7 @@ export class CatalogStore {
     if (this.roomsById === null) this.roomsById = new Map();
     if (!fresherOrSame(this.roomsById.get(room.id), room)) return;
     this.roomsById.set(room.id, room);
+    this.recordRevision++;
     this.emit();
   }
 
@@ -410,9 +429,11 @@ export class CatalogStore {
     return this.activity;
   }
 
-  /** Null until a listing for the spec has landed — consumers gating on runs
-   *  (Reopen after a yielded dispatch) fail closed and the store retries at
-   *  every reconcile point instead of leaving a failed one-shot silent. */
+  /** Null until a listing for the spec has landed, and again while a refresh
+   *  is in flight or after one fails — a stale list must never stand as
+   *  evidence that no dispatch is active. Consumers gating on runs (Reopen
+   *  after a yielded dispatch) fail closed on null and the store retries at
+   *  every reconcile point. */
   runsOf(specId: string): RunView[] | null {
     return this.runsBySpec.get(specId) ?? null;
   }
