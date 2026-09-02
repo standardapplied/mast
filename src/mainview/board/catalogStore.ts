@@ -95,6 +95,12 @@ export class CatalogStore {
    *  listing that started before the boundary can never repopulate the cache. */
   private runsGen = new Map<string, number>();
 
+  /** Per-spec scoped-request generation: only the newest getSpec for an id is
+   *  authoritative, and every accepted upsert (mutation acks included)
+   *  advances it, so a delayed older fetch — success or 404 — can never undo
+   *  newer scoped state. The epoch fences accounts; this orders requests. */
+  private specRequestGen = new Map<string, number>();
+
   private specRefreshers = new Map<string, () => void>();
   private roomRefreshers = new Map<string, () => void>();
   private runRefreshers = new Map<string, () => void>();
@@ -165,6 +171,7 @@ export class CatalogStore {
     this.runsBySpec = new Map();
     this.runHolds = new Map();
     this.runsGen = new Map();
+    this.specRequestGen = new Map();
     this.specRefreshers = new Map();
     this.roomRefreshers = new Map();
     this.runRefreshers = new Map();
@@ -205,17 +212,14 @@ export class CatalogStore {
           : [],
       )
       .catch(() => []);
-    let roomsResult, specsResult;
-    try {
-      [roomsResult, specsResult] = await Promise.all([gateway.listRooms(), gateway.listSpecs({})]);
-    } catch (error) {
-      if (gen !== this.gen) return;
-      const bridge: SailWireError = { status: 0, code: "bridge", message: message(error) };
-      this.roomsError = bridge;
-      this.specsError = bridge;
-      this.emit();
-      return;
-    }
+    const rejected = (error: unknown) => ({
+      ok: false as const,
+      error: { status: 0, code: "bridge", message: message(error) } satisfies SailWireError,
+    });
+    const [roomsResult, specsResult] = await Promise.all([
+      gateway.listRooms().catch(rejected),
+      gateway.listSpecs({}).catch(rejected),
+    ]);
     if (gen !== this.gen) return;
     // A scoped merge that landed while the lists were in flight already knows
     // more than this snapshot about what exists: the older lists must not
@@ -328,8 +332,10 @@ export class CatalogStore {
       return { ok: false, error: { status: 0, code: "bridge", message: "no gateway connected" } };
     }
     const epoch = this.epoch;
+    const request = (this.specRequestGen.get(id) ?? 0) + 1;
+    this.specRequestGen.set(id, request);
     const result = await gateway.getSpec(id);
-    if (this.epoch !== epoch) return result;
+    if (this.epoch !== epoch || this.specRequestGen.get(id) !== request) return result;
     if (!result.ok) {
       if (result.error.status === 404) {
         // An authoritative absence verdict even when the row was never here:
@@ -383,6 +389,7 @@ export class CatalogStore {
     if (!fresherOrSame(this.specsById.get(spec.id), spec)) return;
     this.specsById.set(spec.id, spec);
     if (etag !== undefined) this.etags.set(spec.id, etag);
+    this.specRequestGen.set(spec.id, (this.specRequestGen.get(spec.id) ?? 0) + 1);
     this.recordRevision++;
     this.emit();
   }
@@ -528,8 +535,17 @@ export class CatalogStore {
     const epoch = this.epoch;
     for (let attempt = 0; attempt < 10; attempt++) {
       const result = await gateway.createRoom({ id, project, title: trimmed });
+      // The epoch fences the network too, not just the store: past a
+      // logout/login boundary this operation must not engage an agent or
+      // retry the creation under whoever signed in next.
+      if (this.epoch !== epoch) {
+        return {
+          ok: false,
+          error: { status: 0, code: "session_changed", message: "The signed-in session changed." },
+        };
+      }
       if (result.ok) {
-        if (this.epoch === epoch) this.upsertRoom(result.value);
+        this.upsertRoom(result.value);
         let engageError: string | undefined;
         if (agent) {
           const engaged = await gateway.engage(id, { agent });

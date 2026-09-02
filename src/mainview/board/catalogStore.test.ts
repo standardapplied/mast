@@ -141,6 +141,19 @@ describe("CatalogStore seeding", () => {
     expect(store.error?.message).toContain("bridge died");
   });
 
+  test("a thrown rooms request degrades only the rooms lane — specs still land", async () => {
+    const gateway = createDemoGateway();
+    gateway.listRooms = () => Promise.reject(new Error("rooms bridge died"));
+    const store = new CatalogStore();
+    store.connect(gateway);
+    await settle();
+    expect(store.seeded).toBe(true);
+    expect(store.specList().length).toBe(11);
+    expect(store.boardError).toBeNull();
+    expect(store.error?.code).toBe("bridge");
+    expect(store.error?.message).toContain("rooms bridge died");
+  });
+
   test("a transient whoami failure recovers at the next reconcile point", async () => {
     const gateway = createDemoGateway();
     const realWhoami = gateway.whoami.bind(gateway);
@@ -305,6 +318,50 @@ describe("CatalogStore event merging", () => {
     store.noteEvent(event({ spec: "chorus-billing-export" }));
     await settle();
     expect(store.specOf("chorus-billing-export")).toBeUndefined();
+  });
+
+  test("a stale scoped 404 cannot delete the row a newer scoped fetch installed", async () => {
+    const { gateway, store } = await seeded();
+    const realGetSpec = gateway.getSpec.bind(gateway);
+    let release404: (() => void) | undefined;
+    let calls = 0;
+    gateway.getSpec = async (id) => {
+      if (++calls > 1) return realGetSpec(id);
+      await new Promise<void>((resolve) => {
+        release404 = resolve;
+      });
+      return {
+        ok: false as const,
+        error: { status: 404, code: "spec_not_found", message: "gone" },
+      };
+    };
+    const stale = store.refreshSpec("chorus-billing-export");
+    await store.refreshSpec("chorus-billing-export");
+    expect(store.specOf("chorus-billing-export")).toBeDefined();
+
+    release404!();
+    await stale;
+    expect(store.specOf("chorus-billing-export")).toBeDefined();
+  });
+
+  test("a stale scoped 404 cannot delete the row a mutation ack upserted", async () => {
+    const { gateway, store } = await seededQuiet();
+    let release404: (() => void) | undefined;
+    gateway.getSpec = async () =>
+      new Promise((resolve) => {
+        release404 = () =>
+          resolve({
+            ok: false,
+            error: { status: 404, code: "spec_not_found", message: "gone" },
+          });
+      });
+    const stale = store.refreshSpec("chorus-billing-export");
+    await store.updateSpec("chorus-billing-export", { status: "in_progress" });
+    expect(store.specOf("chorus-billing-export")?.status).toBe("in_progress");
+
+    release404!();
+    await stale;
+    expect(store.specOf("chorus-billing-export")?.status).toBe("in_progress");
   });
 
   test("a 404 for a row the store never held still beats the in-flight seed", async () => {
@@ -596,6 +653,58 @@ describe("CatalogStore reset epoch", () => {
     await settle();
     expect(store.specOf("chorus-billing-export")).toBeUndefined();
     expect(store.specList()).toEqual([]);
+  });
+
+  test("a room creation begun before reset cannot engage an agent in the next sign-in", async () => {
+    const { gateway, store } = await seeded();
+    const template = store.roomList()![0];
+    let releaseStale: (() => void) | undefined;
+    gateway.createRoom = async (request) =>
+      new Promise((resolve) => {
+        releaseStale = () => resolve({ ok: true, value: { ...template, ...request } });
+      });
+    let engages = 0;
+    const realEngage = gateway.engage.bind(gateway);
+    gateway.engage = (roomId, request) => {
+      engages++;
+      return realEngage(roomId, request);
+    };
+    const stale = store.createRoom("Ghost room", "chorus", "claude-code");
+
+    store.reset();
+    store.connect(gateway);
+    await settle();
+
+    releaseStale!();
+    const result = await stale;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("session_changed");
+    expect(engages).toBe(0);
+    expect(store.roomList()!.some((room) => room.id === "ghost-room")).toBe(false);
+  });
+
+  test("a stale 409 cannot trigger another creation attempt in the next sign-in", async () => {
+    const { gateway, store } = await seeded();
+    let creates = 0;
+    let releaseStale: (() => void) | undefined;
+    gateway.createRoom = async () => {
+      creates++;
+      return new Promise((resolve) => {
+        releaseStale = () =>
+          resolve({ ok: false, error: { status: 409, code: "conflict", message: "exists" } });
+      });
+    };
+    const stale = store.createRoom("Ghost room", "chorus");
+
+    store.reset();
+    store.connect(gateway);
+    await settle();
+
+    releaseStale!();
+    const result = await stale;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("session_changed");
+    expect(creates).toBe(1);
   });
 
   test("a whoami begun before reset cannot overwrite the next account's identity", async () => {
