@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { App } from "./App";
+import { catalogStore } from "./board/catalogStore";
 import { createDemoGateway, type DemoGateway } from "./gateway";
 import { dispatchPush } from "./push";
 import { sessionStore } from "./terminal/sessionStore";
@@ -300,10 +301,16 @@ describe("App cockpit", () => {
     expect(container.querySelector('[data-testid="view-room-terminal"]')).not.toBeNull();
 
     // Logout (or token expiry) must unmount the interactive PTY surface with
-    // everything else — the gate owns the whole window.
+    // everything else — the gate owns the whole window — and must clear the
+    // catalog: rooms, specs, runs, and the FDE identity belong to the account
+    // that signed out, and the next sign-in may be someone else.
+    expect(catalogStore.specList().length).toBeGreaterThan(0);
     await push("unauthenticated");
     expect(container.querySelector('[data-testid="view-room-terminal"]')).toBeNull();
     expect(container.querySelector('[data-testid="connect-screen"]')).not.toBeNull();
+    expect(catalogStore.specList()).toEqual([]);
+    expect(catalogStore.roomList()).toBeNull();
+    expect(catalogStore.me).toBeUndefined();
 
     await push("ready");
     expect(container.querySelector('[data-testid="connect-screen"]')).toBeNull();

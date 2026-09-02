@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { GlobalSpecView } from "../../shared/sail-models";
 import type { Gateway } from "../gateway";
+import { catalogLaneStubs } from "../../../test/catalogStubs";
 import { DispatchDialog } from "./DispatchDialog";
 
 let root: Root;
@@ -31,6 +32,7 @@ function mount(overrides: Partial<Parameters<typeof DispatchDialog>[0]> = {}) {
     requests: [] as Array<Record<string, unknown>>,
   };
   const gateway = {
+    ...catalogLaneStubs(),
     dispatch: async (_project: string, request: Record<string, unknown>) => {
       calls.requests.push(request);
       return {
@@ -159,6 +161,7 @@ describe("DispatchDialog", () => {
 
   test("a 403 renders the server's refusal verbatim — never a blanket admin claim", async () => {
     const refusing = {
+      ...catalogLaneStubs(),
       dispatch: async () => ({
         ok: false as const,
         error: {
@@ -186,6 +189,7 @@ describe("DispatchDialog", () => {
 
   test("a structured refusal surfaces the server message and action verbatim", async () => {
     const refusing = {
+      ...catalogLaneStubs(),
       dispatch: async () => ({
         ok: false as const,
         error: {

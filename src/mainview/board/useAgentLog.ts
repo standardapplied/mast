@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { AgentLogRole, RunView, SailEvent } from "../../shared/sail-models";
 import { renderAgentLine } from "../agentLog";
 import type { Gateway } from "../gateway";
 import { latestRun, type AgentLogState } from "../tauri/agentLogStream";
-import { LIFECYCLE_TYPES, RESTART_TYPES, RUN_CHANGE_TYPES } from "./notifyPolicy";
+import { catalogStore, connectCatalog } from "./catalogStore";
+import { LIFECYCLE_TYPES, RESTART_TYPES } from "./notifyPolicy";
 
 /**
  * Follows one spec's live agent log for the desktop panel: an instant
@@ -58,7 +59,6 @@ export function useAgentLog(
   const [raw, setRaw] = useState(false);
   const [lines, setLines] = useState<LogLine[]>([]);
   const [state, setState] = useState<AgentLogState>("connecting");
-  const [runs, setRuns] = useState<RunView[]>([]);
   const [lifecycle, setLifecycle] = useState<Lifecycle | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -72,23 +72,16 @@ export function useAgentLog(
 
   // The header is run-scoped like the log itself: this spec's runs, never the
   // container's current session (which may belong to a sibling spec in the
-  // same project). Loaded once and refreshed on run-lifecycle events — badge
-  // state is the presence store's job, so there is no status poll.
-  const loadRuns = useRef<() => void>(() => {});
-  useEffect(() => {
-    let alive = true;
-    loadRuns.current = () =>
-      void gateway.listRuns(specId).then((r) => {
-        if (alive && r.ok && Array.isArray(r.value.runs)) setRuns(r.value.runs);
-      });
-    loadRuns.current();
-    return () => {
-      alive = false;
-      loadRuns.current = () => {};
-    };
-  }, [gateway, specId]);
-
-  const run = useMemo(() => latestRun(runs, role) ?? null, [runs, role]);
+  // same project). The catalog store owns the list — retained while this
+  // panel is open, refreshed on run events and reconcile points by the store.
+  useEffect(() => connectCatalog(gateway), [gateway]);
+  useEffect(() => catalogStore.retainRuns(specId), [specId]);
+  const catalogVersion = useSyncExternalStore(catalogStore.subscribe, () => catalogStore.version);
+  const run = useMemo<RunView | null>(
+    () => latestRun(catalogStore.runsOf(specId) ?? [], role) ?? null,
+    // catalogVersion is the store's change signal; runsOf reads fresh through it.
+    [specId, role, catalogVersion],
+  );
 
   useEffect(() => {
     if (!project) return;
@@ -99,11 +92,8 @@ export function useAgentLog(
       } else if (RESTART_TYPES.has(event.type)) {
         setLifecycle(null);
       }
-      if (RUN_CHANGE_TYPES.has(event.type) && (!event.spec || event.spec === specId)) {
-        loadRuns.current();
-      }
     });
-  }, [gateway, project, specId]);
+  }, [gateway, project]);
 
   useEffect(() => {
     if (!project) return;

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { EngagementView, GlobalSpecView, ServerRoomView } from "../../shared/sail-models";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import type { EngagementView, ServerRoomView } from "../../shared/sail-models";
 import { ContextMenu } from "../components/ContextMenu";
 import { DetailsDrawer } from "../components/DetailsDrawer";
 import { CaretDown } from "../components/icons";
@@ -11,6 +11,7 @@ import { openTerminalMenu, RoomDeckStrip } from "./RoomDeck";
 import { RosterChip } from "./RosterChip";
 import { SpecRoom } from "./SpecRoom";
 import type { Gateway } from "../gateway";
+import { catalogStore, connectCatalog } from "./catalogStore";
 
 const DRAWER_OPEN_KEY = "mast.room.details.chat.open";
 const DRAWER_WIDTH_KEY = "mast.room.details.width";
@@ -40,7 +41,6 @@ export function ChatRoomPane({
 }) {
   const [drawerOpen, setDrawerOpen] = useState(() => localStorage.getItem(DRAWER_OPEN_KEY) === "true");
   const [drawerWidth, setDrawerWidth] = useState(storedWidth);
-  const [specs, setSpecs] = useState<GlobalSpecView[]>([]);
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number } | null>(null);
 
   const setDetailsOpen = (open: boolean) => {
@@ -48,18 +48,13 @@ export function ChatRoomPane({
     localStorage.setItem(DRAWER_OPEN_KEY, String(open));
   };
 
-  useEffect(() => {
-    if (!drawerOpen || room.spec_ids.length === 0) return;
-    let cancelled = false;
-    void gateway.listSpecs({}).then((result) => {
-      if (cancelled || !result.ok) return;
-      const ids = new Set(room.spec_ids);
-      setSpecs(result.value.specs.filter((spec) => ids.has(spec.id)));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [gateway, drawerOpen, room.spec_ids]);
+  useEffect(() => connectCatalog(gateway), [gateway]);
+  const catalogVersion = useSyncExternalStore(catalogStore.subscribe, () => catalogStore.version);
+  const specs = useMemo(() => {
+    const ids = new Set(room.spec_ids);
+    return catalogStore.specList().filter((spec) => ids.has(spec.id));
+    // catalogVersion is the store's change signal; specList reads fresh through it.
+  }, [room.spec_ids, catalogVersion]);
 
   const openTerminal = (request: { focus?: string; launch?: RoomTerminalRequest["launch"] }) =>
     onOpenTerminal({ roomId: room.id, project: room.project, title: room.title, ...request });

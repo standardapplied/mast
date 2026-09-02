@@ -5,6 +5,7 @@ import type { GlobalSpecView, RunView, SailEvent, StopRunResponse } from "../../
 import type { SailResult } from "../../shared/types";
 import { ToastProvider } from "../components/Toast";
 import type { Gateway } from "../gateway";
+import { catalogLaneStubs } from "../../../test/catalogStubs";
 import { sessionStore } from "../terminal/sessionStore";
 import { SpecDetail } from "./SpecDetail";
 
@@ -55,6 +56,7 @@ function makeGateway(
   };
 
   const gateway = {
+    ...catalogLaneStubs(),
     whoami: async () => ({
       ok: true as const,
       value: {

@@ -8,6 +8,7 @@ import { Select, type SelectOption } from "../components/Select";
 import { ToggleButton } from "../components/ToggleButton";
 import { Button } from "../components/ui";
 import type { Gateway } from "../gateway";
+import { catalogStore, connectCatalog } from "./catalogStore";
 
 /**
  * Add an agent to this room: it joins the conversation and answers every human
@@ -45,6 +46,8 @@ export function EngageDialog({
   const [refusal, setRefusal] = useState<string | null>(null);
   const pendingRef = useRef<{ agent: string } | null>(null);
   const bufferRef = useRef<SailEvent[]>([]);
+
+  useEffect(() => connectCatalog(gateway), [gateway]);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,7 +115,7 @@ export function EngageDialog({
     setBusy(true);
     setRefusal(null);
     const chosen = agent.trim();
-    const result = await gateway.engage(specId, {
+    const result = await catalogStore.engage(specId, {
       agent: chosen,
       mode: readOnly ? "read_only" : "full",
       ...(model.trim() ? { model: model.trim() } : {}),

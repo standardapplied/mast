@@ -8,6 +8,7 @@ import type {
 } from "../../shared/sail-models";
 import type { SailResult } from "../../shared/types";
 import type { Gateway } from "../gateway";
+import { catalogLaneStubs } from "../../../test/catalogStubs";
 import { EngageDialog } from "./EngageDialog";
 
 let root: Root;
@@ -68,6 +69,7 @@ function mount({
     emit: (event: SailEvent) => act(() => listeners.forEach((l) => l(event))),
   };
   const gateway = {
+    ...catalogLaneStubs(),
     listAgents: async () => AGENTS,
     engage: async (_id: string, request: Record<string, unknown>) => {
       calls.requests.push(request);

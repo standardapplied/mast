@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode, useRef } from "react";
 import type { ConnectionStatus, WhoAmI } from "../shared/sail-models";
 import { BoardScreen } from "./board/BoardScreen";
+import { catalogStore, connectCatalog } from "./board/catalogStore";
 import { notification } from "./board/notifyPolicy";
 import { connectPresence, presenceStore } from "./board/presenceStore";
 import { RoomsScreen } from "./board/RoomsScreen";
@@ -176,10 +177,11 @@ export function App({
   // Presence rides the app-wide event stream — no polling. One runs listing on
   // connect seeds chips for agents already mid-work (or mid-silence); after
   // that, progress and agent_presence events keep the store live. The session
-  // inventory connects beside it: one owner, seeded by a listing, accelerated
-  // (never carried) by pty events.
+  // inventory and the rooms/specs/projects catalog connect beside it: one
+  // owner each, seeded by a listing, accelerated (never carried) by events.
   useEffect(() => {
     if (!ready) return;
+    connectCatalog(gateway);
     const disconnectPresence = connectPresence(gateway, presenceStore);
     const disconnectSessions = connectSessions(gateway, sessionStore);
     return () => {
@@ -203,10 +205,14 @@ export function App({
 
   // Losing authentication takes down every workspace surface, the room-terminal
   // route included — and forgets the route, so a later sign-in can't restore a
-  // full-screen PTY the signed-out user was never shown.
+  // full-screen PTY the signed-out user was never shown. The catalog resets
+  // with it: rooms, specs, runs, and the FDE identity are the signed-in
+  // account's data, and the next sign-in may be a different account.
   const needsLogin = status?.phase === "unauthenticated";
   useEffect(() => {
-    if (needsLogin) setRoomRoute(null);
+    if (!needsLogin) return;
+    setRoomRoute(null);
+    catalogStore.reset();
   }, [needsLogin]);
 
   const openSpec = (id: string) => {

@@ -92,16 +92,14 @@ describe("useBoard", () => {
     expect(h2().data.projects).toEqual(["chorus", "sail-mast"]);
   });
 
-  test("switching project shows loading, then the new scope; SSE refetches stay silent", async () => {
+  test("switching project scopes instantly from the owned world — no loading flash", async () => {
     const gateway = createDemoGateway();
     const { handle, rerender } = await render(gateway);
     expect(handle().data.loading).toBe(false);
 
     rerender("sail-mast");
-    expect(handle().data.loading).toBe(true);
-
-    await act(async () => {});
     expect(handle().data.loading).toBe(false);
+    expect(handle().data.specs.length).toBeGreaterThan(0);
     expect(handle().data.specs.every((s) => s.project === "sail-mast")).toBe(true);
 
     await act(async () => {

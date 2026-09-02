@@ -51,20 +51,29 @@ export function isRoomActivityEvent(event: SailEvent): boolean {
   return Boolean(event.spec && !NON_RECORD_EVENT_TYPES.has(event.type));
 }
 
+/** Folds record events into a room-id → newest-activity-timestamp map, in place. */
+export function foldActivity(
+  map: Map<string, string>,
+  events: readonly SailEvent[],
+): Map<string, string> {
+  for (const event of events) {
+    if (!isRoomActivityEvent(event)) continue;
+    const current = map.get(event.spec!);
+    if (!current || timestamp(event.ts) > timestamp(current)) {
+      map.set(event.spec!, event.ts);
+    }
+  }
+  return map;
+}
+
 export function assembleRooms(
   serverRooms: readonly ServerRoomView[],
   specs: readonly GlobalSpecView[],
-  events: readonly SailEvent[],
+  activity: readonly SailEvent[] | ReadonlyMap<string, string>,
   watermarks: Readonly<Record<string, string>>,
 ): RoomView[] {
-  const eventActivity = new Map<string, string>();
-  for (const event of events) {
-    if (!isRoomActivityEvent(event)) continue;
-    const current = eventActivity.get(event.spec!);
-    if (!current || timestamp(event.ts) > timestamp(current)) {
-      eventActivity.set(event.spec!, event.ts);
-    }
-  }
+  const eventActivity =
+    activity instanceof Map ? activity : foldActivity(new Map(), activity as SailEvent[]);
   const specsById = new Map(specs.map((spec) => [spec.id, spec]));
 
   return serverRooms

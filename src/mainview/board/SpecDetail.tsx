@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { AgentLogRole,
   FdeView,
-  GlobalSpecDetailResponse,
-  GlobalSpecView,
   RunView,
   SpecRevisionView,
   SpecStatus,
@@ -25,6 +23,7 @@ import { Button, Eyebrow } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { Markdown } from "../markdown";
 import type { RoomTerminalRequest } from "../terminal/roomDeck";
+import { catalogStore, connectCatalog } from "./catalogStore";
 import { DispatchDialog } from "./DispatchDialog";
 import { openTerminalMenu, RoomDeckStrip } from "./RoomDeck";
 import { EngageDialog } from "./EngageDialog";
@@ -78,17 +77,12 @@ const EDITOR_PANES = [
   { value: "preview", label: "Preview" },
 ];
 
+/** Detail-scope state: body, plan, and revision history belong to this page,
+ *  not the catalog — the spec row itself lives in the catalog store. */
 type Loaded = {
-  detail: GlobalSpecDetailResponse;
-  etag?: string;
   body: string;
   plan: string;
   history: SpecRevisionView[];
-  allSpecs: GlobalSpecView[];
-  /** True once enrichment has landed at least once. Until then, readiness and
-   *  empty-states are unknown — render nothing rather than a wrong guess that
-   *  flips a moment later. */
-  enriched: boolean;
 };
 
 function DepChip({ id, unmet, onOpen }: { id: string; unmet: boolean; onOpen: (id: string) => void }) {
@@ -173,11 +167,17 @@ export function SpecDetail({
     });
   }, [gateway]);
 
+  useEffect(() => connectCatalog(gateway), [gateway]);
+  // Subscribed for re-render: the catalog row and dependency graph are read
+  // straight off the store below, fresh on every store change.
+  useSyncExternalStore(catalogStore.subscribe, () => catalogStore.version);
+
   const load = useCallback(async () => {
-    // Core first — just what the page needs to render — so the detail appears
-    // after two calls and a bridge timeout on enrichment never blocks it.
+    // Core first — the catalog row (through the store, so no surface races it)
+    // and the body — so the detail appears after two calls and a slow history
+    // read never blocks it.
     const [detail, content] = await Promise.all([
-      gateway.getSpec(specId),
+      catalogStore.refreshSpec(specId),
       gateway.getSpecContent(specId),
     ]);
     if (!detail.ok) {
@@ -185,32 +185,18 @@ export function SpecDetail({
       return;
     }
     setError(null);
-    // A reload keeps the previous enrichment on screen — blanking history and
-    // the dependency graph on every SSE-triggered refresh made the cards flicker.
+    // A reload keeps the previous history on screen — blanking it on every
+    // SSE-triggered refresh made the cards flicker.
     setLoaded((prev) => ({
-      detail: detail.value,
-      etag: detail.etag,
       body: content.ok ? content.value.body : (detail.value.body ?? ""),
       plan: content.ok ? content.value.plan : "",
       history: prev?.history ?? [],
-      allSpecs: prev?.allSpecs ?? [],
-      enriched: prev?.enriched ?? false,
     }));
 
-    // Enrichment — history and the dependency graph — is non-fatal and
-    // merged in as it arrives; a failure here leaves the page usable.
-    const [history, all] = await Promise.all([
-      gateway.specHistory(specId),
-      gateway.listSpecs({}),
-    ]);
+    const history = await gateway.specHistory(specId);
     setLoaded((prev) =>
       prev
-        ? {
-            ...prev,
-            history: history.ok ? history.value.revisions : prev.history,
-            allSpecs: all.ok ? all.value.specs : prev.allSpecs,
-            enriched: true,
-          }
+        ? { ...prev, history: history.ok ? history.value.revisions : prev.history }
         : prev,
     );
   }, [gateway, specId]);
@@ -265,7 +251,8 @@ export function SpecDetail({
       </div>
     );
   }
-  if (!loaded) {
+  const row = catalogStore.specOf(specId);
+  if (!loaded || !row) {
     return (
       <div className="detail">
         <LoadingMark label={specId} />
@@ -273,9 +260,11 @@ export function SpecDetail({
     );
   }
 
-  const spec = loaded.detail.spec;
-  const unmet = unmetDependencies(spec, loaded.allSpecs);
-  const dependents = dependentsOf(loaded.allSpecs, spec.id);
+  const spec = row;
+  const allSpecs = catalogStore.specList();
+  const enriched = catalogStore.seeded;
+  const unmet = unmetDependencies(spec, allSpecs);
+  const dependents = dependentsOf(allSpecs, spec.id);
   const logsOwner = logsElsewhere(spec, role.fde);
   const restart =
     spec.status === "review" || spec.status === "done" || spec.status === "cancelled";
@@ -293,7 +282,7 @@ export function SpecDetail({
 
   const confirmStop = async (run: RunView) => {
     setStopTarget(null);
-    const outcome = mapStopOutcome(await gateway.stopRun(run.id), run);
+    const outcome = mapStopOutcome(await catalogStore.stopRun(run.id, spec.id), run);
     showToast(outcome.type, outcome.message);
     if (outcome.refresh) void load();
   };
@@ -326,9 +315,9 @@ export function SpecDetail({
     // Metadata (status/assignee/…) and the body are separate resources on the
     // server — PUT /v1/specs/{id} ignores the body; the body goes to
     // …/content. Save metadata first, then chain its fresh ETag to the body PUT.
-    let etag = loaded.etag;
+    let etag = catalogStore.etagOf(spec.id);
     if (Object.keys(draft).length > 0) {
-      const result = await gateway.updateSpec(spec.id, draft, etag);
+      const result = await catalogStore.updateSpec(spec.id, draft, etag);
       if (!result.ok) return saveError(result.error);
       etag = result.etag ?? etag;
     }
@@ -344,7 +333,7 @@ export function SpecDetail({
 
   const restore = async (rev: number) => {
     setRestoring(null);
-    const result = await gateway.restoreSpec(spec.id, rev);
+    const result = await catalogStore.restoreSpec(spec.id, rev);
     if (result.ok) {
       showToast("success", `${spec.id} restored to rev ${rev}.`);
       void load();
@@ -396,7 +385,7 @@ export function SpecDetail({
 
   const dismissAgent = async () => {
     setDismissConfirm(false);
-    const result = await gateway.disengage(spec.room_id ?? spec.id);
+    const result = await catalogStore.disengage(spec.room_id ?? spec.id);
     if (!result.ok) {
       showToast("error", result.error.message);
       return;
@@ -511,7 +500,7 @@ export function SpecDetail({
             onWidthCommit={(width) => localStorage.setItem(DRAWER_WIDTH_KEY, String(width))}
             onClose={() => setDetailsOpen(false)}
           >
-            {loaded.enriched && unmet.length > 0 && (
+            {enriched && unmet.length > 0 && (
               <p className="detail-blocked" data-testid="blocked-banner">
                 Blocked — waiting on{" "}
                 {unmet.map((id, i) => (
@@ -641,7 +630,7 @@ export function SpecDetail({
                           <DepChip
                             key={id}
                             id={id}
-                            unmet={loaded.enriched && unmet.includes(id)}
+                            unmet={enriched && unmet.includes(id)}
                             onOpen={onOpenSpec}
                           />
                         ))}
@@ -781,8 +770,8 @@ export function SpecDetail({
         <DispatchDialog
           gateway={gateway}
           spec={spec}
-          allSpecs={loaded.allSpecs}
-          depsKnown={loaded.enriched}
+          allSpecs={allSpecs}
+          depsKnown={enriched}
           canDispatch={role.canDispatch}
           roleKnown={role.known}
           restart={restart}
