@@ -7,7 +7,9 @@ import type {
 } from "../../shared/sail-models";
 import {
   assembleRooms,
+  isPersonalRoom,
   isRoomActivityEvent,
+  personalRoomId,
   readRoomWatermarks,
   relativeTime,
   sectionRooms,
@@ -288,6 +290,36 @@ describe("sidebar sections", () => {
     expect(byId["ready"]).toEqual(["queued"]);
     expect(byId["drafts"]).toEqual(["sketch"]);
     expect(byId["archive"]).toEqual(["dropped", "shipped"]);
+  });
+
+  test("the reader's personal room pins first and only for its owner", () => {
+    const rooms = assembleRooms(
+      [serverRoom("fde-uday-mast", []), serverRoom("notes", []), serverRoom("s1")],
+      [spec("s1")],
+      [],
+      {},
+    );
+
+    const mine = sectionRooms(rooms, "uday");
+    expect(mine.map((section) => section.section)).toEqual([
+      "personal",
+      "chats",
+      "ready",
+      "archive",
+    ]);
+    expect(mine[0]!.rooms.map((room) => room.room.id)).toEqual(["fde-uday-mast"]);
+
+    const theirs = sectionRooms(rooms, "rajesh");
+    expect(theirs.map((section) => section.section)).toEqual(["chats", "ready", "archive"]);
+    expect(theirs[0]!.rooms.map((room) => room.room.id)).toEqual(["fde-uday-mast", "notes"]);
+    expect(sectionRooms(rooms).some((section) => section.section === "personal")).toBe(false);
+  });
+
+  test("the personal room id mirrors sail's minting rule", () => {
+    expect(personalRoomId("rajesh", "acme")).toBe("fde-rajesh-acme");
+    expect(personalRoomId("M.Day", "acme")).toBe("fde-m-day-acme");
+    expect(isPersonalRoom(serverRoom("fde-uday-mast", []), "uday")).toBe(true);
+    expect(isPersonalRoom(serverRoom("fde-uday-mast", []), undefined)).toBe(false);
   });
 
   test("empty sections are omitted except the archive anchor", () => {

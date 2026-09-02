@@ -72,11 +72,11 @@ describe("RosterChip", () => {
     );
   });
 
-  test("dismiss fires the callback", () => {
+  test("remove fires the callback", () => {
     let dismissed = 0;
     mount(true, new PresenceStore(), () => dismissed++);
     act(() =>
-      container.querySelector<HTMLButtonElement>('[data-testid="roster-dismiss-s1"]')?.click(),
+      container.querySelector<HTMLButtonElement>('[data-testid="roster-remove-s1"]')?.click(),
     );
     expect(dismissed).toBe(1);
   });

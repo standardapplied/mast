@@ -43,9 +43,9 @@ function agentAuthor(author: string): boolean {
   return author.includes("/");
 }
 
-const CHAT_LANES = new Set(["room", "room-full", "invite", "invite-full"]);
+const CHAT_LANES = new Set(["room", "room-full"]);
 
-/** A chat or invite turn that ended cleanly is plumbing, not news — the reply
+/** A chat turn that ended cleanly is plumbing, not news — the reply
  *  itself is the notification. Failures stay loud whatever the lane. */
 function cleanChatStop(event: SailEvent): boolean {
   if (event.type === "agent_failed") return false;

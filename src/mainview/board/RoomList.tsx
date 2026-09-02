@@ -7,7 +7,14 @@ import { Select } from "../components/Select";
 import { Tooltip } from "../components/Tooltip";
 import { Button } from "../components/ui";
 import type { Gateway } from "../gateway";
-import { relativeTime, SECTION_LABELS, SECTION_TONES, sectionRooms, type RoomView } from "./rooms";
+import {
+  isPersonalRoom,
+  relativeTime,
+  SECTION_LABELS,
+  SECTION_TONES,
+  sectionRooms,
+  type RoomView,
+} from "./rooms";
 
 export function RoomList({
   rooms,
@@ -19,6 +26,7 @@ export function RoomList({
   gateway,
   now = Date.now(),
   workingIds = new Set(),
+  me,
   onProject,
   onSelect,
   onShowArchive,
@@ -33,6 +41,8 @@ export function RoomList({
   creating: boolean;
   /** Injected clock so rows render deterministic relative times in tests. */
   now?: number;
+  /** The signed-in FDE handle; pins their personal room first. */
+  me?: string;
   workingIds?: ReadonlySet<string>;
   onProject: (project: string) => void;
   onSelect: (room: RoomView) => void;
@@ -173,14 +183,14 @@ export function RoomList({
             aria-label="Agent"
           />
           <p className="room-create-hint">
-            The agent joins the room with full access and answers every message. Dismiss it any
-            time.
+            The agent joins the room as a member with full access and answers every message.
+            Remove it any time.
           </p>
         </form>
       </Dialog>
 
       <div className="room-list-scroll">
-        {sectionRooms(rooms).map(({ section, rooms: grouped }) => (
+        {sectionRooms(rooms, me).map(({ section, rooms: grouped }) => (
           <div key={section} className="room-section">
             {section === "archive" ? (
               <button
@@ -212,7 +222,7 @@ export function RoomList({
                   aria-current={selectedId === room.room.id ? "page" : undefined}
                 >
                   <span className={`room-row-id-label${room.unread ? " is-unread" : ""}`}>
-                    {room.room.id}
+                    {isPersonalRoom(room.room, me) ? room.room.title : room.room.id}
                   </span>
                   {room.needsReply && (
                     <span

@@ -27,7 +27,6 @@ import { catalogStore, connectCatalog } from "./catalogStore";
 import { DispatchDialog } from "./DispatchDialog";
 import { openTerminalMenu, RoomDeckStrip } from "./RoomDeck";
 import { EngageDialog } from "./EngageDialog";
-import { InviteDialog } from "./InviteDialog";
 import { RosterChip } from "./RosterChip";
 import { PresenceChip } from "./PresenceChip";
 import { LiveLog } from "./LiveLog";
@@ -126,7 +125,6 @@ export function SpecDetail({
   const [restoring, setRestoring] = useState<number | null>(null);
   const [stopTarget, setStopTarget] = useState<RunView | null>(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
-  const [inviteOpen, setInviteOpen] = useState(false);
   const [engageOpen, setEngageOpen] = useState(false);
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
@@ -362,7 +360,7 @@ export function SpecDetail({
     onOpenTerminal({ roomId, project: spec.project, title: spec.title, ...request });
 
   // Live log and Stop stay inline while an agent runs; the lifecycle actions —
-  // dispatch, invite, open terminal, edit — collapse into this one Actions menu.
+  // dispatch, add member, open terminal, edit — collapse into this one Actions menu.
   const actionItems: MenuNode[] = [
     ...(spec.status === "draft"
       ? []
@@ -375,22 +373,21 @@ export function SpecDetail({
       ? []
       : [{
           kind: "item" as const,
-          label: "Add agent",
+          label: "Add member",
           onSelect: () => setEngageOpen(true),
         }]),
-    { kind: "item", label: "Run a task", onSelect: () => setInviteOpen(true) },
     openTerminalMenu((glyph) => openTerminal({ launch: glyph })),
     { kind: "item", label: "Edit", onSelect: startEdit },
   ];
 
-  const dismissAgent = async () => {
+  const removeMember = async () => {
     setDismissConfirm(false);
     const result = await catalogStore.disengage(spec.room_id ?? spec.id);
     if (!result.ok) {
       showToast("error", result.error.message);
       return;
     }
-    showToast("info", result.value.agent ? `Dismissed ${result.value.agent} from ${spec.id}.` : "Nobody was engaged.");
+    showToast("info", result.value.agent ? `Removed ${result.value.agent} from ${spec.id}.` : "Nobody was a member.");
     void load();
   };
 
@@ -405,7 +402,7 @@ export function SpecDetail({
       eyebrow={spec.id}
       presence={
         spec.engagement ? (
-          // An invited agent owns the room's liveness: the roster chip already
+          // A seated member owns the room's liveness: the roster chip already
           // says who's here and whether they're thinking. The generic
           // run-presence pill is for the other case — a dispatched agent
           // working autonomously with nobody engaged in the room.
@@ -783,19 +780,6 @@ export function SpecDetail({
         />
       )}
 
-      {inviteOpen && (
-        <InviteDialog
-          gateway={gateway}
-          spec={spec}
-          canDispatch={role.canDispatch}
-          roleKnown={role.known}
-          onClose={() => setInviteOpen(false)}
-          onResult={(message, ok) => {
-            showToast(ok ? "success" : "error", message);
-          }}
-        />
-      )}
-
       {engageOpen && (
         <EngageDialog
           gateway={gateway}
@@ -813,7 +797,7 @@ export function SpecDetail({
       <Dialog
         isOpen={dismissConfirm}
         onClose={() => setDismissConfirm(false)}
-        title="Dismiss this agent?"
+        title="Remove this member?"
         size="sm"
         footer={
           <>
@@ -822,10 +806,10 @@ export function SpecDetail({
             </Button>
             <Button
               className="btn-danger"
-              onClick={() => void dismissAgent()}
-              data-testid="confirm-dismiss"
+              onClick={() => void removeMember()}
+              data-testid="confirm-remove-member"
             >
-              Dismiss
+              Remove member
             </Button>
           </>
         }

@@ -108,9 +108,10 @@ export function assembleRooms(
     );
 }
 
-export type RoomSection = "chats" | "inflight" | "ready" | "drafts" | "archive";
+export type RoomSection = "personal" | "chats" | "inflight" | "ready" | "drafts" | "archive";
 
 export const SECTION_LABELS: Record<RoomSection, string> = {
+  personal: "Personal",
   chats: "Conversations",
   inflight: "In flight",
   ready: "Ready",
@@ -120,6 +121,7 @@ export const SECTION_LABELS: Record<RoomSection, string> = {
 
 /** Section marks speak the badge's tone vocabulary — same squares, same tokens. */
 export const SECTION_TONES: Record<RoomSection, string> = {
+  personal: "accent",
   chats: "info",
   inflight: "accent",
   ready: "info",
@@ -127,7 +129,7 @@ export const SECTION_TONES: Record<RoomSection, string> = {
   archive: "success",
 };
 
-const SECTION_ORDER: RoomSection[] = ["chats", "inflight", "ready", "drafts", "archive"];
+const SECTION_ORDER: RoomSection[] = ["personal", "chats", "inflight", "ready", "drafts", "archive"];
 
 /** Unknown statuses from a newer sail are treated as active work, never silently hidden. */
 export function sectionOf(status: SpecStatus | string): RoomSection {
@@ -137,24 +139,39 @@ export function sectionOf(status: SpecStatus | string): RoomSection {
   return "inflight";
 }
 
-/** A chat-only room has no lifecycle — it lives in the conversations section. */
-export function sectionOfRoom(room: RoomView): RoomSection {
+/**
+ * The FDE's personal room id in a project — the same rule sail mints with
+ * (`PersonalRooms.idOf`), so the pin can never drift from the mint.
+ */
+export function personalRoomId(handle: string, project: string): string {
+  return `fde-${handle.toLowerCase().replace(/[^a-z0-9-]/g, "-")}-${project}`;
+}
+
+/** Whether `room` is the personal room of the signed-in FDE (`me`). */
+export function isPersonalRoom(room: ServerRoomView, me: string | undefined): boolean {
+  return me !== undefined && room.id === personalRoomId(me, room.project);
+}
+
+/** The reader's personal room pins first; a chat-only room has no lifecycle and lives in the conversations section. */
+export function sectionOfRoom(room: RoomView, me?: string): RoomSection {
+  if (isPersonalRoom(room.room, me)) return "personal";
   return room.spec ? sectionOf(room.spec.status) : "chats";
 }
 
 export type SectionedRooms = { section: RoomSection; rooms: RoomView[] };
 
 /**
- * Rooms grouped for the sidebar: lifecycle sections in fixed order, activity order
- * preserved within each. Empty sections vanish — except the archive, which always
- * anchors the bottom as the collapsible history of the project.
+ * Rooms grouped for the sidebar: the reader's personal room first, then lifecycle
+ * sections in fixed order, activity order preserved within each. Empty sections
+ * vanish — except the archive, which always anchors the bottom as the collapsible
+ * history of the project.
  */
-export function sectionRooms(rooms: readonly RoomView[]): SectionedRooms[] {
+export function sectionRooms(rooms: readonly RoomView[], me?: string): SectionedRooms[] {
   const buckets = new Map<RoomSection, RoomView[]>(
     SECTION_ORDER.map((section) => [section, []]),
   );
   for (const room of rooms) {
-    buckets.get(sectionOfRoom(room))!.push(room);
+    buckets.get(sectionOfRoom(room, me))!.push(room);
   }
   return SECTION_ORDER.flatMap((section) => {
     const bucket = buckets.get(section)!;
