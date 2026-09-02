@@ -58,6 +58,12 @@ export type ServerRoomView = {
   title: string;
   assignee?: string;
   wake?: string;
+  /** The wake mode the room runs under: the explicit `wake`, else derived from its roster
+   *  (one member or none → on, two or more → mention). Sail ≥ 0.38. */
+  effective_wake?: string;
+  /** The handle whose personal room this is — set only on a personal room, so the client
+   *  pins the reader's without re-deriving sail's id rule. Sail ≥ 0.38. */
+  personal_of?: string;
   members: RoomMemberView[];
   spec_ids: string[];
   created_by?: string;
@@ -213,7 +219,7 @@ export type RunView = {
   project: string;
   spec_id?: string;
   node: string;
-  /** build | review | adhoc | room | room-full | invite | invite-full. */
+  /** build | review | adhoc | room | room-full. Retired lanes (invite, invite-full) survive only on historical rows. */
   role: string;
   agent: string;
   branch?: string;
@@ -539,7 +545,7 @@ export type FdeListResponse = {
   fdes: FdeView[];
 };
 
-/** One invite mode an agent does or does not support (GET /v1/agents). */
+/** One member mode an agent does or does not support (GET /v1/agents). */
 export type AgentModeView = {
   mode: "read_only" | "full";
   supported: boolean;
@@ -547,7 +553,7 @@ export type AgentModeView = {
   reason?: string;
 };
 
-/** One installable agent CLI and its invite-mode support (GET /v1/agents). */
+/** One installable agent CLI and its member-mode support (GET /v1/agents). */
 export type AgentView = {
   name: string;
   display_name: string;
@@ -556,17 +562,6 @@ export type AgentView = {
 
 export type AgentListResponse = {
   agents: AgentView[];
-};
-
-/** Body of POST /v1/specs/{id}/invite: the agent to invite and the one mode choice. */
-export type InviteRequest = {
-  agent: string;
-  model?: string;
-  full?: boolean;
-  /** Full invites snapshot the container first; pass false to skip it (no rollback
-   *  point, instant launch — the escape hatch on the slow dir backend). Ignored
-   *  for read only, which never snapshots. Defaults to true when omitted. */
-  snapshot?: boolean;
 };
 
 /** Body of POST /v1/specs/{id}/engage: who joins the room and with what access. */
@@ -592,16 +587,6 @@ export type EngageResponse = {
 export type DisengageResponse = {
   agent?: string;
   disengaged: boolean;
-};
-
-/** Response of POST /v1/specs/{id}/invite: the launched invite run. */
-export type InviteResponse = {
-  run_id: string;
-  principal: string;
-  mode: "read_only" | "full";
-  /** The pre-launch snapshot label a full invite paid with; empty for read only
-   *  and for a full invite that skipped the snapshot. */
-  snapshot: string;
 };
 
 export type WhoAmI = {

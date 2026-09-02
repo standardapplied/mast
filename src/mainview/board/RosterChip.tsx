@@ -43,13 +43,13 @@ export function RosterChip({
         {engagement.agent} · {mode} · {thinking ? "thinking…" : "in the room"}
       </span>
       {onDismiss && (
-        <Tooltip content="Dismiss from this room">
+        <Tooltip content="Remove from this room">
           <button
             type="button"
-            className="roster-dismiss"
-            aria-label={`Dismiss ${engagement.agent}`}
+            className="roster-remove"
+            aria-label={`Remove ${engagement.agent}`}
             onClick={onDismiss}
-            data-testid={`roster-dismiss-${specId}`}
+            data-testid={`roster-remove-${specId}`}
           >
             ×
           </button>

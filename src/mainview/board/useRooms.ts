@@ -13,6 +13,8 @@ import {
 type RoomsData = {
   rooms: RoomView[];
   projects: string[];
+  /** The signed-in FDE handle once whoami lands — pins their personal room. */
+  me?: string;
   loading: boolean;
   error: SailWireError | null;
 };
@@ -40,6 +42,7 @@ export function useRooms(
       projects: [
         ...new Set([...store.projects(), ...(serverRooms ?? []).map((room) => room.project)]),
       ].sort(),
+      me: store.me,
       loading: store.loading,
       error: store.error,
     };

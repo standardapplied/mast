@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createDemoGateway, type DemoGateway } from "../gateway";
-import type { StorageLike } from "./rooms";
+import { sectionRooms, type StorageLike } from "./rooms";
 import { useRooms } from "./useRooms";
 
 let root: Root;
@@ -61,6 +61,27 @@ afterEach(() => {
 });
 
 describe("useRooms", () => {
+  test("the personal room pins first from the one listing, with no refetch to show it", async () => {
+    const { gateway, handle } = await render();
+    let listings = 0;
+    const listRooms = gateway.listRooms.bind(gateway);
+    gateway.listRooms = (project?: string) => {
+      listings++;
+      return listRooms(project);
+    };
+
+    expect(handle().data.me).toBe("uday");
+    const sections = sectionRooms(
+      handle().data.rooms.filter((room) => room.room.project === "sail-mast"),
+      handle().data.me,
+    );
+    expect(sections[0]?.section).toBe("personal");
+    expect(sections[0]?.rooms.map((room) => room.room.id)).toEqual([
+      "fde-uday-sail-mast-0123456789abcdef",
+    ]);
+    expect(listings).toBe(0);
+  });
+
   test("loads every project, marks a visit read, and reacts to an unfocused message", async () => {
     const { gateway, handle } = await render();
     expect(handle().data.projects).toEqual(["chorus", "nautilus", "sail-mast"]);

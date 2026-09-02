@@ -355,6 +355,19 @@ describe("SpecDetail anti-flicker", () => {
     expect(text()).not.toContain("Only pending specs can be dispatched");
   });
 
+  test("the Actions menu maps one verb per primitive — no Run a task", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    await openActions();
+
+    for (const verb of ["Dispatch", "Add member", "Open terminal", "Edit"]) {
+      expect(menuItem(verb), `${verb} is a room verb`).not.toBeUndefined();
+    }
+    for (const retired of ["Run a task", "Add agent", "New task"]) {
+      expect(menuItem(retired), `${retired} is retired`).toBeUndefined();
+    }
+  });
+
   test("a pending spec keeps the plain Dispatch action", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);

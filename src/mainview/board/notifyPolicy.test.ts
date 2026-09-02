@@ -134,7 +134,7 @@ describe("engaged rooms", () => {
       }) as SailEvent;
     expect(notification(stop("room", 0), null, engaged)).toBeNull();
     expect(notification(stop("room-full", 0), null, engaged)).toBeNull();
-    expect(notification(stop("invite-full", 0), null, engaged)).toBeNull();
+    expect(notification(stop("invite-full", 0), null, engaged)?.kind).toBe("run-ended");
     expect(notification(stop("room", 137), null, engaged)?.kind).toBe("run-ended");
     expect(notification(stop("build", 0), null, engaged)?.kind).toBe("run-ended");
   });

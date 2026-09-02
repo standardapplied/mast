@@ -156,7 +156,7 @@ export function SnapshotsPanel({
             <p>
               {confirm.action === "restore"
                 ? `Restore '${confirm.name}'? The container's current state — files, services, and ` +
-                  "anything an agent or invite changed since — is discarded and replaced by this " +
+                  "anything an agent changed since — is discarded and replaced by this " +
                   "snapshot. This cannot be undone."
                 : `Delete snapshot '${confirm.name}'? This cannot be undone.`}
             </p>

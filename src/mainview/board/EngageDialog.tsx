@@ -11,8 +11,8 @@ import type { Gateway } from "../gateway";
 import { catalogStore, connectCatalog } from "./catalogStore";
 
 /**
- * Add an agent to this room: it joins the conversation and answers every human
- * message until dismissed. Full access is the default — conversations produce
+ * Add a member to this room: the agent joins the conversation and answers every
+ * human message until removed. Full access is the default — conversations produce
  * artifacts (diagrams, drafts, files). A rollback snapshot is opt-in and off by
  * default (a dir-backend snapshot is a slow full copy); when taken, the
  * engagement takes effect only after it completes, so the dialog shows the
@@ -147,7 +147,7 @@ export function EngageDialog({
     <Dialog
       isOpen
       onClose={onClose}
-      title={`Add an agent to ${specId}`}
+      title={`Add a member to ${specId}`}
       size="md"
       footer={
         <>
@@ -156,7 +156,7 @@ export function EngageDialog({
           </Button>
           {!snapshotting && (
             <Button disabled={!runnable} onClick={() => void run()} data-testid="engage-go">
-              {busy ? "Adding…" : "Add to room"}
+              {busy ? "Adding…" : "Add member"}
             </Button>
           )}
         </>
@@ -164,7 +164,7 @@ export function EngageDialog({
     >
       {snapshotting ? (
         <div className="dispatch-body" data-testid="engage-snapshotting">
-          <div className="invite-progress">
+          <div className="engage-progress">
             <Spinner size={18} />
             <div>
               <p className="dispatch-summary">Snapshotting the container…</p>
@@ -183,7 +183,7 @@ export function EngageDialog({
       ) : (
         <div className="dispatch-body">
           <p className="dispatch-summary">
-            The agent joins this room and answers every message until you dismiss it: chat,
+            The member joins this room and answers every message until you remove it: chat,
             drafts, diagrams, code.
           </p>
 
@@ -252,7 +252,7 @@ export function EngageDialog({
           )}
           {roleKnown && !canDispatch && (
             <p className="dispatch-block" data-testid="engage-role">
-              Your credential is read-only. Adding agents needs write access.
+              Your credential is read-only. Adding members needs write access.
             </p>
           )}
           {refusal && (

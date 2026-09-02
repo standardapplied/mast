@@ -125,10 +125,10 @@ function rowLabel(event: SailEvent, label: string): string {
   return failure && dataString(event, "error") ? failure : label;
 }
 
-const CHAT_LANES = new Set(["room", "room-full", "invite", "invite-full"]);
+const CHAT_LANES = new Set(["room", "room-full"]);
 
 /**
- * A chat or invite turn's clean exit is turn plumbing, not conversation — the
+ * A chat turn's clean exit is turn plumbing, not conversation — the
  * agent's reply is already in the room, so "agent stopped · exit 0" after every
  * turn manufactures the "it left" feeling. Failures render, loud.
  */

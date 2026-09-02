@@ -7,6 +7,7 @@ import type {
 } from "../../shared/sail-models";
 import {
   assembleRooms,
+  isPersonalRoom,
   isRoomActivityEvent,
   readRoomWatermarks,
   relativeTime,
@@ -48,6 +49,14 @@ function serverRoom(
     spec_ids: specIds,
     created_at: createdAt,
     updated_at: createdAt,
+  };
+}
+
+function personalRoom(handle: string): ServerRoomView {
+  return {
+    ...serverRoom(`fde-${handle}-mast-0123456789abcdef`, []),
+    title: handle,
+    personal_of: handle,
   };
 }
 
@@ -288,6 +297,41 @@ describe("sidebar sections", () => {
     expect(byId["ready"]).toEqual(["queued"]);
     expect(byId["drafts"]).toEqual(["sketch"]);
     expect(byId["archive"]).toEqual(["dropped", "shipped"]);
+  });
+
+  test("the reader's personal room pins first and only for its owner", () => {
+    const rooms = assembleRooms(
+      [personalRoom("uday"), serverRoom("notes", []), serverRoom("s1")],
+      [spec("s1")],
+      [],
+      {},
+    );
+
+    const mine = sectionRooms(rooms, "uday");
+    expect(mine.map((section) => section.section)).toEqual([
+      "personal",
+      "chats",
+      "ready",
+      "archive",
+    ]);
+    expect(mine[0]!.rooms.map((room) => room.room.id)).toEqual([
+      "fde-uday-mast-0123456789abcdef",
+    ]);
+
+    const theirs = sectionRooms(rooms, "rajesh");
+    expect(theirs.map((section) => section.section)).toEqual(["chats", "ready", "archive"]);
+    expect(theirs[0]!.rooms.map((room) => room.room.id)).toEqual([
+      "fde-uday-mast-0123456789abcdef",
+      "notes",
+    ]);
+    expect(sectionRooms(rooms).some((section) => section.section === "personal")).toBe(false);
+  });
+
+  test("a room is personal only by sail's marker, never by its id shape", () => {
+    expect(isPersonalRoom(personalRoom("uday"), "uday")).toBe(true);
+    expect(isPersonalRoom(personalRoom("uday"), "rajesh")).toBe(false);
+    expect(isPersonalRoom(personalRoom("uday"), undefined)).toBe(false);
+    expect(isPersonalRoom(serverRoom("fde-uday-mast-0123456789abcdef", []), "uday")).toBe(false);
   });
 
   test("empty sections are omitted except the archive anchor", () => {

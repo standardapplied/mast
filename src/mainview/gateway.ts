@@ -9,8 +9,6 @@ import type {
   DispatchRequest,
   DispatchResponse,
   FdeListResponse,
-  InviteRequest,
-  InviteResponse,
   GlobalBoardResponse,
   GlobalSpecContentResponse,
   GlobalSpecDetailResponse,
@@ -130,10 +128,8 @@ export type Gateway = {
   listProjects(): Promise<SailResult<ProjectListResponse>>;
   /** The org's FDE roster — the assignee candidates for a spec. */
   listFdes(): Promise<SailResult<FdeListResponse>>;
-  /** The installable agents and their invite-mode support (GET /v1/agents) — sail ≥ 0.23. */
+  /** The installable agents and their member-mode support (GET /v1/agents) — sail ≥ 0.23. */
   listAgents(): Promise<SailResult<AgentListResponse>>;
-  /** Invite an agent for one turn on the room's spec (POST /v1/rooms/{id}/invite, sail >= 0.34). */
-  invite(id: string, request: InviteRequest): Promise<SailResult<InviteResponse>>;
   /** Put an agent in a spec's room until dismissed (POST /v1/specs/{id}/engage) — sail ≥ 0.28. */
   engage(id: string, request: EngageRequest): Promise<SailResult<EngageResponse>>;
   /** Dismiss the room's engaged agent (POST /v1/specs/{id}/disengage). */
@@ -328,6 +324,19 @@ export function createDemoGateway(): DemoGateway {
   // dispatch displaced — enough for the preview/styleguide loop without a host.
   // Timestamps sit before the seeded specs' activity so default selections keep
   // landing on the chorus rooms the tests pin.
+  chatRooms.push({
+    id: "fde-uday-sail-mast-0123456789abcdef",
+    project: "sail-mast",
+    title: "uday",
+    assignee: "uday",
+    effective_wake: "on",
+    personal_of: "uday",
+    members: [{ agent: "claude-code", mode: "full", engaged_at: "2026-06-01T00:00:00Z" }],
+    spec_ids: [],
+    created_by: "uday",
+    created_at: "2026-06-01T00:00:00Z",
+    updated_at: "2026-06-01T00:00:00Z",
+  });
   chatRooms.push({
     id: "design-talk",
     project: "sail-mast",
@@ -676,56 +685,12 @@ export function createDemoGateway(): DemoGateway {
                 supported: false,
                 reason:
                   "Codex CLI has no harness-enforced read-only session inside a sail container." +
-                  " Invite it with full access instead.",
+                  " Add it with full access instead.",
               },
               { mode: "full" as const, supported: true },
             ],
           },
         ],
-      });
-    },
-
-    async invite(id, request) {
-      const spec = find(id);
-      if (!spec) {
-        return {
-          ok: false,
-          error: { status: 404, code: "spec_not_found", message: `Spec '${id}' was not found.` },
-        };
-      }
-      if (!request.full && request.agent === "codex") {
-        return {
-          ok: false,
-          error: {
-            status: 400,
-            code: "bad_request",
-            message:
-              "Codex CLI has no harness-enforced read-only session inside a sail container.",
-            action: "Invite codex with full access, or invite claude-code read-only.",
-          },
-        };
-      }
-      const runId = `run-${++eventId}`;
-      const family = request.agent.split("-")[0];
-      const withSnapshot = request.full === true && request.snapshot !== false;
-      if (withSnapshot) {
-        emit({
-          v: 1,
-          id: ++eventId,
-          ts: new Date().toISOString(),
-          project: spec.project,
-          spec: spec.id,
-          type: "snapshot_created",
-          agent: "sail",
-          host: "demo",
-          data: { label: `invite-${runId}`, run_id: runId },
-        });
-      }
-      return ok({
-        run_id: runId,
-        principal: `${family}/invite-${runId}`,
-        mode: request.full ? ("full" as const) : ("read_only" as const),
-        snapshot: withSnapshot ? `invite-${runId}` : "",
       });
     },
 
