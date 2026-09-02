@@ -169,8 +169,14 @@ export class CatalogStore {
     this.roomsError = null;
     this.specsError = null;
     this.runsBySpec = new Map();
-    this.runHolds = new Map();
-    this.runsGen = new Map();
+    // Holds are component INTEREST, not cached data: they outlive the reset so
+    // still-mounted surfaces get their slices reseeded on the next connect
+    // (refreshAll re-kicks every held id), and their release closures keep
+    // balancing against the same registry. Only the data and its generations
+    // are dropped.
+    for (const specId of this.runHolds.keys()) {
+      this.runsGen.set(specId, (this.runsGen.get(specId) ?? 0) + 1);
+    }
     this.specRequestGen = new Map();
     this.specRefreshers = new Map();
     this.roomRefreshers = new Map();
@@ -250,6 +256,14 @@ export class CatalogStore {
           return [spec.id, existing && !fresherOrSame(existing, spec) ? existing : spec];
         }),
       );
+      // The snapshot outranks every scoped request already in flight: bump the
+      // request generation for every id it speaks for — listed rows (a stale
+      // 404 must not delete them) and rows it removed (a stale success must
+      // not resurrect them).
+      for (const spec of specsResult.value.specs) this.bumpSpecGen(spec.id);
+      for (const id of previousSpecs.keys()) {
+        if (!this.specsById.has(id)) this.bumpSpecGen(id);
+      }
       this.specsSeeded = true;
     } else {
       this.specsError = specsResult.error;
@@ -355,6 +369,11 @@ export class CatalogStore {
     return result;
   }
 
+  /** Invalidates every scoped spec request in flight for {@code id}. */
+  private bumpSpecGen(id: string): void {
+    this.specRequestGen.set(id, (this.specRequestGen.get(id) ?? 0) + 1);
+  }
+
   private async fetchRoom(id: string): Promise<void> {
     const gateway = this.gateway;
     if (!gateway || this.roomsById === null) return;
@@ -389,7 +408,7 @@ export class CatalogStore {
     if (!fresherOrSame(this.specsById.get(spec.id), spec)) return;
     this.specsById.set(spec.id, spec);
     if (etag !== undefined) this.etags.set(spec.id, etag);
-    this.specRequestGen.set(spec.id, (this.specRequestGen.get(spec.id) ?? 0) + 1);
+    this.bumpSpecGen(spec.id);
     this.recordRevision++;
     this.emit();
   }

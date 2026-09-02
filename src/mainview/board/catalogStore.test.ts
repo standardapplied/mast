@@ -344,6 +344,66 @@ describe("CatalogStore event merging", () => {
     expect(store.specOf("chorus-billing-export")).toBeDefined();
   });
 
+  test("a stale scoped 404 cannot delete the row a newer world snapshot installed", async () => {
+    const { gateway, store } = await seeded();
+    let release404: (() => void) | undefined;
+    gateway.getSpec = async () =>
+      new Promise((resolve) => {
+        release404 = () =>
+          resolve({
+            ok: false,
+            error: { status: 404, code: "spec_not_found", message: "gone" },
+          });
+      });
+    const stale = store.refreshSpec("chorus-billing-export");
+    store.refreshAll();
+    await settle();
+    await settle();
+    expect(store.specOf("chorus-billing-export")).toBeDefined();
+
+    release404!();
+    await stale;
+    expect(
+      store.specOf("chorus-billing-export"),
+      "the world snapshot is newer than the in-flight 404; the row stays",
+    ).toBeDefined();
+  });
+
+  test("a stale scoped success cannot resurrect a row a newer world snapshot removed", async () => {
+    const { gateway, store } = await seeded();
+    const realGetSpec = gateway.getSpec.bind(gateway);
+    const realListSpecs = gateway.listSpecs.bind(gateway);
+    let releaseStale: (() => void) | undefined;
+    gateway.getSpec = async (id) =>
+      new Promise((resolve) => {
+        releaseStale = () => void realGetSpec(id).then(resolve);
+      });
+    const stale = store.refreshSpec("chorus-billing-export");
+    gateway.listSpecs = async (filter) => {
+      const result = await realListSpecs(filter);
+      if (!result.ok) return result;
+      return {
+        ok: true as const,
+        value: {
+          ...result.value,
+          specs: result.value.specs.filter((spec) => spec.id !== "chorus-billing-export"),
+        },
+      };
+    };
+    store.refreshAll();
+    await settle();
+    await settle();
+    expect(store.specOf("chorus-billing-export")).toBeUndefined();
+
+    releaseStale!();
+    await stale;
+    await settle();
+    expect(
+      store.specOf("chorus-billing-export"),
+      "the snapshot removed the row; the older in-flight fetch must not resurrect it",
+    ).toBeUndefined();
+  });
+
   test("a stale scoped 404 cannot delete the row a mutation ack upserted", async () => {
     const { gateway, store } = await seededQuiet();
     let release404: (() => void) | undefined;
@@ -653,6 +713,25 @@ describe("CatalogStore reset epoch", () => {
     await settle();
     expect(store.specOf("chorus-billing-export")).toBeUndefined();
     expect(store.specList()).toEqual([]);
+  });
+
+  test("retained run slices survive a reset: holds are interest, not data", async () => {
+    const { gateway, store } = await seeded();
+    const release = store.retainRuns("chorus-invoice-ui");
+    await settle();
+    expect(store.runsOf("chorus-invoice-ui"), "held and fetched").not.toBeNull();
+
+    store.reset();
+    store.connect(gateway);
+    await settle();
+    await settle();
+    expect(
+      store.runsOf("chorus-invoice-ui"),
+      "the hold outlives the reset — the reseed refetches the held slice",
+    ).not.toBeNull();
+
+    release();
+    expect(store.runsOf("chorus-invoice-ui"), "release still balances").toBeNull();
   });
 
   test("a room creation begun before reset cannot engage an agent in the next sign-in", async () => {
