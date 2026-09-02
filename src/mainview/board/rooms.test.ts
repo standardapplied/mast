@@ -9,7 +9,6 @@ import {
   assembleRooms,
   isPersonalRoom,
   isRoomActivityEvent,
-  personalRoomId,
   readRoomWatermarks,
   relativeTime,
   sectionRooms,
@@ -50,6 +49,14 @@ function serverRoom(
     spec_ids: specIds,
     created_at: createdAt,
     updated_at: createdAt,
+  };
+}
+
+function personalRoom(handle: string): ServerRoomView {
+  return {
+    ...serverRoom(`fde-${handle}-mast-0123456789abcdef`, []),
+    title: handle,
+    personal_of: handle,
   };
 }
 
@@ -294,7 +301,7 @@ describe("sidebar sections", () => {
 
   test("the reader's personal room pins first and only for its owner", () => {
     const rooms = assembleRooms(
-      [serverRoom("fde-uday-mast", []), serverRoom("notes", []), serverRoom("s1")],
+      [personalRoom("uday"), serverRoom("notes", []), serverRoom("s1")],
       [spec("s1")],
       [],
       {},
@@ -307,19 +314,24 @@ describe("sidebar sections", () => {
       "ready",
       "archive",
     ]);
-    expect(mine[0]!.rooms.map((room) => room.room.id)).toEqual(["fde-uday-mast"]);
+    expect(mine[0]!.rooms.map((room) => room.room.id)).toEqual([
+      "fde-uday-mast-0123456789abcdef",
+    ]);
 
     const theirs = sectionRooms(rooms, "rajesh");
     expect(theirs.map((section) => section.section)).toEqual(["chats", "ready", "archive"]);
-    expect(theirs[0]!.rooms.map((room) => room.room.id)).toEqual(["fde-uday-mast", "notes"]);
+    expect(theirs[0]!.rooms.map((room) => room.room.id)).toEqual([
+      "fde-uday-mast-0123456789abcdef",
+      "notes",
+    ]);
     expect(sectionRooms(rooms).some((section) => section.section === "personal")).toBe(false);
   });
 
-  test("the personal room id mirrors sail's minting rule", () => {
-    expect(personalRoomId("rajesh", "acme")).toBe("fde-rajesh-acme");
-    expect(personalRoomId("M.Day", "acme")).toBe("fde-m-day-acme");
-    expect(isPersonalRoom(serverRoom("fde-uday-mast", []), "uday")).toBe(true);
-    expect(isPersonalRoom(serverRoom("fde-uday-mast", []), undefined)).toBe(false);
+  test("a room is personal only by sail's marker, never by its id shape", () => {
+    expect(isPersonalRoom(personalRoom("uday"), "uday")).toBe(true);
+    expect(isPersonalRoom(personalRoom("uday"), "rajesh")).toBe(false);
+    expect(isPersonalRoom(personalRoom("uday"), undefined)).toBe(false);
+    expect(isPersonalRoom(serverRoom("fde-uday-mast-0123456789abcdef", []), "uday")).toBe(false);
   });
 
   test("empty sections are omitted except the archive anchor", () => {

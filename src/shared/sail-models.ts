@@ -61,6 +61,9 @@ export type ServerRoomView = {
   /** The wake mode the room runs under: the explicit `wake`, else derived from its roster
    *  (one member or none → on, two or more → mention). Sail ≥ 0.38. */
   effective_wake?: string;
+  /** The handle whose personal room this is — set only on a personal room, so the client
+   *  pins the reader's without re-deriving sail's id rule. Sail ≥ 0.38. */
+  personal_of?: string;
   members: RoomMemberView[];
   spec_ids: string[];
   created_by?: string;

@@ -325,11 +325,12 @@ export function createDemoGateway(): DemoGateway {
   // Timestamps sit before the seeded specs' activity so default selections keep
   // landing on the chorus rooms the tests pin.
   chatRooms.push({
-    id: "fde-uday-sail-mast",
+    id: "fde-uday-sail-mast-0123456789abcdef",
     project: "sail-mast",
     title: "uday",
     assignee: "uday",
     effective_wake: "on",
+    personal_of: "uday",
     members: [{ agent: "claude-code", mode: "full", engaged_at: "2026-06-01T00:00:00Z" }],
     spec_ids: [],
     created_by: "uday",

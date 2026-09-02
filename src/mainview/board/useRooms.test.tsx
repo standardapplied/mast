@@ -76,7 +76,9 @@ describe("useRooms", () => {
       handle().data.me,
     );
     expect(sections[0]?.section).toBe("personal");
-    expect(sections[0]?.rooms.map((room) => room.room.id)).toEqual(["fde-uday-sail-mast"]);
+    expect(sections[0]?.rooms.map((room) => room.room.id)).toEqual([
+      "fde-uday-sail-mast-0123456789abcdef",
+    ]);
     expect(listings).toBe(0);
   });
 

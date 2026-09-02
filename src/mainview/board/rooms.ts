@@ -139,17 +139,9 @@ export function sectionOf(status: SpecStatus | string): RoomSection {
   return "inflight";
 }
 
-/**
- * The FDE's personal room id in a project — the same rule sail mints with
- * (`PersonalRooms.idOf`), so the pin can never drift from the mint.
- */
-export function personalRoomId(handle: string, project: string): string {
-  return `fde-${handle.toLowerCase().replace(/[^a-z0-9-]/g, "-")}-${project}`;
-}
-
-/** Whether `room` is the personal room of the signed-in FDE (`me`). */
+/** Whether `room` is the personal room of the signed-in FDE (`me`), as sail marks it. */
 export function isPersonalRoom(room: ServerRoomView, me: string | undefined): boolean {
-  return me !== undefined && room.id === personalRoomId(me, room.project);
+  return me !== undefined && room.personal_of === me;
 }
 
 /** The reader's personal room pins first; a chat-only room has no lifecycle and lives in the conversations section. */
