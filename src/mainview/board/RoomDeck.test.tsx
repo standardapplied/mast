@@ -54,6 +54,19 @@ const componentsCss = await Bun.file(
 ).text();
 
 // happy-dom computes no layout, so the geometry contracts live in the stylesheet.
+const componentsCssText = await Bun.file(
+  new URL("../static/components.css", import.meta.url).pathname,
+).text();
+
+// Header controls align by construction: everything in the room header's action
+// row consumes --control-height. The deck cards hardcoded 28px once (the field
+// round called it ugly); this pins them to the law.
+test("deck cards consume the control-height token", () => {
+  const block = componentsCssText.match(/\.deck-card \{[^}]*\}/)?.[0] ?? "";
+  expect(block).toContain("height: var(--control-height)");
+  expect(block).toContain("border-radius: var(--radius)");
+});
+
 describe("stylesheet contracts", () => {
   test("room-conversation stacks its children as a column", () => {
     const block = componentsCss.match(/\.room-conversation \{[^}]*\}/)?.[0] ?? "";
