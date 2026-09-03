@@ -28,16 +28,17 @@ export interface PaneMeta {
 /**
  * `groups[i]` renders as side-by-side splits; `active` is the open sub-tab; `seq` mints ids. A
  * layout may hold no groups at all: the last pane exiting or closing leaves an empty tab, and
- * nothing is minted into it without a user action. `hostBootId` is a stamp on the PERSISTED form
- * only — the pty host boot the arrangement was last reconciled under — so a stored pane the host
- * no longer lists can be explained as "host restarted" rather than left a mystery.
+ * nothing is minted into it without a user action. `seenUnder` is a stamp on the PERSISTED form
+ * only — per pane, the pty host boot its session was last listed live under — so a stored pane
+ * the host no longer lists can be explained as "host restarted" rather than left a mystery. One
+ * stamp per pane, not per arrangement: panes lost to a restart sit beside panes minted after it.
  */
 export interface PaneLayout {
   readonly groups: readonly PaneGroup[];
   readonly active: number;
   readonly seq: number;
   readonly meta?: Readonly<Record<string, PaneMeta>>;
-  readonly hostBootId?: string;
+  readonly seenUnder?: Readonly<Record<string, string>>;
 }
 
 export function baseSessionFor(target?: string): string {
@@ -150,7 +151,7 @@ export function parseLayout(raw: string | null): PaneLayout | null {
       active?: unknown;
       seq?: unknown;
       meta?: unknown;
-      hostBootId?: unknown;
+      seenUnder?: unknown;
     };
     const sound =
       Array.isArray(p.groups) &&
@@ -179,7 +180,12 @@ export function parseLayout(raw: string | null): PaneLayout | null {
           ((m as PaneMeta).color === undefined || typeof (m as PaneMeta).color === "number"),
       );
     if (!metaSound) delete p.meta;
-    if (typeof p.hostBootId !== "string") delete p.hostBootId;
+    const stampsSound =
+      p.seenUnder !== undefined &&
+      p.seenUnder !== null &&
+      typeof p.seenUnder === "object" &&
+      Object.values(p.seenUnder as Record<string, unknown>).every((b) => typeof b === "string");
+    if (!stampsSound) delete p.seenUnder;
     return p as unknown as PaneLayout;
   } catch {
     return null;

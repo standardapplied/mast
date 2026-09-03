@@ -74,8 +74,13 @@ describe("reconcile", () => {
     expect(reconcile(stored, [], "mast-a")).toEqual({ groups: [], active: 0, seq: 4 });
   });
 
-  test("the host boot id stamp is not part of the reconciled arrangement", () => {
-    const stored = { groups: [{ id: 1, panes: ["mast-a"] }], active: 0, seq: 2, hostBootId: "boot-1" };
+  test("the boot stamps are not part of the reconciled arrangement", () => {
+    const stored = {
+      groups: [{ id: 1, panes: ["mast-a"] }],
+      active: 0,
+      seq: 2,
+      seenUnder: { "mast-a": "boot-1" },
+    };
     expect(reconcile(stored, ["mast-a"], "mast-a")).toEqual({
       groups: [{ id: 1, panes: ["mast-a"] }],
       active: 0,
@@ -154,10 +159,15 @@ describe("reconcile", () => {
 });
 
 describe("parseLayout", () => {
-  test("the host boot id stamp survives a round trip; a garbled stamp is dropped, not fatal", () => {
-    const stamped = { groups: [{ id: 1, panes: ["a"] }], active: 0, seq: 2, hostBootId: "boot-9" };
+  test("per-pane boot stamps survive a round trip; garbled stamps are dropped, not fatal", () => {
+    const stamped = {
+      groups: [{ id: 1, panes: ["a"] }],
+      active: 0,
+      seq: 2,
+      seenUnder: { a: "boot-9", b: "boot-1" },
+    };
     expect(parseLayout(JSON.stringify(stamped))).toEqual(stamped);
-    const garbled = { ...stamped, hostBootId: 9 };
+    const garbled = { ...stamped, seenUnder: { a: 9 } };
     expect(parseLayout(JSON.stringify(garbled))).toEqual({
       groups: [{ id: 1, panes: ["a"] }],
       active: 0,

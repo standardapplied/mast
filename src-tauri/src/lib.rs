@@ -479,7 +479,7 @@ async fn session_kill(
     let reply = state
         .backend()
         .await?
-        .session_control(socket_path, token, pty::Frame::Kill(session))
+        .session_kill(socket_path, token, session)
         .await
         .map_err(String::from);
     expect_ok(reply)

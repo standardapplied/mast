@@ -150,8 +150,8 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const paneRefs = useRef(new Map<string, TerminalHandle>());
     const roomRef = useRef(room);
     roomRef.current = room;
-    /** The host boot the stored arrangement was last reconciled under (see absenceReason). */
-    const restoredUnder = useRef<string | undefined>(undefined);
+    /** Per pane, the host boot its session was last listed live under (see absenceReason). */
+    const seenUnder = useRef<Readonly<Record<string, string>>>({});
     const { showToast } = useToast();
 
     /** Menu actions, injected into the tested builders in terminal/paneMenu. */
@@ -190,7 +190,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       (live: readonly string[], adopt?: ReadonlySet<string>): PaneLayout => {
         try {
           const stored = parseLayout(localStorage.getItem(storageKey(base)));
-          restoredUnder.current = stored?.hostBootId;
+          seenUnder.current = stored?.seenUnder ?? {};
           return reconcile(stored, live, base, adopt, closedSessions(sessionStore.deaths()));
         } catch {
           // A poisoned stored value must never blank the tab forever — heal to empty.
@@ -274,17 +274,28 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       });
     }, [roomSessions, base]);
 
-    // The stored form carries the host boot it was reconciled under, so a later mount can
-    // tell "host restarted" from "not running" for a pane the host no longer lists.
+    // The stored form carries, per pane, the host boot its session was last listed live under,
+    // so a later mount can tell "host restarted" from "not running" for a pane the host no
+    // longer lists. A pane confirmed live takes the current boot; one the host does not list
+    // keeps the boot it was last seen under — an arrangement holds panes from both sides of a
+    // restart, and one stamp for all of them would misread one side or the other.
     useEffect(() => {
       if (!layout) return;
+      const boot = sessionStore.hostBootId();
+      const stamps = Object.fromEntries(
+        sessionsOf(layout).flatMap((name) => {
+          const entry = sessionStore.byName(name);
+          const under = boot && entry?.live && !entry.pending ? boot : seenUnder.current[name];
+          return under ? [[name, under]] : [];
+        }),
+      );
+      seenUnder.current = stamps;
       try {
-        const hostBootId = sessionStore.hostBootId() ?? restoredUnder.current;
-        localStorage.setItem(storageKey(base), JSON.stringify({ ...layout, hostBootId }));
+        localStorage.setItem(storageKey(base), JSON.stringify({ ...layout, seenUnder: stamps }));
       } catch {
         /* arrangement is a convenience */
       }
-    }, [layout, base]);
+    }, [layout, base, storeVersion]);
 
     // The tab-bar cluster mirrors the worst pane SYNCHRONOUSLY with every pane report — routing
     // it through render effects left windows where a recovery report could lag or be skipped
@@ -333,7 +344,11 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       if (focus) setFocused(focus);
     }, []);
 
-    /** Drops what this component remembers about panes that left the layout. */
+    /**
+     * Drops what this component remembers about panes that left the layout — or stayed in it as
+     * an ended card, which is why the aggregate is recomputed here and not left to the layout
+     * effect: a parked card must not leave the tab header on the pane's last status.
+     */
     const forget = (sessions: readonly string[]) => {
       for (const session of sessions) paneRefs.current.delete(session);
       setLaunched((m) => {
@@ -346,6 +361,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       for (const session of sessions) delete pruned[session];
       statusesRef.current = pruned;
       setStatuses(pruned);
+      reportAggregate();
       setTitles((prev) => {
         const next = { ...prev };
         for (const session of sessions) delete next[session];
@@ -490,7 +506,9 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         const recorded = sessionStore.reasons()[session];
         const reason =
           recorded ??
-          (plan.absent ? absenceReason(restoredUnder.current, sessionStore.hostBootId()) : undefined);
+          (plan.absent
+            ? absenceReason(seenUnder.current[session], sessionStore.hostBootId())
+            : undefined);
         const card = endedCardModel(deaths.get(session), reason);
         const displaced = card.restartable ? yieldedDispatch(card.reason) : null;
         const restart = () => {

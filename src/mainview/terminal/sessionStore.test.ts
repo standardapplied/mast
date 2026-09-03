@@ -42,11 +42,19 @@ function makeGateway(host: DeckSession[]) {
   let roomFailure: string | null = null;
   let roomEcho: string | null = null;
   let hostBootId = "boot-1";
+  let deferredListings: Array<(sessions: DeckSession[]) => void> | null = null;
   const listeners = new Set<(e: SailEvent) => void>();
   const gateway = {
     connection: async () => ({ server: "ssh://devbox", phase: "ready" }),
     listSessions: async () => {
       calls.list++;
+      if (deferredListings) {
+        return new Promise((res) => {
+          deferredListings!.push((sessions) =>
+            res({ ok: true as const, value: { hostBootId, sessions } }),
+          );
+        });
+      }
       if (listFailure) {
         return {
           ok: false as const,
@@ -103,6 +111,8 @@ function makeGateway(host: DeckSession[]) {
     host,
     calls,
     failListings: (message: string | null) => (listFailure = message),
+    /** Every listing from now on waits; each entry answers one, in issue order. */
+    deferListings: (): Array<(sessions: DeckSession[]) => void> => (deferredListings = []),
     reboot: (bootId: string) => {
       hostBootId = bootId;
       host.length = 0;
@@ -766,6 +776,34 @@ describe("the kill path (field bug: a kill that does nothing, silently)", () => 
     expect(result.ok).toBe(false);
     expect(box.store.byName("ghost")?.refusal).toContain("no session 'ghost'");
     expect(box.store.byName("ghost")?.dying).toBeUndefined();
+  });
+
+  test("a listing issued before the close cannot resurrect the session or erase its tombstone", async () => {
+    const box = await connected([session({ command: ["claude"] })]);
+    const answers = box.deferListings();
+    box.store.refresh();
+    await flush();
+    expect(answers.length, "the stale listing is in flight").toBe(1);
+    const result = await box.store.kill("room-design-talk", { resolvedRoom: "design-talk" });
+    expect(result.ok).toBe(true);
+    answers[0]!([session({ command: ["claude"] })]);
+    await flush();
+    expect(box.store.byName("room-design-talk"), "a stale live entry does not come back").toBeUndefined();
+    expect(box.store.deaths().get("room-design-talk")?.closed).toBe(true);
+    expect(answers.length, "the kill's own re-list followed the stale one").toBe(2);
+    answers[1]!([]);
+    await flush();
+    expect(box.store.deaths().get("room-design-talk")).toMatchObject({
+      reason: "closed from Mast",
+      closed: true,
+      command: ["claude"],
+    });
+    box.store.refresh();
+    await flush();
+    answers[2]!([session({ command: ["claude"] })]);
+    await flush();
+    expect(box.store.byName("room-design-talk")?.live, "a listing after the close proves a recreate").toBe(true);
+    expect(box.store.deaths().has("room-design-talk")).toBe(false);
   });
 
   test("a later successful kill clears the old refusal", async () => {

@@ -60,6 +60,10 @@ type BoxState = {
   consumed: Map<string, number>;
   /** In-flight kills by name — concurrent closes share one destructive call. */
   kills: Map<string, Promise<{ ok: boolean; refusal?: string }>>;
+  /** Listings issued so far; each carries its ordinal so a late response knows how old it is. */
+  listRequests: number;
+  /** Per closed name: the newest listing issued before the close — older ones cannot speak for it. */
+  closedAt: Map<string, number>;
   historyLoaded: Set<string>;
   /** Per-room issue counter for history reads; only the newest read's response lands. */
   historyRevisions: Map<string, number>;
@@ -112,14 +116,17 @@ export class SessionStore {
           historyEnds: new Map(),
           consumed: new Map(),
           kills: new Map(),
+          listRequests: 0,
+          closedAt: new Map(),
           historyLoaded: new Set(),
           historyRevisions: new Map(),
           refresh: () => {},
         };
     box.refresh = coalesce(async () => {
+      const requestId = ++box.listRequests;
       const result = await gateway.listSessions();
       if (this.boxes.get(boxKey) !== box) return;
-      if (result.ok) this.noteListing(boxKey, result.value);
+      if (result.ok) this.noteListing(boxKey, result.value, requestId);
       else {
         box.skewReason = result.error.message;
         this.emit();
@@ -229,11 +236,15 @@ export class SessionStore {
    * dropped at once: the host restarted and lost them — recorded as such, settled,
    * with no history to read. Only a name known live under the previous boot can be
    * attributed to the restart: a corpse the new host lists was created and ended after
-   * it, and follows the ordinary path.
+   * it, and follows the ordinary path. A listing issued BEFORE a name was closed from
+   * Mast may still answer after the ack with the old live entry; it cannot speak for
+   * that name — neither resurrect the entry nor erase the closed tombstone — only a
+   * listing issued after the close can prove the name was genuinely recreated.
    */
-  private noteListing(key: string, listing: SessionListing): void {
+  private noteListing(key: string, listing: SessionListing, requestId: number): void {
     const box = this.boxes.get(key)!;
-    const sessions = listing.sessions;
+    const closedSince = (name: string) => requestId <= (box.closedAt.get(name) ?? -1);
+    const sessions = listing.sessions.filter((s) => !closedSince(s.name));
     const next = new Map(sessions.map((s) => [s.name, s]));
     const rebooted = box.hostBootId !== null && box.hostBootId !== listing.hostBootId;
     const staleRooms = new Set<string>();
@@ -269,6 +280,7 @@ export class SessionStore {
     for (const s of sessions) {
       if (s.live) {
         box.deaths.delete(s.name);
+        box.closedAt.delete(s.name);
         consume(s.name);
       } else if (!box.deaths.has(s.name)) {
         recordDeath(s.name, s.room, s.command, false);
@@ -398,6 +410,7 @@ export class SessionStore {
     if (!box) return;
     box.pending.set(name, { command, room, gen: box.gen });
     box.deaths.delete(name);
+    box.closedAt.delete(name);
     box.refusals.delete(name);
     this.emit();
   }
@@ -464,6 +477,7 @@ export class SessionStore {
       closed: true,
       ...(entry ? { command: entry.command } : {}),
     });
+    box.closedAt.set(name, box.listRequests);
     this.emit();
     box.refresh();
     return { ok: true };

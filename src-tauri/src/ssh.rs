@@ -221,6 +221,8 @@ pub struct Backend {
     /// Shared with each driver task so it can evict its own id when the session
     /// ends on its own, not only when the UI closes the tab.
     sessions: Arc<Mutex<HashMap<String, mpsc::Sender<crate::pty::SessionCmd>>>>,
+    /// Launches still talking to the host, by session name; a kill of that name waits its turn.
+    openings: Openings,
     /// The remote `$HOME` for the node SSH user, resolved once and cached — so a `~/`-relative
     /// socket path lands in the right home whether the box logs in as root, dev, or anyone else.
     home: Mutex<Option<String>>,
@@ -228,6 +230,23 @@ pub struct Backend {
     /// client-chosen id. The sender signals the pump task to stop when the
     /// webview closes the stream.
     streams: Mutex<HashMap<String, mpsc::Sender<()>>>,
+}
+
+/// Per session name, the launch (Create then Attach) still talking to the host. A kill of that
+/// name takes the same lane, so a close that lands mid-launch removes the session the launch is
+/// creating instead of being refused before it exists — which would leave the shell (a Claude,
+/// a Codex) running on the host with no pane. Detach never waits: it rides the command channel.
+#[derive(Default)]
+pub(crate) struct Openings {
+    lanes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+impl Openings {
+    /// Holds the session's lane until the guard drops; a later holder waits its turn.
+    pub(crate) async fn hold(&self, session: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lane = self.lanes.lock().await.entry(session.to_string()).or_default().clone();
+        lane.lock_owned().await
+    }
 }
 
 #[derive(Serialize)]
@@ -395,6 +414,7 @@ impl Backend {
             sftp_pool: Mutex::new(HashMap::new()),
             sftp_opens: AtomicU64::new(0),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            openings: Openings::default(),
             home: Mutex::new(None),
             streams: Mutex::new(HashMap::new()),
         })
@@ -680,6 +700,9 @@ impl Backend {
         // leaving a ghost attachment no one can reach.
         let (tx, rx) = mpsc::channel::<crate::pty::SessionCmd>(256);
         self.sessions.lock().await.insert(id.clone(), tx);
+        // The launch holds its session's lane so a kill racing it (close during the prologue)
+        // is ordered after the Create it must undo — see [`Openings`].
+        let lane = self.openings.hold(&req.session).await;
         let opened = async {
             let channel = self.open_streamlocal(&socket_path).await?;
             // The shell's working directory lives under the box user's home too; expand `~` so a
@@ -690,6 +713,7 @@ impl Backend {
             crate::pty::attach(channel.into_stream(), &req).await.map_err(Error::from)
         }
         .await;
+        drop(lane);
         let stream = match opened {
             Ok(stream) => stream,
             Err(error) => {
@@ -783,6 +807,18 @@ impl Backend {
         crate::pty::list_sessions(channel.into_stream(), &token)
             .await
             .map_err(|e| Error::PtySession(e.to_string()))
+    }
+
+    /// Ends a host-owned session and its process — ordered after any launch of the same name
+    /// still in flight, so the kill lands on the session that launch created.
+    pub async fn session_kill(
+        &self,
+        socket_path: String,
+        token: String,
+        session: String,
+    ) -> Result<crate::pty::Frame, Error> {
+        let _lane = self.openings.hold(&session).await;
+        self.session_control(socket_path, token, crate::pty::Frame::Kill(session)).await
     }
 
     /// A one-shot control request (kill/create) over its own streamlocal channel.
@@ -2795,6 +2831,34 @@ Host bastion
         assert_eq!(names, ["Beta", "gamma", "alpha.txt", "zeta.txt"]);
     }
 
+    /// A kill of a name whose launch is still in flight is ordered after that launch: it can
+    /// only run once the Create it must undo has settled, never be refused ahead of it.
+    #[tokio::test]
+    async fn a_kill_waits_for_the_in_flight_launch_of_its_session() {
+        let openings = Arc::new(Openings::default());
+        let order = Arc::new(std::sync::Mutex::new(Vec::<&'static str>::new()));
+        let launch = openings.hold("mast-node.2").await;
+        let kill = tokio::spawn({
+            let (openings, order) = (openings.clone(), order.clone());
+            async move {
+                let _lane = openings.hold("mast-node.2").await;
+                order.lock().unwrap().push("kill");
+            }
+        });
+        let other = tokio::spawn({
+            let (openings, order) = (openings.clone(), order.clone());
+            async move {
+                let _lane = openings.hold("mast-node.3").await;
+                order.lock().unwrap().push("other");
+            }
+        });
+        other.await.unwrap();
+        order.lock().unwrap().push("create");
+        drop(launch);
+        kill.await.unwrap();
+        assert_eq!(*order.lock().unwrap(), ["other", "create", "kill"]);
+    }
+
     /// A Backend aimed at 127.0.0.1 for the live tests below — no
     /// ~/.sail/config.yaml needed.
     fn test_backend() -> Backend {
@@ -2813,6 +2877,7 @@ Host bastion
             sftp_pool: Mutex::new(HashMap::new()),
             sftp_opens: AtomicU64::new(0),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            openings: Openings::default(),
             home: Mutex::new(None),
             streams: Mutex::new(HashMap::new()),
         }
