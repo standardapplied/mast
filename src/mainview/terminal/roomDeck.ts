@@ -11,9 +11,15 @@ import { labelFor, nextSessionName } from "./paneLayout";
  * components and the Tauri terminal edge are thin skins over these.
  */
 
-/** One session as `session_list` returns it (the SAILPTY3 SessionInfo, camelCased). */
+/**
+ * One session as `session_list` returns it (the SAILPTY3 SessionInfo, camelCased). `name` is
+ * reusable across lives; `instanceId` names this life of it — minted at create, never reused —
+ * so two corpses of one name are distinguishable. Blank only on a pending create the host has
+ * not listed yet.
+ */
 export type DeckSession = {
   readonly name: string;
+  readonly instanceId: string;
   readonly live: boolean;
   readonly attached: number;
   readonly writerFde: string;
@@ -47,6 +53,8 @@ export type SessionEntry = DeckSession & {
 export type DeathRecord = {
   readonly reason: string;
   readonly at: number;
+  /** The incarnation that died; absent when it ended before the host ever listed it to us. */
+  readonly instanceId?: string;
   readonly command?: string[];
   /** The room whose durable history settles this record's reason. */
   readonly room?: string;
@@ -287,33 +295,22 @@ export function isPtyEvent(event: SailEvent): boolean {
   return PTY_EVENT_TYPES.has(event.type);
 }
 
-/** Each session's last recorded ended reason, from the room's pty event history. */
 /**
- * Each name's newest ended event in the history, with its monotonic event id —
- * the incarnation identity the store needs: an id lets a consumer prove an
- * event is newer than everything a name's previous life already accounted for.
- * Events an old server ships without ids carry -1 (provably-newer never holds).
+ * The ended reason of every incarnation the history names, keyed by instance id — the identity a
+ * death record settles on, so a reused name never inherits its previous life's reason from an
+ * append-only history. An ended event that names no incarnation cannot settle anything.
  */
-export function endedEvents(
-  events: readonly SailEvent[],
-): Record<string, { reason: string; id: number }> {
-  const ends: Record<string, { reason: string; id: number }> = {};
+export function endedByInstance(events: readonly SailEvent[]): ReadonlyMap<string, string> {
+  const ends = new Map<string, string>();
   for (const event of events) {
     if (event.type !== "pty_session_ended") continue;
-    const session = event.data?.session;
+    const instanceId = event.data?.instance_id;
     const reason = event.data?.reason;
-    if (typeof session !== "string" || typeof reason !== "string") continue;
-    const id = typeof event.id === "number" ? event.id : -1;
-    const known = ends[session];
-    if (!known || id >= known.id) ends[session] = { reason, id };
+    if (typeof instanceId === "string" && instanceId && typeof reason === "string") {
+      ends.set(instanceId, reason);
+    }
   }
   return ends;
-}
-
-export function endedReasons(events: readonly SailEvent[]): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(endedEvents(events)).map(([name, end]) => [name, end.reason]),
-  );
 }
 
 /** The dispatch a yield notice names, when the reason is a dispatch displacement. */

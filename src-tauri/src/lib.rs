@@ -411,8 +411,9 @@ async fn session_take_write(state: State<'_, AppState>, id: String) -> Result<()
     state.backend().await?.session_take_write(&id).await.map_err(String::from)
 }
 
-/// List the host's sessions (name, liveness, attached count, current writer, room, command)
-/// under the host boot id that answered, draining every page of the cursor-paginated listing.
+/// List the host's sessions (name, incarnation id, liveness, attached count, current writer,
+/// room, command) under the host boot id that answered, draining every page of the
+/// cursor-paginated listing.
 #[tauri::command]
 async fn session_list(
     state: State<'_, AppState>,
@@ -430,6 +431,7 @@ async fn session_list(
         .into_iter()
         .map(|s| json!({
             "name": s.name,
+            "instanceId": s.instance_id,
             "live": s.live,
             "attached": s.attached,
             "writerFde": s.writer_fde,

@@ -350,6 +350,7 @@ export function createDemoGateway(): DemoGateway {
   const demoSessions: DeckSession[] = [
     {
       name: "room-design-talk",
+      instanceId: "inst-room-design-talk",
       live: true,
       attached: 2,
       writerFde: "uday",
@@ -358,6 +359,7 @@ export function createDemoGateway(): DemoGateway {
     },
     {
       name: "room-design-talk.2",
+      instanceId: "inst-room-design-talk.2",
       live: true,
       attached: 1,
       writerFde: "",
@@ -366,13 +368,22 @@ export function createDemoGateway(): DemoGateway {
     },
     {
       name: "resume-demo-run-7",
+      instanceId: "inst-resume-demo-run-7",
       live: false,
       attached: 0,
       writerFde: "",
       room: "design-talk",
       command: ["codex", "resume"],
     },
-    { name: "mast-node", live: true, attached: 1, writerFde: "uday", room: "", command: ["bash", "-l"] },
+    {
+      name: "mast-node",
+      instanceId: "inst-mast-node",
+      live: true,
+      attached: 1,
+      writerFde: "uday",
+      room: "",
+      command: ["bash", "-l"],
+    },
   ];
   const ptyEvent = (
     ts: string,

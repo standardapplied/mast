@@ -8,7 +8,7 @@ import {
   deckSessions,
   type DeckSession,
   endedCardModel,
-  endedReasons,
+  endedByInstance,
   glyphFor,
   isPtyEvent,
   isResumeSession,
@@ -24,6 +24,7 @@ import {
 
 const session = (over: Partial<DeckSession>): DeckSession => ({
   name: "room-design-talk",
+  instanceId: `inst-${over.name ?? "room-design-talk"}`,
   live: true,
   attached: 1,
   writerFde: "uday",
@@ -148,13 +149,19 @@ describe("deck events", () => {
     expect(isPtyEvent(event({ type: "spec_message_posted" }))).toBe(false);
   });
 
-  test("the last ended reason per session wins", () => {
-    const reasons = endedReasons([
-      event({ type: "pty_session_ended", data: { session: "a", reason: "exited(1)" } }),
-      event({ type: "pty_session_ended", data: { session: "a", reason: "exited(0)" } }),
-      event({ type: "pty_session_started", data: { session: "b" } }),
+  test("ended reasons are kept per incarnation; an event that names no incarnation cannot settle anything", () => {
+    const reasons = endedByInstance([
+      event({ type: "pty_session_ended", data: { session: "a", instance_id: "a1", reason: "exited(1)" } }),
+      event({ type: "pty_session_ended", data: { session: "a", instance_id: "a2", reason: "exited(0)" } }),
+      event({ type: "pty_session_ended", data: { session: "legacy", reason: "exited(0)" } }),
+      event({ type: "pty_session_started", data: { session: "b", instance_id: "b1" } }),
     ]);
-    expect(reasons).toEqual({ a: "exited(0)" });
+    expect(reasons).toEqual(
+      new Map([
+        ["a1", "exited(1)"],
+        ["a2", "exited(0)"],
+      ]),
+    );
   });
 });
 

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -220,7 +220,7 @@ pub struct Backend {
     /// session driver; the session outlives the connection on the host side.
     /// Shared with each driver task so it can evict its own id when the session
     /// ends on its own, not only when the UI closes the tab.
-    sessions: Arc<Mutex<HashMap<String, mpsc::Sender<crate::pty::SessionCmd>>>>,
+    sessions: Arc<Mutex<HashMap<String, Attachment>>>,
     /// Launches still talking to the host, by session name; a kill of that name waits its turn.
     openings: Openings,
     /// The remote `$HOME` for the node SSH user, resolved once and cached — so a `~/`-relative
@@ -230,6 +230,30 @@ pub struct Backend {
     /// client-chosen id. The sender signals the pump task to stop when the
     /// webview closes the stream.
     streams: Mutex<HashMap<String, mpsc::Sender<()>>>,
+}
+
+/// One pane's attachment as the backend holds it: the lane its keystrokes, resizes, and detach
+/// ride, and the signal that abandons its prologue should the pane close before the host has
+/// answered (see [`until_closed`]).
+struct Attachment {
+    commands: mpsc::Sender<crate::pty::SessionCmd>,
+    close: oneshot::Sender<()>,
+}
+
+/// Runs a pane's attach prologue until it settles or the pane closes. A `session_close` that
+/// lands mid-prologue drops the prologue where it stands — its channel (the host sees the
+/// connection end and detaches whatever it had attached) and its launch lane with it — so a host
+/// that never answers the Attach cannot pin an attachment, or the kill queued behind it, forever.
+/// An attachment removed from the backend's map without a signal counts as closed too: nothing
+/// can reach that pane any more.
+async fn until_closed<T>(
+    prologue: impl std::future::Future<Output = Result<T, Error>>,
+    closed: oneshot::Receiver<()>,
+) -> Result<T, Error> {
+    tokio::select! {
+        opened = prologue => opened,
+        _ = closed => Err(Error::PtySession("the pane closed before the host answered".into())),
+    }
 }
 
 /// Per session name, the launch (Create then Attach) still talking to the host. A kill of that
@@ -694,16 +718,17 @@ impl Backend {
         socket_path: String,
         mut req: crate::pty::AttachRequest,
     ) -> Result<(), Error> {
-        // The command channel is registered BEFORE the first remote await: a session_close that
-        // lands while the prologue is still talking to the host queues its Detach (and drops the
-        // sender), so the driver detaches the moment the attach is acknowledged instead of
-        // leaving a ghost attachment no one can reach.
+        // The attachment is registered BEFORE the first remote await: a session_close that lands
+        // while the prologue is still talking to the host abandons it (see `until_closed`)
+        // instead of leaving a ghost attachment — or a durable session — no one can reach.
         let (tx, rx) = mpsc::channel::<crate::pty::SessionCmd>(256);
-        self.sessions.lock().await.insert(id.clone(), tx);
-        // The launch holds its session's lane so a kill racing it (close during the prologue)
-        // is ordered after the Create it must undo — see [`Openings`].
-        let lane = self.openings.hold(&req.session).await;
-        let opened = async {
+        let (close, closed) = oneshot::channel::<()>();
+        self.sessions.lock().await.insert(id.clone(), Attachment { commands: tx, close });
+        let prologue = async {
+            // The launch holds its session's lane so a kill racing it (close during the prologue)
+            // is ordered after the Create it must undo — see [`Openings`]. The guard lives in
+            // this future, so abandoning the prologue releases the lane with it.
+            let _lane = self.openings.hold(&req.session).await;
             let channel = self.open_streamlocal(&socket_path).await?;
             // The shell's working directory lives under the box user's home too; expand `~` so a
             // create doesn't fail spawning in a directory that only exists on the client.
@@ -711,10 +736,8 @@ impl Backend {
                 spec.cwd = self.resolve_path(&spec.cwd).await?;
             }
             crate::pty::attach(channel.into_stream(), &req).await.map_err(Error::from)
-        }
-        .await;
-        drop(lane);
-        let stream = match opened {
+        };
+        let stream = match until_closed(prologue, closed).await {
             Ok(stream) => stream,
             Err(error) => {
                 self.sessions.lock().await.remove(&id);
@@ -774,7 +797,8 @@ impl Backend {
         // channel must never hold the lock and stall every other session's writes.
         let tx = {
             let sessions = self.sessions.lock().await;
-            sessions.get(id).cloned().ok_or_else(|| Error::NoSession(id.into()))?
+            let attachment = sessions.get(id).ok_or_else(|| Error::NoSession(id.into()))?;
+            attachment.commands.clone()
         };
         tx.send(cmd).await.map_err(|_| Error::NoSession(id.into()))
     }
@@ -791,9 +815,15 @@ impl Backend {
         self.send_session(id, crate::pty::SessionCmd::TakeWrite).await
     }
 
+    /// Ends a pane's attachment: mid-prologue the open is abandoned where it stands; once
+    /// attached, the driver writes Detach and returns. The host session survives either way —
+    /// closing here never kills.
     pub async fn session_close(&self, id: &str) -> Result<(), Error> {
-        let _ = self.send_session(id, crate::pty::SessionCmd::Detach).await;
-        self.sessions.lock().await.remove(id);
+        let Some(attachment) = self.sessions.lock().await.remove(id) else {
+            return Ok(());
+        };
+        let _ = attachment.close.send(());
+        let _ = attachment.commands.send(crate::pty::SessionCmd::Detach).await;
         Ok(())
     }
 
@@ -2857,6 +2887,34 @@ Host bastion
         drop(launch);
         kill.await.unwrap();
         assert_eq!(*order.lock().unwrap(), ["other", "create", "kill"]);
+    }
+
+    /// A close that lands while the host is still answering the prologue abandons it where it
+    /// stands: the open settles as an error at once and the session's launch lane is released,
+    /// so the kill the close issues can run instead of waiting on an Attach the host never acks
+    /// — the orphan-durable-session hole a queued Detach could never close.
+    #[tokio::test]
+    async fn a_close_mid_prologue_abandons_it_and_frees_the_launch_lane() {
+        let openings = Arc::new(Openings::default());
+        let (held_tx, held_rx) = oneshot::channel::<()>();
+        let (close, closed) = oneshot::channel::<()>();
+        let stalled = {
+            let openings = openings.clone();
+            async move {
+                let _lane = openings.hold("mast-node.2").await;
+                held_tx.send(()).unwrap();
+                std::future::pending::<()>().await;
+                Ok::<(), Error>(())
+            }
+        };
+        let open = tokio::spawn(until_closed(stalled, closed));
+        held_rx.await.unwrap();
+        close.send(()).unwrap();
+        let err = open.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("pane closed"), "{err}");
+        tokio::time::timeout(std::time::Duration::from_secs(5), openings.hold("mast-node.2"))
+            .await
+            .expect("the abandoned launch released its lane for the kill");
     }
 
     /// A Backend aimed at 127.0.0.1 for the live tests below — no

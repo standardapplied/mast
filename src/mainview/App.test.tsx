@@ -163,6 +163,7 @@ describe("App cockpit", () => {
         sessions: [
         {
           name: "room-chorus-invoice-ui",
+          instanceId: "inst-room-chorus-invoice-ui",
           live: true,
           attached: 1,
           writerFde: "uday",
@@ -224,6 +225,7 @@ describe("App cockpit", () => {
         sessions: [
         {
           name: "room-chorus-invoice-ui",
+          instanceId: "inst-room-chorus-invoice-ui",
           live: true,
           attached: 1,
           writerFde: "uday",
@@ -262,6 +264,7 @@ describe("App cockpit", () => {
         sessions: [
         {
           name: "room-chorus-invoice-ui",
+          instanceId: "inst-room-chorus-invoice-ui",
           live: true,
           attached: 1,
           writerFde: "uday",

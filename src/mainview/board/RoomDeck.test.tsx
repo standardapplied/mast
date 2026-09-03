@@ -171,6 +171,7 @@ describe("RoomDeckStrip", () => {
 
     sessions.push({
       name: "room-design-talk",
+      instanceId: "inst-room-design-talk",
       live: true,
       attached: 1,
       writerFde: "mady",
@@ -213,6 +214,7 @@ describe("RoomsInventory", () => {
       sessions: [
         {
           name: "room-design-talk",
+          instanceId: "inst-room-design-talk",
           live: true,
           attached: 1,
           writerFde: "uday",
@@ -221,6 +223,7 @@ describe("RoomsInventory", () => {
         },
         {
           name: "resume-run-7",
+          instanceId: "inst-resume-run-7",
           live: false,
           attached: 0,
           writerFde: "",
@@ -327,6 +330,7 @@ describe("RoomsInventory", () => {
         sessions: [
           {
             name: "room-design-talk",
+            instanceId: "inst-room-design-talk",
             live: true,
             attached: 1,
             writerFde: "uday",

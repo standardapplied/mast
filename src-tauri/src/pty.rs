@@ -19,10 +19,12 @@ pub const MAX_FRAME: usize = 1 << 20;
 /// The host clamps a session listing page to this many entries.
 pub const PAGE_LIMIT: u32 = 16;
 
-/// One session as the host lists it.
+/// One session as the host lists it. `name` is reusable across lives; `instance_id` names this
+/// life of it, minted at create and never reused, so two corpses of one name are distinguishable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionInfo {
     pub name: String,
+    pub instance_id: String,
     pub live: bool,
     pub attached: u32,
     pub writer_fde: String,
@@ -300,6 +302,7 @@ fn put_str_list(buf: &mut Vec<u8>, list: &[String]) {
 
 fn put_info(buf: &mut Vec<u8>, info: &SessionInfo) {
     put_str(buf, &info.name);
+    put_str(buf, &info.instance_id);
     buf.push(if info.live { 1 } else { 0 });
     put_i32(buf, info.attached as i32);
     put_str(buf, &info.writer_fde);
@@ -366,6 +369,7 @@ impl<'a> Cursor<'a> {
     fn info(&mut self) -> Result<SessionInfo, DecodeError> {
         Ok(SessionInfo {
             name: self.string()?,
+            instance_id: self.string()?,
             live: self.u8()? == 1,
             attached: self.i32()? as u32,
             writer_fde: self.string()?,
@@ -797,6 +801,7 @@ mod tests {
             sessions: vec![
                 SessionInfo {
                     name: "a".into(),
+                    instance_id: "inst-a".into(),
                     live: true,
                     attached: 2,
                     writer_fde: "uday".into(),
@@ -805,6 +810,7 @@ mod tests {
                 },
                 SessionInfo {
                     name: "b".into(),
+                    instance_id: "inst-b".into(),
                     live: false,
                     attached: 0,
                     writer_fde: String::new(),
@@ -884,11 +890,12 @@ mod tests {
 
     #[test]
     fn sessions_bytes_match_the_java_contract() {
-        // type 29, i32 count, then per entry: str name, u8 live, i32 attached,
+        // type 29, i32 count, then per entry: str name, str instanceId, u8 live, i32 attached,
         // str writerFde, str room, string-list command; a trailing str next cursor.
         let frame = Frame::Sessions {
             sessions: vec![SessionInfo {
                 name: "a".into(),
+                instance_id: "i".into(),
                 live: true,
                 attached: 2,
                 writer_fde: "u".into(),
@@ -899,10 +906,11 @@ mod tests {
         };
         #[rustfmt::skip]
         let wire = vec![
-            0, 0, 0, 48,
+            0, 0, 0, 53,
             29,
             0, 0, 0, 1,
             0, 0, 0, 1, b'a',
+            0, 0, 0, 1, b'i',
             1,
             0, 0, 0, 2,
             0, 0, 0, 1, b'u',
@@ -1310,6 +1318,7 @@ mod async_tests {
     fn listed(name: &str) -> SessionInfo {
         SessionInfo {
             name: name.into(),
+            instance_id: format!("inst-{name}"),
             live: true,
             attached: 1,
             writer_fde: "uday".into(),

@@ -638,6 +638,7 @@ describe("SpecDetail terminal entries", () => {
         sessions: [
         {
           name: "room-s1",
+          instanceId: "inst-room-s1",
           live: true,
           attached: 1,
           writerFde: "uday",

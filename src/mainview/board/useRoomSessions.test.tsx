@@ -28,6 +28,7 @@ const flush = async () => {
 function session(over: Partial<DeckSession>): DeckSession {
   return {
     name: "room-design-talk",
+    instanceId: `inst-${over.name ?? "room-design-talk"}`,
     live: true,
     attached: 1,
     writerFde: "uday",

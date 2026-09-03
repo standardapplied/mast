@@ -193,6 +193,7 @@ function RoomListDemo() {
 const DECK_DEMO: DeckSession[] = [
   {
     name: "room-design-talk",
+    instanceId: "inst-room-design-talk",
     live: true,
     attached: 3,
     writerFde: "uday",
@@ -201,6 +202,7 @@ const DECK_DEMO: DeckSession[] = [
   },
   {
     name: "room-design-talk.2",
+    instanceId: "inst-room-design-talk.2",
     live: true,
     attached: 1,
     writerFde: "",
@@ -209,6 +211,7 @@ const DECK_DEMO: DeckSession[] = [
   },
   {
     name: "resume-run-7",
+    instanceId: "inst-resume-run-7",
     live: false,
     attached: 0,
     writerFde: "",
