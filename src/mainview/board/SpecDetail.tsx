@@ -809,7 +809,7 @@ export function SpecDetail({
               onClick={() => void removeMember()}
               data-testid="confirm-remove-member"
             >
-              Remove member
+              Remove agent
             </Button>
           </>
         }
