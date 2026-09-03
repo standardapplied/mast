@@ -430,11 +430,12 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     /**
      * The pane found its session gone (a transport loss the reconcile listing proved dead or
      * absent, or a reattach with nothing to attach to). Nothing exited under the user's eyes, so
-     * the pane stays put: the death is recorded with the reason in hand, and the pane's launch
-     * memory is dropped so the cell renders the ended card with Restart in its place.
+     * the pane stays put: the death is recorded as inferred (a room session's card fails closed
+     * until its durable reason is read), and the pane's launch memory is dropped so the cell
+     * renders the ended card in its place.
      */
     const onGone = (session: string, reason: string) => {
-      sessionStore.noteEnded(session, reason);
+      sessionStore.noteReconciledEnd(session, reason);
       forget([session]);
       (room?.refresh ?? sessionStore.refresh)();
     };

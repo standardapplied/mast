@@ -674,16 +674,29 @@ impl Backend {
         socket_path: String,
         mut req: crate::pty::AttachRequest,
     ) -> Result<(), Error> {
-        let channel = self.open_streamlocal(&socket_path).await?;
-        // The shell's working directory lives under the box user's home too; expand `~` so a
-        // create doesn't fail spawning in a directory that only exists on the client.
-        if let Some(spec) = req.create.as_mut() {
-            spec.cwd = self.resolve_path(&spec.cwd).await?;
-        }
-        let stream = crate::pty::attach(channel.into_stream(), &req).await?;
-
+        // The command channel is registered BEFORE the first remote await: a session_close that
+        // lands while the prologue is still talking to the host queues its Detach (and drops the
+        // sender), so the driver detaches the moment the attach is acknowledged instead of
+        // leaving a ghost attachment no one can reach.
         let (tx, rx) = mpsc::channel::<crate::pty::SessionCmd>(256);
         self.sessions.lock().await.insert(id.clone(), tx);
+        let opened = async {
+            let channel = self.open_streamlocal(&socket_path).await?;
+            // The shell's working directory lives under the box user's home too; expand `~` so a
+            // create doesn't fail spawning in a directory that only exists on the client.
+            if let Some(spec) = req.create.as_mut() {
+                spec.cwd = self.resolve_path(&spec.cwd).await?;
+            }
+            crate::pty::attach(channel.into_stream(), &req).await.map_err(Error::from)
+        }
+        .await;
+        let stream = match opened {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.sessions.lock().await.remove(&id);
+                return Err(error);
+            }
+        };
 
         let sessions = self.sessions.clone();
         let cleanup_id = id.clone();

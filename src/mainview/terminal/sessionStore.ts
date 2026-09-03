@@ -345,26 +345,46 @@ export class SessionStore {
   }
 
   /**
-   * An ending this client witnessed itself — the attached pane's shell exited, or
-   * its reconcile listing proved the session gone. Kill-equivalent: the death is
-   * recorded with the reason in hand (no history read to wait on), the entry
-   * dims, and any optimistic start is cancelled — a surviving pending entry
-   * would read as live and mount a create-capable pane over the corpse. The
-   * caller pairs it with a refresh; the listing stays the truth.
+   * An ending the host delivered to this client — the attached pane's shell
+   * exited, or a pty_session_ended event. Kill-equivalent: the death is recorded
+   * with the reason in hand (no history read to wait on), the entry dims, and any
+   * optimistic start is cancelled — a surviving pending entry would read as live
+   * and mount a create-capable pane over the corpse. The caller pairs it with a
+   * refresh; the listing stays the truth.
    */
   noteEnded(name: string, reason: string, key = this.active): void {
+    this.recordEnd(name, reason, false, key);
+  }
+
+  /**
+   * An ending this client only INFERRED from a listing: the session is a corpse
+   * or absent, but no one told the pane why. A host restart is proven by the boot
+   * id and settles as is; any other label is a guess that must not stand in for
+   * the durable reason — a missed "yielded to dispatch …" would otherwise read
+   * as restartable — so a room session's record stays history-pending (the ended
+   * card fails closed) until the room's fresh history read settles it.
+   */
+  noteReconciledEnd(name: string, reason: string, key = this.active): void {
+    this.recordEnd(name, reason, reason !== HOST_RESTARTED, key);
+  }
+
+  private recordEnd(name: string, reason: string, verify: boolean, key: string | null): void {
     const box = this.box(key ?? undefined);
     if (!box) return;
     const known = box.listed?.get(name);
     const pending = box.pending.get(name);
     box.pending.delete(name);
     const command = known?.command ?? pending?.command;
+    const room = known?.room || pending?.room;
+    const pendingHistory = verify && !!room;
     box.deaths.set(name, {
       reason,
       at: Date.now(),
       ...(command ? { command } : {}),
+      ...(pendingHistory ? { room, historyPending: true } : {}),
     });
     if (known?.live) box.listed!.set(name, { ...known, live: false });
+    if (pendingHistory) this.refreshHistory(box, room!);
     this.emit();
   }
 

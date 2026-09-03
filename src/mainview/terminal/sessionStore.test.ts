@@ -530,6 +530,56 @@ describe("local endings (exit closes the pane)", () => {
   });
 });
 
+describe("reconciled endings (the pane inferred the death from a listing)", () => {
+  test("a room session inferred 'not running' fails closed until the history read recovers the durable reason", async () => {
+    const box = await connected([session({ name: "resume-run-7", command: ["codex"] })]);
+    box.setSpecEvents([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "yielded to dispatch r8 of spec s1" },
+      }),
+    ]);
+    box.store.noteReconciledEnd("resume-run-7", "not running");
+    expect(box.store.byName("resume-run-7")?.live).toBe(false);
+    expect(box.store.deaths().get("resume-run-7")).toMatchObject({
+      reason: "not running",
+      command: ["codex"],
+      room: "design-talk",
+      historyPending: true,
+    });
+    await flush();
+    expect(box.store.deaths().get("resume-run-7")?.historyPending).toBeUndefined();
+    expect(box.store.reasons()["resume-run-7"]).toBe("yielded to dispatch r8 of spec s1");
+  });
+
+  test("a history with nothing newer settles the inferred reason as it stands", async () => {
+    const box = await connected([session({ name: "room-design-talk" })]);
+    box.store.noteReconciledEnd("room-design-talk", "ended");
+    await flush();
+    expect(box.store.deaths().get("room-design-talk")).toMatchObject({ reason: "ended" });
+    expect(box.store.deaths().get("room-design-talk")?.historyPending).toBeUndefined();
+  });
+
+  test("a host restart is proven by the boot id — settled, no history read", async () => {
+    const box = await connected([session({ name: "room-design-talk" })]);
+    const reads = box.deferSpecEvents();
+    box.store.noteReconciledEnd("room-design-talk", "host restarted");
+    await flush();
+    expect(reads).toHaveLength(0);
+    expect(box.store.deaths().get("room-design-talk")).toMatchObject({ reason: "host restarted" });
+    expect(box.store.deaths().get("room-design-talk")?.historyPending).toBeUndefined();
+  });
+
+  test("a session with no room has no history to consult — settled as inferred", async () => {
+    const box = await connected([session({ name: "scratch", room: "" })]);
+    const reads = box.deferSpecEvents();
+    box.store.noteReconciledEnd("scratch", "not running");
+    await flush();
+    expect(reads).toHaveLength(0);
+    expect(box.store.deaths().get("scratch")?.historyPending).toBeUndefined();
+  });
+});
+
 describe("host boot id (host restart is a first-class fact)", () => {
   test("the listing's boot id is the box's; null until a listing lands", async () => {
     const store = new SessionStore();

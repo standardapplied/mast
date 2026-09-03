@@ -1128,6 +1128,38 @@ mod async_tests {
         host.await.unwrap();
     }
 
+    /// A close that lands mid-prologue (the pane unmounted while the host was still answering):
+    /// the Detach queued before the attach ack is honored the moment the ack arrives, so no
+    /// attachment outlives its pane.
+    #[tokio::test]
+    async fn a_detach_queued_during_the_prologue_is_honored_right_after_the_attach_ack() {
+        let (client, mut server) = duplex(1024);
+        let (closed_tx, closed_rx) = tokio::sync::oneshot::channel::<()>();
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            read_frame(&mut server).await.unwrap(); // Attach
+            closed_rx.await.unwrap();
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
+            assert_eq!(read_frame(&mut server).await.unwrap(), Frame::Detach);
+        });
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let driver = tokio::spawn(async move {
+            drive(
+                client,
+                AttachRequest { token: "".into(), session: "s".into(), write: false, create: None },
+                cmd_rx,
+                |_ev| {},
+            )
+            .await
+        });
+        cmd_tx.send(SessionCmd::Detach).await.unwrap();
+        drop(cmd_tx);
+        closed_tx.send(()).unwrap();
+        driver.await.unwrap().unwrap();
+        host.await.unwrap();
+    }
+
     #[tokio::test]
     async fn attach_resolves_only_on_the_hosts_attach_ack_and_surfaces_a_refusal() {
         let (client, mut server) = duplex(1024);
