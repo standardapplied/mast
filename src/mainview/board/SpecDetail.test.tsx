@@ -360,10 +360,10 @@ describe("SpecDetail anti-flicker", () => {
     await mount(fake.gateway);
     await openActions();
 
-    for (const verb of ["Dispatch", "Add member", "Open terminal", "Edit"]) {
+    for (const verb of ["Dispatch", "Add an agent", "Open terminal", "Edit"]) {
       expect(menuItem(verb), `${verb} is a room verb`).not.toBeUndefined();
     }
-    for (const retired of ["Run a task", "Add agent", "New task"]) {
+    for (const retired of ["Run a task", "Add member", "Add agent", "New task"]) {
       expect(menuItem(retired), `${retired} is retired`).toBeUndefined();
     }
   });

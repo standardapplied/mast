@@ -373,7 +373,7 @@ export function SpecDetail({
       ? []
       : [{
           kind: "item" as const,
-          label: "Add member",
+          label: "Add an agent",
           onSelect: () => setEngageOpen(true),
         }]),
     openTerminalMenu((glyph) => openTerminal({ launch: glyph })),
@@ -387,7 +387,7 @@ export function SpecDetail({
       showToast("error", result.error.message);
       return;
     }
-    showToast("info", result.value.agent ? `Removed ${result.value.agent} from ${spec.id}.` : "Nobody was a member.");
+    showToast("info", result.value.agent ? `Removed ${result.value.agent} from ${spec.id}.` : "No agent was in the room.");
     void load();
   };
 
@@ -797,7 +797,7 @@ export function SpecDetail({
       <Dialog
         isOpen={dismissConfirm}
         onClose={() => setDismissConfirm(false)}
-        title="Remove this member?"
+        title="Remove this agent?"
         size="sm"
         footer={
           <>
