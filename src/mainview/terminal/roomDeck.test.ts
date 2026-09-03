@@ -95,13 +95,13 @@ describe("observerCount", () => {
 });
 
 describe("skew", () => {
-  test("a SAILPTY1 echo names the box as the older side", () => {
-    expect(skewOf("pty protocol skew: the box speaks SAILPTY1")).toBe("box-older");
+  test("an older magic's echo names the box as the older side", () => {
+    expect(skewOf("pty protocol skew: the box speaks an older SAILPTY")).toBe("box-older");
     expect(skewCard("box-older").detail).toContain("sail upgrade");
   });
 
   test("any other mismatch names this Mast as the older side", () => {
-    expect(skewOf("pty protocol skew: the box no longer speaks SAILPTY2")).toBe("mast-older");
+    expect(skewOf("pty protocol skew: the box no longer speaks SAILPTY3")).toBe("mast-older");
     expect(skewCard("mast-older").title).toBe("This Mast is older than the box");
   });
 
@@ -204,10 +204,11 @@ describe("panePlan", () => {
     });
   });
 
-  test("a session absent from the host recreates in place as a plain shell", () => {
+  test("a session absent from the host parks on the ended card as provably absent — never a silent recreate", () => {
     expect(panePlan("room-design-talk.3", listed, new Map())).toEqual({
-      kind: "attach",
-      command: ["bash", "-l"],
+      kind: "ended",
+      restartCommand: ["bash", "-l"],
+      absent: true,
     });
   });
 
@@ -228,8 +229,8 @@ describe("panePlan", () => {
     });
     expect(
       panePlan("room-design-talk.4", listed, new Map(), deaths),
-      "no record — the genuine host-restart case still recreates a shell",
-    ).toEqual({ kind: "attach", command: ["bash", "-l"] });
+      "no record — absent is still absent: an ended card that says so, not a shell",
+    ).toEqual({ kind: "ended", restartCommand: ["bash", "-l"], absent: true });
   });
 });
 

@@ -17,8 +17,8 @@ export interface RoomTerminalProps {
   readonly session: string;
   readonly project: string;
   readonly room: string;
-  /** argv to create the session with when it does not exist on the host. */
-  readonly command: string[];
+  /** argv to create the session with — set only for a launch; absent means attach to what runs. */
+  readonly command?: string[];
   /** A refused close for this session, rendered inline where the pane lives. */
   readonly refusal?: string;
   readonly active: boolean;
@@ -89,7 +89,7 @@ export const RoomTerminal = forwardRef<TerminalHandle, RoomTerminalProps>(functi
         socketPath={NODE_SOCKET}
         token=""
         session={session}
-        create={{ command, cwd: "~", project, room, cols: 80, rows: 24 }}
+        create={command ? { command, cwd: "~", project, room, cols: 80, rows: 24 } : undefined}
         active={active}
         visible={visible}
         onStatus={onStatus}

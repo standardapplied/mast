@@ -385,8 +385,8 @@ async fn session_take_write(state: State<'_, AppState>, id: String) -> Result<()
     state.backend().await?.session_take_write(&id).await.map_err(String::from)
 }
 
-/// List the host's sessions (name, liveness, attached count, current writer, room, command),
-/// draining every page of the host's cursor-paginated listing.
+/// List the host's sessions (name, liveness, attached count, current writer, room, command)
+/// under the host boot id that answered, draining every page of the cursor-paginated listing.
 #[tauri::command]
 async fn session_list(
     state: State<'_, AppState>,
@@ -399,7 +399,8 @@ async fn session_list(
         .session_list(socket_path, token)
         .await
         .map_err(String::from)?;
-    Ok(json!(list
+    let sessions = list
+        .sessions
         .into_iter()
         .map(|s| json!({
             "name": s.name,
@@ -409,7 +410,8 @@ async fn session_list(
             "room": s.room,
             "command": s.command,
         }))
-        .collect::<Vec<_>>()))
+        .collect::<Vec<_>>();
+    Ok(json!({ "hostBootId": list.host_boot_id, "sessions": sessions }))
 }
 
 /// Create a host-owned session without attaching (a durable named shell).

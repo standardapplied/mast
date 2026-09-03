@@ -195,7 +195,7 @@ function makeGateway(
       await enrichGate;
       return { ok: true as const, value: { specs: [main, dep], total: 2 } };
     },
-    listSessions: async () => ({ ok: true as const, value: [] }),
+    listSessions: async () => ({ ok: true as const, value: { hostBootId: "boot-1", sessions: [] } }),
     onEvent: (l: (e: SailEvent) => void) => {
       listeners.add(l);
       return () => listeners.delete(l);
@@ -633,7 +633,9 @@ describe("SpecDetail terminal entries", () => {
     const fake = makeGateway();
     (fake.gateway as { listSessions: unknown }).listSessions = async () => ({
       ok: true as const,
-      value: [
+      value: {
+        hostBootId: "boot-1",
+        sessions: [
         {
           name: "room-s1",
           live: true,
@@ -642,7 +644,8 @@ describe("SpecDetail terminal entries", () => {
           room: "s1",
           command: ["claude"],
         },
-      ],
+        ],
+      },
     });
     await mount(fake.gateway);
     const card = container.querySelector<HTMLButtonElement>('[data-testid="deck-card-room-s1"]');

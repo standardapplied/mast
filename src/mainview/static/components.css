@@ -3994,6 +3994,11 @@ button.room-section-head:hover {
   height: 100%;
   min-width: 0;
 }
+.term-panes__empty {
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
 .term-panes__cell {
   flex: 1;
   min-width: 0;

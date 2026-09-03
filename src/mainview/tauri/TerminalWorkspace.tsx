@@ -165,6 +165,11 @@ export function TerminalWorkspace({
       onStatus={(s) =>
         setStatuses((prev) => {
           const known = prev[key];
+          if (s === null) {
+            if (known === undefined) return prev;
+            const { [key]: _gone, ...rest } = prev;
+            return rest;
+          }
           return known !== undefined && statusEqual(known, s) ? prev : { ...prev, [key]: s };
         })
       }

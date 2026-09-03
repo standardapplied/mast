@@ -11,7 +11,7 @@ import { labelFor, nextSessionName } from "./paneLayout";
  * components and the Tauri terminal edge are thin skins over these.
  */
 
-/** One session as `session_list` returns it (the SAILPTY2 SessionInfo, camelCased). */
+/** One session as `session_list` returns it (the SAILPTY3 SessionInfo, camelCased). */
 export type DeckSession = {
   readonly name: string;
   readonly live: boolean;
@@ -19,6 +19,12 @@ export type DeckSession = {
   readonly writerFde: string;
   readonly room: string;
   readonly command: string[];
+};
+
+/** What `session_list` answers: the host boot the listing was taken under, and its sessions. */
+export type SessionListing = {
+  readonly hostBootId: string;
+  readonly sessions: DeckSession[];
 };
 
 /**
@@ -33,10 +39,10 @@ export type SessionEntry = DeckSession & {
 };
 
 /**
- * An observed death: a local kill ack, a pty_session_ended event, or a listing
- * that dropped a previously-live name. Layout reconcile may recreate an absent
- * session ONLY when no record exists (the genuine host-restart case); `command`
- * is what ran, kept so a revive can re-mint it.
+ * An observed death: a local kill ack, a pane's own ending, a pty_session_ended
+ * event, or a listing that dropped a previously-live name. The record explains
+ * the name's ended card and prunes it from stored layouts; `command` is what
+ * ran, kept so a revive can re-mint it.
  */
 export type DeathRecord = {
   readonly reason: string;
@@ -108,14 +114,13 @@ export type LaunchSpec = {
 };
 
 /**
- * What a route pane shows for a session. Explicit launches attach with their picked
- * command; a live listed session attaches with the command it runs; a session absent
- * from the host entirely (reboot, pruned) is recreated in place as a plain shell —
- * the Terminal view's layout-survives-a-reboot behavior, safe because no agent can
- * be displaced by a shell. An absent session the store watched die parks on the
- * ended card with the recorded reason — recreating it would undo the kill — and a
- * listed corpse parks the same way: recreating a dead agent session unasked could
- * put two agents on one checkout.
+ * What a pane shows for a session. Explicit launches attach with their picked command
+ * (creating the session); a live listed session attaches to what runs there; anything
+ * else parks on the ended card — nothing is created without a user action. A session
+ * the store watched die carries the recorded reason and revives with its recorded
+ * command; a listed corpse likewise (recreating a dead agent session unasked could put
+ * two agents on one checkout); a session absent from the host with no record is marked
+ * `absent`, and the card says what the client can prove about that (see absenceReason).
  */
 export function panePlan(
   session: string,
@@ -124,7 +129,7 @@ export function panePlan(
   deaths?: ReadonlyMap<string, DeathRecord>,
 ):
   | { kind: "attach"; command: string[]; writerFde?: string }
-  | { kind: "ended"; restartCommand: string[] } {
+  | { kind: "ended"; restartCommand: string[]; absent?: true } {
   const listing = listed.find((s) => s.name === session);
   const opened = launched.get(session);
   if (opened) {
@@ -133,7 +138,7 @@ export function panePlan(
   if (!listing) {
     const death = deaths?.get(session);
     if (death) return { kind: "ended", restartCommand: death.command ?? ["bash", "-l"] };
-    return { kind: "attach", command: ["bash", "-l"] };
+    return { kind: "ended", restartCommand: ["bash", "-l"], absent: true };
   }
   if (listing.live) {
     return { kind: "attach", command: listing.command, writerFde: listing.writerFde };
@@ -228,13 +233,13 @@ export function observerCount(session: DeckSession): number {
 export type SkewSide = "box-older" | "mast-older";
 
 /**
- * Reads the Rust handshake's skew reason (see SKEW_* in src-tauri/src/pty.rs). A
- * SAILPTY1 echo means the box's sail predates this Mast; any other mismatch means
- * the box has moved past the protocol this Mast speaks.
+ * Reads the Rust handshake's skew reason (see SKEW_* in src-tauri/src/pty.rs). An
+ * older magic's echo means the box's sail predates this Mast; any other mismatch
+ * means the box has moved past the protocol this Mast speaks.
  */
 export function skewOf(reason: string | undefined): SkewSide | null {
   if (!reason?.includes("pty protocol skew")) return null;
-  return reason.includes("SAILPTY1") ? "box-older" : "mast-older";
+  return reason.includes("no longer speaks") ? "mast-older" : "box-older";
 }
 
 /**

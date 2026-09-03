@@ -760,7 +760,7 @@ impl Backend {
         &self,
         socket_path: String,
         token: String,
-    ) -> Result<Vec<crate::pty::SessionInfo>, Error> {
+    ) -> Result<crate::pty::Listing, Error> {
         let channel = self.open_streamlocal(&socket_path).await?;
         crate::pty::list_sessions(channel.into_stream(), &token)
             .await

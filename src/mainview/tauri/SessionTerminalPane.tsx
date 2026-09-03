@@ -4,7 +4,10 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import type { ThemeName } from "../../shared/types";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
 import {
+  absenceReason,
+  type HostListing,
   Reconnector,
+  resolveTransportEnd,
   type SessionEnd,
   type SessionStatus,
   toSessionEnd,
@@ -29,7 +32,7 @@ export type TerminalHandle = {
    *  host without a window resize, and fitting at a stale mid-drag size
    *  garbles the PTY geometry. */
   refit: () => void;
-  /** Reattach a dead link now, or restart an ended shell. */
+  /** Reattach a dead link now, skipping any scheduled backoff. */
   revive?: () => void;
   /** Claim the write token; the grant arrives as the host's WriterChanged broadcast. */
   takeWrite?: () => void;
@@ -44,9 +47,12 @@ export type TerminalHandle = {
  * only bridges them to the live IPC host, so it is the untested, Mac-verified surface — kept thin.
  *
  * Connection lifecycle: the host session outlives any one link, so a dead transport (lid close,
- * network change, keepalive timeout) auto-reattaches on the {@link Reconnector}'s backoff — plus
+ * network change, keepalive timeout) auto-reattaches on the {@link Reconnector}'s backoff — after
+ * ONE reconcile listing proves the session still lives; a session the host no longer lists ended
+ * (or the host restarted), and reads as such instead of as a link problem — plus
  * immediately when the window becomes visible or the network returns. A shell that exited is a
- * different matter: the pane parks on an "ended" card until the user restarts it.
+ * different matter: the pane reports `ended` and its host decides — it leaves the layout, or parks
+ * on the scope's ended card. A create spec is spent on the first attach: a reattach never creates.
  */
 
 const BLINK_MS = 1060;
@@ -179,6 +185,10 @@ export const SessionTerminalPane = forwardRef<
   const onWriterRef = useRef(onWriter);
   onWriterRef.current = onWriter;
   const attachIdRef = useRef<string | null>(null);
+  /** The host boot id this pane last saw the session listed under (see absenceReason). */
+  const seenUnderRef = useRef<string | null>(null);
+  /** True once the create spec has been spent — a reattach attaches, never recreates. */
+  const createdRef = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const themeName = useThemeName();
@@ -197,20 +207,14 @@ export const SessionTerminalPane = forwardRef<
   }, []);
 
   /**
-   * The one recovery verb: reattach a dead link now (skipping any scheduled backoff), or — after
-   * the shell itself ended — clear the corpse and start a fresh session in its place.
+   * The one recovery verb: reattach a dead link now, skipping any scheduled backoff. An ended
+   * shell is not revived here — the pane's host decides what an ending means (the pane leaves the
+   * layout, or parks on its scope's ended card whose Restart mints a fresh session).
    */
   const revive = useCallback(() => {
-    const current = statusRef.current;
     reconnector.current.reset();
-    if (current.kind === "ended") {
-      void invoke("session_kill", { socketPath, token, session })
-        .catch(noop)
-        .finally(reattach);
-      return;
-    }
     reattach();
-  }, [socketPath, token, session, reattach]);
+  }, [reattach]);
 
   /** Routes text into the pty, parking multi-line pastes on the confirm card first. */
   const tryPaste = useCallback((text: string) => {
@@ -329,7 +333,7 @@ export const SessionTerminalPane = forwardRef<
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
     /** The session is over for this attach; decide between auto-reattach and parking. */
-    const onEnd = (end: SessionEnd) => {
+    const park = (end: SessionEnd) => {
       if (disposed) return;
       if (end.klass === "ended") {
         setStatus({ kind: "ended", reason: end.reason });
@@ -345,6 +349,22 @@ export const SessionTerminalPane = forwardRef<
       setStatus({ kind: "down", reason: end.reason });
       clearTimeout(retryTimer.current);
       retryTimer.current = setTimeout(reattach, delay);
+    };
+
+    /**
+     * A transport drop takes one reconcile listing before any backoff: the session listed live
+     * is a genuine link loss; absent or dead, it ended and must never be retried into. The
+     * listing failing means the link itself is down — the reconnect path's own case.
+     */
+    const onEnd = (end: SessionEnd) => {
+      if (disposed) return;
+      if (end.klass !== "transport") return park(end);
+      void invoke<HostListing>("session_list", { socketPath, token })
+        .then(
+          (listing) => listing,
+          () => null,
+        )
+        .then((listing) => park(resolveTransportEnd(end, session, seenUnderRef.current, listing)));
     };
 
     const run = async () => {
@@ -437,22 +457,27 @@ export const SessionTerminalPane = forwardRef<
       cleanups.push(await listen<unknown>(`session://exit/${id}`, (e) => onEnd(toSessionEnd(e.payload))));
 
       try {
-        // Reattach when the named session is already live; create it only when absent, so the
-        // terminal survives closing and reopening the pane (the point of a durable host session).
-        const existing = await invoke<Array<{ name: string; live: boolean }>>("session_list", {
-          socketPath,
-          token,
-        });
+        // Reattach when the named session is already live; create it only when the host asked
+        // for a create (a launch). Absent with no create is an ending to report — never a
+        // silent recreate, and never a refusal to retry into.
+        const listing = await invoke<HostListing>("session_list", { socketPath, token });
         if (disposed) return;
-        const alive = existing.some((s) => s.name === session && s.live);
+        const alive = listing.sessions.some((s) => s.name === session && s.live);
+        const spec = createdRef.current ? undefined : create;
+        if (!alive && !spec) {
+          park({ klass: "ended", reason: absenceReason(seenUnderRef.current, listing.hostBootId) });
+          return;
+        }
+        seenUnderRef.current = listing.hostBootId;
         await invoke("session_open", {
           id,
           socketPath,
           token,
           session,
           write,
-          create: alive || !create ? null : { ...create, cols, rows },
+          create: alive || !spec ? null : { ...spec, cols, rows },
         });
+        createdRef.current = true;
       } catch (e) {
         // The link (not the pane) is the usual culprit and reattaches on the same
         // backoff — but a protocol skew parks on the skew card instead of retrying.
@@ -809,11 +834,7 @@ function overlayFor(status: SessionStatus): {
         spin: true,
       };
     case "ended":
-      return {
-        title: `Shell ended (${status.reason})`,
-        action: "Restart shell",
-        tone: "muted",
-      };
+      return { title: `Shell ended (${status.reason})`, tone: "muted" };
     case "failed": {
       // A protocol skew is not a fault to retry into — name the older side and
       // the fix; the pane recovers only after one end is upgraded.

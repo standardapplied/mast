@@ -25,12 +25,19 @@ export interface PaneMeta {
   readonly color?: number;
 }
 
-/** `groups[i]` renders as side-by-side splits; `active` is the open sub-tab; `seq` mints ids. */
+/**
+ * `groups[i]` renders as side-by-side splits; `active` is the open sub-tab; `seq` mints ids. A
+ * layout may hold no groups at all: the last pane exiting or closing leaves an empty tab, and
+ * nothing is minted into it without a user action. `hostBootId` is a stamp on the PERSISTED form
+ * only — the pty host boot the arrangement was last reconciled under — so a stored pane the host
+ * no longer lists can be explained as "host restarted" rather than left a mystery.
+ */
 export interface PaneLayout {
   readonly groups: readonly PaneGroup[];
   readonly active: number;
   readonly seq: number;
   readonly meta?: Readonly<Record<string, PaneMeta>>;
+  readonly hostBootId?: string;
 }
 
 export function baseSessionFor(target?: string): string {
@@ -42,8 +49,13 @@ export function projectFor(target?: string): string {
   return target ?? "";
 }
 
+export function emptyLayout(): PaneLayout {
+  return { groups: [], active: 0, seq: 1 };
+}
+
+/** The one shell a fresh project tab mints on the user's open — the open is the action. */
 export function defaultLayout(base: string): PaneLayout {
-  return { groups: [{ id: 1, panes: [base] }], active: 0, seq: 2 };
+  return newGroup(emptyLayout(), base);
 }
 
 /** The ordinal a session name carries (base = 1), or null when it isn't ours. */
@@ -133,7 +145,13 @@ export function nextSessionName(taken: Iterable<string>, base: string): string {
 export function parseLayout(raw: string | null): PaneLayout | null {
   if (!raw) return null;
   try {
-    const p = JSON.parse(raw) as { groups?: unknown; active?: unknown; seq?: unknown; meta?: unknown };
+    const p = JSON.parse(raw) as {
+      groups?: unknown;
+      active?: unknown;
+      seq?: unknown;
+      meta?: unknown;
+      hostBootId?: unknown;
+    };
     const sound =
       Array.isArray(p.groups) &&
       p.groups.every(
@@ -161,6 +179,7 @@ export function parseLayout(raw: string | null): PaneLayout | null {
           ((m as PaneMeta).color === undefined || typeof (m as PaneMeta).color === "number"),
       );
     if (!metaSound) delete p.meta;
+    if (typeof p.hostBootId !== "string") delete p.hostBootId;
     return p as unknown as PaneLayout;
   } catch {
     return null;
@@ -169,18 +188,17 @@ export function parseLayout(raw: string | null): PaneLayout | null {
 
 /**
  * Merges the stored arrangement with the host's live session list. Stored panes are kept even when
- * their session died — reopening the tab recreates the shell in place, which is how a layout
- * survives a host reboot. That recreate-on-absent survives only without a death record: a name in
- * `dead` that the host no longer lists at all (not in `live` or `adopt`) was watched dying, and
- * keeping its pane would resurrect a session the user deliberately killed — it is pruned instead
- * (persistence stores arrangement, never existence). Live sessions the client has never seen
- * (opened from another Mac, or an older client) are appended as their own tabs in ordinal order.
- * Anything on the socket that isn't this tab's base or `base.<n>` is someone else's and is
- * ignored — except names in `adopt`, which belong to this scope despite foreign naming (a room's
- * `resume-*` agent sessions) and are appended after the ordinal strays, in name order. When
- * death pruning empties the layout entirely, the healed default pane represents one of those
- * deaths rather than the base — a recordless base name would read as a host-restart loss and
- * silently create a shell nobody asked for, where the dead name parks on its ended card.
+ * the host no longer lists their session — the arrangement is the client's to remember — but an
+ * absent pane is never recreated: it renders an ended card saying what the client can prove. A
+ * name in `dead` that the host no longer lists at all (not in `live` or `adopt`) was watched
+ * dying, and keeping its pane would only re-park a session the user deliberately closed — it is
+ * pruned instead (persistence stores arrangement, never existence). Live sessions the client has
+ * never seen (opened from another Mac, or an older client) are appended as their own tabs in
+ * ordinal order. Anything on the socket that isn't this tab's base or `base.<n>` is someone else's
+ * and is ignored — except names in `adopt`, which belong to this scope despite foreign naming (a
+ * room's `resume-*` agent sessions) and are appended after the ordinal strays, in name order. An
+ * arrangement that ends up with no panes stays empty: nothing is ever minted into a layout by
+ * reconciliation, only by the user.
  */
 export function reconcile(
   stored: PaneLayout | null,
@@ -207,13 +225,7 @@ export function reconcile(
   for (const s of strays) {
     groups.push({ id: seq++, panes: [s] });
   }
-  if (groups.length === 0) {
-    const ended = stored?.groups
-      .flatMap((group) => group.panes)
-      .find((session) => dead?.has(session));
-    return defaultLayout(ended ?? base);
-  }
-  const active = Math.min(Math.max(stored?.active ?? 0, 0), groups.length - 1);
+  const active = Math.min(Math.max(stored?.active ?? 0, 0), Math.max(groups.length - 1, 0));
   const meta = pruneMeta(stored?.meta, new Set(groups.flatMap((g) => g.panes)));
   return meta ? { groups, active, seq, meta } : { groups, active, seq };
 }
@@ -236,35 +248,33 @@ export function splitGroup(layout: PaneLayout, group: number, session: string): 
   };
 }
 
-/** Removes a pane; an emptied sub-tab disappears, and removing the very last pane restores the default. */
-export function removePane(layout: PaneLayout, session: string, base: string): PaneLayout {
+/** Removes a pane; an emptied sub-tab disappears, and removing the very last pane leaves the layout empty. */
+export function removePane(layout: PaneLayout, session: string): PaneLayout {
   const groups = layout.groups
     .map((g) => ({ ...g, panes: g.panes.filter((s) => s !== session) }))
     .filter((g) => g.panes.length > 0);
-  if (groups.length === 0) {
-    return defaultLayout(base);
-  }
   const meta = pruneMeta(layout.meta, new Set(groups.flatMap((g) => g.panes)));
-  const next: PaneLayout = { groups, active: Math.min(layout.active, groups.length - 1), seq: layout.seq };
+  const next: PaneLayout = {
+    groups,
+    active: Math.min(layout.active, Math.max(groups.length - 1, 0)),
+    seq: layout.seq,
+  };
   return meta ? { ...next, meta } : next;
 }
 
+/** Removes a set of panes at once; a close is a close, so an emptied layout stays empty. */
+export function removePanes(layout: PaneLayout, sessions: readonly string[]): PaneLayout {
+  return sessions.reduce((acc, session) => removePane(acc, session), layout);
+}
+
 /**
- * Removes a set of panes at once. When the removal empties the layout, the healed
- * default pane is the base session — except with `parkLast`, where the first removed
- * session stays instead: a room's close is a kill, and keeping the killed name lets
- * the listing refresh park it on its ended card rather than the healed base name
- * silently creating a replacement shell.
+ * What the layout becomes when a pane's shell exits on its own: the pane leaves like a closed
+ * chip — except with `parkLast`, where the last remaining pane stays put so the scope can park it
+ * on its ended card (a room route keeps the card and its Restart; a project tab goes empty).
  */
-export function removePanes(
-  layout: PaneLayout,
-  sessions: readonly string[],
-  base: string,
-  parkLast = false,
-): PaneLayout {
-  const emptied = sessionsOf(layout).every((s) => sessions.includes(s));
-  const fallback = parkLast && emptied ? (sessions[0] ?? base) : base;
-  return sessions.reduce((acc, session) => removePane(acc, session, fallback), layout);
+export function dropExited(layout: PaneLayout, session: string, parkLast: boolean): PaneLayout {
+  if (parkLast && paneCount(layout) === 1 && sessionsOf(layout).includes(session)) return layout;
+  return removePane(layout, session);
 }
 
 export function paneCount(layout: PaneLayout): number {

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   baseSessionFor,
   defaultLayout,
+  dropExited,
+  emptyLayout,
   labelFor,
   newGroup,
   nextSessionName,
@@ -42,9 +44,10 @@ describe("session naming", () => {
 });
 
 describe("reconcile", () => {
-  test("no stored layout and no live sessions yields the single base pane", () => {
-    expect(reconcile(null, [], "mast-a")).toEqual(defaultLayout("mast-a"));
-    expect(defaultLayout("mast-a")).toEqual({
+  test("no stored layout and no live sessions yields an empty layout — nothing is created unasked", () => {
+    expect(reconcile(null, [], "mast-a")).toEqual(emptyLayout());
+    expect(emptyLayout()).toEqual({ groups: [], active: 0, seq: 1 });
+    expect(defaultLayout("mast-a"), "the first shell a fresh tab mints on the user's open").toEqual({
       groups: [{ id: 1, panes: ["mast-a"] }],
       active: 0,
       seq: 2,
@@ -61,9 +64,23 @@ describe("reconcile", () => {
     expect(out.seq).toBe(9);
   });
 
-  test("a stored pane whose session died is kept — reopening recreates the shell", () => {
+  test("a stored pane whose session is absent is kept as arrangement — it renders ended, never recreated", () => {
     const stored = { groups: [{ id: 1, panes: ["mast-a"] }, { id: 2, panes: ["mast-a.2"] }], active: 1, seq: 3 };
     expect(reconcile(stored, [], "mast-a")).toEqual(stored);
+  });
+
+  test("a stored layout emptied by the user stays empty — no healed base shell on the next mount", () => {
+    const stored = { groups: [], active: 0, seq: 4 };
+    expect(reconcile(stored, [], "mast-a")).toEqual({ groups: [], active: 0, seq: 4 });
+  });
+
+  test("the host boot id stamp is not part of the reconciled arrangement", () => {
+    const stored = { groups: [{ id: 1, panes: ["mast-a"] }], active: 0, seq: 2, hostBootId: "boot-1" };
+    expect(reconcile(stored, ["mast-a"], "mast-a")).toEqual({
+      groups: [{ id: 1, panes: ["mast-a"] }],
+      active: 0,
+      seq: 2,
+    });
   });
 
   test("live sessions from another Mac appear as their own tabs, in ordinal order", () => {
@@ -127,26 +144,32 @@ describe("reconcile", () => {
     expect(out.groups).toEqual(stored.groups);
   });
 
-  test("pruning the last dead pane heals to the default base — whose own record parks it on the ended card", () => {
-    const stored = { groups: [{ id: 1, panes: ["room-r"] }], active: 0, seq: 2 };
-    const out = reconcile(stored, [], "room-r", new Set(), new Set(["room-r"]));
-    expect(out).toEqual(defaultLayout("room-r"));
-  });
-
-  test("pruning the last dead adopted pane keeps that death as the fallback — never a fresh base shell", () => {
-    const stored = { groups: [{ id: 1, panes: ["resume-run-7"] }], active: 0, seq: 2 };
-    const out = reconcile(stored, [], "room-r", new Set(), new Set(["resume-run-7"]));
-    expect(out).toEqual(defaultLayout("resume-run-7"));
-  });
-
-  test("pruning the last dead ordinal pane falls back to its own death, not the recordless base", () => {
-    const stored = { groups: [{ id: 1, panes: ["room-r.2"] }], active: 0, seq: 2 };
-    const out = reconcile(stored, [], "room-r", new Set(), new Set(["room-r.2"]));
-    expect(out).toEqual(defaultLayout("room-r.2"));
+  test("pruning the last dead pane leaves the layout empty — a kill never mints a replacement", () => {
+    for (const name of ["room-r", "resume-run-7", "room-r.2"]) {
+      const stored = { groups: [{ id: 1, panes: [name] }], active: 0, seq: 2 };
+      const out = reconcile(stored, [], "room-r", new Set(), new Set([name]));
+      expect(out, name).toEqual({ groups: [], active: 0, seq: 2 });
+    }
   });
 });
 
 describe("parseLayout", () => {
+  test("the host boot id stamp survives a round trip; a garbled stamp is dropped, not fatal", () => {
+    const stamped = { groups: [{ id: 1, panes: ["a"] }], active: 0, seq: 2, hostBootId: "boot-9" };
+    expect(parseLayout(JSON.stringify(stamped))).toEqual(stamped);
+    const garbled = { ...stamped, hostBootId: 9 };
+    expect(parseLayout(JSON.stringify(garbled))).toEqual({
+      groups: [{ id: 1, panes: ["a"] }],
+      active: 0,
+      seq: 2,
+    });
+    expect(parseLayout(JSON.stringify({ groups: [], active: 0, seq: 3 }))).toEqual({
+      groups: [],
+      active: 0,
+      seq: 3,
+    });
+  });
+
   test("round-trips a healthy layout", () => {
     const layout = { groups: [{ id: 3, panes: ["mast-a", "mast-a.2"] }], active: 0, seq: 4 };
     expect(parseLayout(JSON.stringify(layout))).toEqual(layout);
@@ -184,7 +207,7 @@ describe("editing", () => {
 
   test("removePane keeps the group's identity when a sibling survives", () => {
     const layout = { groups: [{ id: 1, panes: ["a", "c"] }, { id: 2, panes: ["b"] }], active: 1, seq: 3 };
-    expect(removePane(layout, "c", "base")).toEqual({
+    expect(removePane(layout, "c")).toEqual({
       groups: [{ id: 1, panes: ["a"] }, { id: 2, panes: ["b"] }],
       active: 1,
       seq: 3,
@@ -192,43 +215,42 @@ describe("editing", () => {
   });
 
   test("removePane drops an emptied group and clamps active", () => {
-    expect(removePane(two, "b", "base")).toEqual({
+    expect(removePane(two, "b")).toEqual({
       groups: [{ id: 1, panes: ["a"] }],
       active: 0,
       seq: 3,
     });
   });
 
-  test("removing the last pane falls back to the default layout", () => {
+  test("removing the last pane leaves the layout empty — a close is a close, nothing revives", () => {
     const one = { groups: [{ id: 5, panes: ["a"] }], active: 0, seq: 6 };
-    expect(removePane(one, "a", "mast-x")).toEqual(defaultLayout("mast-x"));
+    expect(removePane(one, "a")).toEqual({ groups: [], active: 0, seq: 6 });
   });
 
-  test("removePanes without parkLast heals an emptied layout to the base", () => {
-    const one = { groups: [{ id: 5, panes: ["a"] }], active: 0, seq: 6 };
-    expect(removePanes(one, ["a"], "mast-x")).toEqual(defaultLayout("mast-x"));
-  });
-
-  test("removePanes with parkLast keeps the killed session when nothing else remains", () => {
-    const one = { groups: [{ id: 5, panes: ["resume-run-7"] }], active: 0, seq: 6 };
-    expect(removePanes(one, ["resume-run-7"], "room-x", true)).toEqual(
-      defaultLayout("resume-run-7"),
-    );
-  });
-
-  test("removePanes parkLast keeps one killed pane when closing a whole split", () => {
+  test("removePanes removes every named pane; closing a whole split empties the layout", () => {
     const split = { groups: [{ id: 1, panes: ["room-x", "room-x.2"] }], active: 0, seq: 2 };
-    expect(sessionsOf(removePanes(split, ["room-x", "room-x.2"], "room-x", true))).toEqual([
-      "room-x",
-    ]);
-  });
-
-  test("removePanes parkLast leaves survivors alone — no fallback needed", () => {
-    expect(removePanes(two, ["b"], "room-x", true)).toEqual({
+    expect(removePanes(split, ["room-x", "room-x.2"])).toEqual({ groups: [], active: 0, seq: 2 });
+    expect(removePanes(two, ["b"])).toEqual({
       groups: [{ id: 1, panes: ["a"] }],
       active: 0,
       seq: 3,
     });
+  });
+
+  test("an exited pane leaves the layout like a closed chip", () => {
+    expect(dropExited(two, "b", false)).toEqual({
+      groups: [{ id: 1, panes: ["a"] }],
+      active: 0,
+      seq: 3,
+    });
+    const split = { groups: [{ id: 1, panes: ["a", "b"] }], active: 0, seq: 2 };
+    expect(dropExited(split, "a", true)).toEqual({ groups: [{ id: 1, panes: ["b"] }], active: 0, seq: 2 });
+  });
+
+  test("the last pane's exit empties the layout — unless the scope parks it on its ended card", () => {
+    const one = { groups: [{ id: 5, panes: ["a"] }], active: 0, seq: 6 };
+    expect(dropExited(one, "a", false)).toEqual({ groups: [], active: 0, seq: 6 });
+    expect(dropExited(one, "a", true)).toBe(one);
   });
 
   test("paneCount and sessionsOf see every pane across groups", () => {
@@ -276,7 +298,7 @@ describe("pane identity (rename + color)", () => {
 
   test("closing a pane drops its identity", () => {
     const named = withPaneMeta(layout, "mast-a.2", { label: "logs", color: 1 });
-    const closed = removePane(named, "mast-a.2", base);
+    const closed = removePane(named, "mast-a.2");
     expect(closed.meta?.["mast-a.2"]).toBeUndefined();
     expect(closed.groups).toEqual([{ id: 1, panes: ["mast-a"] }]);
   });

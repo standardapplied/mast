@@ -41,6 +41,7 @@ function makeGateway(host: DeckSession[]) {
   let listFailure: string | null = null;
   let roomFailure: string | null = null;
   let roomEcho: string | null = null;
+  let hostBootId = "boot-1";
   const listeners = new Set<(e: SailEvent) => void>();
   const gateway = {
     connection: async () => ({ server: "ssh://devbox", phase: "ready" }),
@@ -52,7 +53,7 @@ function makeGateway(host: DeckSession[]) {
           error: { status: 0, code: "pty_unreachable", message: listFailure },
         };
       }
-      return { ok: true as const, value: [...host] };
+      return { ok: true as const, value: { hostBootId, sessions: [...host] } };
     },
     killSession: async (name: string) => {
       calls.kill.push(name);
@@ -102,6 +103,10 @@ function makeGateway(host: DeckSession[]) {
     host,
     calls,
     failListings: (message: string | null) => (listFailure = message),
+    reboot: (bootId: string) => {
+      hostBootId = bootId;
+      host.length = 0;
+    },
     failRooms: (message: string | null) => (roomFailure = message),
     echoRoom: (id: string) => (roomEcho = id),
     emit: (e: SailEvent) => listeners.forEach((l) => l(e)),
@@ -489,6 +494,74 @@ describe("death records", () => {
       }),
     );
     expect(box.store.reasons()["room-design-talk"]).toBe("exited(0)");
+  });
+});
+
+describe("local endings (exit closes the pane)", () => {
+  test("a pane's own ending is recorded kill-equivalent: dead in every read, reason kept, no history read", async () => {
+    const { store, calls, host } = await connected([session({ name: "room-design-talk" })]);
+    store.noteEnded("room-design-talk", "exited(0)");
+    expect(store.byName("room-design-talk")?.live).toBe(false);
+    expect(store.reasons()).toEqual({ "room-design-talk": "exited(0)" });
+    expect(store.deaths().get("room-design-talk")).toMatchObject({
+      reason: "exited(0)",
+      command: ["bash", "-l"],
+    });
+    expect(store.deaths().get("room-design-talk")?.historyPending).toBeUndefined();
+    await flush();
+    expect(calls.list).toBe(1);
+    // The next listing (the corpse, or nothing at all) never downgrades the reason.
+    host.length = 0;
+    store.refresh();
+    await flush();
+    expect(store.reasons()).toEqual({ "room-design-talk": "exited(0)" });
+  });
+
+  test("an ending for a pending create cancels it — the corpse never reads as live", async () => {
+    const { store } = await connected([]);
+    store.noteLaunch("room-design-talk.2", ["claude"], "design-talk");
+    store.noteEnded("room-design-talk.2", "exited(1)");
+    expect(store.byName("room-design-talk.2")).toBeUndefined();
+    expect(store.deaths().get("room-design-talk.2")).toMatchObject({
+      reason: "exited(1)",
+      command: ["claude"],
+    });
+  });
+});
+
+describe("host boot id (host restart is a first-class fact)", () => {
+  test("the listing's boot id is the box's; null until a listing lands", async () => {
+    const store = new SessionStore();
+    expect(store.hostBootId()).toBeNull();
+    const fake = makeGateway([]);
+    store.connect(fake.gateway, "devbox");
+    expect(store.hostBootId()).toBeNull();
+    await flush();
+    expect(store.hostBootId()).toBe("boot-1");
+  });
+
+  test("a live name that vanishes across a boot change died of the restart — recorded as such, settled, no history read", async () => {
+    const { store, reboot, calls } = await connected([session({ name: "room-design-talk" })]);
+    const readsBefore = calls.list;
+    reboot("boot-2");
+    store.refresh();
+    await flush();
+    expect(store.hostBootId()).toBe("boot-2");
+    expect(store.deaths().get("room-design-talk")).toMatchObject({
+      reason: "host restarted",
+      command: ["bash", "-l"],
+    });
+    expect(store.deaths().get("room-design-talk")?.historyPending).toBeUndefined();
+    expect(store.reasons()).toEqual({ "room-design-talk": "host restarted" });
+    expect(calls.list).toBe(readsBefore + 1);
+  });
+
+  test("a live name that vanishes under the same boot is an ordinary death — the history read settles it", async () => {
+    const { store, host } = await connected([session({ name: "room-design-talk" })]);
+    host.length = 0;
+    store.refresh();
+    await flush();
+    expect(store.deaths().get("room-design-talk")?.reason).toBe("ended");
   });
 });
 

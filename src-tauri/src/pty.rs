@@ -8,10 +8,10 @@
 #![allow(dead_code)]
 
 /// Handshake magic; each peer writes it and must read the other's back.
-pub const MAGIC: &[u8; 8] = b"SAILPTY2";
+pub const MAGIC: &[u8; 8] = b"SAILPTY3";
 
-/// The magic an older sail host presents; recognized so the skew can be named.
-const MAGIC_V1: &[u8; 8] = b"SAILPTY1";
+/// The magics older sail hosts present; recognized so the skew can be named.
+const OLDER_MAGICS: [&[u8; 8]; 2] = [b"SAILPTY1", b"SAILPTY2"];
 
 /// Frames larger than this are a protocol violation, refused rather than trusted.
 pub const MAX_FRAME: usize = 1 << 20;
@@ -35,6 +35,8 @@ pub struct SessionInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
     Hello(String),
+    /// The host's answer to an admitted Hello: the boot id of this run of the host process.
+    Welcome(String),
     Create {
         session: String,
         command: Vec<String>,
@@ -198,6 +200,10 @@ pub fn encode(frame: &Frame) -> Vec<u8> {
             p.push(31);
             put_str(&mut p, message);
         }
+        Frame::Welcome(host_boot_id) => {
+            p.push(32);
+            put_str(&mut p, host_boot_id);
+        }
     }
     let mut out = Vec::with_capacity(4 + p.len());
     put_i32(&mut out, p.len() as i32);
@@ -266,6 +272,7 @@ pub fn decode(payload: &[u8]) -> Result<Frame, DecodeError> {
         }
         30 => Frame::Ok,
         31 => Frame::Err(c.string()?),
+        32 => Frame::Welcome(c.string()?),
         other => return Err(DecodeError(format!("unknown pty frame type {other}"))),
     };
     Ok(frame)
@@ -396,12 +403,12 @@ pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Frame> {
 
 /// The version-skew reason strings the webview matches to render a skew card;
 /// keep them in lockstep with `skewOf` in `src/mainview/terminal/roomDeck.ts`.
-pub const SKEW_HOST_OLDER: &str = "pty protocol skew: the box speaks SAILPTY1";
-pub const SKEW_CLIENT_OLDER: &str = "pty protocol skew: the box no longer speaks SAILPTY2";
+pub const SKEW_HOST_OLDER: &str = "pty protocol skew: the box speaks an older SAILPTY";
+pub const SKEW_CLIENT_OLDER: &str = "pty protocol skew: the box no longer speaks SAILPTY3";
 
 /// The magic handshake: send ours, require the peer's back. Symmetric, so both ends call it.
-/// A mismatch names which side is behind: an echo of the v1 magic means the box's sail
-/// predates this Mast; anything else means the box has moved past SAILPTY2.
+/// A mismatch names which side is behind: an echo of an older magic means the box's sail
+/// predates this Mast; anything else means the box has moved past SAILPTY3.
 pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> io::Result<()> {
     s.write_all(MAGIC).await?;
     s.flush().await?;
@@ -410,7 +417,7 @@ pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> io::Resu
     if &peer == MAGIC {
         return Ok(());
     }
-    let skew = if &peer == MAGIC_V1 {
+    let skew = if OLDER_MAGICS.contains(&&peer) {
         SKEW_HOST_OLDER
     } else {
         SKEW_CLIENT_OLDER
@@ -480,7 +487,7 @@ where
     let mut stream = stream;
     handshake(&mut stream).await?;
     write_frame(&mut stream, &Frame::Hello(req.token.clone())).await?;
-    expect_ok(&mut stream, "hello").await?;
+    expect_welcome(&mut stream).await?;
 
     if let Some(spec) = &req.create {
         write_frame(
@@ -587,6 +594,22 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// Reads the Hello reply, which must be `Welcome` carrying the host's boot id — the same error
+/// discipline as [`expect_ok`]: a refusal is `PermissionDenied` with the host's message.
+async fn expect_welcome<S: AsyncRead + Unpin>(s: &mut S) -> io::Result<String> {
+    match read_frame(s).await? {
+        Frame::Welcome(host_boot_id) => Ok(host_boot_id),
+        Frame::Err(message) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("hello: {message}"),
+        )),
+        other => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("hello: unexpected reply {other:?}"),
+        )),
+    }
+}
+
 /// Reads one control reply that must be `Ok`, turning `Err`/unexpected frames into an I/O error
 /// carrying the host's own message — so a refusal (bad token, foreign session) surfaces verbatim.
 /// A refusal is minted as `PermissionDenied` so the caller can tell "the host said no" (retrying
@@ -615,9 +638,17 @@ pub async fn control<S: AsyncRead + AsyncWrite + Unpin>(
 ) -> io::Result<Frame> {
     handshake(&mut stream).await?;
     write_frame(&mut stream, &Frame::Hello(token.to_string())).await?;
-    expect_ok(&mut stream, "hello").await?;
+    expect_welcome(&mut stream).await?;
     write_frame(&mut stream, &request).await?;
     read_frame(&mut stream).await
+}
+
+/// The host's listing: every session it admits the caller to, and the boot id the host answered
+/// under — the fact that turns "absent" into "host restarted" when it changes between listings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    pub host_boot_id: String,
+    pub sessions: Vec<SessionInfo>,
 }
 
 /// The most sessions a listing drain will accumulate before refusing: a real box holds
@@ -632,10 +663,10 @@ pub const MAX_LISTED_SESSIONS: usize = 4096;
 pub async fn list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     token: &str,
-) -> io::Result<Vec<SessionInfo>> {
+) -> io::Result<Listing> {
     handshake(&mut stream).await?;
     write_frame(&mut stream, &Frame::Hello(token.to_string())).await?;
-    expect_ok(&mut stream, "hello").await?;
+    let host_boot_id = expect_welcome(&mut stream).await?;
     let mut all = Vec::new();
     let mut after = String::new();
     loop {
@@ -656,7 +687,10 @@ pub async fn list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
                     ));
                 }
                 if next.is_empty() {
-                    return Ok(all);
+                    return Ok(Listing {
+                        host_boot_id,
+                        sessions: all,
+                    });
                 }
                 if next <= after {
                     return Err(io::Error::new(
@@ -761,6 +795,7 @@ mod tests {
             next: "b".into(),
         });
         roundtrip(Frame::Ok);
+        roundtrip(Frame::Welcome("boot-7".into()));
         roundtrip(Frame::Err("boom".into()));
     }
 
@@ -885,7 +920,7 @@ mod async_tests {
     async fn host_handshake_hello<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> Frame {
         handshake(s).await.unwrap();
         let hello = read_frame(s).await.unwrap();
-        write_frame(s, &Frame::Ok).await.unwrap();
+        write_frame(s, &Frame::Welcome("boot-1".into())).await.unwrap();
         hello
     }
 
@@ -932,15 +967,41 @@ mod async_tests {
     }
 
     #[tokio::test]
+    async fn a_v2_peer_predates_the_boot_id_and_is_the_older_side() {
+        let (mut client, mut host) = duplex(64);
+        let v2 = tokio::spawn(async move {
+            host.write_all(b"SAILPTY2").await.unwrap();
+            host.flush().await.unwrap();
+        });
+        let err = handshake(&mut client).await.unwrap_err();
+        assert_eq!(err.to_string(), SKEW_HOST_OLDER);
+        v2.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn an_unknown_magic_means_this_client_is_the_older_side() {
         let (mut client, mut host) = duplex(64);
-        let v3 = tokio::spawn(async move {
-            host.write_all(b"SAILPTY3").await.unwrap();
+        let v4 = tokio::spawn(async move {
+            host.write_all(b"SAILPTY4").await.unwrap();
             host.flush().await.unwrap();
         });
         let err = handshake(&mut client).await.unwrap_err();
         assert_eq!(err.to_string(), SKEW_CLIENT_OLDER);
-        v3.await.unwrap();
+        v4.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_hello_answered_without_a_welcome_is_invalid_not_a_refusal() {
+        let (client, mut server) = duplex(1024);
+        let host = tokio::spawn(async move {
+            handshake(&mut server).await.unwrap();
+            read_frame(&mut server).await.unwrap(); // Hello
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
+        });
+        let err = list_sessions(client, "tok").await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("unexpected reply"), "{err}");
+        host.await.unwrap();
     }
 
     #[tokio::test]
@@ -1188,8 +1249,9 @@ mod async_tests {
             );
             write_frame(&mut server, &Frame::Sessions { sessions: vec![listed("b")], next: "".into() }).await.unwrap();
         });
-        let all = list_sessions(client, "tok").await.unwrap();
-        assert_eq!(all, vec![listed("a"), listed("b")]);
+        let listing = list_sessions(client, "tok").await.unwrap();
+        assert_eq!(listing.sessions, vec![listed("a"), listed("b")]);
+        assert_eq!(listing.host_boot_id, "boot-1", "the boot id the host welcomed us under rides the listing");
         host.await.unwrap();
     }
 

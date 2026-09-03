@@ -1,12 +1,14 @@
 import type { ConnectionStatus, SailEvent } from "../../shared/sail-models";
 import type { Gateway } from "../gateway";
 import { coalesce } from "../board/roomRouting";
+import { HOST_RESTARTED } from "./connection";
 import {
   type DeathRecord,
   type DeckSession,
   endedEvents,
   isPtyEvent,
   type SessionEntry,
+  type SessionListing,
 } from "./roomDeck";
 
 /**
@@ -47,6 +49,8 @@ type BoxState = {
   deaths: Map<string, DeathRecord>;
   /** The last listing failure, or null; the skew card reads it. */
   skewReason: string | null;
+  /** The pty host boot the last listing was taken under; null until one lands. */
+  hostBootId: string | null;
   /** Listing generation counter — bumped per completed listing. */
   gen: number;
   /** Ended reasons from event history, the backfill for deaths observed before this app instance. */
@@ -103,6 +107,7 @@ export class SessionStore {
           refusals: new Map(),
           deaths: new Map(),
           skewReason: null,
+          hostBootId: null,
           gen: 0,
           historyEnds: new Map(),
           consumed: new Map(),
@@ -201,6 +206,11 @@ export class SessionStore {
     return this.box(key ?? undefined)?.skewReason ?? null;
   }
 
+  /** The host boot id of the active box's last listing — null until one lands. */
+  hostBootId(key = this.active): string | null {
+    return this.box(key ?? undefined)?.hostBootId ?? null;
+  }
+
   /**
    * Folds one completed listing in. The listing is the box's truth: a
    * previously-live name it dropped is an observed death, and so is any corpse
@@ -215,13 +225,21 @@ export class SessionStore {
    * death record is cleared so an external recreate is never pruned. Pending
    * creates ride until listed; one that two whole generations never confirmed
    * was a create that never happened and is dropped rather than haunting the
-   * deck.
+   * deck. A listing taken under a NEW host boot id explains every live name it
+   * dropped at once: the host restarted and lost them — recorded as such, settled,
+   * with no history to read.
    */
-  private noteListing(key: string, sessions: readonly DeckSession[]): void {
+  private noteListing(key: string, listing: SessionListing): void {
     const box = this.boxes.get(key)!;
+    const sessions = listing.sessions;
     const next = new Map(sessions.map((s) => [s.name, s]));
+    const rebooted = box.hostBootId !== null && box.hostBootId !== listing.hostBootId;
     const staleRooms = new Set<string>();
     const recordDeath = (name: string, room: string, command: string[]) => {
+      if (rebooted) {
+        box.deaths.set(name, { reason: HOST_RESTARTED, at: Date.now(), command });
+        return;
+      }
       box.deaths.set(name, {
         reason: "ended",
         at: Date.now(),
@@ -257,6 +275,7 @@ export class SessionStore {
     }
     for (const room of staleRooms) this.refreshHistory(box, room);
     box.listed = next;
+    box.hostBootId = listing.hostBootId;
     box.gen++;
     for (const [name, spec] of box.pending) {
       if (next.has(name) || box.gen - spec.gen >= 2) box.pending.delete(name);
@@ -285,23 +304,11 @@ export class SessionStore {
     if (!name) return;
     if (event.type === "pty_session_ended") {
       const reason = typeof event.data?.reason === "string" ? event.data.reason : "ended";
-      const known = box.listed?.get(name);
-      // The end cancels any optimistic start: a surviving pending entry would
-      // read as live and mount a create-capable pane over the corpse.
-      const pending = box.pending.get(name);
-      box.pending.delete(name);
-      const command = known?.command ?? pending?.command;
       if (typeof event.id === "number") {
         const known = box.historyEnds.get(name);
         if (!known || event.id >= known.id) box.historyEnds.set(name, { reason, id: event.id });
       }
-      box.deaths.set(name, {
-        reason,
-        at: Date.now(),
-        ...(command ? { command } : {}),
-      });
-      if (known?.live) box.listed!.set(name, { ...known, live: false });
-      this.emit();
+      this.noteEnded(name, reason, key);
       return;
     }
     if (event.type === "pty_session_started") {
@@ -328,6 +335,30 @@ export class SessionStore {
       }
       this.emit();
     }
+  }
+
+  /**
+   * An ending this client witnessed itself — the attached pane's shell exited, or
+   * its reconcile listing proved the session gone. Kill-equivalent: the death is
+   * recorded with the reason in hand (no history read to wait on), the entry
+   * dims, and any optimistic start is cancelled — a surviving pending entry
+   * would read as live and mount a create-capable pane over the corpse. The
+   * caller pairs it with a refresh; the listing stays the truth.
+   */
+  noteEnded(name: string, reason: string, key = this.active): void {
+    const box = this.box(key ?? undefined);
+    if (!box) return;
+    const known = box.listed?.get(name);
+    const pending = box.pending.get(name);
+    box.pending.delete(name);
+    const command = known?.command ?? pending?.command;
+    box.deaths.set(name, {
+      reason,
+      at: Date.now(),
+      ...(command ? { command } : {}),
+    });
+    if (known?.live) box.listed!.set(name, { ...known, live: false });
+    this.emit();
   }
 
   /**

@@ -44,7 +44,7 @@ import type {
   WhoAmI,
 } from "../shared/sail-models";
 import type { SailResult } from "../shared/types";
-import type { DeckSession } from "./terminal/roomDeck";
+import type { DeckSession, SessionListing } from "./terminal/roomDeck";
 import type { AgentLogLine, AgentLogState } from "./tauri/agentLogStream";
 
 /**
@@ -77,7 +77,7 @@ export type Gateway = {
   deleteRoom(id: string): Promise<SailResult<RoomDeletedResponse>>;
   /** The box's pty sessions (SAILPTY2 listing over the SSH lane, every page drained);
    *  the room deck filters by `room`. Rides the pty socket, not the REST API. */
-  listSessions(): Promise<SailResult<DeckSession[]>>;
+  listSessions(): Promise<SailResult<SessionListing>>;
   /** End a host-owned session and its process — the deck chip's close verb. */
   killSession(session: string): Promise<SailResult<{ session: string }>>;
   board(project?: string): Promise<SailResult<GlobalBoardResponse>>;
@@ -488,7 +488,7 @@ export function createDemoGateway(): DemoGateway {
     },
 
     async listSessions() {
-      return ok([...demoSessions]);
+      return ok({ hostBootId: "demo-boot", sessions: [...demoSessions] });
     },
 
     async killSession(session) {
