@@ -96,7 +96,6 @@ export function RoomWorkbench({
             roomId,
             project,
             sessions,
-            reasons,
             dispatchLive,
             me,
             focus,

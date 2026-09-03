@@ -126,7 +126,7 @@ describe("RoomDeckStrip", () => {
   test("a room with no sessions reserves nothing", async () => {
     const gateway: Gateway = {
       ...createDemoGateway(),
-      listSessions: async () => ({ ok: true, value: [] }),
+      listSessions: async () => ({ ok: true, value: { hostBootId: "boot-1", sessions: [] } }),
     };
     await renderStrip(gateway);
     expect(container.querySelector('[data-testid="deck-strip"]')).toBeNull();
@@ -161,13 +161,17 @@ describe("RoomDeckStrip", () => {
     const sessions: SessionEntry[] = [];
     const gateway: Gateway = {
       ...base,
-      listSessions: async () => ({ ok: true, value: [...sessions] }),
+      listSessions: async () => ({
+        ok: true,
+        value: { hostBootId: "boot-1", sessions: [...sessions] },
+      }),
     };
     await renderStrip(gateway);
     expect(container.querySelector('[data-testid="deck-strip"]')).toBeNull();
 
     sessions.push({
       name: "room-design-talk",
+      instanceId: "inst-room-design-talk",
       live: true,
       attached: 1,
       writerFde: "mady",
@@ -210,6 +214,7 @@ describe("RoomsInventory", () => {
       sessions: [
         {
           name: "room-design-talk",
+          instanceId: "inst-room-design-talk",
           live: true,
           attached: 1,
           writerFde: "uday",
@@ -218,6 +223,7 @@ describe("RoomsInventory", () => {
         },
         {
           name: "resume-run-7",
+          instanceId: "inst-resume-run-7",
           live: false,
           attached: 0,
           writerFde: "",
@@ -324,6 +330,7 @@ describe("RoomsInventory", () => {
         sessions: [
           {
             name: "room-design-talk",
+            instanceId: "inst-room-design-talk",
             live: true,
             attached: 1,
             writerFde: "uday",

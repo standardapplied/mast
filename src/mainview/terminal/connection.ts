@@ -26,6 +26,14 @@ export interface SessionEnd {
 }
 
 /**
+ * What an ending asks of the pane's host: `close-pane` — the shell itself exited under this
+ * attach, so the pane leaves like a closed chip (a scope may park its last pane); `park-card` —
+ * the session was found gone (a transport loss whose reconcile listing proved it dead or absent,
+ * or a reattach that found nothing to attach to), so the pane stays and its card says why.
+ */
+export type EndedDisposition = "close-pane" | "park-card";
+
+/**
  * What a session pane is doing right now, for the pane overlay and the tab-bar status cluster.
  * `connecting.retrying` separates a first attach (quiet) from a reconnect in flight (surfaced).
  */
@@ -33,7 +41,7 @@ export type SessionStatus =
   | { kind: "connecting"; retrying: boolean }
   | { kind: "up" }
   | { kind: "down"; reason: string }
-  | { kind: "ended"; reason: string }
+  | { kind: "ended"; reason: string; disposition: EndedDisposition }
   | { kind: "failed"; reason: string };
 
 const EXIT_CLASSES: ReadonlySet<string> = new Set(["transport", "ended", "refused"]);
@@ -66,6 +74,8 @@ export function statusEqual(a: SessionStatus, b: SessionStatus): boolean {
       return true;
     case "connecting":
       return a.retrying === (b as typeof a).retrying;
+    case "ended":
+      return a.reason === (b as typeof a).reason && a.disposition === (b as typeof a).disposition;
     default:
       return a.reason === (b as typeof a).reason;
   }
@@ -89,10 +99,10 @@ function severity(status: SessionStatus): number {
 
 /**
  * The status a multi-pane tab reports upward: its most broken pane, so the tab bar's cluster and
- * dot surface trouble anywhere in the tab. An empty tab reads as a quiet first connect.
+ * dot surface trouble anywhere in the tab. An empty tab has no status to report — null.
  */
-export function worstStatus(statuses: readonly SessionStatus[]): SessionStatus {
-  let worst: SessionStatus = { kind: "connecting", retrying: false };
+export function worstStatus(statuses: readonly SessionStatus[]): SessionStatus | null {
+  let worst: SessionStatus | null = null;
   let max = -1;
   for (const s of statuses) {
     const sev = severity(s);
@@ -134,4 +144,48 @@ export class Reconnector {
     this.attempt = 0;
     this.connectedAt = null;
   }
+}
+
+/** What an absent session's ended card can say when the host is up but does not list it. */
+export const NOT_RUNNING = "not running";
+
+/** What it can say when the host's boot id changed since the session was last seen. */
+export const HOST_RESTARTED = "host restarted";
+
+/**
+ * Explains an absence from what the client can prove: a session last seen under one host boot and
+ * absent under a different one was lost to a restart; with no boot change to point at (or no
+ * memory of one), all the client knows is that it is not running.
+ */
+export function absenceReason(
+  seenUnder: string | null | undefined,
+  hostBootId: string | null | undefined,
+): string {
+  return seenUnder && hostBootId && seenUnder !== hostBootId ? HOST_RESTARTED : NOT_RUNNING;
+}
+
+/** The pty host's listing as the transport edge sees it: the boot id it answered under and its sessions. */
+export interface HostListing {
+  readonly hostBootId: string;
+  readonly sessions: ReadonlyArray<{ readonly name: string; readonly live: boolean }>;
+}
+
+/**
+ * Settles a transport drop against ONE reconcile listing before any backoff: the session listed
+ * live is a genuine link loss (reconnect); listed dead, it ended; absent, it is not running — or
+ * the host restarted, when the boot id says so. An unreachable listing (`null`) means the link
+ * itself is down, which is exactly what the reconnect path is for. Non-transport endings pass
+ * through untouched.
+ */
+export function resolveTransportEnd(
+  end: SessionEnd,
+  session: string,
+  seenUnder: string | null,
+  listing: HostListing | null,
+): SessionEnd {
+  if (end.klass !== "transport" || listing === null) return end;
+  const listed = listing.sessions.find((s) => s.name === session);
+  if (listed?.live) return end;
+  if (listed) return { klass: "ended", reason: "ended" };
+  return { klass: "ended", reason: absenceReason(seenUnder, listing.hostBootId) };
 }

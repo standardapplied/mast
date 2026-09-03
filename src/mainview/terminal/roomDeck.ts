@@ -11,14 +11,26 @@ import { labelFor, nextSessionName } from "./paneLayout";
  * components and the Tauri terminal edge are thin skins over these.
  */
 
-/** One session as `session_list` returns it (the SAILPTY2 SessionInfo, camelCased). */
+/**
+ * One session as `session_list` returns it (the SAILPTY3 SessionInfo, camelCased). `name` is
+ * reusable across lives; `instanceId` names this life of it — minted at create, never reused —
+ * so two corpses of one name are distinguishable. Blank only on a pending create the host has
+ * not listed yet.
+ */
 export type DeckSession = {
   readonly name: string;
+  readonly instanceId: string;
   readonly live: boolean;
   readonly attached: number;
   readonly writerFde: string;
   readonly room: string;
   readonly command: string[];
+};
+
+/** What `session_list` answers: the host boot the listing was taken under, and its sessions. */
+export type SessionListing = {
+  readonly hostBootId: string;
+  readonly sessions: DeckSession[];
 };
 
 /**
@@ -33,20 +45,32 @@ export type SessionEntry = DeckSession & {
 };
 
 /**
- * An observed death: a local kill ack, a pty_session_ended event, or a listing
- * that dropped a previously-live name. Layout reconcile may recreate an absent
- * session ONLY when no record exists (the genuine host-restart case); `command`
- * is what ran, kept so a revive can re-mint it.
+ * An observed death: a local kill ack, a pane's own ending, a pty_session_ended
+ * event, or a listing that dropped a previously-live name. The record explains
+ * the name's ended card and prunes it from stored layouts; `command` is what
+ * ran, kept so a revive can re-mint it.
  */
 export type DeathRecord = {
   readonly reason: string;
   readonly at: number;
+  /** The incarnation that died; absent when it ended before the host ever listed it to us. */
+  readonly instanceId?: string;
   readonly command?: string[];
   /** The room whose durable history settles this record's reason. */
   readonly room?: string;
   /** True until a fresh history read confirms or replaces the generic reason. */
   readonly historyPending?: boolean;
+  /** The user closed it from Mast — the one death whose pane nothing should remember. */
+  readonly closed?: true;
 };
+
+/**
+ * The names whose deaths were the user's own close. Only those prune a stored arrangement: a
+ * shell that exited, or a session the host lost, keeps its pane so the ended card can say why.
+ */
+export function closedSessions(deaths: ReadonlyMap<string, DeathRecord>): ReadonlySet<string> {
+  return new Set([...deaths].filter(([, death]) => death.closed).map(([name]) => name));
+}
 
 /**
  * The ended card's model: a death still awaiting its durable reason fails
@@ -108,14 +132,13 @@ export type LaunchSpec = {
 };
 
 /**
- * What a route pane shows for a session. Explicit launches attach with their picked
- * command; a live listed session attaches with the command it runs; a session absent
- * from the host entirely (reboot, pruned) is recreated in place as a plain shell —
- * the Terminal view's layout-survives-a-reboot behavior, safe because no agent can
- * be displaced by a shell. An absent session the store watched die parks on the
- * ended card with the recorded reason — recreating it would undo the kill — and a
- * listed corpse parks the same way: recreating a dead agent session unasked could
- * put two agents on one checkout.
+ * What a pane shows for a session. Explicit launches attach with their picked command
+ * (creating the session); a live listed session attaches to what runs there; anything
+ * else parks on the ended card — nothing is created without a user action. A session
+ * the store watched die carries the recorded reason and revives with its recorded
+ * command; a listed corpse likewise (recreating a dead agent session unasked could put
+ * two agents on one checkout); a session absent from the host with no record is marked
+ * `absent`, and the card says what the client can prove about that (see absenceReason).
  */
 export function panePlan(
   session: string,
@@ -124,7 +147,7 @@ export function panePlan(
   deaths?: ReadonlyMap<string, DeathRecord>,
 ):
   | { kind: "attach"; command: string[]; writerFde?: string }
-  | { kind: "ended"; restartCommand: string[] } {
+  | { kind: "ended"; restartCommand: string[]; absent?: true } {
   const listing = listed.find((s) => s.name === session);
   const opened = launched.get(session);
   if (opened) {
@@ -133,7 +156,7 @@ export function panePlan(
   if (!listing) {
     const death = deaths?.get(session);
     if (death) return { kind: "ended", restartCommand: death.command ?? ["bash", "-l"] };
-    return { kind: "attach", command: ["bash", "-l"] };
+    return { kind: "ended", restartCommand: ["bash", "-l"], absent: true };
   }
   if (listing.live) {
     return { kind: "attach", command: listing.command, writerFde: listing.writerFde };
@@ -228,13 +251,13 @@ export function observerCount(session: DeckSession): number {
 export type SkewSide = "box-older" | "mast-older";
 
 /**
- * Reads the Rust handshake's skew reason (see SKEW_* in src-tauri/src/pty.rs). A
- * SAILPTY1 echo means the box's sail predates this Mast; any other mismatch means
- * the box has moved past the protocol this Mast speaks.
+ * Reads the Rust handshake's skew reason (see SKEW_* in src-tauri/src/pty.rs). An
+ * older magic's echo means the box's sail predates this Mast; any other mismatch
+ * means the box has moved past the protocol this Mast speaks.
  */
 export function skewOf(reason: string | undefined): SkewSide | null {
   if (!reason?.includes("pty protocol skew")) return null;
-  return reason.includes("SAILPTY1") ? "box-older" : "mast-older";
+  return reason.includes("no longer speaks") ? "mast-older" : "box-older";
 }
 
 /**
@@ -272,33 +295,22 @@ export function isPtyEvent(event: SailEvent): boolean {
   return PTY_EVENT_TYPES.has(event.type);
 }
 
-/** Each session's last recorded ended reason, from the room's pty event history. */
 /**
- * Each name's newest ended event in the history, with its monotonic event id —
- * the incarnation identity the store needs: an id lets a consumer prove an
- * event is newer than everything a name's previous life already accounted for.
- * Events an old server ships without ids carry -1 (provably-newer never holds).
+ * The ended reason of every incarnation the history names, keyed by instance id — the identity a
+ * death record settles on, so a reused name never inherits its previous life's reason from an
+ * append-only history. An ended event that names no incarnation cannot settle anything.
  */
-export function endedEvents(
-  events: readonly SailEvent[],
-): Record<string, { reason: string; id: number }> {
-  const ends: Record<string, { reason: string; id: number }> = {};
+export function endedByInstance(events: readonly SailEvent[]): ReadonlyMap<string, string> {
+  const ends = new Map<string, string>();
   for (const event of events) {
     if (event.type !== "pty_session_ended") continue;
-    const session = event.data?.session;
+    const instanceId = event.data?.instance_id;
     const reason = event.data?.reason;
-    if (typeof session !== "string" || typeof reason !== "string") continue;
-    const id = typeof event.id === "number" ? event.id : -1;
-    const known = ends[session];
-    if (!known || id >= known.id) ends[session] = { reason, id };
+    if (typeof instanceId === "string" && instanceId && typeof reason === "string") {
+      ends.set(instanceId, reason);
+    }
   }
   return ends;
-}
-
-export function endedReasons(events: readonly SailEvent[]): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(endedEvents(events)).map(([name, end]) => [name, end.reason]),
-  );
 }
 
 /** The dispatch a yield notice names, when the reason is a dispatch displacement. */

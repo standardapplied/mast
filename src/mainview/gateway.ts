@@ -44,7 +44,7 @@ import type {
   WhoAmI,
 } from "../shared/sail-models";
 import type { SailResult } from "../shared/types";
-import type { DeckSession } from "./terminal/roomDeck";
+import type { DeckSession, SessionListing } from "./terminal/roomDeck";
 import type { AgentLogLine, AgentLogState } from "./tauri/agentLogStream";
 
 /**
@@ -77,7 +77,7 @@ export type Gateway = {
   deleteRoom(id: string): Promise<SailResult<RoomDeletedResponse>>;
   /** The box's pty sessions (SAILPTY2 listing over the SSH lane, every page drained);
    *  the room deck filters by `room`. Rides the pty socket, not the REST API. */
-  listSessions(): Promise<SailResult<DeckSession[]>>;
+  listSessions(): Promise<SailResult<SessionListing>>;
   /** End a host-owned session and its process — the deck chip's close verb. */
   killSession(session: string): Promise<SailResult<{ session: string }>>;
   board(project?: string): Promise<SailResult<GlobalBoardResponse>>;
@@ -350,6 +350,7 @@ export function createDemoGateway(): DemoGateway {
   const demoSessions: DeckSession[] = [
     {
       name: "room-design-talk",
+      instanceId: "inst-room-design-talk",
       live: true,
       attached: 2,
       writerFde: "uday",
@@ -358,6 +359,7 @@ export function createDemoGateway(): DemoGateway {
     },
     {
       name: "room-design-talk.2",
+      instanceId: "inst-room-design-talk.2",
       live: true,
       attached: 1,
       writerFde: "",
@@ -366,13 +368,22 @@ export function createDemoGateway(): DemoGateway {
     },
     {
       name: "resume-demo-run-7",
+      instanceId: "inst-resume-demo-run-7",
       live: false,
       attached: 0,
       writerFde: "",
       room: "design-talk",
       command: ["codex", "resume"],
     },
-    { name: "mast-node", live: true, attached: 1, writerFde: "uday", room: "", command: ["bash", "-l"] },
+    {
+      name: "mast-node",
+      instanceId: "inst-mast-node",
+      live: true,
+      attached: 1,
+      writerFde: "uday",
+      room: "",
+      command: ["bash", "-l"],
+    },
   ];
   const ptyEvent = (
     ts: string,
@@ -488,7 +499,7 @@ export function createDemoGateway(): DemoGateway {
     },
 
     async listSessions() {
-      return ok([...demoSessions]);
+      return ok({ hostBootId: "demo-boot", sessions: [...demoSessions] });
     },
 
     async killSession(session) {

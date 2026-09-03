@@ -11,6 +11,7 @@ const flush = async () => {
 function session(over: Partial<DeckSession>): DeckSession {
   return {
     name: "room-design-talk",
+    instanceId: `inst-${over.name ?? "room-design-talk"}`,
     live: true,
     attached: 1,
     writerFde: "uday",
@@ -22,7 +23,10 @@ function session(over: Partial<DeckSession>): DeckSession {
 
 let nextEventId = 1000;
 
+/** A pty event; its data names the session's incarnation as `inst-<name>` unless the test says otherwise. */
 function ptyEvent(over: Partial<SailEvent>): SailEvent {
+  const named = typeof over.data?.session === "string" ? over.data.session : null;
+  const data = named ? { instance_id: `inst-${named}`, ...over.data } : over.data;
   return {
     v: 1,
     id: nextEventId++,
@@ -33,6 +37,7 @@ function ptyEvent(over: Partial<SailEvent>): SailEvent {
     agent: "uday",
     host: "devbox",
     ...over,
+    ...(data ? { data } : {}),
   } as SailEvent;
 }
 
@@ -41,18 +46,27 @@ function makeGateway(host: DeckSession[]) {
   let listFailure: string | null = null;
   let roomFailure: string | null = null;
   let roomEcho: string | null = null;
+  let hostBootId = "boot-1";
+  let deferredListings: Array<(sessions: DeckSession[]) => void> | null = null;
   const listeners = new Set<(e: SailEvent) => void>();
   const gateway = {
     connection: async () => ({ server: "ssh://devbox", phase: "ready" }),
     listSessions: async () => {
       calls.list++;
+      if (deferredListings) {
+        return new Promise((res) => {
+          deferredListings!.push((sessions) =>
+            res({ ok: true as const, value: { hostBootId, sessions } }),
+          );
+        });
+      }
       if (listFailure) {
         return {
           ok: false as const,
           error: { status: 0, code: "pty_unreachable", message: listFailure },
         };
       }
-      return { ok: true as const, value: [...host] };
+      return { ok: true as const, value: { hostBootId, sessions: [...host] } };
     },
     killSession: async (name: string) => {
       calls.kill.push(name);
@@ -102,6 +116,12 @@ function makeGateway(host: DeckSession[]) {
     host,
     calls,
     failListings: (message: string | null) => (listFailure = message),
+    /** Every listing from now on waits; each entry answers one, in issue order. */
+    deferListings: (): Array<(sessions: DeckSession[]) => void> => (deferredListings = []),
+    reboot: (bootId: string) => {
+      hostBootId = bootId;
+      host.length = 0;
+    },
     failRooms: (message: string | null) => (roomFailure = message),
     echoRoom: (id: string) => (roomEcho = id),
     emit: (e: SailEvent) => listeners.forEach((l) => l(e)),
@@ -258,89 +278,131 @@ describe("death records", () => {
     );
   });
 
+  const priorLife = ptyEvent({
+    type: "pty_session_ended",
+    data: { session: "resume-run-7", instance_id: "inst-old", reason: "exited(0)" },
+  });
+
   test("a reused name never inherits its previous incarnation's reason", async () => {
     const box = await connected([]);
-    box.setSpecEvents([
-      ptyEvent({
-        type: "pty_session_ended",
-        data: { session: "resume-run-7", reason: "exited(0)" },
-      }),
-    ]);
+    box.setSpecEvents([priorLife]);
     box.store.ensureHistory("design-talk");
     await flush();
     box.store.noteLaunch("resume-run-7", ["codex"], "design-talk");
-    box.host.push(session({ name: "resume-run-7", command: ["codex"] }));
+    box.host.push(session({ name: "resume-run-7", instanceId: "inst-new", command: ["codex"] }));
     box.store.refresh();
     await flush();
     box.setSpecEvents([
+      priorLife,
       ptyEvent({
         type: "pty_session_ended",
-        data: { session: "resume-run-7", reason: "yielded to dispatch r2 of spec s2" },
+        data: {
+          session: "resume-run-7",
+          instance_id: "inst-new",
+          reason: "yielded to dispatch r2 of spec s2",
+        },
       }),
     ]);
-    box.host.splice(0, 1, session({ name: "resume-run-7", live: false, command: ["codex"] }));
+    box.host.splice(
+      0,
+      1,
+      session({ name: "resume-run-7", instanceId: "inst-new", live: false, command: ["codex"] }),
+    );
     box.store.refresh();
     await flush();
-    expect(
-      box.store.deaths().get("resume-run-7")?.reason,
-      "the first incarnation's exited(0) would bypass the live-dispatch guard on Reopen",
-    ).toBe("yielded to dispatch r2 of spec s2");
+    expect(box.store.deaths().get("resume-run-7")).toMatchObject({
+      instanceId: "inst-new",
+      reason: "yielded to dispatch r2 of spec s2",
+    });
   });
 
   test("history that still ends with the prior incarnation cannot settle the new death", async () => {
     const box = await connected([]);
-    box.setSpecEvents([
-      ptyEvent({
-        id: 10,
-        type: "pty_session_ended",
-        data: { session: "resume-run-7", reason: "yielded to dispatch r1 of spec s1" },
-      }),
-    ]);
+    box.setSpecEvents([priorLife]);
     box.store.ensureHistory("design-talk");
     await flush();
     box.store.noteLaunch("resume-run-7", ["codex"], "design-talk");
-    box.host.push(session({ name: "resume-run-7", command: ["codex"] }));
+    box.host.push(session({ name: "resume-run-7", instanceId: "inst-new", command: ["codex"] }));
     box.store.refresh();
     await flush();
-    box.host.splice(0, 1, session({ name: "resume-run-7", live: false, command: ["codex"] }));
+    box.host.splice(
+      0,
+      1,
+      session({ name: "resume-run-7", instanceId: "inst-new", live: false, command: ["codex"] }),
+    );
     box.store.refresh();
     await flush();
     const death = box.store.deaths().get("resume-run-7");
     expect(death?.historyPending, "the read completed — proven absence settles the record").toBeFalsy();
     expect(
       death?.reason,
-      "history's newest event predates this incarnation; its yield must not gate this corpse",
+      "history's newest event belongs to the previous life; it must not speak for this corpse",
     ).toBe("ended");
   });
 
-  test("a post-incarnation event in the fresh read settles the death with its reason", async () => {
+  test("a replacement first seen as a corpse settles from ITS incarnation's event, never the old life's", async () => {
     const box = await connected([]);
-    const prior = ptyEvent({
-      id: 10,
-      type: "pty_session_ended",
-      data: { session: "resume-run-7", reason: "yielded to dispatch r1 of spec s1" },
-    });
-    box.setSpecEvents([prior]);
+    box.setSpecEvents([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: {
+          session: "resume-run-7",
+          instance_id: "inst-old",
+          reason: "yielded to dispatch r1 of spec s1",
+        },
+      }),
+    ]);
     box.store.ensureHistory("design-talk");
     await flush();
-    box.store.noteLaunch("resume-run-7", ["codex"], "design-talk");
-    box.host.push(session({ name: "resume-run-7", command: ["codex"] }));
-    box.store.refresh();
-    await flush();
     const reads = box.deferSpecEvents();
-    box.host.splice(0, 1, session({ name: "resume-run-7", live: false, command: ["codex"] }));
+    box.host.push(
+      session({ name: "resume-run-7", instanceId: "inst-new", live: false, command: ["codex"] }),
+    );
     box.store.refresh();
     await flush();
+    expect(box.store.deaths().get("resume-run-7")).toMatchObject({
+      instanceId: "inst-new",
+      historyPending: true,
+    });
     reads.at(-1)!.resolve([
-      prior,
       ptyEvent({
-        id: 12,
         type: "pty_session_ended",
-        data: { session: "resume-run-7", reason: "yielded to dispatch r2 of spec s2" },
+        data: {
+          session: "resume-run-7",
+          instance_id: "inst-old",
+          reason: "yielded to dispatch r1 of spec s1",
+        },
+      }),
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", instance_id: "inst-new", reason: "exited(0)" },
       }),
     ]);
     await flush();
-    expect(box.store.deaths().get("resume-run-7")?.reason).toBe("yielded to dispatch r2 of spec s2");
+    expect(
+      box.store.deaths().get("resume-run-7")?.reason,
+      "the old life's yield would gate Reopen on a corpse that simply exited",
+    ).toBe("exited(0)");
+  });
+
+  test("a death recorded before its incarnation was listed adopts the id the listing brings", async () => {
+    const box = await connected([]);
+    const reads = box.deferSpecEvents();
+    box.store.noteLaunch("resume-run-7", ["codex"], "design-talk");
+    box.store.noteReconciledEnd("resume-run-7", "not running");
+    expect(box.store.deaths().get("resume-run-7")?.instanceId).toBeUndefined();
+    box.host.push(session({ name: "resume-run-7", live: false, command: ["codex"] }));
+    box.store.refresh();
+    await flush();
+    expect(box.store.deaths().get("resume-run-7")?.instanceId).toBe("inst-resume-run-7");
+    reads.at(-1)!.resolve([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "yielded to dispatch r8 of spec s1" },
+      }),
+    ]);
+    await flush();
+    expect(box.store.deaths().get("resume-run-7")?.reason).toBe("yielded to dispatch r8 of spec s1");
   });
 
   test("a live session's name never carries its previous incarnation's reason", async () => {
@@ -492,6 +554,140 @@ describe("death records", () => {
   });
 });
 
+describe("local endings (exit closes the pane)", () => {
+  test("a pane's own ending is recorded kill-equivalent: dead in every read, reason kept, no history read", async () => {
+    const { store, calls, host } = await connected([session({ name: "room-design-talk" })]);
+    store.noteEnded("room-design-talk", "exited(0)");
+    expect(store.byName("room-design-talk")?.live).toBe(false);
+    expect(store.reasons()).toEqual({ "room-design-talk": "exited(0)" });
+    expect(store.deaths().get("room-design-talk")).toMatchObject({
+      reason: "exited(0)",
+      instanceId: "inst-room-design-talk",
+      command: ["bash", "-l"],
+    });
+    expect(store.deaths().get("room-design-talk")?.historyPending).toBeUndefined();
+    await flush();
+    expect(calls.list).toBe(1);
+    // The next listing (the corpse, or nothing at all) never downgrades the reason.
+    host.length = 0;
+    store.refresh();
+    await flush();
+    expect(store.reasons()).toEqual({ "room-design-talk": "exited(0)" });
+  });
+
+  test("an ending for a pending create cancels it — the corpse never reads as live", async () => {
+    const { store } = await connected([]);
+    store.noteLaunch("room-design-talk.2", ["claude"], "design-talk");
+    store.noteEnded("room-design-talk.2", "exited(1)");
+    expect(store.byName("room-design-talk.2")).toBeUndefined();
+    expect(store.deaths().get("room-design-talk.2")).toMatchObject({
+      reason: "exited(1)",
+      command: ["claude"],
+    });
+    expect(store.deaths().get("room-design-talk.2")?.closed).toBeUndefined();
+  });
+});
+
+describe("reconciled endings (the pane inferred the death from a listing)", () => {
+  test("a room session inferred 'not running' fails closed until the history read recovers the durable reason", async () => {
+    const box = await connected([session({ name: "resume-run-7", command: ["codex"] })]);
+    box.setSpecEvents([
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "resume-run-7", reason: "yielded to dispatch r8 of spec s1" },
+      }),
+    ]);
+    box.store.noteReconciledEnd("resume-run-7", "not running");
+    expect(box.store.byName("resume-run-7")?.live).toBe(false);
+    expect(box.store.deaths().get("resume-run-7")).toMatchObject({
+      reason: "not running",
+      command: ["codex"],
+      room: "design-talk",
+      historyPending: true,
+    });
+    await flush();
+    expect(box.store.deaths().get("resume-run-7")?.historyPending).toBeUndefined();
+    expect(box.store.reasons()["resume-run-7"]).toBe("yielded to dispatch r8 of spec s1");
+  });
+
+  test("a history with nothing newer settles the inferred reason as it stands", async () => {
+    const box = await connected([session({ name: "room-design-talk" })]);
+    box.store.noteReconciledEnd("room-design-talk", "ended");
+    await flush();
+    expect(box.store.deaths().get("room-design-talk")).toMatchObject({ reason: "ended" });
+    expect(box.store.deaths().get("room-design-talk")?.historyPending).toBeUndefined();
+  });
+
+  test("a host restart is proven by the boot id — settled, no history read", async () => {
+    const box = await connected([session({ name: "room-design-talk" })]);
+    const reads = box.deferSpecEvents();
+    box.store.noteReconciledEnd("room-design-talk", "host restarted");
+    await flush();
+    expect(reads).toHaveLength(0);
+    expect(box.store.deaths().get("room-design-talk")).toMatchObject({ reason: "host restarted" });
+    expect(box.store.deaths().get("room-design-talk")?.historyPending).toBeUndefined();
+  });
+
+  test("a session with no room has no history to consult — settled as inferred", async () => {
+    const box = await connected([session({ name: "scratch", room: "" })]);
+    const reads = box.deferSpecEvents();
+    box.store.noteReconciledEnd("scratch", "not running");
+    await flush();
+    expect(reads).toHaveLength(0);
+    expect(box.store.deaths().get("scratch")?.historyPending).toBeUndefined();
+  });
+});
+
+describe("host boot id (host restart is a first-class fact)", () => {
+  test("the listing's boot id is the box's; null until a listing lands", async () => {
+    const store = new SessionStore();
+    expect(store.hostBootId()).toBeNull();
+    const fake = makeGateway([]);
+    store.connect(fake.gateway, "devbox");
+    expect(store.hostBootId()).toBeNull();
+    await flush();
+    expect(store.hostBootId()).toBe("boot-1");
+  });
+
+  test("a live name that vanishes across a boot change died of the restart — recorded as such, settled, no history read", async () => {
+    const { store, reboot, calls } = await connected([session({ name: "room-design-talk" })]);
+    const readsBefore = calls.list;
+    reboot("boot-2");
+    store.refresh();
+    await flush();
+    expect(store.hostBootId()).toBe("boot-2");
+    expect(store.deaths().get("room-design-talk")).toMatchObject({
+      reason: "host restarted",
+      command: ["bash", "-l"],
+    });
+    expect(store.deaths().get("room-design-talk")?.historyPending).toBeUndefined();
+    expect(store.reasons()).toEqual({ "room-design-talk": "host restarted" });
+    expect(calls.list).toBe(readsBefore + 1);
+  });
+
+  test("a corpse first listed under the new boot ended after the restart — ordinary death, history read pending", async () => {
+    const box = await connected([session({ name: "room-design-talk" })]);
+    box.reboot("boot-2");
+    box.host.push(session({ name: "room-design-talk.2", live: false, command: ["claude"] }));
+    box.store.refresh();
+    await flush();
+    expect(box.store.deaths().get("room-design-talk")?.reason).toBe("host restarted");
+    expect(box.store.deaths().get("room-design-talk.2")).toMatchObject({
+      reason: "ended",
+      command: ["claude"],
+      room: "design-talk",
+    });
+  });
+
+  test("a live name that vanishes under the same boot is an ordinary death — the history read settles it", async () => {
+    const { store, host } = await connected([session({ name: "room-design-talk" })]);
+    host.length = 0;
+    store.refresh();
+    await flush();
+    expect(store.deaths().get("room-design-talk")?.reason).toBe("ended");
+  });
+});
+
 describe("creates", () => {
   test("a launch intent shows in every read immediately and clears the name's tombstone", async () => {
     const box = await connected([session({})]);
@@ -615,6 +811,7 @@ describe("the kill path (field bug: a kill that does nothing, silently)", () => 
     const death = box.store.deaths().get("room-design-talk");
     expect(death?.reason).toBe("closed from Mast");
     expect(death?.command).toEqual(["claude"]);
+    expect(death?.closed).toBe(true);
     await flush();
     expect(box.calls.list).toBeGreaterThan(listings);
   });
@@ -627,6 +824,93 @@ describe("the kill path (field bug: a kill that does nothing, silently)", () => 
     expect(result.ok).toBe(false);
     expect(box.store.byName("ghost")?.refusal).toContain("no session 'ghost'");
     expect(box.store.byName("ghost")?.dying).toBeUndefined();
+  });
+
+  test("a listing issued before the close cannot resurrect the session or erase its tombstone", async () => {
+    const box = await connected([session({ command: ["claude"] })]);
+    const answers = box.deferListings();
+    box.store.refresh();
+    await flush();
+    expect(answers.length, "the stale listing is in flight").toBe(1);
+    const result = await box.store.kill("room-design-talk", { resolvedRoom: "design-talk" });
+    expect(result.ok).toBe(true);
+    answers[0]!([session({ command: ["claude"] })]);
+    await flush();
+    expect(box.store.byName("room-design-talk"), "a stale live entry does not come back").toBeUndefined();
+    expect(box.store.deaths().get("room-design-talk")?.closed).toBe(true);
+    expect(answers.length, "the kill's own re-list followed the stale one").toBe(2);
+    answers[1]!([]);
+    await flush();
+    expect(box.store.deaths().get("room-design-talk")).toMatchObject({
+      reason: "closed from Mast",
+      closed: true,
+      command: ["claude"],
+    });
+    box.store.refresh();
+    await flush();
+    answers[2]!([session({ command: ["claude"] })]);
+    await flush();
+    expect(box.store.byName("room-design-talk")?.live, "a listing after the close proves a recreate").toBe(true);
+    expect(box.store.deaths().has("room-design-talk")).toBe(false);
+  });
+
+  test("a replacement first seen as a corpse is a new death, not the closed tombstone", async () => {
+    const box = await connected([session({ instanceId: "inst-old", command: ["old"] })]);
+    const result = await box.store.kill("room-design-talk", { resolvedRoom: "design-talk" });
+    expect(result.ok).toBe(true);
+    await flush();
+    expect(box.store.deaths().get("room-design-talk")).toMatchObject({
+      closed: true,
+      instanceId: "inst-old",
+    });
+    const reads = box.deferSpecEvents();
+    box.host.push(session({ instanceId: "inst-new", live: false, command: ["new"] }));
+    box.store.refresh();
+    await flush();
+    const death = box.store.deaths().get("room-design-talk");
+    expect(death).toMatchObject({
+      reason: "ended",
+      instanceId: "inst-new",
+      command: ["new"],
+      room: "design-talk",
+      historyPending: true,
+    });
+    expect(death?.closed, "the tombstone belonged to the life the user closed").toBeUndefined();
+    expect(reads.length, "the new corpse takes its own history read").toBeGreaterThan(0);
+  });
+
+  test("lifecycle events for a closed name are ignored until a listing proves a recreate", async () => {
+    const box = await connected([session({ command: ["claude"] })]);
+    const answers = box.deferListings();
+    const result = await box.store.kill("room-design-talk", { resolvedRoom: "design-talk" });
+    expect(result.ok).toBe(true);
+    box.store.noteEvent(
+      ptyEvent({ data: { session: "room-design-talk", room_id: "design-talk", executable: "claude" } }),
+    );
+    expect(box.store.byName("room-design-talk"), "a late start does not reopen a closed pane").toBeUndefined();
+    box.store.noteEvent(
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "room-design-talk", reason: "exited(143)" },
+      }),
+    );
+    expect(box.store.deaths().get("room-design-talk")).toMatchObject({
+      reason: "closed from Mast",
+      closed: true,
+    });
+    answers[0]!([session({ instanceId: "inst-again", command: ["claude"] })]);
+    await flush();
+    expect(box.store.byName("room-design-talk")?.live, "the post-close listing proves a recreate").toBe(true);
+    box.store.noteEvent(
+      ptyEvent({
+        type: "pty_session_ended",
+        data: { session: "room-design-talk", instance_id: "inst-again", reason: "exited(0)" },
+      }),
+    );
+    expect(box.store.deaths().get("room-design-talk")).toMatchObject({
+      reason: "exited(0)",
+      instanceId: "inst-again",
+    });
   });
 
   test("a later successful kill clears the old refusal", async () => {

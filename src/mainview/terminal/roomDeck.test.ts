@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 import type { SailEvent } from "../../shared/sail-models";
 import {
   chipTitle,
+  closedSessions,
   commandFor,
   type DeathRecord,
   deckSessions,
   type DeckSession,
   endedCardModel,
-  endedReasons,
+  endedByInstance,
   glyphFor,
   isPtyEvent,
   isResumeSession,
@@ -23,6 +24,7 @@ import {
 
 const session = (over: Partial<DeckSession>): DeckSession => ({
   name: "room-design-talk",
+  instanceId: `inst-${over.name ?? "room-design-talk"}`,
   live: true,
   attached: 1,
   writerFde: "uday",
@@ -95,13 +97,13 @@ describe("observerCount", () => {
 });
 
 describe("skew", () => {
-  test("a SAILPTY1 echo names the box as the older side", () => {
-    expect(skewOf("pty protocol skew: the box speaks SAILPTY1")).toBe("box-older");
+  test("an older magic's echo names the box as the older side", () => {
+    expect(skewOf("pty protocol skew: the box speaks an older SAILPTY")).toBe("box-older");
     expect(skewCard("box-older").detail).toContain("sail upgrade");
   });
 
   test("any other mismatch names this Mast as the older side", () => {
-    expect(skewOf("pty protocol skew: the box no longer speaks SAILPTY2")).toBe("mast-older");
+    expect(skewOf("pty protocol skew: the box no longer speaks SAILPTY3")).toBe("mast-older");
     expect(skewCard("mast-older").title).toBe("This Mast is older than the box");
   });
 
@@ -147,13 +149,19 @@ describe("deck events", () => {
     expect(isPtyEvent(event({ type: "spec_message_posted" }))).toBe(false);
   });
 
-  test("the last ended reason per session wins", () => {
-    const reasons = endedReasons([
-      event({ type: "pty_session_ended", data: { session: "a", reason: "exited(1)" } }),
-      event({ type: "pty_session_ended", data: { session: "a", reason: "exited(0)" } }),
-      event({ type: "pty_session_started", data: { session: "b" } }),
+  test("ended reasons are kept per incarnation; an event that names no incarnation cannot settle anything", () => {
+    const reasons = endedByInstance([
+      event({ type: "pty_session_ended", data: { session: "a", instance_id: "a1", reason: "exited(1)" } }),
+      event({ type: "pty_session_ended", data: { session: "a", instance_id: "a2", reason: "exited(0)" } }),
+      event({ type: "pty_session_ended", data: { session: "legacy", reason: "exited(0)" } }),
+      event({ type: "pty_session_started", data: { session: "b", instance_id: "b1" } }),
     ]);
-    expect(reasons).toEqual({ a: "exited(0)" });
+    expect(reasons).toEqual(
+      new Map([
+        ["a1", "exited(1)"],
+        ["a2", "exited(0)"],
+      ]),
+    );
   });
 });
 
@@ -166,6 +174,17 @@ describe("yieldedDispatch", () => {
     expect(yieldedDispatch("yielded to dispatch r1")).toEqual({ runId: "r1" });
     expect(yieldedDispatch("exited(0)")).toBe(null);
     expect(yieldedDispatch(undefined)).toBe(null);
+  });
+});
+
+describe("closedSessions", () => {
+  test("only the user's own closes prune an arrangement; exits and restart losses keep their card", () => {
+    const deaths = new Map<string, DeathRecord>([
+      ["room-r", { reason: "closed from Mast", at: 1, closed: true }],
+      ["room-r.2", { reason: "exited(0)", at: 1 }],
+      ["room-r.3", { reason: "host restarted", at: 1 }],
+    ]);
+    expect([...closedSessions(deaths)]).toEqual(["room-r"]);
   });
 });
 
@@ -204,10 +223,11 @@ describe("panePlan", () => {
     });
   });
 
-  test("a session absent from the host recreates in place as a plain shell", () => {
+  test("a session absent from the host parks on the ended card as provably absent — never a silent recreate", () => {
     expect(panePlan("room-design-talk.3", listed, new Map())).toEqual({
-      kind: "attach",
-      command: ["bash", "-l"],
+      kind: "ended",
+      restartCommand: ["bash", "-l"],
+      absent: true,
     });
   });
 
@@ -228,8 +248,8 @@ describe("panePlan", () => {
     });
     expect(
       panePlan("room-design-talk.4", listed, new Map(), deaths),
-      "no record — the genuine host-restart case still recreates a shell",
-    ).toEqual({ kind: "attach", command: ["bash", "-l"] });
+      "no record — absent is still absent: an ended card that says so, not a shell",
+    ).toEqual({ kind: "ended", restartCommand: ["bash", "-l"], absent: true });
   });
 });
 

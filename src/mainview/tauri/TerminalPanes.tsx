@@ -11,16 +11,25 @@ import { DeckEndedCard } from "../board/RoomDeck";
 import { ContextMenu } from "../components/ContextMenu";
 import { Dialog } from "../components/Dialog";
 import { cx } from "../components/cx";
+import { useToast } from "../components/Toast";
 import { Button } from "../components/ui";
-import { isUnwell, type SessionStatus, statusEqual, worstStatus } from "../terminal/connection";
+import {
+  absenceReason,
+  isUnwell,
+  type SessionStatus,
+  statusEqual,
+  worstStatus,
+} from "../terminal/connection";
 import { IconButton } from "../components/IconButton";
 import { Plus, SplitColumns } from "../components/icons";
 import {
   baseSessionFor,
-  defaultLayout,
+  dropExited,
+  emptyLayout,
   newGroup,
   nextSessionName,
   type PaneLayout,
+  paneCount,
   parseLayout,
   projectFor,
   reconcile,
@@ -38,6 +47,7 @@ import {
   paneMenuItems,
 } from "../terminal/paneMenu";
 import {
+  closedSessions,
   commandFor,
   DECK_LAUNCHERS,
   type DeckGlyph,
@@ -52,20 +62,27 @@ import {
 import { sessionStore } from "../terminal/sessionStore";
 import { PromptDialog } from "./PromptDialog";
 import { RoomTerminal } from "./RoomTerminal";
-import { type SessionCreate, SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane";
+import { SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane";
 
 /**
  * TerminalPanes — one workspace tab's terminals: sub-tabs of durable host sessions, each sub-tab
- * splittable into side-by-side panes. All model logic lives in the tested `terminal/paneLayout`;
- * this edge discovers live sessions from the pty-host, persists the arrangement locally, renders
- * the slim pane bar, and fans a {@link TerminalHandle} + aggregated status up to the workspace.
+ * splittable into side-by-side panes. All model logic lives in the tested `terminal/paneLayout`
+ * and `terminal/roomDeck`; this edge reads existence from the session store, persists the
+ * arrangement locally, renders the slim pane bar, and fans a {@link TerminalHandle} + aggregated
+ * status up to the workspace.
  *
  * Two scopes share this one implementation. A project tab (`target`) names sessions
  * `mast-<target>.n` and every pane is a plain shell. A room route (`room`) names them
- * `room-<id>.n`, adopts the room's foreign-named sessions (`resume-*`), lets ＋ pick
- * Shell / Claude Code / Codex (⌘T repeats the last pick, ⌘D splits a plain shell), and
- * parks a listed corpse on the shipped ended card — with the dispatch-yield Reopen
- * gating — instead of silently recreating a dead agent session (see `panePlan`).
+ * `room-<id>.n`, adopts the room's foreign-named sessions (`resume-*`), and lets ＋ pick
+ * Shell / Claude Code / Codex (⌘T repeats the last pick, ⌘D splits a plain shell).
+ *
+ * Lifecycle law: nothing is created without a user action, and every absence is explained.
+ * A pane attaches only to a session this client launched (create) or the host lists live
+ * (attach); anything else — a listed corpse, a session the store watched die, a stored pane
+ * the host no longer lists — parks on the ended card saying what the client can prove, with
+ * Restart as the user's verb (see `panePlan`). A shell that exits leaves the layout like a
+ * closed chip; the last pane of a project tab leaves an empty tab, the last pane of a room
+ * route parks on the card. Closing the last pane never revives anything.
  *
  * Mounting is lazy: a sub-tab's panes first mount when it is first shown, so a restored multi-tab
  * layout doesn't attach (or geometry-thrash) sessions nobody is looking at. Once visited, panes
@@ -77,12 +94,10 @@ import { type SessionCreate, SessionTerminalPane, type TerminalHandle } from "./
 
 /** The pty-host unix socket on the devbox; `~` expands against the remote home on the Rust side. */
 const NODE_SOCKET = "~/.sail/pty.sock";
-const BASE_CREATE = { command: ["bash", "-l"], cwd: "~", cols: 80, rows: 24 };
+const BASE_CREATE = { cwd: "~", cols: 80, rows: 24 };
 const MAX_SPLITS = 4;
 const MAX_GROUPS = 8;
-
-
-const noop = () => {};
+const CLEAN_EXIT = "exited(0)";
 
 /** The room the panes are scoped to; its data layer lives with the route's workbench. */
 export interface RoomScope {
@@ -90,8 +105,6 @@ export interface RoomScope {
   readonly project: string;
   /** The room's slice of the session store (live sessions and corpses). */
   readonly sessions: readonly SessionEntry[];
-  /** Ended reasons by session, from the room's pty event history. */
-  readonly reasons: Readonly<Record<string, string>>;
   /** specId → a dispatch is live there (Reopen withheld until confirmed absent). */
   readonly dispatchLive: Readonly<Record<string, boolean>>;
   /** The caller's FDE, for the pane's observer banner. */
@@ -111,8 +124,8 @@ export interface TerminalPanesProps {
   readonly room?: RoomScope;
   /** True when this workspace tab is the visible one. */
   readonly active: boolean;
-  /** Aggregated lifecycle of every pane (the worst one wins) for the tab bar. */
-  readonly onStatus?: (status: SessionStatus) => void;
+  /** Aggregated lifecycle of every pane (the worst one wins) for the tab bar; null = no panes. */
+  readonly onStatus?: (status: SessionStatus | null) => void;
 }
 
 function storageKey(base: string): string {
@@ -137,6 +150,9 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const paneRefs = useRef(new Map<string, TerminalHandle>());
     const roomRef = useRef(room);
     roomRef.current = room;
+    /** Per pane, the host boot its session was last listed live under (see absenceReason). */
+    const seenUnder = useRef<Readonly<Record<string, string>>>({});
+    const { showToast } = useToast();
 
     /** Menu actions, injected into the tested builders in terminal/paneMenu. */
     const menuActions: PaneMenuActions = {
@@ -145,17 +161,26 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       close: (sessions) => setClosing(sessions),
     };
 
+    const launch = useCallback(
+      (name: string, command: string[]) => {
+        setLaunched((m) => new Map(m).set(name, { command }));
+        sessionStore.noteLaunch(name, command, roomRef.current?.roomId ?? "");
+      },
+      [],
+    );
+
     /** Restores the stored arrangement against the host's truth and lands the focus. */
     const settle = useCallback(
       (next: PaneLayout, focusPane?: string) => {
         setLayout(next);
-        setVisited(new Set([next.groups[next.active]!.id]));
+        const shown = next.groups[next.active];
+        setVisited(new Set(shown ? [shown.id] : []));
         // Focus must land in the ACTIVE group — a restored focus in some other group would leave
         // the visible split entirely unfocused (every pane dimmed, keyboard going nowhere).
         setFocused((f) => {
-          const panes = next.groups[next.active]!.panes;
+          const panes = shown?.panes ?? [];
           if (focusPane && panes.includes(focusPane)) return focusPane;
-          return panes.includes(f) ? f : panes[0]!;
+          return panes.includes(f) ? f : (panes[0] ?? f);
         });
       },
       [],
@@ -164,22 +189,17 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const restore = useCallback(
       (live: readonly string[], adopt?: ReadonlySet<string>): PaneLayout => {
         try {
-          const dead = new Set(sessionStore.deaths().keys());
-          return reconcile(
-            parseLayout(localStorage.getItem(storageKey(base))),
-            live,
-            base,
-            adopt,
-            dead,
-          );
+          const stored = parseLayout(localStorage.getItem(storageKey(base)));
+          seenUnder.current = stored?.seenUnder ?? {};
+          return reconcile(stored, live, base, adopt, closedSessions(sessionStore.deaths()));
         } catch {
-          // A poisoned stored value must never blank the tab forever — heal to the default.
+          // A poisoned stored value must never blank the tab forever — heal to empty.
           try {
             localStorage.removeItem(storageKey(base));
           } catch {
             /* storage is a convenience */
           }
-          return defaultLayout(base);
+          return emptyLayout();
         }
       },
       [base],
@@ -203,16 +223,9 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         }
         let focusPane = entry.focus;
         if (entry.launch) {
-          const command = commandFor(entry.launch);
-          // An empty room's reconciled layout is only the filler base pane; the launch
-          // takes that name instead of minting a sibling (which would also auto-create
-          // a phantom shell in the filler).
-          const filler =
-            names.length === 0 && parseLayout(localStorage.getItem(storageKey(base))) === null;
-          const name = filler ? base : nextSessionName([...sessionsOf(next), ...names], base);
-          setLaunched((m) => new Map(m).set(name, { command }));
-          sessionStore.noteLaunch(name, command, entry.roomId);
-          if (!filler) next = newGroup(next, name);
+          const name = nextSessionName([...sessionsOf(next), ...names], base);
+          launch(name, commandFor(entry.launch));
+          next = newGroup(next, name);
           focusPane = name;
         }
         settle(next, focusPane);
@@ -220,48 +233,69 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         return;
       }
       const inventory = sessionStore.sessions();
-      // A failed first listing (skew, unreachable) settles empty like a listing
-      // would — stored panes still recreate in place; only a store that is
-      // connected and silent is worth waiting on.
+      // A failed first listing (skew, unreachable) settles like a listing would —
+      // stored panes park on their cards; only a store that is connected and
+      // silent is worth waiting on.
       if (inventory === null && sessionStore.connected && sessionStore.skewReason() === null) {
         return;
       }
-      settle(restore((inventory ?? []).filter((s) => s.live).map((s) => s.name)));
+      let next = restore((inventory ?? []).filter((s) => s.live).map((s) => s.name));
+      // Opening a project tab IS the user's action: a tab with nothing in it gets its
+      // first shell now; from then on only ＋, ⌘T, ⌘D, and Restart create anything.
+      if (paneCount(next) === 0) {
+        launch(base, commandFor("shell"));
+        next = newGroup(next, base);
+      }
+      settle(next);
       settledBase.current = base;
-    }, [base, restore, settle, storeVersion]);
+    }, [base, launch, restore, settle, storeVersion]);
 
     // The room keeps living while the route is up: sessions opened elsewhere (another
     // Mac, `sail agent attach`) join the layout as their own sub-tabs on each listing.
     // Only LIVE strays join here — corpses were adopted once on entry, and re-adopting
     // them would resurrect a group the user just closed the moment its kill is listed.
-    // The store's death records prune the other direction: a stored pane whose session
-    // was watched dying and is no longer listed must not survive the arrangement.
+    // The user's own closes prune the other direction: a stored pane whose session was
+    // closed from Mast and is no longer listed must not survive the arrangement. Every
+    // other death (an exit that parked, a host-restart loss) keeps its pane and its card.
     const roomSessions = room?.sessions;
     useEffect(() => {
       if (!roomSessions) return;
       setLayout((current) => {
         if (!current) return current;
         const live = roomSessions.filter((s) => s.live).map((s) => s.name);
-        const dead = new Set(sessionStore.deaths().keys());
         const next = reconcile(
           current,
           live,
           base,
           new Set(roomSessions.map((s) => s.name)),
-          dead,
+          closedSessions(sessionStore.deaths()),
         );
         return JSON.stringify(next.groups) === JSON.stringify(current.groups) ? current : next;
       });
     }, [roomSessions, base]);
 
+    // The stored form carries, per pane, the host boot its session was last listed live under,
+    // so a later mount can tell "host restarted" from "not running" for a pane the host no
+    // longer lists. A pane confirmed live takes the current boot; one the host does not list
+    // keeps the boot it was last seen under — an arrangement holds panes from both sides of a
+    // restart, and one stamp for all of them would misread one side or the other.
     useEffect(() => {
       if (!layout) return;
+      const boot = sessionStore.hostBootId();
+      const stamps = Object.fromEntries(
+        sessionsOf(layout).flatMap((name) => {
+          const entry = sessionStore.byName(name);
+          const under = boot && entry?.live && !entry.pending ? boot : seenUnder.current[name];
+          return under ? [[name, under]] : [];
+        }),
+      );
+      seenUnder.current = stamps;
       try {
-        localStorage.setItem(storageKey(base), JSON.stringify(layout));
+        localStorage.setItem(storageKey(base), JSON.stringify({ ...layout, seenUnder: stamps }));
       } catch {
         /* arrangement is a convenience */
       }
-    }, [layout, base]);
+    }, [layout, base, storeVersion]);
 
     // The tab-bar cluster mirrors the worst pane SYNCHRONOUSLY with every pane report — routing
     // it through render effects left windows where a recovery report could lag or be skipped
@@ -272,7 +306,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     layoutRef.current = layout;
     const onStatusRef = useRef(onStatus);
     onStatusRef.current = onStatus;
-    const lastReported = useRef<SessionStatus | null>(null);
+    const lastReported = useRef<SessionStatus | null | undefined>(undefined);
     const reportAggregate = useCallback(() => {
       const current = layoutRef.current;
       if (!current) return;
@@ -281,7 +315,11 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
           .map((s) => statusesRef.current[s])
           .filter((s) => s !== undefined),
       );
-      if (lastReported.current && statusEqual(lastReported.current, worst)) return;
+      const prev = lastReported.current;
+      const unchanged =
+        prev !== undefined &&
+        (prev === null ? worst === null : worst !== null && statusEqual(prev, worst));
+      if (unchanged) return;
       lastReported.current = worst;
       onStatusRef.current?.(worst);
     }, []);
@@ -300,11 +338,42 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const apply = useCallback((next: PaneLayout, focus?: string) => {
       setLayout(next);
       setVisited((v) => {
-        const id = next.groups[next.active]!.id;
-        return v.has(id) ? v : new Set([...v, id]);
+        const shown = next.groups[next.active];
+        return !shown || v.has(shown.id) ? v : new Set([...v, shown.id]);
       });
       if (focus) setFocused(focus);
     }, []);
+
+    /**
+     * Drops what this component remembers about panes that left the layout — or stayed in it as
+     * an ended card, which is why the aggregate is recomputed here and not left to the layout
+     * effect: a parked card must not leave the tab header on the pane's last status.
+     */
+    const forget = (sessions: readonly string[]) => {
+      for (const session of sessions) paneRefs.current.delete(session);
+      setLaunched((m) => {
+        if (!sessions.some((s) => m.has(s))) return m;
+        const pruned = new Map(m);
+        for (const session of sessions) pruned.delete(session);
+        return pruned;
+      });
+      const pruned = { ...statusesRef.current };
+      for (const session of sessions) delete pruned[session];
+      statusesRef.current = pruned;
+      setStatuses(pruned);
+      reportAggregate();
+      setTitles((prev) => {
+        const next = { ...prev };
+        for (const session of sessions) delete next[session];
+        return next;
+      });
+    };
+
+    /** Lands a layout with the focus on a survivor of its active group. */
+    const applyKeepingFocus = (next: PaneLayout) => {
+      const survivors = next.groups[next.active]?.panes ?? [];
+      apply(next, survivors.includes(focused) ? focused : survivors[0]);
+    };
 
     /** Every name spoken for: panes in the layout, the room's listing, pending launches. */
     const takenNames = () => [
@@ -316,21 +385,18 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const addShell = (glyph: DeckGlyph = room ? lastGlyph : "shell") => {
       if (!layout || layout.groups.length >= MAX_GROUPS) return;
       const name = nextSessionName(takenNames(), base);
-      if (room) {
-        setLastGlyph(glyph);
-        setLaunched((m) => new Map(m).set(name, { command: commandFor(glyph) }));
-        sessionStore.noteLaunch(name, commandFor(glyph), room.roomId);
-      }
+      if (room) setLastGlyph(glyph);
+      launch(name, commandFor(glyph));
       apply(newGroup(layout, name), name);
     };
 
     const split = () => {
-      if (!layout || layout.groups[layout.active]!.panes.length >= MAX_SPLITS) return;
+      if (!layout) return;
+      const group = layout.groups[layout.active];
+      if (!group) return addShell("shell");
+      if (group.panes.length >= MAX_SPLITS) return;
       const name = nextSessionName(takenNames(), base);
-      if (room) {
-        setLaunched((m) => new Map(m).set(name, { command: commandFor("shell") }));
-        sessionStore.noteLaunch(name, commandFor("shell"), room.roomId);
-      }
+      launch(name, commandFor("shell"));
       apply(splitGroup(layout, layout.active, name), name);
     };
 
@@ -339,54 +405,61 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const doClose = (sessions: string[]) => {
       setClosing(null);
       if (!layout) return;
-      // Closing the LAST shell heals the layout back to the same base session name — the pane
-      // stays mounted, so after the kill it must revive into a fresh shell instead of parking
-      // on the corpse's "ended" card. A room never auto-revives: closing its last pane parks
-      // the killed session itself (see removePanes), so the listing refresh lands it on the
-      // ended card instead of a healed base name minting an unasked-for replacement shell.
-      const next = removePanes(layout, sessions, base, !!room);
-      const resurrected = new Set(sessions.filter((s) => sessionsOf(next).includes(s)));
       for (const session of sessions) {
-        const revive = !room && resurrected.has(session)
-          ? () => paneRefs.current.get(session)?.revive?.()
-          : noop;
-        // The store's kill path: optimistic transition, ack, death record, re-list —
-        // every surface converges through it. The route resolved its room on entry,
-        // so in-room closes skip the inventory's fail-closed guard.
+        // A close is a close: the pane leaves, and nothing revives in its place. The
+        // store's kill path (optimistic transition, ack, death record, re-list) is the
+        // one destructive verb; a pane the host does not list has nothing to kill. The
+        // route resolved its room on entry, so in-room closes skip the inventory's
+        // fail-closed guard. The pane is gone by the time a refusal lands, so it toasts.
+        if (!sessionStore.byName(session)) continue;
         void sessionStore
           .kill(session, room ? { resolvedRoom: room.roomId } : {})
-          .finally(revive);
-        if (!resurrected.has(session)) {
-          paneRefs.current.delete(session);
-        }
+          .then((result) => {
+            if (!result.ok) showToast("error", `Close refused — ${result.refusal}`);
+          });
       }
-      setLaunched((m) => {
-        if (!sessions.some((s) => m.has(s))) return m;
-        const pruned = new Map(m);
-        for (const session of sessions) pruned.delete(session);
-        return pruned;
-      });
-      {
-        const pruned = { ...statusesRef.current };
-        for (const session of sessions) {
-          if (!resurrected.has(session)) delete pruned[session];
-        }
-        statusesRef.current = pruned;
-        setStatuses(pruned);
+      forget(sessions);
+      applyKeepingFocus(removePanes(layout, sessions));
+    };
+
+    /**
+     * The pane's shell exited on its own (or its reconcile listing proved the session gone).
+     * The store records the death kill-equivalent — the reason is in hand, no history to
+     * wait on — and the pane leaves the layout; a room route's last pane parks on its ended
+     * card instead, where Restart mints a fresh session by the user's hand.
+     */
+    const onExited = (session: string, reason: string) => {
+      sessionStore.noteEnded(session, reason);
+      const current = layoutRef.current;
+      if (current) {
+        const next = dropExited(current, session, !!room);
+        forget([session]);
+        if (next !== current) applyKeepingFocus(next);
       }
-      setTitles((prev) => {
-        const pruned = { ...prev };
-        for (const session of sessions) delete pruned[session];
-        return pruned;
-      });
-      const survivors = next.groups[next.active]!.panes;
-      apply(next, survivors.includes(focused) ? focused : survivors[0]!);
+      if (reason !== CLEAN_EXIT) {
+        const title = current ? titleOf(current, session, base, titles) : session;
+        showToast("info", `Shell ${title} ended (${reason})`);
+      }
+      (room?.refresh ?? sessionStore.refresh)();
+    };
+
+    /**
+     * The pane found its session gone (a transport loss the reconcile listing proved dead or
+     * absent, or a reattach with nothing to attach to). Nothing exited under the user's eyes, so
+     * the pane stays put: the death is recorded as inferred (a room session's card fails closed
+     * until its durable reason is read), and the pane's launch memory is dropped so the cell
+     * renders the ended card in its place.
+     */
+    const onGone = (session: string, reason: string) => {
+      sessionStore.noteReconciledEnd(session, reason);
+      forget([session]);
+      (room?.refresh ?? sessionStore.refresh)();
     };
 
     const activateGroup = (index: number) => {
       if (!layout) return;
-      const panes = layout.groups[index]!.panes;
-      apply({ ...layout, active: index }, panes.includes(focused) ? focused : panes[0]!);
+      const panes = layout.groups[index]?.panes ?? [];
+      apply({ ...layout, active: index }, panes.includes(focused) ? focused : panes[0]);
     };
 
     // Cmd+T (new shell) / Cmd+D (split) bubble up from the focused pane — meta chords are never
@@ -420,29 +493,36 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       return <div className="term-panes" />;
     }
 
-    /** A room pane's content: the terminal, or the shipped ended card with yield gating. */
-    const roomCell = (session: string, groupActive: boolean) => {
-      const scope = room!;
+    /** A pane's content: the terminal, or the ended card with the provable reason and Restart. */
+    const cell = (session: string, groupActive: boolean) => {
       const deaths = sessionStore.deaths();
-      const plan = panePlan(session, scope.sessions, launched, deaths);
-      const refusal = scope.sessions.find((s) => s.name === session)?.refusal;
+      const listed = room ? room.sessions : (sessionStore.sessions() ?? []);
+      const plan = panePlan(session, listed, launched, deaths);
+      const refusal = listed.find((s) => s.name === session)?.refusal;
       if (plan.kind === "ended") {
-        // A death awaiting its durable reason fails closed: the reason gates
-        // the dispatch-yield check, so no Restart until the history read lands.
-        const card = endedCardModel(deaths.get(session), scope.reasons[session]);
+        // A death awaiting its durable reason fails closed: the reason gates the
+        // dispatch-yield check, so no Restart until the history read lands. An absent
+        // session with no record says what the client can prove about the absence.
+        const recorded = sessionStore.reasons()[session];
+        const reason =
+          recorded ??
+          (plan.absent
+            ? absenceReason(seenUnder.current[session], sessionStore.hostBootId())
+            : undefined);
+        const card = endedCardModel(deaths.get(session), reason);
         const displaced = card.restartable ? yieldedDispatch(card.reason) : null;
         const restart = () => {
-          // The store owns the destructive step: a listed corpse must be
-          // KILLED through it (a refusal lands inline above, and no launch
-          // intent clears the tombstone) before the revive re-mints the name.
-          const revive = () => {
-            setLaunched((m) => new Map(m).set(session, { command: plan.restartCommand }));
-            sessionStore.noteLaunch(session, plan.restartCommand, scope.roomId);
-          };
-          if (!scope.sessions.some((s) => s.name === session)) return revive();
-          void sessionStore.kill(session, { resolvedRoom: scope.roomId }).then((result) => {
-            if (result.ok) revive();
-          });
+          // The store owns the destructive step: a listed corpse must be KILLED
+          // through it (a refusal lands inline above, and no launch intent clears
+          // the tombstone) before the revive re-mints the name; an absent session
+          // has nothing to kill.
+          const revive = () => launch(session, plan.restartCommand);
+          if (!sessionStore.byName(session)) return revive();
+          void sessionStore
+            .kill(session, room ? { resolvedRoom: room.roomId } : {})
+            .then((result) => {
+              if (result.ok) revive();
+            });
         };
         return (
           <div className="room-pane-ended">
@@ -456,58 +536,75 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               reason={card.reason}
               yielded={displaced !== null}
               dispatchLive={
-                displaced?.specId ? (scope.dispatchLive[displaced.specId] ?? true) : false
+                displaced?.specId ? (room?.dispatchLive[displaced.specId] ?? true) : false
               }
               onRestart={card.restartable ? restart : undefined}
             />
           </div>
         );
       }
+      const creating = launched.has(session);
+      const paneRef = (h: TerminalHandle | null) => {
+        if (h) paneRefs.current.set(session, h);
+        else paneRefs.current.delete(session);
+      };
+      const onPaneReport = (s: SessionStatus) => {
+        // The pane re-reports its unchanged status whenever this callback's identity
+        // changes; acting on a non-transition would loop — refresh → new listing →
+        // rerender → new callback → same report.
+        const known = statusesRef.current[session];
+        if (known && statusEqual(known, s)) return;
+        onPaneStatus(session, s);
+        // An attach ack is a mutation ack — the create is real, take the reconcile
+        // listing so every surface sees it without any event.
+        if (s.kind === "up") (room?.refresh ?? sessionStore.refresh)();
+        if (s.kind === "ended") {
+          (s.disposition === "close-pane" ? onExited : onGone)(session, s.reason);
+        }
+      };
+      const onTitle = (raw: string) => {
+        const t = shortTitle(raw);
+        setTitles((prev) => (prev[session] === t ? prev : { ...prev, [session]: t }));
+      };
+      const menuExtras = paneMenuItems(layout, session, base, menuActions, titles);
+      if (room) {
+        return (
+          <RoomTerminal
+            ref={paneRef}
+            session={session}
+            project={room.project}
+            room={room.roomId}
+            command={creating ? plan.command : undefined}
+            refusal={refusal}
+            active={active && groupActive && session === focused}
+            visible={active && groupActive}
+            me={room.me}
+            writerFde={plan.writerFde}
+            onStatus={onPaneReport}
+            onTitle={onTitle}
+            menuExtras={menuExtras}
+          />
+        );
+      }
       return (
-        <RoomTerminal
-          ref={(h) => {
-            if (h) paneRefs.current.set(session, h);
-            else paneRefs.current.delete(session);
-          }}
+        <SessionTerminalPane
+          ref={paneRef}
+          socketPath={NODE_SOCKET}
+          token=""
           session={session}
-          project={scope.project}
-          room={scope.roomId}
-          command={plan.command}
-          refusal={refusal}
+          create={
+            creating ? { ...BASE_CREATE, command: plan.command, project: projectFor(target) } : undefined
+          }
           active={active && groupActive && session === focused}
           visible={active && groupActive}
-          me={scope.me}
-          writerFde={plan.writerFde}
-          onStatus={(s) => {
-            // The pane re-reports its unchanged status whenever this callback's
-            // identity changes; acting on a non-transition would loop —
-            // refresh → new listing → rerender → new callback → same report.
-            const known = statusesRef.current[session];
-            if (known && statusEqual(known, s)) return;
-            onPaneStatus(session, s);
-            // An attach ack is a mutation ack — the create is real, take the
-            // reconcile listing so every surface sees it without any event.
-            if (s.kind === "up") scope.refresh();
-            // The shell (or agent) is gone: hand the pane to the listing, which parks it
-            // on the ended card with the host's reason.
-            if (s.kind === "ended") {
-              setLaunched((m) => {
-                if (!m.has(session)) return m;
-                const pruned = new Map(m);
-                pruned.delete(session);
-                return pruned;
-              });
-              scope.refresh();
-            }
-          }}
-          onTitle={(raw) => {
-            const t = shortTitle(raw);
-            setTitles((prev) => (prev[session] === t ? prev : { ...prev, [session]: t }));
-          }}
-          menuExtras={paneMenuItems(layout, session, base, menuActions, titles)}
+          onStatus={onPaneReport}
+          onTitle={onTitle}
+          menuExtras={menuExtras}
         />
       );
     };
+
+    const activeGroup = layout.groups[layout.active];
 
     return (
       // `terminal-pane` is the drop-target marker classifyDrop keys on (see dropTarget.ts).
@@ -578,12 +675,25 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
           <IconButton
             label="Split right — ⌘D"
             onClick={split}
-            disabled={layout.groups[layout.active]!.panes.length >= MAX_SPLITS}
+            disabled={!activeGroup || activeGroup.panes.length >= MAX_SPLITS}
           >
             <SplitColumns size={15} />
           </IconButton>
         </div>
         <div className="term-panes__body">
+          {layout.groups.length === 0 && (
+            <div className="term-panes__empty" data-testid="term-panes-empty">
+              <div className="room-deck-card">
+                <div className="room-deck-card__title">No terminals</div>
+                <div className="room-deck-card__reason">
+                  Nothing opens on its own — start one with ＋ or ⌘T.
+                </div>
+                <button type="button" className="term-overlay__btn" onClick={() => addShell()}>
+                  {room ? "New terminal" : "New shell"}
+                </button>
+              </div>
+            </div>
+          )}
           {layout.groups.map((group, i) => {
             const groupActive = i === layout.active;
             if (!visited.has(group.id)) return null; // first mount happens on first visit
@@ -603,33 +713,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                     )}
                     onPointerDownCapture={() => setFocused(session)}
                   >
-                    {room ? (
-                      roomCell(session, groupActive)
-                    ) : (
-                      <SessionTerminalPane
-                        ref={(h) => {
-                          if (h) paneRefs.current.set(session, h);
-                          else paneRefs.current.delete(session);
-                        }}
-                        socketPath={NODE_SOCKET}
-                        token=""
-                        session={session}
-                        create={{ ...BASE_CREATE, project: projectFor(target) }}
-                        active={active && groupActive && session === focused}
-                        visible={active && groupActive}
-                        onStatus={(s) => {
-                          const known = statusesRef.current[session];
-                          if (known && statusEqual(known, s)) return;
-                          onPaneStatus(session, s);
-                          if (s.kind === "up") sessionStore.refresh();
-                        }}
-                        onTitle={(raw) => {
-                          const t = shortTitle(raw);
-                          setTitles((prev) => (prev[session] === t ? prev : { ...prev, [session]: t }));
-                        }}
-                        menuExtras={paneMenuItems(layout, session, base, menuActions, titles)}
-                      />
-                    )}
+                    {cell(session, groupActive)}
                   </div>
                 ))}
               </div>

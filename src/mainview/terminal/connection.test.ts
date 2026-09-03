@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  absenceReason,
+  HOST_RESTARTED,
   isUnwell,
+  NOT_RUNNING,
   Reconnector,
+  resolveTransportEnd,
+  type SessionEnd,
   type SessionStatus,
   STABLE_MS,
   statusEqual,
@@ -90,7 +95,7 @@ describe("worstStatus", () => {
   const first: SessionStatus = { kind: "connecting", retrying: false };
   const retrying: SessionStatus = { kind: "connecting", retrying: true };
   const down: SessionStatus = { kind: "down", reason: "transport error: gone" };
-  const ended: SessionStatus = { kind: "ended", reason: "exited(0)" };
+  const ended: SessionStatus = { kind: "ended", reason: "exited(0)", disposition: "close-pane" };
   const failed: SessionStatus = { kind: "failed", reason: "no webgpu" };
 
   test("a tab reports its most broken pane", () => {
@@ -102,8 +107,8 @@ describe("worstStatus", () => {
     expect(worstStatus([down, failed])).toEqual(failed);
   });
 
-  test("no panes reads as a quiet first connect", () => {
-    expect(worstStatus([])).toEqual(first);
+  test("no panes reads as no status at all — an empty tab shows no cluster", () => {
+    expect(worstStatus([])).toBeNull();
   });
 
   test("isUnwell flags everything except live and a quiet first connect", () => {
@@ -122,5 +127,66 @@ describe("worstStatus", () => {
     expect(statusEqual(down, { kind: "down", reason: down.reason })).toBe(true);
     expect(statusEqual(down, { kind: "down", reason: "other" })).toBe(false);
     expect(statusEqual(down, failed)).toBe(false);
+  });
+
+  test("an ending's disposition is part of its identity — a parked card is not a closed pane", () => {
+    expect(statusEqual(ended, { ...ended })).toBe(true);
+    expect(statusEqual(ended, { ...ended, disposition: "park-card" })).toBe(false);
+  });
+});
+
+describe("absenceReason", () => {
+  test("a changed boot id proves the host restarted; anything less is just not running", () => {
+    expect(absenceReason("boot-1", "boot-2")).toBe(HOST_RESTARTED);
+    expect(absenceReason("boot-1", "boot-1")).toBe(NOT_RUNNING);
+    expect(absenceReason(undefined, "boot-2")).toBe(NOT_RUNNING);
+    expect(absenceReason("boot-1", null)).toBe(NOT_RUNNING);
+    expect(absenceReason("", "")).toBe(NOT_RUNNING);
+  });
+});
+
+describe("resolveTransportEnd — one reconcile listing before any backoff", () => {
+  const lost: SessionEnd = { klass: "transport", reason: "channel closed" };
+  const listing = (live: boolean, hostBootId = "boot-1") => ({
+    hostBootId,
+    sessions: [{ name: "mast-a", live }],
+  });
+
+  test("the session is listed live: a genuine link loss, reconnect on the backoff", () => {
+    expect(resolveTransportEnd(lost, "mast-a", "boot-1", listing(true))).toEqual(lost);
+  });
+
+  test("the listing itself is unreachable: the link IS down, reconnect on the backoff", () => {
+    expect(resolveTransportEnd(lost, "mast-a", "boot-1", null)).toEqual(lost);
+  });
+
+  test("the session is listed dead: it ended — park, never retry", () => {
+    expect(resolveTransportEnd(lost, "mast-a", "boot-1", listing(false))).toEqual({
+      klass: "ended",
+      reason: "ended",
+    });
+  });
+
+  test("the session is absent under the same boot: not running — park", () => {
+    expect(
+      resolveTransportEnd(lost, "mast-a", "boot-1", { hostBootId: "boot-1", sessions: [] }),
+    ).toEqual({ klass: "ended", reason: NOT_RUNNING });
+  });
+
+  test("the session is absent under a new boot: the host restarted — park with that reason", () => {
+    expect(
+      resolveTransportEnd(lost, "mast-a", "boot-1", { hostBootId: "boot-2", sessions: [] }),
+    ).toEqual({ klass: "ended", reason: HOST_RESTARTED });
+  });
+
+  test("a listed-live session under a new boot is still live — the name was recreated; reconnect", () => {
+    expect(resolveTransportEnd(lost, "mast-a", "boot-1", listing(true, "boot-2"))).toEqual(lost);
+  });
+
+  test("an ending that was never a transport drop passes through untouched", () => {
+    const ended: SessionEnd = { klass: "ended", reason: "exited(0)" };
+    expect(resolveTransportEnd(ended, "mast-a", "boot-1", null)).toEqual(ended);
+    const refused: SessionEnd = { klass: "refused", reason: "no" };
+    expect(resolveTransportEnd(refused, "mast-a", "boot-1", listing(false))).toEqual(refused);
   });
 });

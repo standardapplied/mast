@@ -1,12 +1,14 @@
 import type { ConnectionStatus, SailEvent } from "../../shared/sail-models";
 import type { Gateway } from "../gateway";
 import { coalesce } from "../board/roomRouting";
+import { HOST_RESTARTED } from "./connection";
 import {
   type DeathRecord,
   type DeckSession,
-  endedEvents,
+  endedByInstance,
   isPtyEvent,
   type SessionEntry,
+  type SessionListing,
 } from "./roomDeck";
 
 /**
@@ -47,15 +49,18 @@ type BoxState = {
   deaths: Map<string, DeathRecord>;
   /** The last listing failure, or null; the skew card reads it. */
   skewReason: string | null;
+  /** The pty host boot the last listing was taken under; null until one lands. */
+  hostBootId: string | null;
   /** Listing generation counter — bumped per completed listing. */
   gen: number;
-  /** Ended reasons from event history, the backfill for deaths observed before this app instance. */
-  /** Each name's newest known ended event — reason plus its monotonic id. */
-  historyEnds: Map<string, { reason: string; id: number }>;
-  /** Per name: the highest ended-event id already accounted to a PAST incarnation. */
-  consumed: Map<string, number>;
+  /** Per incarnation id: its ended reason, from event history and live ended events. */
+  historyEnds: Map<string, string>;
   /** In-flight kills by name — concurrent closes share one destructive call. */
   kills: Map<string, Promise<{ ok: boolean; refusal?: string }>>;
+  /** Listings issued so far; each carries its ordinal so a late response knows how old it is. */
+  listRequests: number;
+  /** Per closed name: the newest listing issued before the close — older ones cannot speak for it. */
+  closedAt: Map<string, number>;
   historyLoaded: Set<string>;
   /** Per-room issue counter for history reads; only the newest read's response lands. */
   historyRevisions: Map<string, number>;
@@ -103,18 +108,21 @@ export class SessionStore {
           refusals: new Map(),
           deaths: new Map(),
           skewReason: null,
+          hostBootId: null,
           gen: 0,
           historyEnds: new Map(),
-          consumed: new Map(),
           kills: new Map(),
+          listRequests: 0,
+          closedAt: new Map(),
           historyLoaded: new Set(),
           historyRevisions: new Map(),
           refresh: () => {},
         };
     box.refresh = coalesce(async () => {
+      const requestId = ++box.listRequests;
       const result = await gateway.listSessions();
       if (this.boxes.get(boxKey) !== box) return;
-      if (result.ok) this.noteListing(boxKey, result.value);
+      if (result.ok) this.noteListing(boxKey, result.value, requestId);
       else {
         box.skewReason = result.error.message;
         this.emit();
@@ -157,6 +165,7 @@ export class SessionStore {
       if (box.listed?.has(name)) continue;
       entries.push({
         name,
+        instanceId: "",
         live: true,
         attached: 0,
         writerFde: "",
@@ -201,6 +210,11 @@ export class SessionStore {
     return this.box(key ?? undefined)?.skewReason ?? null;
   }
 
+  /** The host boot id of the active box's last listing — null until one lands. */
+  hostBootId(key = this.active): string | null {
+    return this.box(key ?? undefined)?.hostBootId ?? null;
+  }
+
   /**
    * Folds one completed listing in. The listing is the box's truth: a
    * previously-live name it dropped is an observed death, and so is any corpse
@@ -215,38 +229,61 @@ export class SessionStore {
    * death record is cleared so an external recreate is never pruned. Pending
    * creates ride until listed; one that two whole generations never confirmed
    * was a create that never happened and is dropped rather than haunting the
-   * deck.
+   * deck. A listing taken under a NEW host boot id explains every live name it
+   * dropped at once: the host restarted and lost them — recorded as such, settled,
+   * with no history to read. Only a name known live under the previous boot can be
+   * attributed to the restart: a corpse the new host lists was created and ended after
+   * it, and follows the ordinary path. A listing issued BEFORE a name was closed from
+   * Mast may still answer after the ack with the old live entry; it cannot speak for
+   * that name — neither resurrect the entry nor erase the closed tombstone — only a
+   * listing issued after the close can prove the name was genuinely recreated. Records
+   * are about one incarnation: a listed entry whose instance id differs from the record's
+   * is a new life of the name (so is anything listed under a closed name — a kill removes
+   * the session outright), and the record it supersedes is dropped before the entry is
+   * read; a record made before its incarnation was ever listed adopts the id the listing
+   * brings, so its history read can settle it.
    */
-  private noteListing(key: string, sessions: readonly DeckSession[]): void {
+  private noteListing(key: string, listing: SessionListing, requestId: number): void {
     const box = this.boxes.get(key)!;
+    const closedSince = (name: string) => requestId <= (box.closedAt.get(name) ?? -1);
+    const sessions = listing.sessions.filter((s) => !closedSince(s.name));
     const next = new Map(sessions.map((s) => [s.name, s]));
+    const rebooted = box.hostBootId !== null && box.hostBootId !== listing.hostBootId;
     const staleRooms = new Set<string>();
-    const recordDeath = (name: string, room: string, command: string[]) => {
+    const recordDeath = (of: DeckSession, lostWithPreviousHost: boolean) => {
+      const { name, instanceId, room, command } = of;
+      if (lostWithPreviousHost) {
+        box.deaths.set(name, { reason: HOST_RESTARTED, at: Date.now(), instanceId, command });
+        return;
+      }
       box.deaths.set(name, {
         reason: "ended",
         at: Date.now(),
+        instanceId,
         command,
         ...(room ? { room, historyPending: true } : {}),
       });
       if (room) staleRooms.add(room);
     };
-    const consume = (name: string) => {
-      const known = box.historyEnds.get(name);
-      if (known && known.id >= 0) {
-        box.consumed.set(name, Math.max(box.consumed.get(name) ?? -1, known.id));
-      }
-    };
+    const superseded = (death: DeathRecord, by: DeckSession) =>
+      death.closed === true ||
+      (death.instanceId !== undefined && death.instanceId !== by.instanceId);
     for (const [name, prev] of box.listed ?? []) {
-      if (prev.live && !next.has(name) && !box.deaths.has(name)) {
-        recordDeath(name, prev.room, prev.command);
-      }
+      if (prev.live && !next.has(name) && !box.deaths.has(name)) recordDeath(prev, rebooted);
     }
     for (const s of sessions) {
+      const death = box.deaths.get(s.name);
+      if (death && superseded(death, s)) {
+        box.deaths.delete(s.name);
+        box.closedAt.delete(s.name);
+      } else if (death && death.instanceId === undefined) {
+        box.deaths.set(s.name, { ...death, instanceId: s.instanceId });
+      }
       if (s.live) {
         box.deaths.delete(s.name);
-        consume(s.name);
+        box.closedAt.delete(s.name);
       } else if (!box.deaths.has(s.name)) {
-        recordDeath(s.name, s.room, s.command);
+        recordDeath(s, false);
       }
     }
     for (const [, death] of box.deaths) {
@@ -257,6 +294,7 @@ export class SessionStore {
     }
     for (const room of staleRooms) this.refreshHistory(box, room);
     box.listed = next;
+    box.hostBootId = listing.hostBootId;
     box.gen++;
     for (const [name, spec] of box.pending) {
       if (next.has(name) || box.gen - spec.gen >= 2) box.pending.delete(name);
@@ -275,7 +313,11 @@ export class SessionStore {
    * A live pty event folds in optimistically — a start shows the session
    * before the re-list lands, an end records the death with the server's
    * reason (richer than any local guess, so it overwrites) — but the caller
-   * pairs it with a refresh; the listing stays the truth.
+   * pairs it with a refresh; the listing stays the truth. A name the user closed
+   * from Mast is fenced: events may arrive late (stream catch-up) and could
+   * describe the very life the kill ended, so none of them reopens or rewrites the
+   * tombstone — the post-close listing is what proves a genuine recreate, and the
+   * caller's refresh takes it at once.
    */
   noteEvent(event: SailEvent, key = this.active): void {
     if (!isPtyEvent(event)) return;
@@ -283,35 +325,20 @@ export class SessionStore {
     if (!box) return;
     const name = typeof event.data?.session === "string" ? event.data.session : null;
     if (!name) return;
+    const instanceId =
+      typeof event.data?.instance_id === "string" && event.data.instance_id
+        ? event.data.instance_id
+        : undefined;
     if (event.type === "pty_session_ended") {
       const reason = typeof event.data?.reason === "string" ? event.data.reason : "ended";
-      const known = box.listed?.get(name);
-      // The end cancels any optimistic start: a surviving pending entry would
-      // read as live and mount a create-capable pane over the corpse.
-      const pending = box.pending.get(name);
-      box.pending.delete(name);
-      const command = known?.command ?? pending?.command;
-      if (typeof event.id === "number") {
-        const known = box.historyEnds.get(name);
-        if (!known || event.id >= known.id) box.historyEnds.set(name, { reason, id: event.id });
-      }
-      box.deaths.set(name, {
-        reason,
-        at: Date.now(),
-        ...(command ? { command } : {}),
-      });
-      if (known?.live) box.listed!.set(name, { ...known, live: false });
-      this.emit();
+      if (instanceId) box.historyEnds.set(instanceId, reason);
+      if (box.deaths.get(name)?.closed) return;
+      this.recordEnd(name, reason, false, key, instanceId);
       return;
     }
     if (event.type === "pty_session_started") {
+      if (box.deaths.get(name)?.closed) return;
       box.deaths.delete(name);
-      {
-        const known = box.historyEnds.get(name);
-        if (known && known.id >= 0) {
-          box.consumed.set(name, Math.max(box.consumed.get(name) ?? -1, known.id));
-        }
-      }
       if (!box.listed?.has(name) && !box.pending.has(name)) {
         const room =
           typeof event.data?.room_id === "string"
@@ -331,6 +358,58 @@ export class SessionStore {
   }
 
   /**
+   * An ending the host delivered to this client — the attached pane's shell
+   * exited, or a pty_session_ended event. Kill-equivalent: the death is recorded
+   * with the reason in hand (no history read to wait on), the entry dims, and any
+   * optimistic start is cancelled — a surviving pending entry would read as live
+   * and mount a create-capable pane over the corpse. The caller pairs it with a
+   * refresh; the listing stays the truth.
+   */
+  noteEnded(name: string, reason: string, key = this.active): void {
+    this.recordEnd(name, reason, false, key);
+  }
+
+  /**
+   * An ending this client only INFERRED from a listing: the session is a corpse
+   * or absent, but no one told the pane why. A host restart is proven by the boot
+   * id and settles as is; any other label is a guess that must not stand in for
+   * the durable reason — a missed "yielded to dispatch …" would otherwise read
+   * as restartable — so a room session's record stays history-pending (the ended
+   * card fails closed) until the room's fresh history read settles it.
+   */
+  noteReconciledEnd(name: string, reason: string, key = this.active): void {
+    this.recordEnd(name, reason, reason !== HOST_RESTARTED, key);
+  }
+
+  private recordEnd(
+    name: string,
+    reason: string,
+    verify: boolean,
+    key: string | null,
+    instanceHint?: string,
+  ): void {
+    const box = this.box(key ?? undefined);
+    if (!box) return;
+    const known = box.listed?.get(name);
+    const pending = box.pending.get(name);
+    box.pending.delete(name);
+    const instanceId = known?.instanceId ?? instanceHint;
+    const command = known?.command ?? pending?.command;
+    const room = known?.room || pending?.room;
+    const pendingHistory = verify && !!room;
+    box.deaths.set(name, {
+      reason,
+      at: Date.now(),
+      ...(instanceId ? { instanceId } : {}),
+      ...(command ? { command } : {}),
+      ...(pendingHistory ? { room, historyPending: true } : {}),
+    });
+    if (known?.live) box.listed!.set(name, { ...known, live: false });
+    if (pendingHistory) this.refreshHistory(box, room!);
+    this.emit();
+  }
+
+  /**
    * A deliberate create (open, launch, revive): the intent shows in every
    * surface immediately, and it clears the name's death record — reviving a
    * corpse must not leave a tombstone that would prune the new pane.
@@ -340,6 +419,7 @@ export class SessionStore {
     if (!box) return;
     box.pending.set(name, { command, room, gen: box.gen });
     box.deaths.delete(name);
+    box.closedAt.delete(name);
     box.refusals.delete(name);
     this.emit();
   }
@@ -403,8 +483,10 @@ export class SessionStore {
     box.deaths.set(name, {
       reason: KILLED_REASON,
       at: Date.now(),
-      ...(entry ? { command: entry.command } : {}),
+      closed: true,
+      ...(entry ? { instanceId: entry.instanceId, command: entry.command } : {}),
     });
+    box.closedAt.set(name, box.listRequests);
     this.emit();
     box.refresh();
     return { ok: true };
@@ -445,27 +527,22 @@ export class SessionStore {
         box.historyLoaded.delete(roomId);
         return;
       }
-      const durable = endedEvents(result.value.events);
-      for (const [name, end] of Object.entries(durable)) {
-        const known = box.historyEnds.get(name);
-        if (!known || end.id >= known.id) box.historyEnds.set(name, end);
+      for (const [instanceId, reason] of endedByInstance(result.value.events)) {
+        box.historyEnds.set(instanceId, reason);
       }
-      // An event settles a death only when it is provably NEWER than everything
-      // this name's previous incarnation already accounted for — a reused name
-      // must never inherit its predecessor's reason from an append-only history.
-      const freshFor = (name: string) => {
-        const end = box.historyEnds.get(name);
-        if (!end || end.id < 0) return null;
-        return end.id > (box.consumed.get(name) ?? -1) ? end : null;
-      };
+      // A death settles from the ended event of ITS incarnation, never from the name's
+      // newest — a reused name must not inherit its predecessor's reason from an
+      // append-only history.
+      const durableFor = (death: DeathRecord) =>
+        death.instanceId === undefined ? undefined : box.historyEnds.get(death.instanceId);
       for (const [name, death] of box.deaths) {
         if (death.room !== roomId) continue;
         if (death.historyPending) {
           const { historyPending: _settled, ...record } = death;
-          box.deaths.set(name, { ...record, reason: freshFor(name)?.reason ?? death.reason });
+          box.deaths.set(name, { ...record, reason: durableFor(death) ?? death.reason });
         } else if (death.reason === "ended") {
-          const fresh = freshFor(name);
-          if (fresh) box.deaths.set(name, { ...death, reason: fresh.reason });
+          const durable = durableFor(death);
+          if (durable) box.deaths.set(name, { ...death, reason: durable });
         }
       }
       this.emit();

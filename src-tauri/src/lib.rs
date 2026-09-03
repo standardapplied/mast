@@ -323,9 +323,35 @@ struct SessionCreate {
     rows: u32,
 }
 
-/// Attach a terminal to a host-owned pty session over SSH direct-streamlocal. Output arrives on
-/// `session://data/{id}`, the ending on `session://exit/{id}`, terminal-state changes on
-/// `session://meta/{id}`. A `create` mints the session first (durable, survives the app).
+/// How `session_open` fails: the same `{class, reason}` shape as a `session://exit` payload, so
+/// the pane reads a failure before the attach exactly like one after it.
+#[derive(serde::Serialize)]
+struct SessionEnd {
+    class: &'static str,
+    reason: String,
+}
+
+impl From<ssh::Error> for SessionEnd {
+    fn from(e: ssh::Error) -> Self {
+        let class = match &e {
+            ssh::Error::Io(io) => ssh::end_class(io),
+            _ => "transport",
+        };
+        SessionEnd { class, reason: e.to_string() }
+    }
+}
+
+impl From<String> for SessionEnd {
+    fn from(reason: String) -> Self {
+        SessionEnd { class: "transport", reason }
+    }
+}
+
+/// Attach a terminal to a host-owned pty session over SSH direct-streamlocal. Resolves once the
+/// host has acknowledged the (optional) Create and the Attach; a failure before that is the
+/// rejection, as `{class, reason}`. Output then arrives on `session://data/{id}`, the ending on
+/// `session://exit/{id}`, terminal-state changes on `session://meta/{id}`. A `create` mints the
+/// session first (durable, survives the app).
 #[tauri::command]
 async fn session_open(
     app: AppHandle,
@@ -336,7 +362,7 @@ async fn session_open(
     session: String,
     write: bool,
     create: Option<SessionCreate>,
-) -> Result<(), String> {
+) -> Result<(), SessionEnd> {
     let req = pty::AttachRequest {
         token,
         session,
@@ -355,7 +381,7 @@ async fn session_open(
         .await?
         .session_open(app, id, socket_path, req)
         .await
-        .map_err(String::from)
+        .map_err(SessionEnd::from)
 }
 
 #[tauri::command]
@@ -385,8 +411,9 @@ async fn session_take_write(state: State<'_, AppState>, id: String) -> Result<()
     state.backend().await?.session_take_write(&id).await.map_err(String::from)
 }
 
-/// List the host's sessions (name, liveness, attached count, current writer, room, command),
-/// draining every page of the host's cursor-paginated listing.
+/// List the host's sessions (name, incarnation id, liveness, attached count, current writer,
+/// room, command) under the host boot id that answered, draining every page of the
+/// cursor-paginated listing.
 #[tauri::command]
 async fn session_list(
     state: State<'_, AppState>,
@@ -399,17 +426,20 @@ async fn session_list(
         .session_list(socket_path, token)
         .await
         .map_err(String::from)?;
-    Ok(json!(list
+    let sessions = list
+        .sessions
         .into_iter()
         .map(|s| json!({
             "name": s.name,
+            "instanceId": s.instance_id,
             "live": s.live,
             "attached": s.attached,
             "writerFde": s.writer_fde,
             "room": s.room,
             "command": s.command,
         }))
-        .collect::<Vec<_>>()))
+        .collect::<Vec<_>>();
+    Ok(json!({ "hostBootId": list.host_boot_id, "sessions": sessions }))
 }
 
 /// Create a host-owned session without attaching (a durable named shell).
@@ -451,7 +481,7 @@ async fn session_kill(
     let reply = state
         .backend()
         .await?
-        .session_control(socket_path, token, pty::Frame::Kill(session))
+        .session_kill(socket_path, token, session)
         .await
         .map_err(String::from);
     expect_ok(reply)

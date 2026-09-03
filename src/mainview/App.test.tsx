@@ -158,16 +158,20 @@ describe("App cockpit", () => {
     await render();
     gateway.listSessions = async () => ({
       ok: true,
-      value: [
+      value: {
+        hostBootId: "boot-1",
+        sessions: [
         {
           name: "room-chorus-invoice-ui",
+          instanceId: "inst-room-chorus-invoice-ui",
           live: true,
           attached: 1,
           writerFde: "uday",
           room: "chorus-invoice-ui",
           command: ["claude"],
         },
-      ],
+        ],
+      },
     });
     act(() => {
       container.querySelector<HTMLButtonElement>('[data-testid="card-chorus-invoice-ui"]')?.click();
@@ -216,16 +220,20 @@ describe("App cockpit", () => {
     await render(<div data-testid="term-stub">TERM</div>);
     gateway.listSessions = async () => ({
       ok: true,
-      value: [
+      value: {
+        hostBootId: "boot-1",
+        sessions: [
         {
           name: "room-chorus-invoice-ui",
+          instanceId: "inst-room-chorus-invoice-ui",
           live: true,
           attached: 1,
           writerFde: "uday",
           room: "chorus-invoice-ui",
           command: ["claude"],
         },
-      ],
+        ],
+      },
     });
     act(() => {
       container.querySelector<HTMLButtonElement>('[data-testid="card-chorus-invoice-ui"]')?.click();
@@ -251,16 +259,20 @@ describe("App cockpit", () => {
     gateway = createDemoGateway();
     gateway.listSessions = async () => ({
       ok: true,
-      value: [
+      value: {
+        hostBootId: "boot-1",
+        sessions: [
         {
           name: "room-chorus-invoice-ui",
+          instanceId: "inst-room-chorus-invoice-ui",
           live: true,
           attached: 1,
           writerFde: "uday",
           room: "chorus-invoice-ui",
           command: ["claude"],
         },
-      ],
+        ],
+      },
     });
     const listeners = new Set<(s: Status) => void>();
     const base = await gateway.connection();

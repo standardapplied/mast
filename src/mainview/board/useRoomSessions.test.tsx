@@ -28,6 +28,7 @@ const flush = async () => {
 function session(over: Partial<DeckSession>): DeckSession {
   return {
     name: "room-design-talk",
+    instanceId: `inst-${over.name ?? "room-design-talk"}`,
     live: true,
     attached: 1,
     writerFde: "uday",
@@ -44,7 +45,10 @@ function session(over: Partial<DeckSession>): DeckSession {
  */
 function makeEventlessGateway(hostSessions: DeckSession[]) {
   const gateway = {
-    listSessions: async () => ({ ok: true as const, value: [...hostSessions] }),
+    listSessions: async () => ({
+      ok: true as const,
+      value: { hostBootId: "boot-1", sessions: [...hostSessions] },
+    }),
     killSession: async (name: string) => {
       const index = hostSessions.findIndex((s) => s.name === name);
       if (index >= 0) hostSessions.splice(index, 1);
