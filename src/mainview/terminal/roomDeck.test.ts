@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SailEvent } from "../../shared/sail-models";
 import {
   chipTitle,
+  closedSessions,
   commandFor,
   type DeathRecord,
   deckSessions,
@@ -166,6 +167,17 @@ describe("yieldedDispatch", () => {
     expect(yieldedDispatch("yielded to dispatch r1")).toEqual({ runId: "r1" });
     expect(yieldedDispatch("exited(0)")).toBe(null);
     expect(yieldedDispatch(undefined)).toBe(null);
+  });
+});
+
+describe("closedSessions", () => {
+  test("only the user's own closes prune an arrangement; exits and restart losses keep their card", () => {
+    const deaths = new Map<string, DeathRecord>([
+      ["room-r", { reason: "closed from Mast", at: 1, closed: true }],
+      ["room-r.2", { reason: "exited(0)", at: 1 }],
+      ["room-r.3", { reason: "host restarted", at: 1 }],
+    ]);
+    expect([...closedSessions(deaths)]).toEqual(["room-r"]);
   });
 });
 

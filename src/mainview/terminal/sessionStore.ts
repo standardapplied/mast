@@ -227,7 +227,9 @@ export class SessionStore {
    * was a create that never happened and is dropped rather than haunting the
    * deck. A listing taken under a NEW host boot id explains every live name it
    * dropped at once: the host restarted and lost them — recorded as such, settled,
-   * with no history to read.
+   * with no history to read. Only a name known live under the previous boot can be
+   * attributed to the restart: a corpse the new host lists was created and ended after
+   * it, and follows the ordinary path.
    */
   private noteListing(key: string, listing: SessionListing): void {
     const box = this.boxes.get(key)!;
@@ -235,8 +237,13 @@ export class SessionStore {
     const next = new Map(sessions.map((s) => [s.name, s]));
     const rebooted = box.hostBootId !== null && box.hostBootId !== listing.hostBootId;
     const staleRooms = new Set<string>();
-    const recordDeath = (name: string, room: string, command: string[]) => {
-      if (rebooted) {
+    const recordDeath = (
+      name: string,
+      room: string,
+      command: string[],
+      lostWithPreviousHost: boolean,
+    ) => {
+      if (lostWithPreviousHost) {
         box.deaths.set(name, { reason: HOST_RESTARTED, at: Date.now(), command });
         return;
       }
@@ -256,7 +263,7 @@ export class SessionStore {
     };
     for (const [name, prev] of box.listed ?? []) {
       if (prev.live && !next.has(name) && !box.deaths.has(name)) {
-        recordDeath(name, prev.room, prev.command);
+        recordDeath(name, prev.room, prev.command, rebooted);
       }
     }
     for (const s of sessions) {
@@ -264,7 +271,7 @@ export class SessionStore {
         box.deaths.delete(s.name);
         consume(s.name);
       } else if (!box.deaths.has(s.name)) {
-        recordDeath(s.name, s.room, s.command);
+        recordDeath(s.name, s.room, s.command, false);
       }
     }
     for (const [, death] of box.deaths) {
@@ -434,6 +441,7 @@ export class SessionStore {
     box.deaths.set(name, {
       reason: KILLED_REASON,
       at: Date.now(),
+      closed: true,
       ...(entry ? { command: entry.command } : {}),
     });
     this.emit();

@@ -526,6 +526,7 @@ describe("local endings (exit closes the pane)", () => {
       reason: "exited(1)",
       command: ["claude"],
     });
+    expect(store.deaths().get("room-design-talk.2")?.closed).toBeUndefined();
   });
 });
 
@@ -554,6 +555,20 @@ describe("host boot id (host restart is a first-class fact)", () => {
     expect(store.deaths().get("room-design-talk")?.historyPending).toBeUndefined();
     expect(store.reasons()).toEqual({ "room-design-talk": "host restarted" });
     expect(calls.list).toBe(readsBefore + 1);
+  });
+
+  test("a corpse first listed under the new boot ended after the restart — ordinary death, history read pending", async () => {
+    const box = await connected([session({ name: "room-design-talk" })]);
+    box.reboot("boot-2");
+    box.host.push(session({ name: "room-design-talk.2", live: false, command: ["claude"] }));
+    box.store.refresh();
+    await flush();
+    expect(box.store.deaths().get("room-design-talk")?.reason).toBe("host restarted");
+    expect(box.store.deaths().get("room-design-talk.2")).toMatchObject({
+      reason: "ended",
+      command: ["claude"],
+      room: "design-talk",
+    });
   });
 
   test("a live name that vanishes under the same boot is an ordinary death — the history read settles it", async () => {
@@ -688,6 +703,7 @@ describe("the kill path (field bug: a kill that does nothing, silently)", () => 
     const death = box.store.deaths().get("room-design-talk");
     expect(death?.reason).toBe("closed from Mast");
     expect(death?.command).toEqual(["claude"]);
+    expect(death?.closed).toBe(true);
     await flush();
     expect(box.calls.list).toBeGreaterThan(listings);
   });

@@ -47,6 +47,7 @@ import {
   paneMenuItems,
 } from "../terminal/paneMenu";
 import {
+  closedSessions,
   commandFor,
   DECK_LAUNCHERS,
   type DeckGlyph,
@@ -190,7 +191,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         try {
           const stored = parseLayout(localStorage.getItem(storageKey(base)));
           restoredUnder.current = stored?.hostBootId;
-          return reconcile(stored, live, base, adopt, new Set(sessionStore.deaths().keys()));
+          return reconcile(stored, live, base, adopt, closedSessions(sessionStore.deaths()));
         } catch {
           // A poisoned stored value must never blank the tab forever — heal to empty.
           try {
@@ -253,21 +254,21 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     // Mac, `sail agent attach`) join the layout as their own sub-tabs on each listing.
     // Only LIVE strays join here — corpses were adopted once on entry, and re-adopting
     // them would resurrect a group the user just closed the moment its kill is listed.
-    // The store's death records prune the other direction: a stored pane whose session
-    // was watched dying and is no longer listed must not survive the arrangement.
+    // The user's own closes prune the other direction: a stored pane whose session was
+    // closed from Mast and is no longer listed must not survive the arrangement. Every
+    // other death (an exit that parked, a host-restart loss) keeps its pane and its card.
     const roomSessions = room?.sessions;
     useEffect(() => {
       if (!roomSessions) return;
       setLayout((current) => {
         if (!current) return current;
         const live = roomSessions.filter((s) => s.live).map((s) => s.name);
-        const dead = new Set(sessionStore.deaths().keys());
         const next = reconcile(
           current,
           live,
           base,
           new Set(roomSessions.map((s) => s.name)),
-          dead,
+          closedSessions(sessionStore.deaths()),
         );
         return JSON.stringify(next.groups) === JSON.stringify(current.groups) ? current : next;
       });
@@ -426,6 +427,18 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       (room?.refresh ?? sessionStore.refresh)();
     };
 
+    /**
+     * The pane found its session gone (a transport loss the reconcile listing proved dead or
+     * absent, or a reattach with nothing to attach to). Nothing exited under the user's eyes, so
+     * the pane stays put: the death is recorded with the reason in hand, and the pane's launch
+     * memory is dropped so the cell renders the ended card with Restart in its place.
+     */
+    const onGone = (session: string, reason: string) => {
+      sessionStore.noteEnded(session, reason);
+      forget([session]);
+      (room?.refresh ?? sessionStore.refresh)();
+    };
+
     const activateGroup = (index: number) => {
       if (!layout) return;
       const panes = layout.groups[index]?.panes ?? [];
@@ -526,7 +539,9 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         // An attach ack is a mutation ack — the create is real, take the reconcile
         // listing so every surface sees it without any event.
         if (s.kind === "up") (room?.refresh ?? sessionStore.refresh)();
-        if (s.kind === "ended") onExited(session, s.reason);
+        if (s.kind === "ended") {
+          (s.disposition === "close-pane" ? onExited : onGone)(session, s.reason);
+        }
       };
       const onTitle = (raw: string) => {
         const t = shortTitle(raw);

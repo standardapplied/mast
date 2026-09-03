@@ -26,6 +26,14 @@ export interface SessionEnd {
 }
 
 /**
+ * What an ending asks of the pane's host: `close-pane` — the shell itself exited under this
+ * attach, so the pane leaves like a closed chip (a scope may park its last pane); `park-card` —
+ * the session was found gone (a transport loss whose reconcile listing proved it dead or absent,
+ * or a reattach that found nothing to attach to), so the pane stays and its card says why.
+ */
+export type EndedDisposition = "close-pane" | "park-card";
+
+/**
  * What a session pane is doing right now, for the pane overlay and the tab-bar status cluster.
  * `connecting.retrying` separates a first attach (quiet) from a reconnect in flight (surfaced).
  */
@@ -33,7 +41,7 @@ export type SessionStatus =
   | { kind: "connecting"; retrying: boolean }
   | { kind: "up" }
   | { kind: "down"; reason: string }
-  | { kind: "ended"; reason: string }
+  | { kind: "ended"; reason: string; disposition: EndedDisposition }
   | { kind: "failed"; reason: string };
 
 const EXIT_CLASSES: ReadonlySet<string> = new Set(["transport", "ended", "refused"]);
@@ -66,6 +74,8 @@ export function statusEqual(a: SessionStatus, b: SessionStatus): boolean {
       return true;
     case "connecting":
       return a.retrying === (b as typeof a).retrying;
+    case "ended":
+      return a.reason === (b as typeof a).reason && a.disposition === (b as typeof a).disposition;
     default:
       return a.reason === (b as typeof a).reason;
   }

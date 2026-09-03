@@ -52,7 +52,17 @@ export type DeathRecord = {
   readonly room?: string;
   /** True until a fresh history read confirms or replaces the generic reason. */
   readonly historyPending?: boolean;
+  /** The user closed it from Mast — the one death whose pane nothing should remember. */
+  readonly closed?: true;
 };
+
+/**
+ * The names whose deaths were the user's own close. Only those prune a stored arrangement: a
+ * shell that exited, or a session the host lost, keeps its pane so the ended card can say why.
+ */
+export function closedSessions(deaths: ReadonlyMap<string, DeathRecord>): ReadonlySet<string> {
+  return new Set([...deaths].filter(([, death]) => death.closed).map(([name]) => name));
+}
 
 /**
  * The ended card's model: a death still awaiting its durable reason fails

@@ -469,7 +469,8 @@ pub struct AttachRequest {
     pub create: Option<CreateSpec>,
 }
 
-/// Drives one attached session over {@code stream} until the session ends or a detach is commanded.
+/// Drives one attached session over {@code stream} until the session ends or a detach is commanded:
+/// the [`attach`] prologue, then the [`run`] steady state.
 ///
 /// The transport is abstract (`AsyncRead + AsyncWrite`), so this same logic runs over an SSH
 /// direct-streamlocal channel in production and a `tokio::io::duplex` in tests. Input frames carry a
@@ -477,14 +478,24 @@ pub struct AttachRequest {
 pub async fn drive<S, F>(
     stream: S,
     req: AttachRequest,
-    mut cmds: mpsc::Receiver<SessionCmd>,
-    mut on_event: F,
+    cmds: mpsc::Receiver<SessionCmd>,
+    on_event: F,
 ) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     F: FnMut(SessionEvent),
 {
-    let mut stream = stream;
+    let stream = attach(stream, &req).await?;
+    run(stream, cmds, on_event).await
+}
+
+/// The strictly request/reply prologue: handshake, identify, create when asked, attach. Returns
+/// the stream once the host has acknowledged the attach — a caller that awaits this knows the
+/// session exists before anyone treats the create as spent.
+pub async fn attach<S>(mut stream: S, req: &AttachRequest) -> io::Result<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     handshake(&mut stream).await?;
     write_frame(&mut stream, &Frame::Hello(req.token.clone())).await?;
     expect_welcome(&mut stream).await?;
@@ -515,7 +526,16 @@ where
     )
     .await?;
     expect_ok(&mut stream, "attach").await?;
+    Ok(stream)
+}
 
+/// The steady state of an attached session: host frames become events, UI commands become
+/// frames, until the session ends or a detach is commanded.
+pub async fn run<S, F>(stream: S, mut cmds: mpsc::Receiver<SessionCmd>, mut on_event: F) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    F: FnMut(SessionEvent),
+{
     // The prologue is strictly request/reply, but the steady state must await a
     // host frame and a UI command at once. `read_frame` is NOT cancel-safe
     // (its inner `read_exact` can drop already-consumed bytes if a `select!`
@@ -1105,6 +1125,39 @@ mod async_tests {
         });
         cmd_tx.send(SessionCmd::Detach).await.unwrap();
         driver.await.unwrap().unwrap();
+        host.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn attach_resolves_only_on_the_hosts_attach_ack_and_surfaces_a_refusal() {
+        let (client, mut server) = duplex(1024);
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            assert!(matches!(read_frame(&mut server).await.unwrap(), Frame::Attach { .. }));
+            write_frame(&mut server, &Frame::Err("no session 's'".into())).await.unwrap();
+        });
+        let err = attach(
+            client,
+            &AttachRequest { token: "t".into(), session: "s".into(), write: true, create: None },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(err.to_string().contains("no session 's'"), "{err}");
+        host.await.unwrap();
+
+        let (client, mut server) = duplex(1024);
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            assert!(matches!(read_frame(&mut server).await.unwrap(), Frame::Attach { .. }));
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
+        });
+        attach(
+            client,
+            &AttachRequest { token: "t".into(), session: "s".into(), write: true, create: None },
+        )
+        .await
+        .unwrap();
         host.await.unwrap();
     }
 

@@ -95,7 +95,7 @@ describe("worstStatus", () => {
   const first: SessionStatus = { kind: "connecting", retrying: false };
   const retrying: SessionStatus = { kind: "connecting", retrying: true };
   const down: SessionStatus = { kind: "down", reason: "transport error: gone" };
-  const ended: SessionStatus = { kind: "ended", reason: "exited(0)" };
+  const ended: SessionStatus = { kind: "ended", reason: "exited(0)", disposition: "close-pane" };
   const failed: SessionStatus = { kind: "failed", reason: "no webgpu" };
 
   test("a tab reports its most broken pane", () => {
@@ -127,6 +127,11 @@ describe("worstStatus", () => {
     expect(statusEqual(down, { kind: "down", reason: down.reason })).toBe(true);
     expect(statusEqual(down, { kind: "down", reason: "other" })).toBe(false);
     expect(statusEqual(down, failed)).toBe(false);
+  });
+
+  test("an ending's disposition is part of its identity — a parked card is not a closed pane", () => {
+    expect(statusEqual(ended, { ...ended })).toBe(true);
+    expect(statusEqual(ended, { ...ended, disposition: "park-card" })).toBe(false);
   });
 });
 

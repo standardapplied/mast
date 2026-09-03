@@ -5,6 +5,7 @@ import type { ThemeName } from "../../shared/types";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
 import {
   absenceReason,
+  type EndedDisposition,
   type HostListing,
   Reconnector,
   resolveTransportEnd,
@@ -332,11 +333,15 @@ export const SessionTerminalPane = forwardRef<
     attachIdRef.current = id;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-    /** The session is over for this attach; decide between auto-reattach and parking. */
-    const park = (end: SessionEnd) => {
+    /**
+     * The session is over for this attach; decide between auto-reattach and parking. An ending
+     * the host delivered as the shell's own exit closes the pane; one this pane inferred from a
+     * listing (the session is gone) parks it on its card — see {@link EndedDisposition}.
+     */
+    const park = (end: SessionEnd, disposition: EndedDisposition = "close-pane") => {
       if (disposed) return;
       if (end.klass === "ended") {
-        setStatus({ kind: "ended", reason: end.reason });
+        setStatus({ kind: "ended", reason: end.reason, disposition });
         return;
       }
       if (end.klass === "refused") {
@@ -364,7 +369,9 @@ export const SessionTerminalPane = forwardRef<
           (listing) => listing,
           () => null,
         )
-        .then((listing) => park(resolveTransportEnd(end, session, seenUnderRef.current, listing)));
+        .then((listing) =>
+          park(resolveTransportEnd(end, session, seenUnderRef.current, listing), "park-card"),
+        );
     };
 
     const run = async () => {
@@ -465,10 +472,15 @@ export const SessionTerminalPane = forwardRef<
         const alive = listing.sessions.some((s) => s.name === session && s.live);
         const spec = createdRef.current ? undefined : create;
         if (!alive && !spec) {
-          park({ klass: "ended", reason: absenceReason(seenUnderRef.current, listing.hostBootId) });
+          park(
+            { klass: "ended", reason: absenceReason(seenUnderRef.current, listing.hostBootId) },
+            "park-card",
+          );
           return;
         }
         seenUnderRef.current = listing.hostBootId;
+        // Resolves only once the host has acknowledged Create and Attach: a link that drops
+        // before that keeps the create for the next attempt, since nothing was created.
         await invoke("session_open", {
           id,
           socketPath,
@@ -479,10 +491,11 @@ export const SessionTerminalPane = forwardRef<
         });
         createdRef.current = true;
       } catch (e) {
-        // The link (not the pane) is the usual culprit and reattaches on the same
-        // backoff — but a protocol skew parks on the skew card instead of retrying.
-        const message = e instanceof Error ? e.message : String(e);
-        onEnd({ klass: preAttachClass(message), reason: message });
+        // An open rejects with the same `{class, reason}` an ending carries; a listing rejects
+        // with a bare message. The link (not the pane) is the usual culprit and reattaches on
+        // the same backoff — but a protocol skew parks on the skew card instead of retrying.
+        const end = toSessionEnd(e instanceof Error ? e.message : e);
+        onEnd(end.klass === "transport" ? { ...end, klass: preAttachClass(end.reason) } : end);
         return;
       }
       if (disposed) return;

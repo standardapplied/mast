@@ -369,6 +369,16 @@ fn session_meta(event: &crate::pty::SessionEvent) -> serde_json::Value {
     }
 }
 
+/// How the pane should read a session failure: a host refusal (bad token, foreign session, dead
+/// container, protocol skew) would fail identically on every retry; only a genuine transport
+/// failure is worth reattaching for.
+pub fn end_class(e: &std::io::Error) -> &'static str {
+    match e.kind() {
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::InvalidData => "refused",
+        _ => "transport",
+    }
+}
+
 fn emit_transfer(app: &AppHandle, progress: &TransferProgress) {
     let _ = app.emit("transfer", progress);
 }
@@ -650,10 +660,13 @@ impl Backend {
     }
 
     /// Attaches a terminal ({@code id}) to a host-owned pty session over a streamlocal channel,
-    /// speaking the pty-host protocol directly. Output frames become `session://data/{id}`, the
-    /// ending becomes `session://exit/{id}`, and flow-control/roster/resize become
-    /// `session://meta/{id}`. Keystrokes/resize/detach ride the returned sender via the session_*
-    /// methods. The session survives this connection on the host — closing here only detaches.
+    /// speaking the pty-host protocol directly. Resolves once the host has acknowledged the
+    /// Create (when asked) and the Attach, so a caller that gets `Ok` knows the session exists;
+    /// a prologue failure is the error, classified by [`end_class`]. From then on output frames
+    /// become `session://data/{id}`, the ending becomes `session://exit/{id}`, and
+    /// flow-control/roster/resize become `session://meta/{id}`. Keystrokes/resize/detach ride the
+    /// returned sender via the session_* methods. The session survives this connection on the
+    /// host — closing here only detaches.
     pub async fn session_open(
         &self,
         app: AppHandle,
@@ -667,7 +680,7 @@ impl Backend {
         if let Some(spec) = req.create.as_mut() {
             spec.cwd = self.resolve_path(&spec.cwd).await?;
         }
-        let stream = channel.into_stream();
+        let stream = crate::pty::attach(channel.into_stream(), &req).await?;
 
         let (tx, rx) = mpsc::channel::<crate::pty::SessionCmd>(256);
         self.sessions.lock().await.insert(id.clone(), tx);
@@ -706,18 +719,10 @@ impl Backend {
                     }
                 }
             };
-            if let Err(e) = crate::pty::drive(stream, req, rx, on_event).await {
-                // A host refusal (bad token, foreign session, dead container) would fail identically
-                // on every retry; only genuine transport failures are worth reattaching for.
-                let class = match e.kind() {
-                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::InvalidData => {
-                        "refused"
-                    }
-                    _ => "transport",
-                };
+            if let Err(e) = crate::pty::run(stream, rx, on_event).await {
                 let _ = app.emit(
                     &exit_on_error,
-                    serde_json::json!({ "class": class, "reason": e.to_string() }),
+                    serde_json::json!({ "class": end_class(&e), "reason": e.to_string() }),
                 );
             }
             // Evict the id whether the session ended on its own, detached, or the
