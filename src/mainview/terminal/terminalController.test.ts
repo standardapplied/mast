@@ -309,6 +309,26 @@ describe("TerminalController", () => {
     expect(copied).toEqual(["fresh"]);
   });
 
+  test("a program's query is answered into the pty; a replayed query is not", async () => {
+    const { controller, sink } = await harness(20, 3);
+    controller.feed(enc("\x1b[c"));
+    expect(sink.writes).toEqual([Array.from(enc("\x1b[?62;22c"))]);
+    controller.resetForReplay();
+    controller.feed(enc("\x1b[c\x1b[6n"));
+    expect(sink.writes).toHaveLength(1); // history: nothing answered
+    controller.endReplay();
+    controller.feed(enc("\x1b[6n"));
+    expect(sink.writes).toHaveLength(2);
+  });
+
+  test("a bell in the stream reaches the bell hook", async () => {
+    const { controller } = await harness(20, 3);
+    let bells = 0;
+    controller.hooks.onBell = () => bells++;
+    controller.feed(enc("\x07"));
+    expect(bells).toBe(1);
+  });
+
   test("resetForReplay wipes state so a journal snapshot lands on a clean terminal", async () => {
     const { controller, core, renderer } = await harness(40, 4);
     controller.feed(enc("stale garbage\x1b[?1049h TUI leftovers"));

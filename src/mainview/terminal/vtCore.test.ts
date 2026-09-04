@@ -448,6 +448,88 @@ describe("paste", () => {
     expect(decode(core.encodeFocus(false))).toBe("\x1b[O");
   });
 
+  test("answers the queries agent TUIs make, through onWritePty", async () => {
+    const core = await VtCore.create(WASM, 80, 24, undefined, { identity: "mast 9.9.9" });
+    open.push(core);
+    const replies: string[] = [];
+    core.hooks.onWritePty = (b) => replies.push(new TextDecoder().decode(b));
+    const ask = (seq: string) => {
+      replies.length = 0;
+      core.write(bytes(seq));
+      return replies.join("");
+    };
+    expect(ask("\x1b[c")).toBe("\x1b[?62;22c"); // DA1
+    expect(ask("\x1b[>c")).toBe("\x1b[>1;0;0c"); // DA2
+    expect(ask("\x1b[3;5H\x1b[6n")).toBe("\x1b[3;5R"); // cursor position report
+    expect(ask("\x1b[5n")).toBe("\x1b[0n"); // device status
+    expect(ask("\x1b[?u")).toBe("\x1b[?0u"); // kitty keyboard flags: none yet
+    expect(ask("\x1b[>1u\x1b[?u")).toBe("\x1b[?1u"); // pushed, then queried
+    expect(ask("\x1b[?2026$p")).toBe("\x1b[?2026;2$y"); // DECRQM: reset
+    expect(ask("\x1b[>q")).toBe("\x1bP>|mast 9.9.9\x1b\\"); // XTVERSION is the embedder
+    expect(ask("\x1b[?996n")).toBe("\x1b[?997;1n"); // color scheme: dark by default
+    // OSC 10/11 answer with the theme colors the terminal was configured with
+    expect(ask("\x1b]11;?\x1b\\")).toBe("\x1b]11;rgb:0b0b/0e0e/1414\x1b\\");
+    expect(ask("\x1b]10;?\x07")).toBe("\x1b]10;rgb:dcdc/e0e0/e6e6\x07");
+  });
+
+  test("reports its size in cells and pixels once told the cell size", async () => {
+    const core = await track(80, 24);
+    const replies: string[] = [];
+    core.hooks.onWritePty = (b) => replies.push(new TextDecoder().decode(b));
+    core.setCellPixels(18, 40);
+    core.write(bytes("\x1b[14t\x1b[16t\x1b[18t"));
+    expect(replies).toEqual(["\x1b[4;960;1440t", "\x1b[6;40;18t", "\x1b[8;24;80t"]);
+    replies.length = 0;
+    core.write(bytes("\x1b[?2048h")); // in-band resize: enabling reports once immediately
+    expect(replies).toEqual(["\x1b[48;24;80;960;1440t"]);
+  });
+
+  test("a light embedder reports a light scheme, and the identity defaults to mast", async () => {
+    const core = await VtCore.create(WASM, 10, 2, undefined, { scheme: "light" });
+    open.push(core);
+    const replies: string[] = [];
+    core.hooks.onWritePty = (b) => replies.push(new TextDecoder().decode(b));
+    core.write(bytes("\x1b[?996n\x1b[>q"));
+    expect(replies).toEqual(["\x1b[?997;2n", "\x1bP>|mast\x1b\\"]);
+  });
+
+  test("title changes (OSC 0/2) reach onTitle with the title text", async () => {
+    const core = await track(20, 2);
+    const titles: string[] = [];
+    core.hooks.onTitle = (t) => titles.push(t);
+    core.write(bytes("\x1b]0;uday@box: ~/ws\x07\x1b]2;vim README.md\x1b\\"));
+    expect(titles).toEqual(["uday@box: ~/ws", "vim README.md"]);
+    expect(core.title()).toBe("vim README.md");
+  });
+
+  test("OSC 52 writes reach onClipboard decoded; queries and other OSCs do not", async () => {
+    const core = await track(20, 2);
+    const copied: string[] = [];
+    core.hooks.onClipboard = (t) => copied.push(t);
+    core.write(bytes("\x1b]52;c;aGVsbG8=\x07")); // "hello"
+    core.write(bytes("\x1b]52;c;5LiW55WMIPCfmIA=\x1b\\")); // "世界 😀"
+    core.write(bytes("\x1b]52;c;?\x07")); // a read request, ignored
+    core.write(bytes("\x1b]0;a title\x07"));
+    expect(copied).toEqual(["hello", "世界 😀"]);
+  });
+
+  test("an OSC 52 clear reaches onClipboard as the empty string", async () => {
+    const core = await track(20, 2);
+    const copied: string[] = [];
+    core.hooks.onClipboard = (t) => copied.push(t);
+    core.write(bytes("\x1b]52;c;\x07"));
+    expect(copied).toEqual([""]);
+  });
+
+  test("BEL reaches onBell and never the screen", async () => {
+    const core = await track(20, 2);
+    let bells = 0;
+    core.hooks.onBell = () => bells++;
+    core.write(bytes("a\x07b\x07"));
+    expect(bells).toBe(2);
+    expect(rowText(core, 0)).toBe("ab");
+  });
+
   test("synchronizedOutput tracks mode 2026 around an app's redraw", async () => {
     const core = await vt();
     expect(core.synchronizedOutput()).toBe(false);
