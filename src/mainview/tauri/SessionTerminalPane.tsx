@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ThemeName } from "../../shared/types";
@@ -22,6 +22,7 @@ import {
 import { preAttachClass, skewCard, skewOf } from "../terminal/roomDeck";
 import { TerminalRenderer } from "../terminal/renderer";
 import { type CellPos, Selection } from "../terminal/selection";
+import { decodeDataFrame } from "../terminal/dataFrames";
 import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
 import { VtCore } from "../terminal/vtCore";
@@ -420,7 +421,9 @@ export const SessionTerminalPane = forwardRef<
       paint(cols, rows);
 
       const sink: PtySink = {
-        write: (bytes) => void invoke("session_write", { id, data: Array.from(bytes) }).catch(noop),
+        // Raw body, id in a header: no JSON number array per keystroke byte.
+        write: (bytes) =>
+          void invoke("session_write", bytes, { headers: { "x-mast-session": id } }).catch(noop),
         resize: (c, r) => void invoke("session_resize", { id, cols: c, rows: r }).catch(noop),
       };
       const controller = new TerminalController(core, renderer, sink);
@@ -429,29 +432,27 @@ export const SessionTerminalPane = forwardRef<
       controller.hooks.onClipboard = (text) =>
         void navigator.clipboard?.writeText(text).catch(noop);
       controller.hooks.onTitle = (title) => onTitleRef.current?.(title);
-      cleanups.push(
-        // One ordered channel carries bytes AND replay markers: a mid-stream replay means the
-        // host dropped part of the stream (flow-control pause) and is re-baselining us — the
-        // terminal resets so the snapshot lands clean, then snaps back to the live view.
-        await listen<
-          { kind: "bytes"; data: number[] } | { kind: "replay-begin"; safe: boolean } | { kind: "replay-end" }
-        >(`session://data/${id}`, (e) => {
-          const p = e.payload;
-          if (p.kind === "bytes") {
-            controller.feed(new Uint8Array(p.data));
-          } else if (p.kind === "replay-begin") {
-            controller.resetForReplay();
-          } else if (p.kind === "replay-end") {
-            controller.endReplay();
-            controller.scroll("bottom");
-            // The replay just restored the app's modes; an unfocused pane owes it a focus-lost
-            // report (the attach itself is assumed focused, which is wrong for a split's far side).
-            if (!activeRef.current) {
-              controller.setFocus(false);
-            }
+      // One ordered raw channel carries bytes AND replay markers: a mid-stream replay means the
+      // host dropped part of the stream (flow-control pause) and is re-baselining us — the
+      // terminal resets so the snapshot lands clean, then snaps back to the live view.
+      const onData = new Channel<ArrayBuffer>();
+      onData.onmessage = (message) => {
+        if (disposed) return;
+        const frame = decodeDataFrame(message);
+        if (frame.kind === "bytes") {
+          controller.feed(frame.data);
+        } else if (frame.kind === "replay-begin") {
+          controller.resetForReplay();
+        } else {
+          controller.endReplay();
+          controller.scroll("bottom");
+          // The replay just restored the app's modes; an unfocused pane owes it a focus-lost
+          // report (the attach itself is assumed focused, which is wrong for a split's far side).
+          if (!activeRef.current) {
+            controller.setFocus(false);
           }
-        }),
-      );
+        }
+      };
       cleanups.push(
         await listen<{ kind: string; fde?: string }>(`session://meta/${id}`, (e) => {
           if (e.payload.kind === "writer_changed") {
@@ -486,6 +487,7 @@ export const SessionTerminalPane = forwardRef<
           session,
           write,
           create: alive || !spec ? null : { ...spec, cols, rows },
+          onData,
         });
         createdRef.current = true;
       } catch (e) {

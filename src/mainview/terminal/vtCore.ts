@@ -117,6 +117,8 @@ const MODE_BRACKETED_PASTE = 2004;
 const MODES_ALT_SCREEN = [1049, 1047, 47] as const;
 /** DEC private mode 1004 — focus event reporting. */
 const MODE_FOCUS_REPORTING = 1004;
+/** DEC private mode 2026 — synchronized output: hold frames until the app finishes a redraw. */
+const MODE_SYNCHRONIZED_OUTPUT = 2026;
 /** GhosttyFocusEvent values. */
 const FOCUS_GAINED = 0;
 const FOCUS_LOST = 1;
@@ -585,6 +587,11 @@ export class VtCore {
   /** Whether the application asked for focus reports (mode 1004). */
   focusReporting(): boolean {
     return this.modeEnabled(MODE_FOCUS_REPORTING);
+  }
+
+  /** Whether the application is mid-redraw under synchronized output (mode 2026). */
+  synchronizedOutput(): boolean {
+    return this.modeEnabled(MODE_SYNCHRONIZED_OUTPUT);
   }
 
   /** The CSI I / CSI O focus report — send only when {@link focusReporting} says the app wants it. */

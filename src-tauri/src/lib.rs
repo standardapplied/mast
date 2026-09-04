@@ -6,12 +6,14 @@ mod login;
 mod pty;
 #[cfg(test)]
 mod pty_probe;
+mod session_frames;
 mod ssh;
 
 use std::sync::Arc;
 
 use serde_json::json;
 use ssh::Backend;
+use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Request};
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::OnceCell;
@@ -358,9 +360,9 @@ impl From<String> for SessionEnd {
 
 /// Attach a terminal to a host-owned pty session over SSH direct-streamlocal. Resolves once the
 /// host has acknowledged the (optional) Create and the Attach; a failure before that is the
-/// rejection, as `{class, reason}`. Output then arrives on `session://data/{id}`, the ending on
-/// `session://exit/{id}`, terminal-state changes on `session://meta/{id}`. A `create` mints the
-/// session first (durable, survives the app).
+/// rejection, as `{class, reason}`. Output and replay markers then arrive as raw frames on
+/// `on_data` (see `session_frames`), the ending on `session://exit/{id}`, terminal-state changes
+/// on `session://meta/{id}`. A `create` mints the session first (durable, survives the app).
 #[tauri::command]
 async fn session_open(
     app: AppHandle,
@@ -371,6 +373,7 @@ async fn session_open(
     session: String,
     write: bool,
     create: Option<SessionCreate>,
+    on_data: Channel<InvokeResponseBody>,
 ) -> Result<(), SessionEnd> {
     let req = pty::AttachRequest {
         token,
@@ -388,13 +391,29 @@ async fn session_open(
     state
         .backend()
         .await?
-        .session_open(app, id, socket_path, req)
+        .session_open(app, id, socket_path, req, on_data)
         .await
         .map_err(SessionEnd::from)
 }
 
+/// The header naming the attachment a raw `session_write` body is for.
+const SESSION_HEADER: &str = "x-mast-session";
+
+/// Keystrokes and pastes toward a session. The body is the raw bytes (no JSON number array per
+/// byte); the attachment id rides the `x-mast-session` header.
 #[tauri::command]
-async fn session_write(state: State<'_, AppState>, id: String, data: Vec<u8>) -> Result<(), String> {
+async fn session_write(state: State<'_, AppState>, request: Request<'_>) -> Result<(), String> {
+    let id = request
+        .headers()
+        .get(SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| format!("session_write: missing {SESSION_HEADER} header"))?
+        .to_owned();
+    let data = match request.body() {
+        InvokeBody::Raw(bytes) => bytes.clone(),
+        InvokeBody::Json(_) => return Err("session_write: the body must be raw bytes".into()),
+    };
     state.backend().await?.session_write(&id, data).await.map_err(String::from)
 }
 

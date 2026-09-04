@@ -22,6 +22,7 @@ use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tauri::ipc::{Channel as IpcChannel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -706,17 +707,18 @@ impl Backend {
     /// Attaches a terminal ({@code id}) to a host-owned pty session over a streamlocal channel,
     /// speaking the pty-host protocol directly. Resolves once the host has acknowledged the
     /// Create (when asked) and the Attach, so a caller that gets `Ok` knows the session exists;
-    /// a prologue failure is the error, classified by [`end_class`]. From then on output frames
-    /// become `session://data/{id}`, the ending becomes `session://exit/{id}`, and
-    /// flow-control/roster/resize become `session://meta/{id}`. Keystrokes/resize/detach ride the
-    /// returned sender via the session_* methods. The session survives this connection on the
-    /// host — closing here only detaches.
+    /// a prologue failure is the error, classified by [`end_class`]. From then on output bytes
+    /// and replay markers travel as raw frames on `on_data` (see `session_frames`), the ending
+    /// becomes `session://exit/{id}`, and flow-control/roster/resize become `session://meta/{id}`.
+    /// Keystrokes/resize/detach ride the returned sender via the session_* methods. The session
+    /// survives this connection on the host — closing here only detaches.
     pub async fn session_open(
         &self,
         app: AppHandle,
         id: String,
         socket_path: String,
         mut req: crate::pty::AttachRequest,
+        on_data: IpcChannel<InvokeResponseBody>,
     ) -> Result<(), Error> {
         // The attachment is registered BEFORE the first remote await: a session_close that lands
         // while the prologue is still talking to the host abandons it (see `until_closed`)
@@ -748,28 +750,20 @@ impl Backend {
         let sessions = self.sessions.clone();
         let cleanup_id = id.clone();
         let emitter = app.clone();
-        let data_ev = format!("session://data/{id}");
         let exit_ev = format!("session://exit/{id}");
         let meta_ev = format!("session://meta/{id}");
         let exit_on_error = exit_ev.clone();
         tokio::spawn(async move {
-            // Replay markers ride the DATA channel: a mid-stream resync must reset the client
-            // terminal *before* the snapshot bytes land, and only one ordered channel can
-            // guarantee that sequencing.
+            // Output and replay markers ride ONE raw channel, in order: a mid-stream resync must
+            // reset the client terminal *before* the snapshot bytes land. Raw frames skip the
+            // JSON number-array encoding an event would impose on every output byte.
             let on_event = |event: crate::pty::SessionEvent| {
                 use crate::pty::SessionEvent;
+                if let Some(frame) = crate::session_frames::encode(&event) {
+                    let _ = on_data.send(InvokeResponseBody::Raw(frame));
+                    return;
+                }
                 match event {
-                    SessionEvent::Output(bytes) => {
-                        let _ = emitter
-                            .emit(&data_ev, serde_json::json!({ "kind": "bytes", "data": bytes }));
-                    }
-                    SessionEvent::Replaying { safe } => {
-                        let _ = emitter
-                            .emit(&data_ev, serde_json::json!({ "kind": "replay-begin", "safe": safe }));
-                    }
-                    SessionEvent::ReplayDone => {
-                        let _ = emitter.emit(&data_ev, serde_json::json!({ "kind": "replay-end" }));
-                    }
                     SessionEvent::Ended(reason) => {
                         let _ = emitter
                             .emit(&exit_ev, serde_json::json!({ "class": "ended", "reason": reason }));
