@@ -271,6 +271,14 @@ const OPT_COLOR_BACKGROUND = 12;
 const OPT_COLOR_CURSOR = 13;
 const OPT_COLOR_PALETTE = 14;
 const OPT_DEFAULT_CURSOR_BLINK = 23;
+const OPT_SCROLLBACK_MAX_BYTES = 27;
+/** GHOSTTY_TERMINAL_DATA_SCROLLBACK_MAX_BYTES (size_t). */
+const DATA_SCROLLBACK_MAX_BYTES = 34;
+/**
+ * Scrollback budget per terminal. libghostty-vt's own default is 10 KB (a few hundred lines);
+ * native Ghostty configures 50 MB. Memory is allocated only as output accumulates.
+ */
+export const SCROLLBACK_MAX_BYTES = 20 * 1024 * 1024;
 /** Effect callbacks: the value passed to ghostty_terminal_set is the function-table index. */
 const OPT_WRITE_PTY = 1;
 const OPT_BELL = 2;
@@ -588,6 +596,7 @@ export class VtCore {
     this.setColor(OPT_COLOR_BACKGROUND, theme.bg);
     this.setColor(OPT_COLOR_CURSOR, theme.cursor);
     this.setBool(OPT_DEFAULT_CURSOR_BLINK, true);
+    this.setSize(OPT_SCROLLBACK_MAX_BYTES, SCROLLBACK_MAX_BYTES);
 
     const ptr = this.abi.alloc(256 * 3);
     try {
@@ -601,6 +610,35 @@ export class VtCore {
       this.e.ghostty_terminal_set(this.term, OPT_COLOR_PALETTE, ptr);
     } finally {
       this.abi.free(ptr, 256 * 3);
+    }
+  }
+
+  /** A size_t option (u32 on wasm32). */
+  private setSize(option: number, value: number): void {
+    const ptr = this.abi.alloc(4);
+    try {
+      this.abi.writeU32(ptr, value);
+      const rc = this.e.ghostty_terminal_set(this.term, option, ptr);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: setting option ${option} failed (rc=${rc})`);
+      }
+    } finally {
+      this.abi.free(ptr, 4);
+    }
+  }
+
+  /** The scrollback budget in bytes the terminal is running with. */
+  scrollbackMaxBytes(): number {
+    this.requireOpen();
+    const ptr = this.abi.alloc(4);
+    try {
+      const rc = this.e.ghostty_terminal_get(this.term, DATA_SCROLLBACK_MAX_BYTES, ptr);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: reading the scrollback limit failed (rc=${rc})`);
+      }
+      return this.abi.readU32(ptr);
+    } finally {
+      this.abi.free(ptr, 4);
     }
   }
 

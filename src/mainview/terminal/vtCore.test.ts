@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { keyEventFor, MODS, type KeyStroke } from "./input";
-import { VtCore } from "./vtCore";
+import { SCROLLBACK_MAX_BYTES, VtCore } from "./vtCore";
 
 // Drives the real vendored libghostty-vt wasm (see PIN.md) — no mocks. If the wasm's ABI drifts on
 // a re-pin, these tests fail loudly, which is exactly the guard we want around an alpha C ABI.
@@ -59,6 +59,27 @@ describe("VtCore", () => {
     expect(cells[3]).toMatchObject({ text: "x", width: 1 });
     expect(cells[4]).toMatchObject({ text: "😀", width: 2 });
     expect(core.readAll().rows[0]!.cells[0]!.width).toBe(1); // stable across reads
+  });
+
+  test("scrollback is budgeted like a real terminal, not the library's 10 KB default", async () => {
+    const core = await track(80, 4);
+    expect(core.scrollbackMaxBytes()).toBe(SCROLLBACK_MAX_BYTES);
+    // ~1 MB of history: well past the library default and past one internal page, so a pruned
+    // terminal would have lost the first lines.
+    const lines = 20_000;
+    let chunk = "";
+    for (let i = 0; i < lines; i++) {
+      chunk += `line ${i} ${"x".repeat(40)}\r\n`;
+      if (chunk.length > 65_536) {
+        core.write(bytes(chunk));
+        chunk = "";
+      }
+    }
+    core.write(bytes(chunk));
+    core.scroll("top");
+    expect(rowText(core, 0)).toBe(`line 0 ${"x".repeat(40)}`);
+    core.scroll("bottom");
+    expect(rowText(core, 2)).toBe(`line ${lines - 1} ${"x".repeat(40)}`);
   });
 
   test("scrolls the viewport up into scrollback and back to the live bottom", async () => {
