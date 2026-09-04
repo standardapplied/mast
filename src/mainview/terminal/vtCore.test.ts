@@ -448,6 +448,15 @@ describe("paste", () => {
     expect(decode(core.encodeFocus(false))).toBe("\x1b[O");
   });
 
+  test("synchronizedOutput tracks mode 2026 around an app's redraw", async () => {
+    const core = await vt();
+    expect(core.synchronizedOutput()).toBe(false);
+    core.write(bytes("\x1b[?2026h"));
+    expect(core.synchronizedOutput()).toBe(true);
+    core.write(bytes("\x1b[?2026l"));
+    expect(core.synchronizedOutput()).toBe(false);
+  });
+
   test("altScreen tracks the application's alternate-screen modes", async () => {
     const core = await track();
     expect(core.altScreen()).toBe(false);

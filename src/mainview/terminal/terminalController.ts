@@ -7,9 +7,9 @@
  * VtCore with a recording renderer and sink — no WebGPU, no Tauri, no DOM. The React component and
  * the WebGPU renderer are the thin, untested edge that wires these seams to the live app.
  *
- * Damage-aware: {@link #frame} applies only the rows VtCore reports dirty, then draws. Idle frames
- * cost one snapshot and one draw; the caller decides how often to call it (new data, resize, cursor
- * blink), so nothing spins when the screen is quiet.
+ * Damage-driven: {@link #frame} applies only the rows VtCore reports dirty, then draws only when
+ * something visible changed — rows, cursor, selection. An idle terminal costs one mode query per
+ * frame and nothing else; the caller decides how often to call it (an animation frame is fine).
  */
 
 import { keyEventFor, type KeyStroke } from "./input";
@@ -32,13 +32,30 @@ export interface PtySink {
   resize(cols: number, rows: number): void;
 }
 
+export interface ControllerOptions {
+  /** Monotonic milliseconds; injected so the synchronized-output cap is testable. */
+  readonly now?: () => number;
+}
+
+/**
+ * How long a frame may be held under synchronized output (mode 2026). An app that begins a
+ * synchronized update and dies, or forgets to end it, must not freeze the terminal forever.
+ */
+export const SYNCHRONIZED_OUTPUT_CAP_MS = 1000;
+
 export class TerminalController {
   private cols: number;
   private rows: number;
-  private dirty = false;
+  /** Terminal state may have changed since the last frame: read the dirty rows. */
+  private dirty = true;
+  /** Something visible changed that the grid does not carry (selection, geometry): draw. */
+  private redraw = true;
+  private lastCursor: Cursor | null = null;
+  private syncSince: number | null = null;
   private selection: Selection | null = null;
   private readonly osc = new OscSignalScanner();
   private replaying = false;
+  private readonly now: () => number;
 
   /** Side-channel intents found in the stream; the host wires these to the platform. */
   readonly hooks: { onClipboard?: (text: string) => void; onTitle?: (title: string) => void } = {};
@@ -47,7 +64,9 @@ export class TerminalController {
     private readonly core: VtCore,
     private readonly renderer: Renderer,
     private readonly sink: PtySink,
+    options: ControllerOptions = {},
   ) {
+    this.now = options.now ?? (() => performance.now());
     const size = core.size;
     this.cols = size.cols;
     this.rows = size.rows;
@@ -100,27 +119,48 @@ export class TerminalController {
   }
 
   /**
-   * Renders one frame: when bytes have arrived since the last paint, re-reads the whole viewport and
-   * applies it, then draws with the cursor. {@code blinkOn} is the UI blink phase; it applies only
-   * when the terminal asked for a blinking cursor. An unfocused terminal shows a steady hollow
-   * cursor, as native terminals do, whatever shape the application chose.
+   * Renders one frame if anything visible changed: applies the rows VtCore reports dirty, folds
+   * the cursor in, and draws. {@code blinkOn} is the UI blink phase; it applies only when the
+   * terminal asked for a blinking cursor. An unfocused terminal shows a steady hollow cursor, as
+   * native terminals do, whatever shape the application chose.
    *
-   * <p>The repaint is gated on our own "bytes fed" flag, not libghostty-vt's damage: it only flags a
-   * scroll as dirty, never an in-place edit (readline echoing a keystroke, a one-line command's
-   * output), so a renderer that trusts its dirty gate silently drops them and typed text stays
-   * invisible. We know when data arrived, so we re-read every row then and nothing is missed; idle
-   * frames still cost only a cursor draw.
+   * <p>Under synchronized output (mode 2026) the frame is held so a TUI's multi-write redraw
+   * lands at once instead of tearing — up to {@link SYNCHRONIZED_OUTPUT_CAP_MS}, after which the
+   * hold is released regardless.
    */
   frame(blinkOn = true, focused = true): void {
+    if (this.holdForSynchronizedOutput()) {
+      return;
+    }
     if (this.dirty) {
-      this.renderer.apply(this.core.readAll());
+      const snapshot = this.core.snapshot();
+      if (snapshot.dirty !== "none") {
+        this.renderer.apply(snapshot);
+        this.redraw = true;
+      }
       this.core.clean();
       this.dirty = false;
     }
     const cursor = this.core.cursor();
     const shown = cursor.visible && (!focused || !cursor.blinking || blinkOn);
-    this.renderer.setCursor({ ...cursor, visible: shown, style: focused ? cursor.style : "hollow" });
+    const next: Cursor = { ...cursor, visible: shown, style: focused ? cursor.style : "hollow" };
+    if (!this.redraw && this.lastCursor !== null && sameCursor(this.lastCursor, next)) {
+      return;
+    }
+    this.lastCursor = next;
+    this.redraw = false;
+    this.renderer.setCursor(next);
     this.renderer.draw();
+  }
+
+  private holdForSynchronizedOutput(): boolean {
+    if (!this.core.synchronizedOutput()) {
+      this.syncSince = null;
+      return false;
+    }
+    const now = this.now();
+    this.syncSince ??= now;
+    return now - this.syncSince < SYNCHRONIZED_OUTPUT_CAP_MS;
   }
 
   /**
@@ -208,7 +248,7 @@ export class TerminalController {
   setSelection(selection: Selection | null): void {
     this.selection = selection;
     this.renderer.setSelection(selection);
-    this.dirty = true;
+    this.redraw = true;
   }
 
   /** The selected text, newline-joined and per-line right-trimmed; empty when nothing is selected. */
@@ -233,11 +273,22 @@ export class TerminalController {
     this.renderer.resize(cols, rows);
     this.sink.resize(cols, rows);
     this.dirty = true;
+    this.redraw = true;
   }
 
   get size(): { cols: number; rows: number } {
     return { cols: this.cols, rows: this.rows };
   }
+}
+
+function sameCursor(a: Cursor, b: Cursor): boolean {
+  return (
+    a.present === b.present &&
+    a.visible === b.visible &&
+    a.x === b.x &&
+    a.y === b.y &&
+    a.style === b.style
+  );
 }
 
 /**

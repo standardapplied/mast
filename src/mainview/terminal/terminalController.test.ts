@@ -5,6 +5,7 @@ import {
   gridFor,
   type PtySink,
   type Renderer,
+  SYNCHRONIZED_OUTPUT_CAP_MS,
   TerminalController,
 } from "./terminalController";
 import { Selection } from "./selection";
@@ -64,12 +65,12 @@ function gridRow(grid: TerminalGrid, y: number): string {
 }
 
 let cores: VtCore[] = [];
-async function harness(cols = 80, rows = 24) {
+async function harness(cols = 80, rows = 24, now?: () => number) {
   const core = await VtCore.create(WASM, cols, rows);
   cores.push(core);
   const renderer = new RecRenderer();
   const sink = new RecSink();
-  const controller = new TerminalController(core, renderer, sink);
+  const controller = new TerminalController(core, renderer, sink, { now });
   return { core, renderer, sink, controller };
 }
 afterEach(() => {
@@ -107,15 +108,17 @@ describe("TerminalController", () => {
     expect([0, 1, 2].map((y) => gridRow(renderer.grid, y))).toEqual(["b", "c", "d"]);
   });
 
-  test("an echoed keystroke on the active line reaches the rendered grid", async () => {
+  test("an echoed keystroke on the active line reaches the rendered grid via its dirty row", async () => {
     const { controller, renderer } = await harness(80, 40);
     controller.feed(enc("$ "));
     controller.frame();
     controller.feed(enc("x")); // one echoed keystroke edits the cursor row in place
     controller.frame();
-    // The whole viewport is re-read on any change (libghostty-vt's dirty-row iterator drops
-    // in-place edits on the active line), so an echo on the current row is never missed.
     expect(gridRow(renderer.grid, 0)).toBe("$ x");
+    // libghostty-vt flags the in-place edit as partial damage on exactly that row.
+    const last = renderer.applied.at(-1)!;
+    expect(last.dirty).toBe("partial");
+    expect(last.rows.map((r) => r.y)).toEqual([0]);
   });
 
   test("selectedText reads the highlighted cells straight from the live grid", async () => {
@@ -145,15 +148,78 @@ describe("TerminalController", () => {
     expect(core.snapshot().rows.every((r) => rowText(core.snapshot(), r.y) === "")).toBe(true);
   });
 
-  test("frames are damage-aware: an unchanged frame re-draws but re-applies nothing", async () => {
+  test("an idle frame applies nothing and draws nothing", async () => {
     const { controller, renderer } = await harness();
     controller.feed(enc("x"));
     controller.frame();
-    const appliedAfterFirst = renderer.applied.length;
+    const applied = renderer.applied.length;
     controller.frame();
-    expect(renderer.applied.length).toBe(appliedAfterFirst);
+    controller.frame();
+    expect(renderer.applied.length).toBe(applied);
+    expect(renderer.draws).toBe(1);
+  });
+
+  test("a write that changes no cell (a mode switch) draws nothing", async () => {
+    const { controller, renderer } = await harness();
+    controller.frame();
+    controller.feed(enc("\x1b[?2004h"));
+    controller.frame();
+    expect(renderer.draws).toBe(1);
+  });
+
+  test("a cursor move without output still draws", async () => {
+    const { controller, renderer } = await harness();
+    controller.frame();
+    controller.feed(enc("\x1b[5;5H"));
+    controller.frame();
     expect(renderer.draws).toBe(2);
-    expect(renderer.cursors.length).toBe(2);
+    expect(renderer.cursors.at(-1)).toMatchObject({ x: 4, y: 4 });
+  });
+
+  test("a blink phase flip draws once per flip, not per frame", async () => {
+    const { controller, renderer } = await harness();
+    controller.frame(true);
+    controller.frame(true);
+    controller.frame(false);
+    controller.frame(false);
+    controller.frame(true);
+    expect(renderer.draws).toBe(3);
+  });
+
+  test("a selection change draws even with no terminal change", async () => {
+    const { controller, renderer } = await harness(20, 3);
+    controller.feed(enc("hello"));
+    controller.frame();
+    controller.setSelection(new Selection({ x: 0, y: 0 }, { x: 3, y: 0 }, 20));
+    controller.frame();
+    expect(renderer.draws).toBe(2);
+  });
+
+  test("synchronized output holds frames until the app ends the update", async () => {
+    let now = 0;
+    const { controller, renderer } = await harness(20, 3, () => now);
+    controller.feed(enc("\x1b[?2026hfirst"));
+    controller.frame();
+    expect(renderer.draws).toBe(0);
+    expect(gridRow(renderer.grid, 0)).toBe("");
+    controller.feed(enc("\r\nsecond\x1b[?2026l"));
+    controller.frame();
+    expect(renderer.draws).toBe(1);
+    expect([gridRow(renderer.grid, 0), gridRow(renderer.grid, 1)]).toEqual(["first", "second"]);
+  });
+
+  test("a synchronized update that never ends is released after the cap", async () => {
+    let now = 0;
+    const { controller, renderer } = await harness(20, 3, () => now);
+    controller.feed(enc("\x1b[?2026hstuck"));
+    controller.frame();
+    now = SYNCHRONIZED_OUTPUT_CAP_MS - 1;
+    controller.frame();
+    expect(renderer.draws).toBe(0);
+    now = SYNCHRONIZED_OUTPUT_CAP_MS;
+    controller.frame();
+    expect(renderer.draws).toBe(1);
+    expect(gridRow(renderer.grid, 0)).toBe("stuck");
   });
 
   test("the blink phase applies to a blinking cursor", async () => {

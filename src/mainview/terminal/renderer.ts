@@ -51,7 +51,7 @@ interface FrameData {
   readonly cellW: number;
   readonly cellH: number;
   readonly atlasCols: number;
-  /** Per-cell background: cols*rows*3 floats (0..1). */
+  /** Per-cell background, row-major: cols*rows*BG_STRIDE floats (0..1). */
   readonly bg: Float32Array;
   /** Per-glyph-cell foreground: packed [x,y, r,g,b, u,v, w, mode] * n. */
   readonly fg: Float32Array;
@@ -177,8 +177,8 @@ const WGSL = /* wgsl */ `
 struct Uniforms {
   view : vec2f,      // canvas size in px
   cell : vec2f,      // cell size in px
-  atlas : vec2f,     // atlas grid cols, and atlas texel size flag (cols only used)
-  pad : vec2f,
+  atlas : vec2f,     // x: atlas grid cols
+  grid : vec2f,      // x: terminal cols (background instances index the grid row-major)
 };
 @group(0) @binding(0) var<uniform> U : Uniforms;
 @group(0) @binding(1) var atlasTex : texture_2d<f32>;
@@ -188,12 +188,14 @@ struct BgOut { @builtin(position) pos : vec4f, @location(0) color : vec3f, };
 
 @vertex
 fn bg_vs(@builtin(vertex_index) vi : u32,
-         @location(0) grid : vec2f,
-         @location(1) color : vec3f) -> BgOut {
+         @builtin(instance_index) ii : u32,
+         @location(0) color : vec3f) -> BgOut {
   var corners = array<vec2f,6>(
     vec2f(0,0), vec2f(1,0), vec2f(0,1),
     vec2f(0,1), vec2f(1,0), vec2f(1,1));
   let c = corners[vi];
+  let cols = u32(U.grid.x);
+  let grid = vec2f(f32(ii % cols), f32(ii / cols));
   let px = (grid + c) * U.cell;
   let ndc = vec2f(px.x / U.view.x * 2.0 - 1.0, 1.0 - px.y / U.view.y * 2.0);
   var o : BgOut;
@@ -306,12 +308,9 @@ class WebGpuBackend implements Backend {
         entryPoint: "bg_vs",
         buffers: [
           {
-            arrayStride: 5 * 4,
+            arrayStride: BG_STRIDE * 4,
             stepMode: "instance",
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: "float32x2" },
-              { shaderLocation: 1, offset: 2 * 4, format: "float32x3" },
-            ],
+            attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }],
           },
         ],
       },
@@ -347,9 +346,22 @@ class WebGpuBackend implements Backend {
     return new WebGpuBackend(canvas, device, ctx, format, bgPipe, fgPipe, sampler, bindLayout);
   }
 
+  private bgBuf: GPUBuffer | null = null;
+  private fgBuf: GPUBuffer | null = null;
+
   resize(pxW: number, pxH: number): void {
     this.canvas.width = pxW;
     this.canvas.height = pxH;
+  }
+
+  /** Vertex buffers persist across frames and grow only when the grid outgrows them. */
+  private vertexBuffer(current: GPUBuffer | null, bytes: number): GPUBuffer {
+    if (current && current.size >= bytes) return current;
+    current?.destroy();
+    return this.device.createBuffer({
+      size: Math.max(4, bytes),
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
   }
 
   private ensureAtlas(d: FrameData): void {
@@ -418,34 +430,18 @@ class WebGpuBackend implements Backend {
         d.cellH,
         d.atlasCols,
         0,
-        0,
+        d.cols,
         0,
       ]),
     );
 
-    const gridBg = new Float32Array(d.cols * d.rows * 5);
-    for (let y = 0; y < d.rows; y++) {
-      for (let x = 0; x < d.cols; x++) {
-        const i = (y * d.cols + x) * 5;
-        const c = (y * d.cols + x) * 3;
-        gridBg[i] = x;
-        gridBg[i + 1] = y;
-        gridBg[i + 2] = d.bg[c];
-        gridBg[i + 3] = d.bg[c + 1];
-        gridBg[i + 4] = d.bg[c + 2];
-      }
-    }
-    const bgBuf = this.device.createBuffer({
-      size: gridBg.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    this.writeF32(bgBuf, gridBg);
-
-    const fgBuf = this.device.createBuffer({
-      size: Math.max(FG_STRIDE * 4, d.fg.byteLength),
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    if (d.fgCount > 0) this.writeF32(fgBuf, d.fg.subarray(0, d.fgCount * FG_STRIDE));
+    const bgBytes = d.cols * d.rows * BG_STRIDE * 4;
+    this.bgBuf = this.vertexBuffer(this.bgBuf, bgBytes);
+    this.writeF32(this.bgBuf, d.bg.subarray(0, d.cols * d.rows * BG_STRIDE));
+    this.fgBuf = this.vertexBuffer(this.fgBuf, d.fg.byteLength);
+    if (d.fgCount > 0) this.writeF32(this.fgBuf, d.fg.subarray(0, d.fgCount * FG_STRIDE));
+    const bgBuf = this.bgBuf;
+    const fgBuf = this.fgBuf;
 
     const encoder = this.device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
@@ -469,11 +465,11 @@ class WebGpuBackend implements Backend {
     }
     pass.end();
     this.device.queue.submit([encoder.finish()]);
-    bgBuf.destroy();
-    fgBuf.destroy();
   }
 
   destroy(): void {
+    this.bgBuf?.destroy();
+    this.fgBuf?.destroy();
     this.texture?.destroy();
     this.device.destroy();
   }
@@ -483,12 +479,12 @@ class WebGpuBackend implements Backend {
 
 const GL_BG_VS = `#version 300 es
 precision highp float;
-layout(location=0) in vec2 grid;
-layout(location=1) in vec3 color;
-uniform vec2 uView; uniform vec2 uCell;
+layout(location=0) in vec3 color;
+uniform vec2 uView; uniform vec2 uCell; uniform int uCols;
 out vec3 vColor;
 const vec2 C[6] = vec2[6](vec2(0,0),vec2(1,0),vec2(0,1),vec2(0,1),vec2(1,0),vec2(1,1));
 void main(){
+  vec2 grid = vec2(float(gl_InstanceID % uCols), float(gl_InstanceID / uCols));
   vec2 px = (grid + C[gl_VertexID]) * uCell;
   gl_Position = vec4(px.x/uView.x*2.0-1.0, 1.0-px.y/uView.y*2.0, 0.0, 1.0);
   vColor = color;
@@ -543,8 +539,7 @@ class WebGl2Backend implements Backend {
     const bgVao = gl.createVertexArray()!;
     gl.bindVertexArray(bgVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, bgBuf);
-    attr(gl, 0, 2, 5 * 4, 0);
-    attr(gl, 1, 3, 5 * 4, 2 * 4);
+    attr(gl, 0, 3, BG_STRIDE * 4, 0);
     const fgVao = gl.createVertexArray()!;
     gl.bindVertexArray(fgVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, fgBuf);
@@ -592,25 +587,13 @@ class WebGl2Backend implements Backend {
     gl.clearColor(d.clear[0] / 255, d.clear[1] / 255, d.clear[2] / 255, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    const gridBg = new Float32Array(d.cols * d.rows * 5);
-    for (let y = 0; y < d.rows; y++) {
-      for (let x = 0; x < d.cols; x++) {
-        const i = (y * d.cols + x) * 5;
-        const c = (y * d.cols + x) * 3;
-        gridBg[i] = x;
-        gridBg[i + 1] = y;
-        gridBg[i + 2] = d.bg[c];
-        gridBg[i + 3] = d.bg[c + 1];
-        gridBg[i + 4] = d.bg[c + 2];
-      }
-    }
-
     gl.useProgram(this.bgProg);
     uni2(gl, this.bgProg, "uView", this.canvas.width, this.canvas.height);
     uni2(gl, this.bgProg, "uCell", d.cellW, d.cellH);
+    gl.uniform1i(gl.getUniformLocation(this.bgProg, "uCols"), d.cols);
     gl.bindVertexArray(this.bgVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.bgBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, gridBg, gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, d.bg.subarray(0, d.cols * d.rows * BG_STRIDE), gl.DYNAMIC_DRAW);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, d.cols * d.rows);
 
     if (d.fgCount > 0) {

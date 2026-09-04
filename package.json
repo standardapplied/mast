@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "preview": "bun run scripts/preview.ts",
-    "terminal:replay": "bun run scripts/terminal-replay.ts"
+    "terminal:replay": "bun run scripts/terminal-replay.ts",
+    "terminal:bench": "bun run scripts/terminal-bench.ts"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",
