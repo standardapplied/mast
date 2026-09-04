@@ -3,6 +3,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { CrashScreen } from "./components/CrashScreen";
+import { logError } from "./errorLog";
 import { Styleguide } from "./styleguide";
 import { createTauriGateway } from "./tauri/gateway";
 import type { RosterSources } from "./tauri/projectRoster";
@@ -74,6 +76,21 @@ const theme = {
 const container = document.getElementById("root");
 if (!container) throw new Error("Missing #root element");
 
+// A release webview has no inspector, so anything that escapes React's tree — or its render — is
+// invisible unless it leaves the process: the shell writes reports to stderr, where a Terminal
+// launch of Mast shows them, and the Diagnostics report carries the same ring.
+const report = (message: string) => void invoke("log_error", { message }).catch(() => {});
+window.addEventListener("error", (e) => {
+  const detail = `${e.message}\n${e.error instanceof Error ? (e.error.stack ?? "") : ""}`;
+  logError("window", detail);
+  report(detail);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const reason = e.reason instanceof Error ? `${e.reason.message}\n${e.reason.stack ?? ""}` : String(e.reason);
+  logError("promise", reason);
+  report(reason);
+});
+
 // Navigation (rooms ⇄ board ⇄ terminal ⇄ spec) is React state inside <App>; it must NOT
 // reload the page, or the terminal tabs and their live sessions — and all other
 // in-memory state — are lost. The board writes the current spec to location.hash
@@ -89,6 +106,7 @@ createRoot(container).render(
     {isStyleguide ? (
       <Styleguide theme={theme} />
     ) : (
+      <CrashScreen report={report}>
       <App
         gateway={gateway}
         theme={theme}
@@ -102,6 +120,7 @@ createRoot(container).render(
         deck={tauriDeckServices}
         updater={createTauriUpdater()}
       />
+      </CrashScreen>
     )}
   </StrictMode>,
 );
