@@ -49,9 +49,12 @@ const styleOf = (c: Cell) =>
   [
     c.bold && "bold",
     c.italic && "italic",
-    c.underline && "underline",
+    c.underline !== "none" && `underline:${c.underline}`,
+    c.underlineColor && `ul=${c.underlineColor}`,
     c.strikethrough && "strike",
+    c.overline && "overline",
     c.faint && "faint",
+    c.invisible && "invisible",
   ]
     .filter(Boolean)
     .join("+");
@@ -79,7 +82,9 @@ for (const row of snapshot.rows) {
   }
   console.log(`|${line.trimEnd()}`);
 }
-const where = cursor.present ? `(${cursor.x},${cursor.y})${cursor.visible ? "" : " hidden"}` : "off-screen";
+const where = cursor.present
+  ? `(${cursor.x},${cursor.y}) ${cursor.style}${cursor.blinking ? " blinking" : ""}${cursor.visible ? "" : " hidden"}`
+  : "off-screen";
 console.log(`cursor: ${where}`);
 if (styled.length) console.log(`\nstyled cells:\n${styled.join("\n")}`);
 

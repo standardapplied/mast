@@ -92,17 +92,56 @@ describe("VtCore", () => {
     const c = core.readAll().rows[0]!.cells;
     expect(c[0]).toMatchObject({ text: "B", bold: true, italic: false });
     expect(c[1]).toMatchObject({ text: "I", italic: true, bold: false });
-    expect(c[2]).toMatchObject({ text: "U", underline: true });
+    expect(c[2]).toMatchObject({ text: "U", underline: "single", underlineColor: null });
     expect(c[3]).toMatchObject({ text: "S", strikethrough: true });
     expect(c[4]).toMatchObject({ text: "F", faint: true });
     expect(c[5]).toMatchObject({
       text: "P",
       bold: false,
       italic: false,
-      underline: false,
+      underline: "none",
       strikethrough: false,
       faint: false,
+      overline: false,
+      invisible: false,
     });
+  });
+
+  test("reads every SGR 4:x underline style, the SGR 58 underline color, overline and invisible", async () => {
+    const core = await track(30, 3);
+    core.write(
+      bytes(
+        "\x1b[4:2mD\x1b[0m\x1b[4:3m\x1b[58;2;10;20;30mC\x1b[0m\x1b[4:4m\x1b[58;5;1mO\x1b[0m" +
+          "\x1b[4:5mA\x1b[0m\x1b[53mV\x1b[0m\x1b[8mH\x1b[0m",
+      ),
+    );
+    const c = core.readAll().rows[0]!.cells;
+    expect(c[0]).toMatchObject({ text: "D", underline: "double", underlineColor: null });
+    expect(c[1]).toMatchObject({ text: "C", underline: "curly", underlineColor: [10, 20, 30] });
+    // palette index 1 resolves through the configured palette (the default theme's red)
+    expect(c[2]).toMatchObject({ text: "O", underline: "dotted", underlineColor: [224, 123, 111] });
+    expect(c[3]).toMatchObject({ text: "A", underline: "dashed" });
+    expect(c[4]).toMatchObject({ text: "V", overline: true, underline: "none" });
+    expect(c[5]).toMatchObject({ text: "H", invisible: true });
+  });
+
+  test("reports the cursor shape and blink request: DECSCUSR and mode 12", async () => {
+    const core = await track(10, 2);
+    expect(core.cursor()).toMatchObject({ style: "block", blinking: true }); // Mast's default
+    core.write(bytes("\x1b[5 q"));
+    expect(core.cursor()).toMatchObject({ style: "bar", blinking: true });
+    core.write(bytes("\x1b[6 q"));
+    expect(core.cursor()).toMatchObject({ style: "bar", blinking: false });
+    core.write(bytes("\x1b[3 q"));
+    expect(core.cursor()).toMatchObject({ style: "underline", blinking: true });
+    core.write(bytes("\x1b[2 q"));
+    expect(core.cursor()).toMatchObject({ style: "block", blinking: false });
+    core.write(bytes("\x1b[0 q"));
+    expect(core.cursor()).toMatchObject({ style: "block", blinking: true });
+    core.write(bytes("\x1b[?12l"));
+    expect(core.cursor()).toMatchObject({ blinking: false });
+    core.write(bytes("\x1b[?25l"));
+    expect(core.cursor()).toMatchObject({ visible: false });
   });
 
   test("reverse video swaps a cell's foreground and background", async () => {

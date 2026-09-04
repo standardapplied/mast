@@ -13,6 +13,7 @@
  * only the device, the shaders, and the draw call differ.
  */
 
+import { BG_STRIDE, FG_PER_CELL, FG_STRIDE, packFrame } from "./framePacker";
 import { GlyphAtlas } from "./glyphAtlas";
 import { offscreenRaster, type RasterFactory } from "./raster";
 import type { Selection } from "./selection";
@@ -43,12 +44,6 @@ export interface RendererOptions {
   /** Where the glyph atlas draws; defaults to an OffscreenCanvas. */
   readonly raster?: RasterFactory;
 }
-
-/** Floats per foreground instance: x, y, r, g, b, u, v, w, mode. */
-const FG_STRIDE = 9;
-/** Instance mode: tint the white mask with the cell color, or draw the entry's own colors. */
-const MODE_TINT = 0;
-const MODE_COLOR = 1;
 
 interface FrameData {
   readonly cols: number;
@@ -84,7 +79,14 @@ export class TerminalRenderer implements Renderer {
   private readonly grid: TerminalGrid;
   private cols = 0;
   private rows = 0;
-  private cursor: Cursor = { present: false, x: 0, y: 0, visible: false };
+  private cursor: Cursor = {
+    present: false,
+    x: 0,
+    y: 0,
+    visible: false,
+    style: "block",
+    blinking: false,
+  };
   private selection: Selection | null = null;
   // Instance buffers reused across frames — sized on resize, never per frame.
   private bgInstances = new Float32Array(0);
@@ -120,8 +122,8 @@ export class TerminalRenderer implements Renderer {
     this.cols = cols;
     this.rows = rows;
     this.grid.resize(cols, rows);
-    this.bgInstances = new Float32Array(cols * rows * 3);
-    this.fgInstances = new Float32Array(cols * rows * FG_STRIDE);
+    this.bgInstances = new Float32Array(cols * rows * BG_STRIDE);
+    this.fgInstances = new Float32Array((cols * rows * FG_PER_CELL + 1) * FG_STRIDE);
     this.backend.resize(cols * this.atlas.metrics.cellW, rows * this.atlas.metrics.cellH);
   }
 
@@ -142,46 +144,10 @@ export class TerminalRenderer implements Renderer {
   draw(): void {
     const bg = this.bgInstances;
     const fg = this.fgInstances;
-    let fgCount = 0;
-
-    for (let y = 0; y < this.rows; y++) {
-      for (let x = 0; x < this.cols; x++) {
-        const cell = this.grid.cell(x, y);
-        const onCursor =
-          this.cursor.present && this.cursor.visible && this.cursor.x === x && this.cursor.y === y;
-        const selected = !onCursor && (this.selection?.contains(x, y) ?? false);
-        const cellBg = onCursor ? this.opts.cursor : selected ? this.opts.selectionBg : cell.bg;
-        const bi = (y * this.cols + x) * 3;
-        bg[bi] = cellBg[0] / 255;
-        bg[bi + 1] = cellBg[1] / 255;
-        bg[bi + 2] = cellBg[2] / 255;
-        const wide = cell.width === 2;
-        const glyph = this.atlas.glyph(cell.text, cell, wide);
-        if (glyph !== 0) {
-          const { u, v } = this.atlas.cell(glyph);
-          const o = fgCount * FG_STRIDE;
-          fg[o] = x;
-          fg[o + 1] = y;
-          if (onCursor || selected) {
-            const glyphColor = onCursor ? this.opts.bg : this.opts.selectionFg;
-            fg[o + 2] = glyphColor[0] / 255;
-            fg[o + 3] = glyphColor[1] / 255;
-            fg[o + 4] = glyphColor[2] / 255;
-          } else {
-            // faint dims the glyph halfway toward its own background
-            const t = cell.faint ? 0.5 : 0;
-            fg[o + 2] = (cell.fg[0] + (cell.bg[0] - cell.fg[0]) * t) / 255;
-            fg[o + 3] = (cell.fg[1] + (cell.bg[1] - cell.fg[1]) * t) / 255;
-            fg[o + 4] = (cell.fg[2] + (cell.bg[2] - cell.fg[2]) * t) / 255;
-          }
-          fg[o + 5] = u;
-          fg[o + 6] = v;
-          fg[o + 7] = wide ? 2 : 1;
-          fg[o + 8] = this.atlas.isColor(glyph) ? MODE_COLOR : MODE_TINT;
-          fgCount++;
-        }
-      }
-    }
+    const fgCount = packFrame(this.grid, this.cursor, this.selection, this.atlas, this.opts, {
+      bg,
+      fg,
+    });
 
     this.backend.frame({
       cols: this.cols,

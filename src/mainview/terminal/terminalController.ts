@@ -101,8 +101,9 @@ export class TerminalController {
 
   /**
    * Renders one frame: when bytes have arrived since the last paint, re-reads the whole viewport and
-   * applies it, then draws with the cursor. {@code blinkOn} folds the UI blink phase into the pty's
-   * own cursor visibility.
+   * applies it, then draws with the cursor. {@code blinkOn} is the UI blink phase; it applies only
+   * when the terminal asked for a blinking cursor. An unfocused terminal shows a steady hollow
+   * cursor, as native terminals do, whatever shape the application chose.
    *
    * <p>The repaint is gated on our own "bytes fed" flag, not libghostty-vt's damage: it only flags a
    * scroll as dirty, never an in-place edit (readline echoing a keystroke, a one-line command's
@@ -110,14 +111,15 @@ export class TerminalController {
    * invisible. We know when data arrived, so we re-read every row then and nothing is missed; idle
    * frames still cost only a cursor draw.
    */
-  frame(blinkOn = true): void {
+  frame(blinkOn = true, focused = true): void {
     if (this.dirty) {
       this.renderer.apply(this.core.readAll());
       this.core.clean();
       this.dirty = false;
     }
     const cursor = this.core.cursor();
-    this.renderer.setCursor({ ...cursor, visible: cursor.visible && blinkOn });
+    const shown = cursor.visible && (!focused || !cursor.blinking || blinkOn);
+    this.renderer.setCursor({ ...cursor, visible: shown, style: focused ? cursor.style : "hollow" });
     this.renderer.draw();
   }
 

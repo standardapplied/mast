@@ -156,10 +156,34 @@ describe("TerminalController", () => {
     expect(renderer.cursors.length).toBe(2);
   });
 
-  test("the blink phase folds into the cursor's own visibility", async () => {
+  test("the blink phase applies to a blinking cursor", async () => {
     const { controller, renderer } = await harness();
     controller.frame(true);
+    expect(renderer.cursors.at(-1)).toMatchObject({ visible: true, style: "block", blinking: true });
     controller.frame(false);
+    expect(renderer.cursors.at(-1)!.visible).toBe(false);
+  });
+
+  test("a steady cursor (DECSCUSR 2) ignores the blink phase", async () => {
+    const { controller, renderer } = await harness();
+    controller.feed(enc("\x1b[2 q"));
+    controller.frame(false);
+    expect(renderer.cursors.at(-1)).toMatchObject({ visible: true, blinking: false });
+  });
+
+  test("an unfocused terminal shows a steady hollow cursor whatever the app chose", async () => {
+    const { controller, renderer } = await harness();
+    controller.feed(enc("\x1b[5 q")); // blinking bar
+    controller.frame(false, false);
+    expect(renderer.cursors.at(-1)).toMatchObject({ visible: true, style: "hollow" });
+    controller.frame(false, true);
+    expect(renderer.cursors.at(-1)).toMatchObject({ visible: false, style: "bar" });
+  });
+
+  test("a cursor the app hid (DECTCEM) stays hidden focused or not", async () => {
+    const { controller, renderer } = await harness();
+    controller.feed(enc("\x1b[?25l"));
+    controller.frame(true, false);
     expect(renderer.cursors.at(-1)!.visible).toBe(false);
   });
 

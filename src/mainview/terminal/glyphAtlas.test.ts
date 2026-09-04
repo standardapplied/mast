@@ -20,7 +20,7 @@ function slotOf(a: GlyphAtlas, id: number, span = 1): Rect {
   return { x: u * cellW, y: v * cellH, w: span * cellW, h: cellH };
 }
 
-const PLAIN = { bold: false, italic: false, underline: false, strikethrough: false };
+const PLAIN = { bold: false, italic: false };
 
 describe("GlyphAtlas", () => {
   test("derives its cell from the measured face and the known table metrics", () => {
@@ -34,6 +34,7 @@ describe("GlyphAtlas", () => {
       strikethroughPosition: 21,
       strikethroughThickness: 2,
       boxThickness: 2,
+      cursorThickness: 2,
     });
     expect(a.width).toBe(64 * 18);
     expect(a.height).toBe(64 * 40);
@@ -59,7 +60,7 @@ describe("GlyphAtlas", () => {
     expect(ops().filter((o) => o.kind === "fillText")).toHaveLength(1);
   });
 
-  test("blank text without decoration is glyph 0 and draws nothing", () => {
+  test("blank text is glyph 0 and draws nothing", () => {
     const { a, ops } = atlas();
     expect(a.glyph(" ", PLAIN)).toBe(0);
     expect(a.glyph("", PLAIN)).toBe(0);
@@ -86,15 +87,19 @@ describe("GlyphAtlas", () => {
     expect(rects[0]).toMatchObject({ x: slot.x + 8, y: slot.y, w: 2 });
   });
 
-  test("underline and strikethrough rules land at the face's positions, full slot width", () => {
+  test("decoration sprites are slots of their own, drawn at the face's positions", () => {
     const { a, ops } = atlas();
-    const id = a.glyph(" ", { ...PLAIN, underline: true, strikethrough: true });
-    expect(id).not.toBe(0);
-    const slot = slotOf(a, id);
+    const underline = a.special("underline");
+    const strike = a.special("strikethrough", true);
+    expect(underline).not.toBe(strike);
+    expect(a.special("underline")).toBe(underline);
+    const u = slotOf(a, underline);
+    const s = slotOf(a, strike, 2);
     expect(ops()).toEqual([
-      { kind: "fillRect", x: slot.x, y: slot.y + 36, w: 18, h: 2, fillStyle: "#fff" },
-      { kind: "fillRect", x: slot.x, y: slot.y + 21, w: 18, h: 2, fillStyle: "#fff" },
+      { kind: "fillRect", x: u.x, y: u.y + 36, w: 18, h: 2, fillStyle: "#fff" },
+      { kind: "fillRect", x: s.x, y: s.y + 21, w: 36, h: 2, fillStyle: "#fff" },
     ]);
+    expect(a.isColor(underline)).toBe(false);
   });
 
   test("a wide glyph takes two slots in one row and is clipped to both", () => {
@@ -143,8 +148,12 @@ describe("GlyphAtlas", () => {
     ];
     const slots = new Map<number, Rect>();
     for (const [text, wide] of samples) {
-      const id = a.glyph(text, { ...PLAIN, underline: true, italic: true }, wide);
+      const id = a.glyph(text, { bold: false, italic: true }, wide);
       slots.set(id, slotOf(a, id, wide ? 2 : 1));
+    }
+    for (const kind of ["underline_curly", "underline_dotted", "cursor_hollow"] as const) {
+      const id = a.special(kind, true);
+      slots.set(id, slotOf(a, id, 2));
     }
     const drawn: RasterOp[] = ops();
     expect(drawn.length).toBeGreaterThan(samples.length);

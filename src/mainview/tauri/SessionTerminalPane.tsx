@@ -538,8 +538,9 @@ export const SessionTerminalPane = forwardRef<
           return;
         }
         try {
-          // Only the focused pane blinks; an unfocused pane holds a steady cursor.
-          controller.frame(activeRef.current ? (now - start) % BLINK_MS < BLINK_ON_MS : true);
+          // The blink phase applies only when the app wants a blinking cursor; an unfocused pane
+          // shows a steady hollow cursor.
+          controller.frame((now - start) % BLINK_MS < BLINK_ON_MS, activeRef.current);
         } catch (e) {
           if (!disposed) setStatus({ kind: "failed", reason: e instanceof Error ? e.message : String(e) });
         }

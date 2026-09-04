@@ -16,21 +16,17 @@
 import { type CellMetrics, cellMetrics, knownFace } from "./fontMetrics";
 import type { Raster, RasterFactory, RasterSurface } from "./raster";
 import { drawSprite, spriteCodepoint } from "./sprites";
+import { drawSpecial, type SpecialKind } from "./sprites/special";
 
-/** The style attributes that change how a glyph is rasterized (color is applied later, at draw). */
+/** The style attributes that change how a glyph is rasterized (color is applied later, at draw).
+ *  Decorations (underline, strikethrough, overline) are separate {@link GlyphAtlas.special} entries
+ *  layered by the renderer, so they never vary the glyph slot. */
 export interface GlyphStyle {
   readonly bold: boolean;
   readonly italic: boolean;
-  readonly underline: boolean;
-  readonly strikethrough: boolean;
 }
 
-export const PLAIN_GLYPH: GlyphStyle = {
-  bold: false,
-  italic: false,
-  underline: false,
-  strikethrough: false,
-};
+export const PLAIN_GLYPH: GlyphStyle = { bold: false, italic: false };
 
 const BLANK = 0;
 
@@ -63,29 +59,33 @@ export class GlyphAtlas {
   }
 
   /**
-   * The atlas index for {@code text} rendered in {@code style}; blank with no decoration is 0.
-   * Rasterizes on first sight, keyed by (text, style, wide): bold/italic pick the font face,
-   * underline and strikethrough draw rules into the slot. Color is applied per cell at draw time,
-   * so one entry serves every color the same styled grapheme ever appears in. A full atlas
-   * returns blank rather than corrupting an occupied slot.
+   * The atlas index for {@code text} rendered in {@code style}; blank is 0. Rasterizes on first
+   * sight, keyed by (text, style, wide): bold/italic pick the font face. Color is applied per cell
+   * at draw time, so one entry serves every color the same styled grapheme ever appears in. A full
+   * atlas returns blank rather than corrupting an occupied slot.
    */
   glyph(text: string, style: GlyphStyle = PLAIN_GLYPH, wide = false): number {
-    const blank = text === "" || text === " ";
-    if (blank && !style.underline && !style.strikethrough) return BLANK;
-    const key = `${style.bold ? "b" : ""}${style.italic ? "i" : ""}${style.underline ? "u" : ""}${
-      style.strikethrough ? "s" : ""
-    }${wide ? "w" : ""}|${text}`;
-    const hit = this.index.get(key);
-    if (hit !== undefined) return hit;
-    const span = wide ? 2 : 1;
-    if (wide && this.next % this.cols === this.cols - 1) this.next++;
-    if (this.next + span > this.cols * this.rows) return BLANK;
-    const id = this.next;
-    this.next += span;
-    this.index.set(key, id);
-    this.color[id] = this.rasterize(id, span, blank ? null : text, style);
-    this.generation++;
-    return id;
+    if (text === "" || text === " ") return BLANK;
+    const key = `${style.bold ? "b" : ""}${style.italic ? "i" : ""}${wide ? "w" : ""}|${text}`;
+    return this.entry(key, wide, (ctx, w) => {
+      const sprite = spriteCodepoint(text);
+      if (sprite !== null) {
+        drawSprite(sprite, ctx, this.metrics);
+        return false;
+      }
+      const face = `${style.italic ? "italic " : ""}${style.bold ? "bold " : ""}`;
+      ctx.font = `${face}${this.px}px ${this.family}`;
+      ctx.fillText(text, 0, this.metrics.baseline);
+      return true;
+    });
+  }
+
+  /** The atlas index of a decoration or cursor sprite spanning one cell (two when {@code wide}). */
+  special(kind: SpecialKind, wide = false): number {
+    return this.entry(`${kind}${wide ? "w" : ""}`, wide, (ctx, w) => {
+      drawSpecial(kind, ctx, this.metrics, w);
+      return false;
+    });
   }
 
   /** Whether the entry carries its own colors (an emoji) rather than a tintable white mask. */
@@ -120,7 +120,21 @@ export class GlyphAtlas {
     return this.ctx.getImageData(0, 0, this.width, this.height).data;
   }
 
-  private rasterize(id: number, span: number, text: string | null, style: GlyphStyle): boolean {
+  /**
+   * Allocates a slot for {@code key} (one or two cells wide, never straddling a row end) and runs
+   * {@code draw} inside it, clipped and translated so cell-local coordinates apply. {@code draw}
+   * returns whether the entry came from a font and must be checked for color.
+   */
+  private entry(key: string, wide: boolean, draw: (ctx: Raster, width: number) => boolean): number {
+    const hit = this.index.get(key);
+    if (hit !== undefined) return hit;
+    const span = wide ? 2 : 1;
+    if (wide && this.next % this.cols === this.cols - 1) this.next++;
+    if (this.next + span > this.cols * this.rows) return BLANK;
+    const id = this.next;
+    this.next += span;
+    this.index.set(key, id);
+
     const { cellW, cellH } = this.metrics;
     const { u, v } = this.cell(id);
     const x0 = u * cellW;
@@ -132,26 +146,11 @@ export class GlyphAtlas {
     ctx.rect(x0, y0, w, cellH);
     ctx.clip();
     ctx.translate(x0, y0);
-    let colored = false;
-    if (text !== null) {
-      const sprite = spriteCodepoint(text);
-      if (sprite !== null) {
-        drawSprite(sprite, ctx, this.metrics);
-      } else {
-        const face = `${style.italic ? "italic " : ""}${style.bold ? "bold " : ""}`;
-        ctx.font = `${face}${this.px}px ${this.family}`;
-        ctx.fillText(text, 0, this.metrics.baseline);
-        colored = hasColor(ctx.getImageData(x0, y0, w, cellH).data);
-      }
-    }
-    if (style.underline) {
-      ctx.fillRect(0, this.metrics.underlinePosition, w, this.metrics.underlineThickness);
-    }
-    if (style.strikethrough) {
-      ctx.fillRect(0, this.metrics.strikethroughPosition, w, this.metrics.strikethroughThickness);
-    }
+    const fromFont = draw(ctx, w);
     ctx.restore();
-    return colored;
+    this.color[id] = fromFont && hasColor(ctx.getImageData(x0, y0, w, cellH).data);
+    this.generation++;
+    return id;
   }
 }
 
