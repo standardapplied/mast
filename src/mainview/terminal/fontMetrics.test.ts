@@ -32,6 +32,7 @@ describe("cellMetrics (a port of Ghostty's Metrics.calc)", () => {
     expect(m.strikethroughPosition).toBe(21); // round(31 - 9.6)
     expect(m.strikethroughThickness).toBe(2);
     expect(m.boxThickness).toBe(2); // box lines share the underline thickness
+    expect(m.cursorThickness).toBe(2); // so do the bar, underline and hollow cursors
   });
 
   test("estimates the way Ghostty does when the face lacks a metric", () => {
@@ -69,6 +70,7 @@ describe("cellMetrics (a port of Ghostty's Metrics.calc)", () => {
     expect(m.underlineThickness).toBe(1);
     expect(m.strikethroughThickness).toBe(1);
     expect(m.boxThickness).toBe(1);
+    expect(m.cursorThickness).toBe(1);
   });
 
   test("rejects a face that cannot have come from a font", () => {

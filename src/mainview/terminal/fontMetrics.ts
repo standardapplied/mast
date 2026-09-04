@@ -41,6 +41,8 @@ export interface CellMetrics {
   readonly strikethroughThickness: number;
   /** Stroke width of the light box-drawing line (heavy is twice this). */
   readonly boxThickness: number;
+  /** Stroke width of the bar, underline and hollow cursors. */
+  readonly cursorThickness: number;
 }
 
 /**
@@ -122,5 +124,6 @@ export function cellMetrics(face: FaceMetrics): CellMetrics {
     strikethroughPosition: Math.round(topToBaseline - strikethroughPosition),
     strikethroughThickness,
     boxThickness: underlineThickness,
+    cursorThickness: underlineThickness,
   };
 }

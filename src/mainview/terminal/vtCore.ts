@@ -17,6 +17,9 @@ const UTF8 = new TextEncoder();
 /** A resolved 8-bit RGB triple, already accounting for the palette. */
 export type Rgb = readonly [number, number, number];
 
+/** SGR 4:x underline styles, as libghostty reports them. */
+export type UnderlineStyle = "none" | "single" | "double" | "curly" | "dotted" | "dashed";
+
 /** One rendered cell: text (a grapheme cluster), resolved colors, and SGR style. Colors already
  *  account for reverse video (fg/bg are swapped when the cell is inverse). */
 export interface Cell {
@@ -25,31 +28,51 @@ export interface Cell {
   readonly bg: Rgb;
   readonly bold: boolean;
   readonly italic: boolean;
-  readonly underline: boolean;
+  readonly underline: UnderlineStyle;
+  /** SGR 58 underline color, resolved; null means "same as the text". */
+  readonly underlineColor: Rgb | null;
   readonly strikethrough: boolean;
+  readonly overline: boolean;
   readonly faint: boolean;
+  /** SGR 8: the cell has text but must not show it. */
+  readonly invisible: boolean;
   /** Display columns the grapheme occupies: 2 for wide (CJK/emoji), else 1. */
   readonly width: number;
 }
 
 /** A cell with no styling, before colors are filled in — the common case (plain text). */
-const PLAIN = {
+const PLAIN: CellStyle = {
   bold: false,
   italic: false,
-  underline: false,
+  underline: "none",
+  underlineColor: null,
   strikethrough: false,
+  overline: false,
   faint: false,
+  invisible: false,
   inverse: false,
-} as const;
+};
 
 interface CellStyle {
   bold: boolean;
   italic: boolean;
-  underline: boolean;
+  underline: UnderlineStyle;
+  underlineColor: Rgb | null;
   strikethrough: boolean;
+  overline: boolean;
   faint: boolean;
+  invisible: boolean;
   inverse: boolean;
 }
+
+const UNDERLINE_STYLES: readonly UnderlineStyle[] = [
+  "none",
+  "single",
+  "double",
+  "curly",
+  "dotted",
+  "dashed",
+];
 
 /** A row of cells at viewport position {@link y}. */
 export interface Row {
@@ -66,13 +89,22 @@ export interface GridSnapshot {
   readonly rows: Row[];
 }
 
-/** The cursor's viewport position and visibility; {@link present} is false when off-screen. */
+/** DECSCUSR shapes; "hollow" is what an unfocused terminal shows. */
+export type CursorStyle = "bar" | "block" | "underline" | "hollow";
+
+/** The cursor's viewport position, shape and visibility; {@link present} is false when off-screen. */
 export interface Cursor {
   readonly present: boolean;
   readonly x: number;
   readonly y: number;
   readonly visible: boolean;
+  readonly style: CursorStyle;
+  /** Whether the application wants it to blink (DECSCUSR odd values, mode 12). */
+  readonly blinking: boolean;
 }
+
+/** GhosttyRenderStateCursorVisualStyle values, in enum order. */
+const CURSOR_STYLES: readonly CursorStyle[] = ["bar", "block", "underline", "hollow"];
 
 const SUCCESS = 0;
 const OUT_OF_SPACE = -3;
@@ -107,7 +139,10 @@ const MAX_DIM = 65535;
 // Enum values from ghostty/vt/render.h (build 1.3.2 +d9840f3), pinned alongside the wasm.
 const RS_DATA_DIRTY = 3;
 const RS_DATA_ROW_ITERATOR = 4;
+const RS_DATA_COLOR_PALETTE = 9;
+const RS_DATA_CURSOR_VISUAL_STYLE = 10;
 const RS_DATA_CURSOR_VISIBLE = 11;
+const RS_DATA_CURSOR_BLINKING = 12;
 const RS_DATA_CURSOR_VIEWPORT_HAS_VALUE = 14;
 const RS_DATA_CURSOR_VIEWPORT_X = 15;
 const RS_DATA_CURSOR_VIEWPORT_Y = 16;
@@ -119,15 +154,23 @@ const CELLS_DATA_BG_COLOR = 5;
 const CELLS_DATA_FG_COLOR = 6;
 const CELLS_DATA_HAS_STYLING = 8;
 
-// GhosttyStyle field byte offsets (wasm32) and struct size, confirmed against the wasm. The bool
-// flags sit past three GhosttyStyleColor unions; `underline` is an int (>0 ⇒ underlined).
+// GhosttyStyle field byte offsets (wasm32) and struct size, confirmed against the wasm. Three
+// 16-byte GhosttyStyleColor tagged unions (tag u32, then an 8-byte value: palette u8 or rgb) follow
+// the size_t; the bool flags follow those; `underline` is a GhosttySgrUnderline int.
 const STYLE_SIZE = 72;
+const STYLE_UNDERLINE_COLOR_TAG = 40;
+const STYLE_UNDERLINE_COLOR_VALUE = 48;
 const STYLE_BOLD = 56;
 const STYLE_ITALIC = 57;
 const STYLE_FAINT = 58;
 const STYLE_INVERSE = 60;
+const STYLE_INVISIBLE = 61;
 const STYLE_STRIKETHROUGH = 62;
+const STYLE_OVERLINE = 63;
 const STYLE_UNDERLINE = 64;
+const STYLE_COLOR_PALETTE = 1;
+const STYLE_COLOR_RGB = 2;
+const PALETTE_BYTES = 256 * 3;
 const DIRTY_FALSE = 0;
 const DIRTY_PARTIAL = 1;
 
@@ -175,6 +218,7 @@ const OPT_COLOR_FOREGROUND = 11;
 const OPT_COLOR_BACKGROUND = 12;
 const OPT_COLOR_CURSOR = 13;
 const OPT_COLOR_PALETTE = 14;
+const OPT_DEFAULT_CURSOR_BLINK = 23;
 
 // GhosttyTerminalScrollViewport: a 24-byte tagged union {tag: u32 @0, value @8}.
 const SCROLL_STRUCT_SIZE = 24;
@@ -405,6 +449,7 @@ export class VtCore {
     this.setColor(OPT_COLOR_FOREGROUND, theme.fg);
     this.setColor(OPT_COLOR_BACKGROUND, theme.bg);
     this.setColor(OPT_COLOR_CURSOR, theme.cursor);
+    this.setBool(OPT_DEFAULT_CURSOR_BLINK, true);
 
     const ptr = this.abi.alloc(256 * 3);
     try {
@@ -418,6 +463,17 @@ export class VtCore {
       this.e.ghostty_terminal_set(this.term, OPT_COLOR_PALETTE, ptr);
     } finally {
       this.abi.free(ptr, 256 * 3);
+    }
+  }
+
+  /** The cursor blinks unless the application says otherwise — Ghostty's default, and Mast's. */
+  private setBool(option: number, value: boolean): void {
+    const ptr = this.abi.alloc(1);
+    try {
+      this.abi.bytes()[ptr] = value ? 1 : 0;
+      this.e.ghostty_terminal_set(this.term, option, ptr);
+    } finally {
+      this.abi.free(ptr, 1);
     }
   }
 
@@ -675,19 +731,25 @@ export class VtCore {
     return { dirty: "full", rows: this.readAllRows() };
   }
 
-  /** The cursor's viewport position and visibility. */
+  /** The cursor's viewport position, DECSCUSR shape, blink request, and visibility. */
   cursor(): Cursor {
     this.requireOpen();
     this.refresh();
     const present = this.getBool(RS_DATA_CURSOR_VIEWPORT_HAS_VALUE);
     if (!present) {
-      return { present: false, x: 0, y: 0, visible: false };
+      return { present: false, x: 0, y: 0, visible: false, style: "block", blinking: false };
+    }
+    const style = CURSOR_STYLES[this.getU32(RS_DATA_CURSOR_VISUAL_STYLE)];
+    if (style === undefined) {
+      throw new Error("VtCore: libghostty reported an unknown cursor style");
     }
     return {
       present: true,
       x: this.getU16(RS_DATA_CURSOR_VIEWPORT_X),
       y: this.getU16(RS_DATA_CURSOR_VIEWPORT_Y),
       visible: this.getBool(RS_DATA_CURSOR_VISIBLE),
+      style,
+      blinking: this.getBool(RS_DATA_CURSOR_BLINKING),
     };
   }
 
@@ -801,8 +863,11 @@ export class VtCore {
           bold: style.bold,
           italic: style.italic,
           underline: style.underline,
+          underlineColor: style.underlineColor,
           strikethrough: style.strikethrough,
+          overline: style.overline,
           faint: style.faint,
+          invisible: style.invisible,
         });
       }
     } finally {
@@ -838,14 +903,50 @@ export class VtCore {
     }
     const m = this.abi.bytes();
     const dv = new DataView(this.e.memory.buffer);
+    const underline = UNDERLINE_STYLES[dv.getInt32(stylePtr + STYLE_UNDERLINE, true)];
+    if (underline === undefined) {
+      throw new Error("VtCore: libghostty reported an unknown underline style");
+    }
     return {
       bold: m[stylePtr + STYLE_BOLD] !== 0,
       italic: m[stylePtr + STYLE_ITALIC] !== 0,
       faint: m[stylePtr + STYLE_FAINT] !== 0,
       inverse: m[stylePtr + STYLE_INVERSE] !== 0,
+      invisible: m[stylePtr + STYLE_INVISIBLE] !== 0,
       strikethrough: m[stylePtr + STYLE_STRIKETHROUGH] !== 0,
-      underline: dv.getInt32(stylePtr + STYLE_UNDERLINE, true) > 0,
+      overline: m[stylePtr + STYLE_OVERLINE] !== 0,
+      underline,
+      underlineColor: this.readStyleColor(stylePtr + STYLE_UNDERLINE_COLOR_TAG),
     };
+  }
+
+  /**
+   * A GhosttyStyleColor tagged union: unset, a palette index (resolved through the terminal's live
+   * palette, so OSC 4 redefinitions apply), or a true-color triple.
+   */
+  private readStyleColor(ptr: number): Rgb | null {
+    const tag = this.abi.readU32(ptr);
+    const value = ptr + (STYLE_UNDERLINE_COLOR_VALUE - STYLE_UNDERLINE_COLOR_TAG);
+    if (tag === STYLE_COLOR_RGB) {
+      return this.abi.readRgb(value);
+    }
+    if (tag === STYLE_COLOR_PALETTE) {
+      return this.paletteColor(this.abi.readU8(value));
+    }
+    return null;
+  }
+
+  private paletteColor(index: number): Rgb {
+    const ptr = this.abi.alloc(PALETTE_BYTES);
+    try {
+      const rc = this.e.ghostty_render_state_get(this.state, RS_DATA_COLOR_PALETTE, ptr);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: reading the palette failed (rc=${rc})`);
+      }
+      return this.abi.readRgb(ptr + index * 3);
+    } finally {
+      this.abi.free(ptr, PALETTE_BYTES);
+    }
   }
 
   /** The cell's grapheme text and its display width (2 for wide CJK/emoji, else 1). Blank cells are
@@ -928,6 +1029,19 @@ export class VtCore {
       return this.abi.readU8(ptr);
     } finally {
       this.abi.free(ptr, 1);
+    }
+  }
+
+  private getU32(data: number): number {
+    const ptr = this.abi.alloc(4);
+    try {
+      const rc = this.e.ghostty_render_state_get(this.state, data, ptr);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: reading scalar ${data} failed (rc=${rc})`);
+      }
+      return this.abi.readU32(ptr);
+    } finally {
+      this.abi.free(ptr, 4);
     }
   }
 
