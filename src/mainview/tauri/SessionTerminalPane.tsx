@@ -1,3 +1,4 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
@@ -74,6 +75,16 @@ function useThemeName(): ThemeName {
     };
   }, []);
   return name;
+}
+
+/** What the terminal answers to XTVERSION (CSI > q); resolved once. */
+let identityPromise: Promise<string> | null = null;
+function mastIdentity(): Promise<string> {
+  identityPromise ??= getVersion().then(
+    (version) => `mast ${version}`,
+    () => "mast",
+  );
+  return identityPromise;
 }
 
 /** The pinned VT wasm, fetched once and shared by every pane (see build-tauri-web.ts). */
@@ -415,9 +426,13 @@ export const SessionTerminalPane = forwardRef<
       // client. Attach at a sane default instead; the ResizeObserver fits it on first reveal.
       const sized = host.clientWidth > 0 && host.clientHeight > 0;
       let { cols, rows } = sized ? fit() : { cols: 80, rows: 24 };
-      const core = await VtCore.create(wasm, cols, rows, palette);
+      const core = await VtCore.create(wasm, cols, rows, palette, {
+        identity: await mastIdentity(),
+        scheme: themeName === "light" ? "light" : "dark",
+      });
       if (disposed) return void core.free();
       cleanups.push(() => core.free());
+      core.setCellPixels(cellW, cellH);
       paint(cols, rows);
 
       const sink: PtySink = {

@@ -13,7 +13,6 @@
  */
 
 import { keyEventFor, type KeyStroke } from "./input";
-import { OscSignalScanner } from "./oscSignals";
 import { type Selection, selectedText } from "./selection";
 import type { Cursor, GridSnapshot, Scroll, VtCore } from "./vtCore";
 
@@ -53,12 +52,15 @@ export class TerminalController {
   private lastCursor: Cursor | null = null;
   private syncSince: number | null = null;
   private selection: Selection | null = null;
-  private readonly osc = new OscSignalScanner();
   private replaying = false;
   private readonly now: () => number;
 
   /** Side-channel intents found in the stream; the host wires these to the platform. */
-  readonly hooks: { onClipboard?: (text: string) => void; onTitle?: (title: string) => void } = {};
+  readonly hooks: {
+    onClipboard?: (text: string) => void;
+    onTitle?: (title: string) => void;
+    onBell?: () => void;
+  } = {};
 
   constructor(
     private readonly core: VtCore,
@@ -71,22 +73,25 @@ export class TerminalController {
     this.cols = size.cols;
     this.rows = size.rows;
     this.renderer.resize(this.cols, this.rows);
+    // The core's effects fire synchronously inside feed(). A replayed query or OSC 52 is history:
+    // answering a stale query or clobbering the clipboard the user filled since would be wrong. A
+    // replayed title is current state and always applies.
+    core.hooks.onWritePty = (reply) => {
+      if (!this.replaying) this.sink.write(reply);
+    };
+    core.hooks.onClipboard = (text) => {
+      if (!this.replaying) this.hooks.onClipboard?.(text);
+    };
+    core.hooks.onTitle = (title) => this.hooks.onTitle?.(title);
+    core.hooks.onBell = () => this.hooks.onBell?.();
   }
 
-  /** Feeds pty output bytes into terminal state; a later {@link #frame} paints the result. */
+  /**
+   * Feeds pty output bytes into terminal state; a later {@link #frame} paints the result. Any
+   * reply the stream provokes (a query the program made) leaves for the pty from inside this call.
+   */
   feed(bytes: Uint8Array): void {
     if (bytes.length > 0) {
-      for (const signal of this.osc.feed(bytes)) {
-        if (signal.kind === "clipboard") {
-          // A replayed OSC 52 is history, not a user action — honoring it would clobber whatever
-          // the user copied since. A replayed TITLE is current state and always applies.
-          if (!this.replaying) {
-            this.hooks.onClipboard?.(signal.text);
-          }
-        } else {
-          this.hooks.onTitle?.(signal.text);
-        }
-      }
       this.core.write(bytes);
       this.dirty = true;
     }
@@ -95,12 +100,11 @@ export class TerminalController {
   /**
    * Wipes the terminal to a blank ground state ahead of a journal replay. A mid-stream replay
    * means the host dropped part of the stream (flow-control pause) and is re-baselining us — the
-   * snapshot must land on a clean terminal (and a clean scanner), not on top of the gap's
-   * leftovers. Clipboard side effects stay off until {@link endReplay}.
+   * snapshot must land on a clean terminal, not on top of the gap's leftovers. Clipboard writes
+   * and query replies stay off until {@link endReplay}.
    */
   resetForReplay(): void {
     this.core.reset();
-    this.osc.reset();
     this.replaying = true;
     this.setSelection(null);
     this.dirty = true;

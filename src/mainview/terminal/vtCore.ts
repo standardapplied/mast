@@ -11,8 +11,10 @@
  */
 
 import type { KeyEventSpec } from "./input";
+import { installCallbacks } from "./wasmCallbacks";
 
 const UTF8 = new TextEncoder();
+const UTF8_DECODER = new TextDecoder();
 
 /** A resolved 8-bit RGB triple, already accounting for the palette. */
 export type Rgb = readonly [number, number, number];
@@ -105,6 +107,28 @@ export interface Cursor {
 
 /** GhosttyRenderStateCursorVisualStyle values, in enum order. */
 const CURSOR_STYLES: readonly CursorStyle[] = ["bar", "block", "underline", "hollow"];
+
+/** What the embedder looks like to the application: light or dark (CSI ? 996 n). */
+export type ColorScheme = "light" | "dark";
+
+export interface VtCoreOptions {
+  /** The XTVERSION reply (CSI > q), e.g. "mast 0.1.80". */
+  readonly identity?: string;
+  readonly scheme?: ColorScheme;
+}
+
+/**
+ * The terminal's side effects, delivered synchronously from inside {@link VtCore.write}. Replies
+ * the application asked for (device attributes, cursor position, mode reports, kitty flags,
+ * XTVERSION, color queries, size reports) arrive on {@link onWritePty} and belong in the pty.
+ */
+export interface VtCoreHooks {
+  onWritePty?: (bytes: Uint8Array) => void;
+  onTitle?: (title: string) => void;
+  /** OSC 52 (and kitty OSC 5522) writes; an empty string clears the clipboard. */
+  onClipboard?: (text: string) => void;
+  onBell?: () => void;
+}
 
 const SUCCESS = 0;
 const OUT_OF_SPACE = -3;
@@ -221,6 +245,35 @@ const OPT_COLOR_BACKGROUND = 12;
 const OPT_COLOR_CURSOR = 13;
 const OPT_COLOR_PALETTE = 14;
 const OPT_DEFAULT_CURSOR_BLINK = 23;
+/** Effect callbacks: the value passed to ghostty_terminal_set is the function-table index. */
+const OPT_WRITE_PTY = 1;
+const OPT_BELL = 2;
+const OPT_XTVERSION = 4;
+const OPT_TITLE_CHANGED = 5;
+const OPT_SIZE = 6;
+const OPT_COLOR_SCHEME = 7;
+const OPT_CLIPBOARD_WRITE = 26;
+/** GHOSTTY_TERMINAL_DATA_TITLE: a borrowed GhosttyString {ptr, len}. */
+const DATA_TITLE = 12;
+const STRING_SIZE = 8;
+const COLOR_SCHEME_LIGHT = 0;
+const COLOR_SCHEME_DARK = 1;
+// GhosttyClipboardWrite (wasm32, confirmed against the wasm): contents array + reply fn pointer.
+const CLIP_CONTENTS = 8;
+const CLIP_CONTENTS_LEN = 12;
+const CLIP_REPLY_FN = 32;
+/** GhosttyClipboardContent: {mime: GhosttyString, data: GhosttyString}. */
+const CLIP_CONTENT_SIZE = 16;
+const CLIP_CONTENT_DATA = 8;
+/** GhosttyClipboardWriteReply: {size_t size, result enum, bool remember}. */
+const CLIP_REPLY_SIZE = 12;
+const CLIP_RESULT_SUCCESS = 0;
+const TEXT_PLAIN = "text/plain";
+// GhosttySizeReportSize: {u16 rows, u16 columns, u32 cell_width, u32 cell_height}.
+const SIZE_ROWS = 0;
+const SIZE_COLS = 2;
+const SIZE_CELL_W = 4;
+const SIZE_CELL_H = 8;
 
 // GhosttyTerminalScrollViewport: a 24-byte tagged union {tag: u32 @0, value @8}.
 const SCROLL_STRUCT_SIZE = 24;
@@ -234,6 +287,7 @@ export type Scroll = "top" | "bottom" | { readonly delta: number };
 /** The subset of libghostty-vt exports VtCore drives. */
 interface GhosttyExports {
   memory: WebAssembly.Memory;
+  __indirect_function_table: WebAssembly.Table;
   ghostty_wasm_alloc(len: number): number;
   ghostty_wasm_free(ptr: number, len: number): void;
   ghostty_wasm_alloc_opaque(): number;
@@ -368,6 +422,17 @@ class Abi {
     this.view().setInt32(ptr, value, true);
   }
 
+  writeU32(ptr: number, value: number): void {
+    this.view().setUint32(ptr, value, true);
+  }
+
+  /** A GhosttyString {ptr, len} at {@code ptr}, decoded as UTF-8. */
+  readString(ptr: number): string {
+    const start = this.readU32(ptr);
+    const len = this.readU32(ptr + 4);
+    return UTF8_DECODER.decode(this.u8().subarray(start, start + len));
+  }
+
   readU32(ptr: number): number {
     return this.view().getUint32(ptr, true);
   }
@@ -408,18 +473,30 @@ export class VtCore {
 
   private readonly fg: Rgb;
   private readonly bg: Rgb;
+  private readonly scheme: ColorScheme;
+  private readonly identityPtr: number;
+  private readonly identityLen: number;
+  private cellPx = { w: 0, h: 0 };
+
+  /** Side effects of the stream; the embedder wires them (see {@link VtCoreHooks}). */
+  readonly hooks: VtCoreHooks = {};
 
   private constructor(
     private readonly e: GhosttyExports,
     cols: number,
     rows: number,
     theme: Theme,
+    options: VtCoreOptions,
   ) {
     this.abi = new Abi(e);
     this.cols = cols;
     this.rows = rows;
     this.fg = theme.fg;
     this.bg = theme.bg;
+    this.scheme = options.scheme ?? "dark";
+    const identity = UTF8.encode(options.identity ?? "mast");
+    this.identityPtr = this.abi.writeInto(identity);
+    this.identityLen = identity.length;
     this.term = this.abi.construct((slot) => e.ghostty_terminal_new(0, slot, cols, rows));
     this.configure(theme);
     this.state = this.abi.construct((slot) => e.ghostty_render_state_new(0, slot));
@@ -502,13 +579,136 @@ export class VtCore {
     cols: number,
     rows: number,
     theme: Theme = DEFAULT_THEME,
+    options: VtCoreOptions = {},
   ): Promise<VtCore> {
     if (cols <= 0 || rows <= 0 || cols > MAX_DIM || rows > MAX_DIM) {
       throw new Error(`VtCore: cols and rows must be in 1..${MAX_DIM} (got ${cols}x${rows})`);
     }
     const module = await WebAssembly.compile(wasm);
     const instance = await WebAssembly.instantiate(module, {});
-    return new VtCore(instance.exports as unknown as GhosttyExports, cols, rows, theme);
+    const core = new VtCore(instance.exports as unknown as GhosttyExports, cols, rows, theme, options);
+    await core.installEffects();
+    return core;
+  }
+
+  /**
+   * Registers the terminal's effect callbacks. The wasm has no imports, so JS functions reach it
+   * through the exported function table (see wasmCallbacks.ts); the table index is the C function
+   * pointer. All of them fire synchronously from inside {@link write}.
+   */
+  private async installEffects(): Promise<void> {
+    const abi = this.abi;
+    const [writePty, bell, xtversion, title, size, scheme, clipboard] = await installCallbacks(
+      this.e.__indirect_function_table,
+      [
+        {
+          signature: { params: 4, result: false },
+          fn: (_term, _userdata, ptr, len) =>
+            this.hooks.onWritePty?.(abi.bytes().slice(ptr!, ptr! + len!)),
+        },
+        { signature: { params: 2, result: false }, fn: () => this.hooks.onBell?.() },
+        {
+          // GhosttyString is returned by value: wasm32 passes it as a hidden first pointer.
+          signature: { params: 3, result: false },
+          fn: (sret) => {
+            abi.writeU32(sret!, this.identityPtr);
+            abi.writeU32(sret! + 4, this.identityLen);
+          },
+        },
+        { signature: { params: 2, result: false }, fn: () => this.hooks.onTitle?.(this.title()) },
+        {
+          signature: { params: 3, result: true },
+          fn: (_term, _userdata, out) => {
+            abi.writeU16(out! + SIZE_ROWS, this.rows);
+            abi.writeU16(out! + SIZE_COLS, this.cols);
+            abi.writeU32(out! + SIZE_CELL_W, this.cellPx.w);
+            abi.writeU32(out! + SIZE_CELL_H, this.cellPx.h);
+            return 1;
+          },
+        },
+        {
+          signature: { params: 3, result: true },
+          fn: (_term, _userdata, out) => {
+            abi.writeU32(out!, this.scheme === "dark" ? COLOR_SCHEME_DARK : COLOR_SCHEME_LIGHT);
+            return 1;
+          },
+        },
+        {
+          signature: { params: 3, result: false },
+          fn: (_term, _userdata, write) => this.clipboardWrite(write!),
+        },
+      ],
+    );
+    const effects: [number, number][] = [
+      [OPT_WRITE_PTY, writePty!],
+      [OPT_BELL, bell!],
+      [OPT_XTVERSION, xtversion!],
+      [OPT_TITLE_CHANGED, title!],
+      [OPT_SIZE, size!],
+      [OPT_COLOR_SCHEME, scheme!],
+      [OPT_CLIPBOARD_WRITE, clipboard!],
+    ];
+    for (const [option, index] of effects) {
+      const rc = this.e.ghostty_terminal_set(this.term, option, index);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: installing effect ${option} failed (rc=${rc})`);
+      }
+    }
+  }
+
+  /** The cell size in pixels, reported to programs that ask (XTWINOPS 14/16 t, mode 2048). */
+  setCellPixels(width: number, height: number): void {
+    this.cellPx = { w: width, h: height };
+  }
+
+  /** The title the application set (OSC 0/2); empty when none. */
+  title(): string {
+    const out = this.abi.alloc(STRING_SIZE);
+    try {
+      const rc = this.e.ghostty_terminal_get(this.term, DATA_TITLE, out);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: reading the title failed (rc=${rc})`);
+      }
+      return this.abi.readString(out);
+    } finally {
+      this.abi.free(out, STRING_SIZE);
+    }
+  }
+
+  /**
+   * An OSC 52 write: the program's representations of one value; text/plain when offered, else
+   * the first. Mast honors clipboard writes, so the reply is always success — the core sends the
+   * program its acknowledgement (OSC 5522) through the pty writer.
+   */
+  private clipboardWrite(write: number): void {
+    const abi = this.abi;
+    const contents = abi.readU32(write + CLIP_CONTENTS);
+    const count = abi.readU32(write + CLIP_CONTENTS_LEN);
+    let text = "";
+    for (let i = 0; i < count; i++) {
+      const entry = contents + i * CLIP_CONTENT_SIZE;
+      const mime = abi.readString(entry);
+      if (i === 0 || mime === TEXT_PLAIN) {
+        text = abi.readString(entry + CLIP_CONTENT_DATA);
+      }
+      if (mime === TEXT_PLAIN) break;
+    }
+    this.hooks.onClipboard?.(text);
+    const reply = abi.alloc(CLIP_REPLY_SIZE);
+    try {
+      abi.bytes().fill(0, reply, reply + CLIP_REPLY_SIZE);
+      abi.writeU32(reply, CLIP_REPLY_SIZE);
+      abi.writeU32(reply + 4, CLIP_RESULT_SUCCESS);
+      const replyFn = this.e.__indirect_function_table.get(abi.readU32(write + CLIP_REPLY_FN)) as
+        | ((write: number, reply: number) => void)
+        | null;
+      if (!replyFn) {
+        throw new Error("VtCore: the clipboard write carries no reply function");
+      }
+      replyFn(write, reply);
+    } finally {
+      abi.free(reply, CLIP_REPLY_SIZE);
+    }
   }
 
   /** Feeds PTY output bytes to the terminal, advancing its state. */
@@ -798,6 +998,7 @@ export class VtCore {
       return;
     }
     this.freed = true;
+    this.abi.free(this.identityPtr, this.identityLen);
     this.abi.free(this.optAsAltPtr, 4);
     this.e.ghostty_key_event_free(this.keyEvent);
     this.e.ghostty_key_encoder_free(this.keyEncoder);
