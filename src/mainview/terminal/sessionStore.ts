@@ -146,10 +146,14 @@ export class SessionStore {
     return this.box() !== undefined;
   }
 
-  /** Coalesced re-list of the active box — the deterministic reconcile verb. */
-  refresh(): void {
+  /**
+   * Coalesced re-list of the active box — the deterministic reconcile verb. A property, not a
+   * method: callers hand it around detached (`room?.refresh ?? sessionStore.refresh`), and a
+   * prototype method invoked that way has no receiver — it threw inside every pane that came up.
+   */
+  refresh = (): void => {
     this.box()?.refresh();
-  }
+  };
 
   /**
    * The active box's inventory — listing truth overlaid with the store's own
