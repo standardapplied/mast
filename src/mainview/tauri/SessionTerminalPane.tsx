@@ -24,9 +24,10 @@ import { preAttachClass, skewCard, skewOf } from "../terminal/roomDeck";
 import { TerminalRenderer } from "../terminal/renderer";
 import { type CellPos, Selection } from "../terminal/selection";
 import { decodeDataFrame } from "../terminal/dataFrames";
+import { MODS } from "../terminal/input";
 import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
-import { VtCore } from "../terminal/vtCore";
+import { type MouseButton, VtCore } from "../terminal/vtCore";
 /** What a mounted terminal offers its host: paste routing, refit, and connection recovery. */
 export type TerminalHandle = {
   paste: (text: string) => void;
@@ -643,6 +644,15 @@ export const SessionTerminalPane = forwardRef<
     }
   };
 
+  /** The button an application is hearing about while it is held; null while none is. */
+  const heldButtonRef = useRef<MouseButton | null>(null);
+
+  const modsOf = (e: React.MouseEvent) =>
+    (e.shiftKey ? MODS.SHIFT : 0) |
+    (e.ctrlKey ? MODS.CTRL : 0) |
+    (e.altKey ? MODS.ALT : 0) |
+    (e.metaKey ? MODS.SUPER : 0);
+
   const wheelAccRef = useRef(0);
   const onWheel = (e: React.WheelEvent) => {
     const controller = controllerRef.current;
@@ -656,11 +666,11 @@ export const SessionTerminalPane = forwardRef<
     if (lines !== 0) {
       wheelAccRef.current -= lines * cellH;
       controller.setSelection(null); // the viewport-relative highlight no longer lines up
-      controller.wheel(lines);
+      controller.wheel(lines, cellAt(e) ?? undefined, modsOf(e));
     }
   };
 
-  const cellAt = (e: React.PointerEvent): CellPos | null => {
+  const cellAt = (e: { clientX: number; clientY: number }): CellPos | null => {
     const canvas = canvasRef.current;
     const g = geomRef.current;
     if (!canvas || !g) return null;
@@ -669,6 +679,10 @@ export const SessionTerminalPane = forwardRef<
     const y = Math.min(g.rows - 1, Math.max(0, Math.floor((e.clientY - rect.top) / g.ch)));
     return { x, y };
   };
+
+  /** Left and middle buttons may belong to the application; the right button stays Mast's menu. */
+  const buttonOf = (e: React.PointerEvent): MouseButton | null =>
+    e.button === 0 ? "left" : e.button === 1 ? "middle" : null;
 
   const onPointerDown = (e: React.PointerEvent) => {
     // Overlay chrome (the context menu, confirm cards) renders inside this host. Capturing the
@@ -681,24 +695,45 @@ export const SessionTerminalPane = forwardRef<
       return;
     }
     hostRef.current?.focus();
-    if (e.button !== 0) return;
+    const button = buttonOf(e);
     const pos = cellAt(e);
-    if (!pos) return;
+    if (!button || !pos) return;
+    const controller = controllerRef.current;
+    // An application tracking the mouse gets the press (unless Shift keeps it local); the
+    // release and any drag follow it there too, whatever the app does with tracking meanwhile.
+    if (controller?.mouse({ action: "press", button, mods: modsOf(e), ...pos })) {
+      heldButtonRef.current = button;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+    if (button !== "left") return;
     dragRef.current = pos;
-    controllerRef.current?.setSelection(null);
+    controller?.setSelection(null);
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
-    const anchor = dragRef.current;
-    if (!anchor) return;
     const pos = cellAt(e);
+    if (!pos) return;
+    const controller = controllerRef.current;
+    const held = heldButtonRef.current;
+    if (held || dragRef.current === null) {
+      controller?.mouse({ action: "motion", button: held ?? undefined, mods: modsOf(e), ...pos });
+      return;
+    }
     const g = geomRef.current;
-    if (!pos || !g) return;
-    controllerRef.current?.setSelection(new Selection(anchor, pos, g.cols));
+    if (!g) return;
+    controller?.setSelection(new Selection(dragRef.current, pos, g.cols));
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent) => {
+    const held = heldButtonRef.current;
+    if (held) {
+      heldButtonRef.current = null;
+      const pos = cellAt(e);
+      if (pos) controllerRef.current?.mouse({ action: "release", button: held, mods: modsOf(e), ...pos });
+    }
     dragRef.current = null;
   };
 
