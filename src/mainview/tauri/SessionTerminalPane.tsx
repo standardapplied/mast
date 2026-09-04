@@ -191,8 +191,6 @@ export const SessionTerminalPane = forwardRef<
   const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
-  const activeRef = useRef(active !== false);
-  activeRef.current = active !== false;
   const onTitleRef = useRef(onTitle);
   onTitleRef.current = onTitle;
   const onWriterRef = useRef(onWriter);
