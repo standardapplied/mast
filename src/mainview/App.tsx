@@ -125,7 +125,15 @@ export function App({
   theme: ThemeController;
   /** The terminal section, injected by the Tauri entry (absent in demo/tests); handed
    *  the room-route navigation so its Rooms inventory can jump to a session's home. */
-  terminal?: (openRoomTerminal: (request: RoomTerminalRequest) => void) => ReactNode;
+  /**
+   * The injected terminal workspace. {@code active} says whether the terminal view is the one on
+   * screen: hidden views stay mounted, so the workspace must know when to release and retake
+   * keyboard focus, and when its cursors should read as unfocused.
+   */
+  terminal?: (
+    openRoomTerminal: (request: RoomTerminalRequest) => void,
+    active: boolean,
+  ) => ReactNode;
   /** The room workbench the terminal route mounts, injected by the Tauri entry. */
   deck?: DeckServices;
   /** Auto-updater, injected by the Tauri entry (absent on demo/tests). */
@@ -406,7 +414,7 @@ export function App({
                   className="cockpit-view"
                   style={{ display: view === "terminal" && !roomRoute ? "flex" : "none" }}
                 >
-                  {terminal(setRoomRoute)}
+                  {terminal(setRoomRoute, view === "terminal" && !roomRoute)}
                 </section>
               )}
               {roomRoute && (

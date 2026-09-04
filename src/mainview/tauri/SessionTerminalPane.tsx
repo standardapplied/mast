@@ -191,8 +191,6 @@ export const SessionTerminalPane = forwardRef<
   const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
-  const activeRef = useRef(active !== false);
-  activeRef.current = active !== false;
   const onTitleRef = useRef(onTitle);
   onTitleRef.current = onTitle;
   const onWriterRef = useRef(onWriter);
@@ -301,37 +299,38 @@ export const SessionTerminalPane = forwardRef<
   // The retry timer must survive effect re-runs (a theme flip mid-wait) and die with the pane.
   useEffect(() => () => clearTimeout(retryTimer.current), []);
 
-  // Focus reporting (mode 1004): apps like vim and claude-code want CSI I/O on focus changes.
-  // Report pane-focus transitions (never the initial state — an attach is assumed focused) and
-  // window-level blur/focus for whichever pane holds the focus.
-  const prevFocusRef = useRef<boolean | null>(null);
-  useEffect(() => {
-    const focused = active !== false;
-    if (prevFocusRef.current !== null && prevFocusRef.current !== focused) {
+  // Focus is a fact of the DOM, not a prop: the cursor reads as focused, and apps that asked for
+  // focus reports (mode 1004) hear CSI I/O, exactly when keystrokes would reach this pane — the
+  // host element holds focus and the window is frontmost. Anything else (a hidden view that kept
+  // its "active" prop, a button in an overlay, a backgrounded window) reads as unfocused.
+  const hasFocusRef = useRef(false);
+  const reportedFocusRef = useRef<boolean | null>(null);
+  const syncFocus = useCallback(() => {
+    const host = hostRef.current;
+    const focused = host !== null && document.hasFocus() && document.activeElement === host;
+    hasFocusRef.current = focused;
+    // The initial state is never reported: an attach is assumed focused, and a replay end
+    // corrects an unfocused far side of a split.
+    if (reportedFocusRef.current !== null && reportedFocusRef.current !== focused) {
       controllerRef.current?.setFocus(focused);
     }
-    prevFocusRef.current = focused;
-  }, [active]);
-  useEffect(() => {
-    const onBlur = () => {
-      if (activeRef.current) controllerRef.current?.setFocus(false);
-    };
-    const onFocus = () => {
-      if (activeRef.current) controllerRef.current?.setFocus(true);
-    };
-    window.addEventListener("blur", onBlur);
-    window.addEventListener("focus", onFocus);
-    return () => {
-      window.removeEventListener("blur", onBlur);
-      window.removeEventListener("focus", onFocus);
-    };
+    reportedFocusRef.current = focused;
   }, []);
-
-  // Take keyboard focus when this pane's tab becomes the visible one, so keystrokes land in the
-  // terminal instead of being dropped on an unfocused div (the old xterm pane focused itself).
   useEffect(() => {
-    if (active !== false) hostRef.current?.focus();
-  }, [active, epoch]);
+    window.addEventListener("blur", syncFocus);
+    window.addEventListener("focus", syncFocus);
+    return () => {
+      window.removeEventListener("blur", syncFocus);
+      window.removeEventListener("focus", syncFocus);
+    };
+  }, [syncFocus]);
+
+  // Take keyboard focus whenever this pane becomes the visible, active one — its tab selected,
+  // its view brought back on screen, a reconnect — so keystrokes land in the terminal instead of
+  // wherever the previous view left them. A hidden element cannot take focus, hence `visible`.
+  useEffect(() => {
+    if (active !== false && visible) hostRef.current?.focus();
+  }, [active, visible, epoch]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -462,9 +461,10 @@ export const SessionTerminalPane = forwardRef<
         } else {
           controller.endReplay();
           controller.scroll("bottom");
-          // The replay just restored the app's modes; an unfocused pane owes it a focus-lost
-          // report (the attach itself is assumed focused, which is wrong for a split's far side).
-          if (!activeRef.current) {
+          // The replay just restored the app's modes; a pane without keyboard focus owes it a
+          // focus-lost report (the attach itself is assumed focused, which is wrong for a split's
+          // far side or a view that is not on screen).
+          if (!hasFocusRef.current) {
             controller.setFocus(false);
           }
         }
@@ -558,7 +558,7 @@ export const SessionTerminalPane = forwardRef<
         try {
           // The blink phase applies only when the app wants a blinking cursor; an unfocused pane
           // shows a steady hollow cursor.
-          controller.frame((now - start) % BLINK_MS < BLINK_ON_MS, activeRef.current);
+          controller.frame((now - start) % BLINK_MS < BLINK_ON_MS, hasFocusRef.current);
         } catch (e) {
           if (!disposed) setStatus({ kind: "failed", reason: e instanceof Error ? e.message : String(e) });
         }
@@ -766,6 +766,8 @@ export const SessionTerminalPane = forwardRef<
       ref={hostRef}
       tabIndex={0}
       onKeyDown={onKeyDown}
+      onFocus={syncFocus}
+      onBlur={syncFocus}
       onCompositionEnd={onCompositionEnd}
       onPaste={onPaste}
       onContextMenu={onContextMenu}
