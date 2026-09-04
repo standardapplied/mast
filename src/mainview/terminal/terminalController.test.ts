@@ -8,6 +8,7 @@ import {
   SYNCHRONIZED_OUTPUT_CAP_MS,
   TerminalController,
 } from "./terminalController";
+import { MODS } from "./input";
 import { Selection } from "./selection";
 import { TerminalGrid } from "./terminalGrid";
 import type { Cursor, GridSnapshot } from "./vtCore";
@@ -366,6 +367,44 @@ describe("TerminalController", () => {
     core.write(enc("\x1b[?1h")); // and with DECCKM on, the arrows follow it
     controller.wheel(-1);
     expect(sink.writes.at(-1)).toEqual(Array.from(enc("\x1bOA")));
+  });
+
+  test("a mouse event is local until the app tracks the mouse; Shift always keeps it local", async () => {
+    const { controller, core, sink } = await harness();
+    const click = { action: "press", button: "left", mods: 0, x: 2, y: 1 } as const;
+    expect(controller.mouse(click)).toBe(false);
+    expect(sink.writes).toEqual([]);
+    core.write(enc("\x1b[?1000h\x1b[?1006h"));
+    expect(controller.mouse(click)).toBe(true);
+    expect(sink.writes).toEqual([Array.from(enc("\x1b[<0;3;2M"))]);
+    // motion the mode does not carry is still the app's: consumed, nothing sent
+    expect(controller.mouse({ action: "motion", mods: 0, x: 3, y: 1 })).toBe(true);
+    expect(sink.writes).toHaveLength(1);
+    core.write(enc("\x1b[?1002h")); // button-event tracking: one report per cell while dragging
+    const drag = { action: "motion", button: "left", mods: 0 } as const;
+    controller.mouse({ ...drag, x: 4, y: 1 });
+    controller.mouse({ ...drag, x: 4, y: 1 });
+    controller.mouse({ ...drag, x: 5, y: 1 });
+    expect(sink.writes.slice(1)).toEqual([
+      Array.from(enc("\x1b[<32;5;2M")),
+      Array.from(enc("\x1b[<32;6;2M")),
+    ]);
+    expect(controller.mouse({ ...click, mods: MODS.SHIFT })).toBe(false);
+    expect(sink.writes).toHaveLength(3);
+  });
+
+  test("the wheel reaches a mouse-tracking app as wheel buttons at the pointer's cell", async () => {
+    const { controller, core, sink } = await harness();
+    core.write(enc("\x1b[?1000h\x1b[?1006h"));
+    controller.wheel(-2, { x: 4, y: 3 });
+    controller.wheel(1, { x: 4, y: 3 });
+    expect(sink.writes).toEqual([
+      Array.from(enc("\x1b[<64;5;4M")),
+      Array.from(enc("\x1b[<64;5;4M")),
+      Array.from(enc("\x1b[<65;5;4M")),
+    ]);
+    controller.wheel(-1, { x: 4, y: 3 }, MODS.SHIFT); // Shift: local scrollback instead
+    expect(sink.writes).toHaveLength(3);
   });
 
   test("committed composition text (IME, dead keys) flows to the pty verbatim", async () => {

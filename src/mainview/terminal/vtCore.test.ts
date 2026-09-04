@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { keyEventFor, type KeyStroke } from "./input";
+import { keyEventFor, MODS, type KeyStroke } from "./input";
 import { VtCore } from "./vtCore";
 
 // Drives the real vendored libghostty-vt wasm (see PIN.md) — no mocks. If the wasm's ABI drifts on
@@ -528,6 +528,43 @@ describe("paste", () => {
     core.write(bytes("a\x07b\x07"));
     expect(bells).toBe(2);
     expect(rowText(core, 0)).toBe("ab");
+  });
+
+  test("mouse reports follow the application's tracking mode and format", async () => {
+    const core = await track(40, 10);
+    const enc = (spec: Parameters<VtCore["encodeMouse"]>[0]) => {
+      const out = core.encodeMouse(spec);
+      return out === null ? null : new TextDecoder().decode(out);
+    };
+    const press = { action: "press", button: "left", mods: 0, x: 2, y: 1 } as const;
+    expect(core.mouseTracking()).toBe(false);
+    expect(enc(press)).toBeNull(); // nobody asked
+    core.write(bytes("\x1b[?1000h\x1b[?1006h")); // normal tracking, SGR format — Claude Code's pair
+    expect(core.mouseTracking()).toBe(true);
+    expect(enc(press)).toBe("\x1b[<0;3;2M");
+    expect(enc({ ...press, action: "release" })).toBe("\x1b[<0;3;2m");
+    expect(enc({ ...press, button: "middle" })).toBe("\x1b[<1;3;2M");
+    expect(enc({ ...press, button: "wheelUp" })).toBe("\x1b[<64;3;2M");
+    expect(enc({ ...press, button: "wheelDown" })).toBe("\x1b[<65;3;2M");
+    expect(enc({ ...press, mods: MODS.SHIFT | MODS.CTRL })).toBe("\x1b[<20;3;2M");
+    expect(enc({ action: "motion", mods: 0, x: 5, y: 1 })).toBeNull(); // mode 1000 has no motion
+    core.write(bytes("\x1b[?1002h")); // button-event tracking: motion while a button is held
+    expect(enc({ action: "motion", button: "left", mods: 0, x: 5, y: 1 })).toBe("\x1b[<32;6;2M");
+    expect(enc({ action: "motion", mods: 0, x: 6, y: 1 })).toBeNull(); // no button held
+    core.write(bytes("\x1b[?1003h")); // any-event tracking: motion with no button too
+    expect(enc({ action: "motion", mods: 0, x: 7, y: 1 })).toBe("\x1b[<35;8;2M");
+    core.write(bytes("\x1b[?1003l\x1b[?1002l\x1b[?1000l"));
+    expect(core.mouseTracking()).toBe(false);
+  });
+
+  test("without SGR the legacy X10 byte format is used; with 1016 pixels are reported", async () => {
+    const core = await track(40, 10);
+    core.write(bytes("\x1b[?1000h"));
+    const press = { action: "press", button: "left", mods: 0, x: 2, y: 1 } as const;
+    expect(Array.from(core.encodeMouse(press)!)).toEqual([0x1b, 0x5b, 0x4d, 32, 32 + 3, 32 + 2]);
+    core.setCellPixels(18, 40);
+    core.write(bytes("\x1b[?1016h")); // SGR-pixels: the cell's center in pixels
+    expect(new TextDecoder().decode(core.encodeMouse(press)!)).toBe("\x1b[<0;45;60M");
   });
 
   test("synchronizedOutput tracks mode 2026 around an app's redraw", async () => {

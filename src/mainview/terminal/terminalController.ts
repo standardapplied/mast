@@ -12,9 +12,9 @@
  * frame and nothing else; the caller decides how often to call it (an animation frame is fine).
  */
 
-import { keyEventFor, type KeyStroke } from "./input";
+import { keyEventFor, type KeyStroke, MODS } from "./input";
 import { type Selection, selectedText } from "./selection";
-import type { Cursor, GridSnapshot, Scroll, VtCore } from "./vtCore";
+import type { Cursor, GridSnapshot, MouseEventSpec, Scroll, VtCore } from "./vtCore";
 
 /** What the controller needs from a renderer; the WebGPU renderer implements this structurally. */
 export interface Renderer {
@@ -50,6 +50,7 @@ export class TerminalController {
   /** Something visible changed that the grid does not carry (selection, geometry): draw. */
   private redraw = true;
   private lastCursor: Cursor | null = null;
+  private lastMotionCell = -1;
   private syncSince: number | null = null;
   private selection: Selection | null = null;
   private replaying = false;
@@ -223,12 +224,47 @@ export class TerminalController {
   }
 
   /**
-   * Routes mouse-wheel intent ({@code lines} < 0 = up): the local scrollback normally, but an
-   * alternate-screen TUI (vim, less, claude-code) has no scrollback — it gets arrow keys, one per
-   * line, encoded mode-aware so DECCKM applications hear their own dialect.
+   * Offers a mouse event to the application. Consumed (true) when the application tracks the
+   * mouse — the event is encoded in its requested format and sent, or deduplicated away — so the
+   * caller must not treat it as a local gesture. Not consumed (false) when no tracking mode is on,
+   * or when Shift is held: Shift is the user's way past the application to local selection and
+   * scrolling, as in every native terminal.
    */
-  wheel(lines: number): void {
+  mouse(spec: MouseEventSpec): boolean {
+    if ((spec.mods & MODS.SHIFT) !== 0 || !this.core.mouseTracking()) {
+      return false;
+    }
+    // Pointer motion arrives per pixel; the application hears one report per cell.
+    if (spec.action === "motion") {
+      const cell = spec.y * this.cols + spec.x;
+      if (cell === this.lastMotionCell) return true;
+      this.lastMotionCell = cell;
+    } else {
+      this.lastMotionCell = -1;
+    }
+    const bytes = this.core.encodeMouse(spec);
+    if (bytes !== null) {
+      this.sink.write(bytes);
+    }
+    return true;
+  }
+
+  /**
+   * Routes mouse-wheel intent ({@code lines} < 0 = up). An application tracking the mouse hears
+   * wheel buttons at the cell under the pointer (unless Shift bypasses it); otherwise the local
+   * scrollback scrolls — except on the alternate screen, which has no scrollback: a full-screen
+   * TUI (vim, less) gets arrow keys, one per line, encoded mode-aware so DECCKM applications hear
+   * their own dialect.
+   */
+  wheel(lines: number, at?: { x: number; y: number }, mods = 0): void {
     if (lines === 0) {
+      return;
+    }
+    if (at && (mods & MODS.SHIFT) === 0 && this.core.mouseTracking()) {
+      const button = lines < 0 ? "wheelUp" : "wheelDown";
+      for (let i = 0; i < Math.abs(lines); i++) {
+        this.mouse({ action: "press", button, mods, x: at.x, y: at.y });
+      }
       return;
     }
     if (!this.core.altScreen()) {

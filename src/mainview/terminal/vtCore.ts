@@ -111,6 +111,19 @@ const CURSOR_STYLES: readonly CursorStyle[] = ["bar", "block", "underline", "hol
 /** What the embedder looks like to the application: light or dark (CSI ? 996 n). */
 export type ColorScheme = "light" | "dark";
 
+export type MouseAction = keyof typeof MOUSE_ACTIONS;
+export type MouseButton = keyof typeof MOUSE_BUTTONS;
+
+/** A mouse event in cell coordinates; {@code mods} uses the key encoder's GhosttyMods bits. */
+export interface MouseEventSpec {
+  readonly action: MouseAction;
+  /** The button pressed, released, or held during motion; absent for plain motion. */
+  readonly button?: MouseButton;
+  readonly mods: number;
+  readonly x: number;
+  readonly y: number;
+}
+
 export interface VtCoreOptions {
   /** The XTVERSION reply (CSI > q), e.g. "mast 0.1.80". */
   readonly identity?: string;
@@ -143,6 +156,19 @@ const MODES_ALT_SCREEN = [1049, 1047, 47] as const;
 const MODE_FOCUS_REPORTING = 1004;
 /** DEC private mode 2026 — synchronized output: hold frames until the app finishes a redraw. */
 const MODE_SYNCHRONIZED_OUTPUT = 2026;
+/** The mouse tracking modes (X10, normal, button-event, any-event) — any one means the app wants the mouse. */
+const MODES_MOUSE_TRACKING = [9, 1000, 1002, 1003] as const;
+/** GhosttyMouseAction / GhosttyMouseButton values. */
+const MOUSE_ACTIONS = { press: 0, release: 1, motion: 2 } as const;
+const MOUSE_BUTTONS = { left: 1, right: 2, middle: 3, wheelUp: 4, wheelDown: 5 } as const;
+/** GhosttyMouseEncoderOption values and the GhosttyMouseEncoderSize struct (size_t + 8 × u32). */
+const MOUSE_OPT_SIZE = 2;
+const MOUSE_OPT_ANY_BUTTON_PRESSED = 3;
+const MOUSE_SIZE_STRUCT = 36;
+/** GhosttyMousePosition {float x, float y}, passed by pointer on wasm32. */
+const MOUSE_POSITION_STRUCT = 8;
+/** Mouse reports are a few bytes; one retry covers the out-of-space contract regardless. */
+const MOUSE_BUF_LEN = 32;
 /** GhosttyFocusEvent values. */
 const FOCUS_GAINED = 0;
 const FOCUS_LOST = 1;
@@ -315,6 +341,24 @@ interface GhosttyExports {
   ghostty_key_event_set_composing(event: number, composing: number): void;
   ghostty_key_event_set_utf8(event: number, ptr: number, len: number): void;
   ghostty_key_event_set_unshifted_codepoint(event: number, codepoint: number): void;
+  ghostty_mouse_event_new(alloc: number, out: number): number;
+  ghostty_mouse_event_free(event: number): void;
+  ghostty_mouse_event_set_action(event: number, action: number): void;
+  ghostty_mouse_event_set_button(event: number, button: number): void;
+  ghostty_mouse_event_clear_button(event: number): void;
+  ghostty_mouse_event_set_mods(event: number, mods: number): void;
+  ghostty_mouse_event_set_position(event: number, positionPtr: number): void;
+  ghostty_mouse_encoder_new(alloc: number, out: number): number;
+  ghostty_mouse_encoder_free(encoder: number): void;
+  ghostty_mouse_encoder_setopt(encoder: number, option: number, valuePtr: number): void;
+  ghostty_mouse_encoder_setopt_from_terminal(encoder: number, term: number): void;
+  ghostty_mouse_encoder_encode(
+    encoder: number,
+    event: number,
+    buf: number,
+    bufLen: number,
+    outLen: number,
+  ): number;
   ghostty_terminal_get(term: number, data: number, out: number): number;
   ghostty_terminal_reset(term: number): void;
   ghostty_focus_encode(event: number, buf: number, bufLen: number, outWritten: number): number;
@@ -470,6 +514,8 @@ export class VtCore {
   private readonly keyEncoder: number;
   private readonly keyEvent: number;
   private readonly optAsAltPtr: number;
+  private readonly mouseEncoder: number;
+  private readonly mouseEvent: number;
 
   private readonly fg: Rgb;
   private readonly bg: Rgb;
@@ -507,6 +553,19 @@ export class VtCore {
     this.optAsAltPtr = this.abi.alloc(4);
     this.abi.writeI32(this.optAsAltPtr, OPTION_AS_ALT_TRUE);
     this.setOptionAsAlt();
+    this.mouseEncoder = this.abi.construct((slot) => e.ghostty_mouse_encoder_new(0, slot));
+    this.mouseEvent = this.abi.construct((slot) => e.ghostty_mouse_event_new(0, slot));
+  }
+
+  /** A bool option on the mouse encoder. */
+  private setMouseBool(option: number, value: boolean): void {
+    const ptr = this.abi.alloc(1);
+    try {
+      this.abi.bytes()[ptr] = value ? 1 : 0;
+      this.e.ghostty_mouse_encoder_setopt(this.mouseEncoder, option, ptr);
+    } finally {
+      this.abi.free(ptr, 1);
+    }
   }
 
   /**
@@ -794,6 +853,71 @@ export class VtCore {
     return this.modeEnabled(MODE_SYNCHRONIZED_OUTPUT);
   }
 
+  /** Whether the application asked to hear about the mouse (modes 9/1000/1002/1003). */
+  mouseTracking(): boolean {
+    return MODES_MOUSE_TRACKING.some((mode) => this.modeEnabled(mode));
+  }
+
+  /**
+   * Encodes a mouse event the way the application asked for it — tracking mode (which events),
+   * report format (X10, UTF-8, SGR, urxvt, SGR-pixels) — through libghostty's mouse encoder synced
+   * with the terminal's live modes. Null when the event is not reported: tracking off, or motion
+   * the mode does not carry. Every motion event is reported; the caller collapses repeats within
+   * one cell.
+   */
+  encodeMouse(spec: MouseEventSpec): Uint8Array | null {
+    this.requireOpen();
+    const e = this.e;
+    e.ghostty_mouse_encoder_setopt_from_terminal(this.mouseEncoder, this.term);
+    this.setMouseGeometry();
+    this.setMouseBool(
+      MOUSE_OPT_ANY_BUTTON_PRESSED,
+      spec.button !== undefined && spec.action !== "release",
+    );
+    e.ghostty_mouse_event_set_action(this.mouseEvent, MOUSE_ACTIONS[spec.action]);
+    if (spec.button === undefined) {
+      e.ghostty_mouse_event_clear_button(this.mouseEvent);
+    } else {
+      e.ghostty_mouse_event_set_button(this.mouseEvent, MOUSE_BUTTONS[spec.button]);
+    }
+    e.ghostty_mouse_event_set_mods(this.mouseEvent, spec.mods);
+    const { w, h } = this.mouseCell();
+    const position = this.abi.alloc(MOUSE_POSITION_STRUCT);
+    try {
+      const dv = new DataView(e.memory.buffer);
+      dv.setFloat32(position, (spec.x + 0.5) * w, true);
+      dv.setFloat32(position + 4, (spec.y + 0.5) * h, true);
+      e.ghostty_mouse_event_set_position(this.mouseEvent, position);
+    } finally {
+      this.abi.free(position, MOUSE_POSITION_STRUCT);
+    }
+    const out = this.encodeWithRetry("encodeMouse", MOUSE_BUF_LEN, (buf, len, outPtr) =>
+      e.ghostty_mouse_encoder_encode(this.mouseEncoder, this.mouseEvent, buf, len, outPtr),
+    );
+    return out.length === 0 ? null : out;
+  }
+
+  /** The cell size the mouse encoder works in: real pixels when known, else unit cells. */
+  private mouseCell(): { w: number; h: number } {
+    return this.cellPx.w > 0 && this.cellPx.h > 0 ? this.cellPx : { w: 1, h: 1 };
+  }
+
+  private setMouseGeometry(): void {
+    const { w, h } = this.mouseCell();
+    const ptr = this.abi.alloc(MOUSE_SIZE_STRUCT);
+    try {
+      this.abi.bytes().fill(0, ptr, ptr + MOUSE_SIZE_STRUCT);
+      this.abi.writeU32(ptr, MOUSE_SIZE_STRUCT);
+      this.abi.writeU32(ptr + 4, this.cols * w);
+      this.abi.writeU32(ptr + 8, this.rows * h);
+      this.abi.writeU32(ptr + 12, w);
+      this.abi.writeU32(ptr + 16, h);
+      this.e.ghostty_mouse_encoder_setopt(this.mouseEncoder, MOUSE_OPT_SIZE, ptr);
+    } finally {
+      this.abi.free(ptr, MOUSE_SIZE_STRUCT);
+    }
+  }
+
   /** The CSI I / CSI O focus report — send only when {@link focusReporting} says the app wants it. */
   encodeFocus(focused: boolean): Uint8Array {
     this.requireOpen();
@@ -1000,6 +1124,8 @@ export class VtCore {
     this.freed = true;
     this.abi.free(this.identityPtr, this.identityLen);
     this.abi.free(this.optAsAltPtr, 4);
+    this.e.ghostty_mouse_event_free(this.mouseEvent);
+    this.e.ghostty_mouse_encoder_free(this.mouseEncoder);
     this.e.ghostty_key_event_free(this.keyEvent);
     this.e.ghostty_key_encoder_free(this.keyEncoder);
     this.e.ghostty_render_state_row_cells_free(this.cells);
