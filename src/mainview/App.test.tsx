@@ -100,6 +100,39 @@ describe("App cockpit", () => {
     expect(container.querySelector(".rail")?.getAttribute("data-tauri-drag-region")).toBe("deep");
   });
 
+  test("the injected terminal is told whether its view is on screen", async () => {
+    gateway = createDemoGateway();
+    const theme = createThemeController(browserThemeDeps(() => {}));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root.render(
+        <App
+          gateway={gateway}
+          theme={theme}
+          terminal={(_open, active) => (
+            <div data-testid="fake-terminal" data-active={String(active)} />
+          )}
+        />,
+      ),
+    );
+    await flush();
+    const fake = () => container.querySelector('[data-testid="fake-terminal"]');
+    await act(async () => navBtn("terminal")!.click());
+    await flush();
+    expect(fake()?.getAttribute("data-active")).toBe("true");
+    await act(async () => navBtn("board")!.click());
+    await flush();
+    expect(fake(), "hidden, still mounted").not.toBeNull();
+    expect(fake()?.getAttribute("data-active"), "a hidden workspace holds no active pane").toBe(
+      "false",
+    );
+    await act(async () => navBtn("terminal")!.click());
+    await flush();
+    expect(fake()?.getAttribute("data-active")).toBe("true");
+  });
+
   test("Rooms/Board nav remains reachable when no terminal is injected", async () => {
     await render(undefined, "rooms");
     const labels = navItems().map((button) => button.getAttribute("aria-label"));

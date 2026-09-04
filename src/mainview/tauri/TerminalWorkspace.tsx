@@ -81,10 +81,13 @@ function statusView(
 export function TerminalWorkspace({
   sources,
   gateway,
+  active: viewActive,
   onOpenRoom,
 }: {
   sources: RosterSources;
   gateway?: Gateway;
+  /** Whether the terminal view is on screen; a hidden workspace holds no active pane. */
+  active: boolean;
   /** Jump to a room's terminal route — a Rooms-inventory row's home surface. */
   onOpenRoom?: (request: RoomTerminalRequest) => void;
 }) {
@@ -261,7 +264,7 @@ export function TerminalWorkspace({
 
       <div className="term-workspace__body">
         {tabs.map((t) => {
-          const active = t.key === activeKey && !showPicker;
+          const active = viewActive && t.key === activeKey && !showPicker;
           return (
             <div
               key={t.key}

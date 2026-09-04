@@ -110,10 +110,11 @@ createRoot(container).render(
       <App
         gateway={gateway}
         theme={theme}
-        terminal={(openRoomTerminal) => (
+        terminal={(openRoomTerminal, active) => (
           <TerminalWorkspace
             sources={rosterSources}
             gateway={gateway}
+            active={active}
             onOpenRoom={openRoomTerminal}
           />
         )}
