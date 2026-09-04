@@ -13,6 +13,8 @@
  * only the device, the shaders, and the draw call differ.
  */
 
+import { GlyphAtlas } from "./glyphAtlas";
+import { offscreenRaster, type RasterFactory } from "./raster";
 import type { Selection } from "./selection";
 import type { Renderer } from "./terminalController";
 import { TerminalGrid } from "./terminalGrid";
@@ -23,10 +25,8 @@ export type BackendName = "webgpu" | "webgl2";
 export interface RendererOptions {
   /** Monospace family used to rasterize glyphs; must be loaded before the first frame. */
   readonly fontFamily: string;
-  /** Cell height in CSS pixels; cell width is derived from the font's advance. */
+  /** Font size in CSS pixels; the cell is derived from the face's metrics (see fontMetrics.ts). */
   readonly fontPx: number;
-  /** Extra line height as a fraction of fontPx (0.2 ≈ comfortable). */
-  readonly linePad: number;
   /** Device pixel ratio to render at (crispness on retina). */
   readonly dpr: number;
   /** Theme background — the canvas clear and the color drawn under the block cursor. */
@@ -40,128 +40,15 @@ export interface RendererOptions {
   readonly selectionFg: Rgb;
   /** Reports an async GPU error (uncaptured validation error, device loss) that no throw surfaces. */
   readonly onError?: (message: string) => void;
+  /** Where the glyph atlas draws; defaults to an OffscreenCanvas. */
+  readonly raster?: RasterFactory;
 }
 
-
-/**
- * Rasterizes graphemes into a fixed-cell atlas on an OffscreenCanvas and hands out a stable index
- * per grapheme. Glyphs are drawn in white on transparent; the renderer tints them per cell, so one
- * atlas entry serves every color the same grapheme ever appears in.
- */
-/** The style attributes that change how a glyph is rasterized (color is applied later, at draw). */
-export interface GlyphStyle {
-  readonly bold: boolean;
-  readonly italic: boolean;
-  readonly underline: boolean;
-  readonly strikethrough: boolean;
-}
-
-const PLAIN_GLYPH: GlyphStyle = {
-  bold: false,
-  italic: false,
-  underline: false,
-  strikethrough: false,
-};
-
-class GlyphAtlas {
-  readonly cellW: number;
-  readonly cellH: number;
-  private readonly cols: number;
-  private readonly canvas: OffscreenCanvas;
-  private readonly ctx: OffscreenCanvasRenderingContext2D;
-  private readonly index = new Map<string, number>();
-  private readonly baseline: number;
-  private readonly family: string;
-  private readonly px: number;
-  private readonly thickness: number;
-  private readonly underlineY: number;
-  private readonly strikeY: number;
-  private next = 1; // 0 is reserved for "blank" (drawn as nothing)
-  private generation = 0;
-
-  constructor(fontFamily: string, fontPx: number, linePad: number, dpr: number) {
-    const probe = new OffscreenCanvas(64, 64).getContext("2d")!;
-    probe.font = `${fontPx}px ${fontFamily}`;
-    const advance = probe.measureText("M").width;
-    this.cellW = Math.max(1, Math.round(advance * dpr));
-    this.cellH = Math.max(1, Math.round(fontPx * (1 + linePad) * dpr));
-    this.baseline = Math.round(fontPx * (1 + linePad / 2) * dpr) - Math.round(fontPx * 0.2 * dpr);
-    this.family = fontFamily;
-    this.px = Math.round(fontPx * dpr);
-    this.thickness = Math.max(1, Math.round(dpr));
-    this.underlineY = Math.min(this.cellH - this.thickness, this.baseline + Math.round(2 * dpr));
-    this.strikeY = Math.max(0, this.baseline - Math.round(this.px * 0.3));
-    this.cols = 64;
-    const rows = 64;
-    this.canvas = new OffscreenCanvas(this.cols * this.cellW, rows * this.cellH);
-    this.ctx = this.canvas.getContext("2d")!;
-    this.ctx.textBaseline = "alphabetic";
-    this.ctx.fillStyle = "#fff";
-  }
-
-  /**
-   * The atlas index for {@code text} rendered in {@code style}; blank with no decoration is 0.
-   * Rasterizes on first sight, keyed by (text, style): bold/italic pick the font face, underline and
-   * strikethrough draw rules into the cell. Color is applied per-cell at draw time, so one entry
-   * serves every color the same styled grapheme ever appears in.
-   */
-  glyph(text: string, style: GlyphStyle = PLAIN_GLYPH, wide = false): number {
-    const blank = text === "" || text === " ";
-    if (blank && !style.underline && !style.strikethrough) return 0;
-    const key = `${style.bold ? "b" : ""}${style.italic ? "i" : ""}${style.underline ? "u" : ""}${
-      style.strikethrough ? "s" : ""
-    }${wide ? "w" : ""}|${text}`;
-    const hit = this.index.get(key);
-    if (hit !== undefined) return hit;
-    const span = wide ? 2 : 1;
-    // A wide glyph occupies two atlas cells; keep them in one row so its right half is (u+1, v).
-    if (wide && this.next % this.cols === this.cols - 1) this.next++;
-    if (this.next + span > this.cols * this.cols) return 0; // atlas full: blank, never corrupt
-    const id = this.next;
-    this.next += span;
-    this.index.set(key, id);
-    const x0 = (id % this.cols) * this.cellW;
-    const y0 = Math.floor(id / this.cols) * this.cellH;
-    const w = span * this.cellW;
-    this.ctx.font = `${style.italic ? "italic " : ""}${style.bold ? "bold " : ""}${this.px}px ${this.family}`;
-    if (!blank) this.ctx.fillText(text, x0 + 1, y0 + this.baseline);
-    if (style.underline) this.ctx.fillRect(x0, y0 + this.underlineY, w, this.thickness);
-    if (style.strikethrough) this.ctx.fillRect(x0, y0 + this.strikeY, w, this.thickness);
-    this.generation++;
-    return id;
-  }
-
-  cell(id: number): { u: number; v: number } {
-    return { u: id % this.cols, v: Math.floor(id / this.cols) };
-  }
-
-  get atlasCols(): number {
-    return this.cols;
-  }
-  get bitmap(): OffscreenCanvas {
-    return this.canvas;
-  }
-  /** Bumps when new glyphs were rasterized, so a backend knows to re-upload the texture. */
-  get version(): number {
-    return this.generation;
-  }
-}
-
-/**
- * The atlas's pixels, read synchronously. Uploading from these exact bytes — rather than handing the
- * OffscreenCanvas to {@code copyExternalImageToTexture} / {@code texImage2D} — sidesteps a WebKit
- * WebGPU quirk: the canvas *snapshot* those take can miss a {@code fillText} done earlier in the same
- * tick, so a freshly-typed glyph gets marked uploaded yet never reaches the GPU texture until a later
- * upload happens to catch it (default-fg text stays black, then "fixes itself" minutes later).
- * {@code getImageData} forces a current read of the backing store, so the upload can never be stale.
- */
-function atlasPixels(atlas: OffscreenCanvas): Uint8ClampedArray {
-  const ctx = atlas.getContext("2d");
-  if (!ctx) {
-    throw new Error("TerminalRenderer: the glyph atlas has no 2D context.");
-  }
-  return ctx.getImageData(0, 0, atlas.width, atlas.height).data;
-}
+/** Floats per foreground instance: x, y, r, g, b, u, v, w, mode. */
+const FG_STRIDE = 9;
+/** Instance mode: tint the white mask with the cell color, or draw the entry's own colors. */
+const MODE_TINT = 0;
+const MODE_COLOR = 1;
 
 interface FrameData {
   readonly cols: number;
@@ -171,10 +58,13 @@ interface FrameData {
   readonly atlasCols: number;
   /** Per-cell background: cols*rows*3 floats (0..1). */
   readonly bg: Float32Array;
-  /** Per-glyph-cell foreground: packed [x,y, r,g,b, u,v] * n. */
+  /** Per-glyph-cell foreground: packed [x,y, r,g,b, u,v, w, mode] * n. */
   readonly fg: Float32Array;
   readonly fgCount: number;
-  readonly atlas: OffscreenCanvas;
+  readonly atlasWidth: number;
+  readonly atlasHeight: number;
+  /** The atlas bitmap's pixels, read when {@link atlasVersion} changed. */
+  readonly atlasPixels: () => Uint8ClampedArray;
   readonly atlasVersion: number;
   /** Canvas clear color (theme background). */
   readonly clear: Rgb;
@@ -202,13 +92,13 @@ export class TerminalRenderer implements Renderer {
 
   private constructor(opts: RendererOptions) {
     this.opts = opts;
-    this.atlas = new GlyphAtlas(opts.fontFamily, opts.fontPx, opts.linePad, opts.dpr);
+    this.atlas = new GlyphAtlas(opts.raster ?? offscreenRaster, opts.fontFamily, opts.fontPx, opts.dpr);
     this.grid = new TerminalGrid({ fg: opts.fg, bg: opts.bg });
   }
 
   /** The cell size in device pixels, so the harness can size the terminal to the canvas. */
   get cellSize(): { w: number; h: number } {
-    return { w: this.atlas.cellW, h: this.atlas.cellH };
+    return { w: this.atlas.metrics.cellW, h: this.atlas.metrics.cellH };
   }
   get backendName(): BackendName {
     return this.backend.name;
@@ -231,8 +121,8 @@ export class TerminalRenderer implements Renderer {
     this.rows = rows;
     this.grid.resize(cols, rows);
     this.bgInstances = new Float32Array(cols * rows * 3);
-    this.fgInstances = new Float32Array(cols * rows * 8);
-    this.backend.resize(cols * this.atlas.cellW, rows * this.atlas.cellH);
+    this.fgInstances = new Float32Array(cols * rows * FG_STRIDE);
+    this.backend.resize(cols * this.atlas.metrics.cellW, rows * this.atlas.metrics.cellH);
   }
 
   /** Folds a snapshot's rows into the grid. Cheap on a dirty snapshot: only changed rows are touched. */
@@ -269,7 +159,7 @@ export class TerminalRenderer implements Renderer {
         const glyph = this.atlas.glyph(cell.text, cell, wide);
         if (glyph !== 0) {
           const { u, v } = this.atlas.cell(glyph);
-          const o = fgCount * 8;
+          const o = fgCount * FG_STRIDE;
           fg[o] = x;
           fg[o + 1] = y;
           if (onCursor || selected) {
@@ -287,6 +177,7 @@ export class TerminalRenderer implements Renderer {
           fg[o + 5] = u;
           fg[o + 6] = v;
           fg[o + 7] = wide ? 2 : 1;
+          fg[o + 8] = this.atlas.isColor(glyph) ? MODE_COLOR : MODE_TINT;
           fgCount++;
         }
       }
@@ -295,13 +186,15 @@ export class TerminalRenderer implements Renderer {
     this.backend.frame({
       cols: this.cols,
       rows: this.rows,
-      cellW: this.atlas.cellW,
-      cellH: this.atlas.cellH,
+      cellW: this.atlas.metrics.cellW,
+      cellH: this.atlas.metrics.cellH,
       atlasCols: this.atlas.atlasCols,
       bg,
       fg,
       fgCount,
-      atlas: this.atlas.bitmap,
+      atlasWidth: this.atlas.width,
+      atlasHeight: this.atlas.height,
+      atlasPixels: () => this.atlas.pixels(),
       atlasVersion: this.atlas.version,
       clear: this.opts.bg,
     });
@@ -346,14 +239,20 @@ fn bg_vs(@builtin(vertex_index) vi : u32,
 @fragment
 fn bg_fs(i : BgOut) -> @location(0) vec4f { return vec4f(i.color, 1.0); }
 
-struct FgOut { @builtin(position) pos : vec4f, @location(0) color : vec3f, @location(1) uv : vec2f, };
+struct FgOut {
+  @builtin(position) pos : vec4f,
+  @location(0) color : vec3f,
+  @location(1) uv : vec2f,
+  @location(2) @interpolate(flat) mode : u32,
+};
 
 @vertex
 fn fg_vs(@builtin(vertex_index) vi : u32,
          @location(0) grid : vec2f,
          @location(1) color : vec3f,
          @location(2) atlasCell : vec2f,
-         @location(3) w : f32) -> FgOut {
+         @location(3) w : f32,
+         @location(4) mode : f32) -> FgOut {
   var corners = array<vec2f,6>(
     vec2f(0,0), vec2f(1,0), vec2f(0,1),
     vec2f(0,1), vec2f(1,0), vec2f(1,1));
@@ -366,13 +265,15 @@ fn fg_vs(@builtin(vertex_index) vi : u32,
   o.pos = vec4f(ndc, 0.0, 1.0);
   o.color = color;
   o.uv = uv;
+  o.mode = u32(mode);
   return o;
 }
 
 @fragment
 fn fg_fs(i : FgOut) -> @location(0) vec4f {
-  let a = textureSample(atlasTex, atlasSamp, i.uv).a;
-  return vec4f(i.color, a);
+  let t = textureSample(atlasTex, atlasSamp, i.uv);
+  // mode 0 tints the white mask with the cell color; mode 1 draws a color glyph as-is.
+  return select(vec4f(i.color, t.a), t, i.mode == 1u);
 }
 `;
 
@@ -458,13 +359,14 @@ class WebGpuBackend implements Backend {
         entryPoint: "fg_vs",
         buffers: [
           {
-            arrayStride: 8 * 4,
+            arrayStride: FG_STRIDE * 4,
             stepMode: "instance",
             attributes: [
               { shaderLocation: 0, offset: 0, format: "float32x2" },
               { shaderLocation: 1, offset: 2 * 4, format: "float32x3" },
               { shaderLocation: 2, offset: 5 * 4, format: "float32x2" },
               { shaderLocation: 3, offset: 7 * 4, format: "float32" },
+              { shaderLocation: 4, offset: 8 * 4, format: "float32" },
             ],
           },
         ],
@@ -484,15 +386,15 @@ class WebGpuBackend implements Backend {
     this.canvas.height = pxH;
   }
 
-  private ensureAtlas(atlas: OffscreenCanvas, version: number): void {
+  private ensureAtlas(d: FrameData): void {
     if (
       !this.texture ||
-      this.texture.width !== atlas.width ||
-      this.texture.height !== atlas.height
+      this.texture.width !== d.atlasWidth ||
+      this.texture.height !== d.atlasHeight
     ) {
       this.texture?.destroy();
       this.texture = this.device.createTexture({
-        size: [atlas.width, atlas.height],
+        size: [d.atlasWidth, d.atlasHeight],
         format: "rgba8unorm",
         usage:
           GPUTextureUsage.TEXTURE_BINDING |
@@ -501,15 +403,15 @@ class WebGpuBackend implements Backend {
       });
       this.uploadedAtlas = -1;
     }
-    if (this.uploadedAtlas !== version) {
-      const pixels = atlasPixels(atlas);
+    if (this.uploadedAtlas !== d.atlasVersion) {
+      const pixels = d.atlasPixels();
       this.device.queue.writeTexture(
         { texture: this.texture },
         pixels.buffer as ArrayBuffer,
-        { offset: pixels.byteOffset, bytesPerRow: atlas.width * 4, rowsPerImage: atlas.height },
-        { width: atlas.width, height: atlas.height },
+        { offset: pixels.byteOffset, bytesPerRow: d.atlasWidth * 4, rowsPerImage: d.atlasHeight },
+        { width: d.atlasWidth, height: d.atlasHeight },
       );
-      this.uploadedAtlas = version;
+      this.uploadedAtlas = d.atlasVersion;
     }
     if (!this.uniform) {
       this.uniform = this.device.createBuffer({
@@ -540,7 +442,7 @@ class WebGpuBackend implements Backend {
   }
 
   frame(d: FrameData): void {
-    this.ensureAtlas(d.atlas, d.atlasVersion);
+    this.ensureAtlas(d);
     this.writeF32(
       this.uniform,
       new Float32Array([
@@ -574,10 +476,10 @@ class WebGpuBackend implements Backend {
     this.writeF32(bgBuf, gridBg);
 
     const fgBuf = this.device.createBuffer({
-      size: Math.max(28, d.fg.byteLength),
+      size: Math.max(FG_STRIDE * 4, d.fg.byteLength),
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
-    if (d.fgCount > 0) this.writeF32(fgBuf, d.fg.subarray(0, d.fgCount * 8));
+    if (d.fgCount > 0) this.writeF32(fgBuf, d.fg.subarray(0, d.fgCount * FG_STRIDE));
 
     const encoder = this.device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
@@ -633,8 +535,9 @@ layout(location=0) in vec2 grid;
 layout(location=1) in vec3 color;
 layout(location=2) in vec2 atlasCell;
 layout(location=3) in float w;
+layout(location=4) in float mode;
 uniform vec2 uView; uniform vec2 uCell; uniform float uAtlasCols;
-out vec3 vColor; out vec2 vUv;
+out vec3 vColor; out vec2 vUv; flat out float vMode;
 const vec2 C[6] = vec2[6](vec2(0,0),vec2(1,0),vec2(0,1),vec2(0,1),vec2(1,0),vec2(1,1));
 void main(){
   vec2 c = vec2(C[gl_VertexID].x * w, C[gl_VertexID].y); // wide glyph spans w cells
@@ -642,10 +545,11 @@ void main(){
   gl_Position = vec4(px.x/uView.x*2.0-1.0, 1.0-px.y/uView.y*2.0, 0.0, 1.0);
   vUv = (atlasCell + c) / vec2(uAtlasCols, uAtlasCols);
   vColor = color;
+  vMode = mode;
 }`;
 const GL_FG_FS = `#version 300 es
-precision highp float; in vec3 vColor; in vec2 vUv; uniform sampler2D uAtlas; out vec4 o;
-void main(){ float a = texture(uAtlas, vUv).a; o = vec4(vColor, a); }`;
+precision highp float; in vec3 vColor; in vec2 vUv; flat in float vMode; uniform sampler2D uAtlas; out vec4 o;
+void main(){ vec4 t = texture(uAtlas, vUv); o = vMode > 0.5 ? t : vec4(vColor, t.a); }`;
 
 class WebGl2Backend implements Backend {
   readonly name = "webgl2" as const;
@@ -678,10 +582,11 @@ class WebGl2Backend implements Backend {
     const fgVao = gl.createVertexArray()!;
     gl.bindVertexArray(fgVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, fgBuf);
-    attr(gl, 0, 2, 8 * 4, 0);
-    attr(gl, 1, 3, 8 * 4, 2 * 4);
-    attr(gl, 2, 2, 8 * 4, 5 * 4);
-    attr(gl, 3, 1, 8 * 4, 7 * 4);
+    attr(gl, 0, 2, FG_STRIDE * 4, 0);
+    attr(gl, 1, 3, FG_STRIDE * 4, 2 * 4);
+    attr(gl, 2, 2, FG_STRIDE * 4, 5 * 4);
+    attr(gl, 3, 1, FG_STRIDE * 4, 7 * 4);
+    attr(gl, 4, 1, FG_STRIDE * 4, 8 * 4);
     gl.bindVertexArray(null);
     const tex = gl.createTexture()!;
     gl.enable(gl.BLEND);
@@ -698,14 +603,14 @@ class WebGl2Backend implements Backend {
   frame(d: FrameData): void {
     const gl = this.gl;
     if (this.uploadedAtlas !== d.atlasVersion) {
-      const pixels = atlasPixels(d.atlas);
+      const pixels = d.atlasPixels();
       gl.bindTexture(gl.TEXTURE_2D, this.tex);
       gl.texImage2D(
         gl.TEXTURE_2D,
         0,
         gl.RGBA,
-        d.atlas.width,
-        d.atlas.height,
+        d.atlasWidth,
+        d.atlasHeight,
         0,
         gl.RGBA,
         gl.UNSIGNED_BYTE,
@@ -752,7 +657,7 @@ class WebGl2Backend implements Backend {
       gl.bindTexture(gl.TEXTURE_2D, this.tex);
       gl.bindVertexArray(this.fgVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.fgBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, d.fg.subarray(0, d.fgCount * 8), gl.DYNAMIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, d.fg.subarray(0, d.fgCount * FG_STRIDE), gl.DYNAMIC_DRAW);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, d.fgCount);
     }
     gl.bindVertexArray(null);

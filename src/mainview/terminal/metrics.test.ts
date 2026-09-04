@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_FONT_PX,
-  TERMINAL_LINE_PAD,
   TERMINAL_PAD_X,
   TERMINAL_PAD_Y,
 } from "./metrics";
@@ -19,7 +18,6 @@ describe("terminal font metrics", () => {
   test("the metrics are pinned", () => {
     expect(TERMINAL_FONT_FAMILY).toBe('"JetBrains Mono", ui-monospace, "SF Mono", monospace');
     expect(TERMINAL_FONT_PX).toBe(15);
-    expect(TERMINAL_LINE_PAD).toBe(0.25);
     expect(TERMINAL_PAD_X).toBe(10);
     expect(TERMINAL_PAD_Y).toBe(8);
   });
@@ -32,7 +30,6 @@ describe("terminal font metrics", () => {
     expect(source).toContain('from "../terminal/metrics"');
     expect(source).not.toMatch(/const FONT_PX\s*=/);
     expect(source).not.toMatch(/const FONT_FAMILY\s*=/);
-    expect(source).not.toMatch(/const LINE_PAD\s*=/);
     expect(source).not.toMatch(/const PAD_[XY]\s*=/);
   });
 });

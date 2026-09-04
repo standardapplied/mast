@@ -16,7 +16,6 @@ import {
 import {
   TERMINAL_FONT_FAMILY as FONT_FAMILY,
   TERMINAL_FONT_PX as FONT_PX,
-  TERMINAL_LINE_PAD as LINE_PAD,
   TERMINAL_PAD_X as PAD_X,
   TERMINAL_PAD_Y as PAD_Y,
 } from "../terminal/metrics";
@@ -382,7 +381,6 @@ export const SessionTerminalPane = forwardRef<
         TerminalRenderer.create(canvas, {
           fontFamily: FONT_FAMILY,
           fontPx: FONT_PX,
-          linePad: LINE_PAD,
           dpr,
           bg: palette.bg,
           fg: palette.fg,
