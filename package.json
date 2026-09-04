@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "preview": "bun run scripts/preview.ts"
+    "preview": "bun run scripts/preview.ts",
+    "terminal:replay": "bun run scripts/terminal-replay.ts"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",
