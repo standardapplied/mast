@@ -988,3 +988,14 @@ describe("connectSessions", () => {
     off();
   });
 });
+
+describe("refresh as a detached callback", () => {
+  test("re-lists when invoked without its receiver (the panes hand it around bare)", async () => {
+    const { store, calls } = await connected([session({ name: "mast-sail-mast", room: "" })]);
+    const before = calls.list;
+    const refresh: () => void = store.refresh;
+    refresh();
+    await flush();
+    expect(calls.list).toBe(before + 1);
+  });
+});

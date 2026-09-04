@@ -4,6 +4,8 @@
 
 mod login;
 mod pty;
+#[cfg(test)]
+mod pty_probe;
 mod ssh;
 
 use std::sync::Arc;
@@ -294,6 +296,13 @@ async fn fs_open(
 /// Read the system clipboard as text. The webview cannot do this itself: WKWebView never fires DOM
 /// paste events on a non-editable surface, and its async clipboard *read* is gesture-gated — while
 /// `pbpaste` ships on every Mac. Empty clipboard reads as an empty string, not an error.
+/// A webview-side failure (an uncaught error, a rejected promise, a render crash) written to the
+/// process's stderr — the one channel a release build exposes, since its webview has no inspector.
+#[tauri::command]
+fn log_error(message: String) {
+    eprintln!("mast webview: {message}");
+}
+
 #[tauri::command]
 async fn clipboard_read_text() -> Result<String, String> {
     #[cfg(target_os = "macos")]
@@ -551,6 +560,7 @@ pub fn run() {
             fs_delete,
             fs_open,
             clipboard_read_text,
+            log_error,
             session_open,
             session_write,
             session_resize,

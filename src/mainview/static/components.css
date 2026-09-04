@@ -5650,3 +5650,37 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   font: 500 11px var(--font-mono);
   letter-spacing: 0.06em;
 }
+
+/* The crash screen: the boundary's replacement for a blank window (see components/CrashScreen). */
+.crash-screen {
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 48px 32px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: var(--background);
+  color: var(--foreground);
+  overflow: auto;
+}
+.crash-screen__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.crash-screen__detail {
+  margin: 0;
+  padding: 12px;
+  font: 12px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 60vh;
+  overflow: auto;
+}
+.crash-screen__actions {
+  display: flex;
+  gap: 8px;
+}
