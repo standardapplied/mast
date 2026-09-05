@@ -9,7 +9,6 @@ import {
   TerminalController,
 } from "./terminalController";
 import { MODS } from "./input";
-import { Selection } from "./selection";
 import { TerminalGrid } from "./terminalGrid";
 import type { Cursor, GridSnapshot } from "./vtCore";
 import { VtCore } from "./vtCore";
@@ -35,7 +34,6 @@ class RecRenderer implements Renderer {
   setCursor(cursor: Cursor): void {
     this.cursors.push(cursor);
   }
-  setSelection(): void {}
   draw(): void {
     this.draws++;
   }
@@ -122,14 +120,44 @@ describe("TerminalController", () => {
     expect(last.rows.map((r) => r.y)).toEqual([0]);
   });
 
-  test("selectedText reads the highlighted cells straight from the live grid", async () => {
-    const { controller } = await harness(20, 3);
+  test("a press-drag-release selects cells the core owns; copy reads them; typing clears", async () => {
+    const { controller, core, renderer } = await harness(20, 3);
     controller.feed(enc("hello world"));
     controller.frame();
-    controller.setSelection(new Selection({ x: 0, y: 0 }, { x: 4, y: 0 }, 20));
+    // 10×20 px cells; a press in a cell's left half anchors before it, a drag past a cell's
+    // midpoint includes it, as in Ghostty.
+    core.setCellPixels(10, 20);
+    const px = (x: number, y: number) => ({ x: (x + 0.8) * 10, y: (y + 0.5) * 20 });
+    controller.selectPress({ x: 0, y: 0 }, { x: 2, y: 10 }, 1000);
+    controller.selectDrag({ x: 4, y: 0 }, px(4, 0));
+    controller.selectRelease({ x: 4, y: 0 });
+    controller.frame();
     expect(controller.selectedText()).toBe("hello");
-    controller.setSelection(null);
+    expect([0, 1, 2, 3, 4, 5].map((x) => renderer.grid.cell(x, 0).selected)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+    ]);
+    controller.clearSelection();
+    controller.frame();
+    expect(core.hasSelection()).toBe(false);
     expect(controller.selectedText()).toBe("");
+    expect(renderer.grid.cell(0, 0).selected).toBe(false);
+  });
+
+  test("a selection change alone is enough to repaint", async () => {
+    const { controller, core, renderer } = await harness(20, 3);
+    controller.feed(enc("abc"));
+    controller.frame();
+    const draws = renderer.draws;
+    core.setCellPixels(10, 20);
+    controller.selectPress({ x: 0, y: 0 }, { x: 2, y: 10 }, 1000);
+    controller.selectDrag({ x: 2, y: 0 }, { x: 28, y: 10 });
+    controller.frame();
+    expect(renderer.draws).toBe(draws + 1);
   });
 
   test("a scroll repaints at the new viewport, with no new pty output", async () => {
@@ -211,15 +239,6 @@ describe("TerminalController", () => {
     controller.frame(false);
     controller.frame(true);
     expect(renderer.draws).toBe(3);
-  });
-
-  test("a selection change draws even with no terminal change", async () => {
-    const { controller, renderer } = await harness(20, 3);
-    controller.feed(enc("hello"));
-    controller.frame();
-    controller.setSelection(new Selection({ x: 0, y: 0 }, { x: 3, y: 0 }, 20));
-    controller.frame();
-    expect(renderer.draws).toBe(2);
   });
 
   test("synchronized output holds frames until the app ends the update", async () => {

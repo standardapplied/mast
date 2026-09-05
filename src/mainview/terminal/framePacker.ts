@@ -2,14 +2,14 @@
  * packFrame — turns the terminal grid into the two instance buffers the GPU draws, with no GPU in
  * sight. One background instance per cell, then foreground instances in draw order: decorations
  * (underline, strikethrough, overline) first so text layers over them, glyphs, and finally a
- * bar/underline/hollow cursor. A block cursor is a background swap, as in a native terminal.
+ * bar/underline/hollow cursor. A block cursor is a background swap, as in a native terminal. The
+ * selection is the terminal's own: a cell arrives flagged, and paints in the selection colors.
  *
  * Pure, so the layering rules are provable under `bun test` with a stub atlas; the renderer only
  * uploads what this packs.
  */
 
 import type { GlyphStyle } from "./glyphAtlas";
-import type { Selection } from "./selection";
 import type { SpecialKind } from "./sprites/special";
 import type { TerminalGrid } from "./terminalGrid";
 import type { Cell, Cursor, CursorStyle, Rgb, UnderlineStyle } from "./vtCore";
@@ -65,7 +65,6 @@ const CURSOR_SPRITE: Partial<Record<CursorStyle, SpecialKind>> = {
 export function packFrame(
   grid: TerminalGrid,
   cursor: Cursor,
-  selection: Selection | null,
   atlas: AtlasLike,
   colors: FrameColors,
   out: FrameBuffers,
@@ -94,7 +93,7 @@ export function packFrame(
     for (let x = 0; x < grid.cols; x++) {
       const cell = grid.cell(x, y);
       const onBlockCursor = blockCursor && cursor.x === x && cursor.y === y;
-      const selected = !onBlockCursor && (selection?.contains(x, y) ?? false);
+      const selected = !onBlockCursor && cell.selected;
       const cellBg = onBlockCursor ? colors.cursor : selected ? colors.selectionBg : cell.bg;
       const bi = (y * grid.cols + x) * BG_STRIDE;
       out.bg[bi] = cellBg[0] / 255;
