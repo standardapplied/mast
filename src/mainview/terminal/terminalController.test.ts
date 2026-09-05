@@ -142,6 +142,32 @@ describe("TerminalController", () => {
     expect(renderer.applied.length).toBeGreaterThan(before);
   });
 
+  test("output that lands below a scrolled-up viewport is flagged until the user comes back", async () => {
+    const { controller } = await harness(20, 3);
+    for (let i = 0; i < 6; i++) controller.feed(enc(`row${i}\r\n`));
+    expect(controller.hasUnseenOutput()).toBe(false); // at the bottom: nothing is unseen
+    controller.scroll({ delta: -2 });
+    expect(controller.hasUnseenOutput()).toBe(false); // scrolling up alone is not new output
+    controller.feed(enc("late\r\n"));
+    expect(controller.hasUnseenOutput()).toBe(true);
+    controller.scroll({ delta: 1 }); // still in history
+    expect(controller.hasUnseenOutput()).toBe(true);
+    controller.scroll("bottom");
+    expect(controller.hasUnseenOutput()).toBe(false);
+    controller.feed(enc("live\r\n")); // output while live never flags
+    expect(controller.hasUnseenOutput()).toBe(false);
+  });
+
+  test("a keystroke snaps back to the live view, which clears the flag", async () => {
+    const { controller } = await harness(20, 3);
+    for (let i = 0; i < 6; i++) controller.feed(enc(`row${i}\r\n`));
+    controller.scroll({ delta: -3 });
+    controller.feed(enc("late\r\n"));
+    expect(controller.hasUnseenOutput()).toBe(true);
+    controller.scroll("bottom"); // the pane does this on every keystroke
+    expect(controller.hasUnseenOutput()).toBe(false);
+  });
+
   test("empty output is a no-op", async () => {
     const { controller, core } = await harness();
     controller.feed(new Uint8Array(0));

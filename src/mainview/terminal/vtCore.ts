@@ -274,6 +274,8 @@ const OPT_DEFAULT_CURSOR_BLINK = 23;
 const OPT_SCROLLBACK_MAX_BYTES = 27;
 /** GHOSTTY_TERMINAL_DATA_SCROLLBACK_MAX_BYTES (size_t). */
 const DATA_SCROLLBACK_MAX_BYTES = 34;
+/** GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE (bool): the viewport follows the active area. */
+const DATA_VIEWPORT_ACTIVE = 32;
 /**
  * Scrollback budget per terminal. libghostty-vt's own default is 10 KB (a few hundred lines);
  * native Ghostty configures 50 MB. Memory is allocated only as output accumulates.
@@ -627,6 +629,24 @@ export class VtCore {
     }
   }
 
+  /**
+   * Whether the viewport is pinned to the live screen — false once the user has scrolled into
+   * history, where new output lands below what they are looking at.
+   */
+  viewportActive(): boolean {
+    this.requireOpen();
+    const ptr = this.abi.alloc(1);
+    try {
+      const rc = this.e.ghostty_terminal_get(this.term, DATA_VIEWPORT_ACTIVE, ptr);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: reading the viewport state failed (rc=${rc})`);
+      }
+      return this.abi.readU8(ptr) !== 0;
+    } finally {
+      this.abi.free(ptr, 1);
+    }
+  }
+
   /** The scrollback budget in bytes the terminal is running with. */
   scrollbackMaxBytes(): number {
     this.requireOpen();
@@ -668,11 +688,12 @@ export class VtCore {
 
   /**
    * Instantiates the wasm and creates a terminal of {@code cols}×{@code rows}. {@code wasm} is the
-   * raw module bytes — injected by the caller (a bundled asset in the app, the vendored file in
-   * tests), so VtCore never depends on where the wasm lives.
+   * raw module bytes or an already-compiled module — injected by the caller (a bundled asset in the
+   * app, compiled once and shared by every pane; the vendored file in tests), so VtCore never
+   * depends on where the wasm lives. Each terminal gets its own instance and linear memory.
    */
   static async create(
-    wasm: BufferSource,
+    wasm: BufferSource | WebAssembly.Module,
     cols: number,
     rows: number,
     theme: Theme = DEFAULT_THEME,
@@ -681,7 +702,7 @@ export class VtCore {
     if (cols <= 0 || rows <= 0 || cols > MAX_DIM || rows > MAX_DIM) {
       throw new Error(`VtCore: cols and rows must be in 1..${MAX_DIM} (got ${cols}x${rows})`);
     }
-    const module = await WebAssembly.compile(wasm);
+    const module = wasm instanceof WebAssembly.Module ? wasm : await WebAssembly.compile(wasm);
     const instance = await WebAssembly.instantiate(module, {});
     const core = new VtCore(instance.exports as unknown as GhosttyExports, cols, rows, theme, options);
     await core.installEffects();

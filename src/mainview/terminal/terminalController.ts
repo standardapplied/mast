@@ -51,6 +51,7 @@ export class TerminalController {
   private redraw = true;
   private lastCursor: Cursor | null = null;
   private lastMotionCell = -1;
+  private unseenOutput = false;
   private syncSince: number | null = null;
   private selection: Selection | null = null;
   private replaying = false;
@@ -95,7 +96,22 @@ export class TerminalController {
     if (bytes.length > 0) {
       this.core.write(bytes);
       this.dirty = true;
+      if (!this.core.viewportActive()) {
+        this.unseenOutput = true;
+      }
     }
+  }
+
+  /**
+   * Whether output arrived below the viewport while the user was scrolled into history. The
+   * viewport deliberately stays put when that happens (as in Ghostty), so the host offers a way
+   * back down; this turns false the moment the viewport is live again.
+   */
+  hasUnseenOutput(): boolean {
+    if (this.unseenOutput && this.core.viewportActive()) {
+      this.unseenOutput = false;
+    }
+    return this.unseenOutput;
   }
 
   /**
