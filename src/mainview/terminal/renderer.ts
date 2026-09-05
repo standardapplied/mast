@@ -16,7 +16,6 @@
 import { BG_STRIDE, FG_PER_CELL, FG_STRIDE, packFrame } from "./framePacker";
 import { GlyphAtlas } from "./glyphAtlas";
 import { offscreenRaster, type RasterFactory } from "./raster";
-import type { Selection } from "./selection";
 import type { Renderer } from "./terminalController";
 import { TerminalGrid } from "./terminalGrid";
 import type { Cursor, GridSnapshot, Rgb } from "./vtCore";
@@ -87,7 +86,6 @@ export class TerminalRenderer implements Renderer {
     style: "block",
     blinking: false,
   };
-  private selection: Selection | null = null;
   // Instance buffers reused across frames — sized on resize, never per frame.
   private bgInstances = new Float32Array(0);
   private fgInstances = new Float32Array(0);
@@ -136,15 +134,11 @@ export class TerminalRenderer implements Renderer {
     this.cursor = cursor;
   }
 
-  setSelection(selection: Selection | null): void {
-    this.selection = selection;
-  }
-
   /** Packs the current grid into the reused instance buffers and draws one frame. */
   draw(): void {
     const bg = this.bgInstances;
     const fg = this.fgInstances;
-    const fgCount = packFrame(this.grid, this.cursor, this.selection, this.atlas, this.opts, {
+    const fgCount = packFrame(this.grid, this.cursor, this.atlas, this.opts, {
       bg,
       fg,
     });

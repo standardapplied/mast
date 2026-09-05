@@ -8,20 +8,26 @@
  * the WebGPU renderer are the thin, untested edge that wires these seams to the live app.
  *
  * Damage-driven: {@link #frame} applies only the rows VtCore reports dirty, then draws only when
- * something visible changed — rows, cursor, selection. An idle terminal costs one mode query per
+ * something visible changed — rows, cursor. An idle terminal costs one mode query per
  * frame and nothing else; the caller decides how often to call it (an animation frame is fine).
  */
 
 import { keyEventFor, type KeyStroke, MODS } from "./input";
-import { type Selection, selectedText } from "./selection";
-import type { Cursor, GridSnapshot, MouseEventSpec, Scroll, VtCore } from "./vtCore";
+import type {
+  CellPos,
+  Cursor,
+  GridSnapshot,
+  MouseEventSpec,
+  Scroll,
+  SurfacePos,
+  VtCore,
+} from "./vtCore";
 
 /** What the controller needs from a renderer; the WebGPU renderer implements this structurally. */
 export interface Renderer {
   resize(cols: number, rows: number): void;
   apply(snapshot: GridSnapshot): void;
   setCursor(cursor: Cursor): void;
-  setSelection(selection: Selection | null): void;
   draw(): void;
 }
 
@@ -53,7 +59,6 @@ export class TerminalController {
   private lastMotionCell = -1;
   private unseenOutput = false;
   private syncSince: number | null = null;
-  private selection: Selection | null = null;
   private replaying = false;
   private readonly now: () => number;
 
@@ -123,7 +128,6 @@ export class TerminalController {
   resetForReplay(): void {
     this.core.reset();
     this.replaying = true;
-    this.setSelection(null);
     this.dirty = true;
   }
 
@@ -300,18 +304,37 @@ export class TerminalController {
     this.sink.write(out);
   }
 
-  /** Sets (or clears) the highlighted selection; the next frame repaints it. */
-  setSelection(selection: Selection | null): void {
-    this.selection = selection;
-    this.renderer.setSelection(selection);
-    this.redraw = true;
+  /**
+   * Selection is the terminal's own (libghostty tracks it through scrolling and output), so these
+   * only route the pointer and mark a repaint: press starts a gesture (a repeat click widens it to
+   * the word, then the line), drag extends it, release closes it. Positions are surface pixels in
+   * the same unit as the cell size the renderer reported.
+   */
+  selectPress(cell: CellPos, px: SurfacePos, timeMs: number): void {
+    this.core.selectionPress(cell, px, timeMs);
+    this.dirty = true;
   }
 
-  /** The selected text, newline-joined and per-line right-trimmed; empty when nothing is selected. */
+  selectDrag(cell: CellPos, px: SurfacePos): void {
+    this.core.selectionDrag(cell, px);
+    this.dirty = true;
+  }
+
+  selectRelease(cell: CellPos | null): void {
+    this.core.selectionRelease(cell);
+  }
+
+  /** Drops the selection; the next frame repaints without it. */
+  clearSelection(): void {
+    if (this.core.hasSelection()) {
+      this.core.clearSelection();
+      this.dirty = true;
+    }
+  }
+
+  /** The selected text (across scrollback, wrapped rows unwrapped); empty when nothing is selected. */
   selectedText(): string {
-    if (!this.selection || this.selection.isEmpty) return "";
-    const rows = this.core.readAll().rows.map((r) => r.cells.map((c) => c.text));
-    return selectedText(this.selection, rows);
+    return this.core.selectionText();
   }
 
   /**

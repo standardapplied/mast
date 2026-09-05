@@ -92,6 +92,99 @@ describe("VtCore", () => {
     expect(rowText(b, 0)).toBe("");
   });
 
+  describe("selection the core owns", () => {
+    // 10×20 px cells. As in Ghostty, the pointer's half of a cell decides the boundary: a press in
+    // the left half anchors before that cell, a drag past the midpoint includes the cell.
+    const px = (x: number, y: number) => ({ x: (x + 0.8) * 10, y: (y + 0.5) * 20 });
+    const pressPx = (x: number, y: number) => ({ x: (x + 0.2) * 10, y: (y + 0.5) * 20 });
+    const sized = async (cols: number, rows: number) => {
+      const core = await track(cols, rows);
+      core.setCellPixels(10, 20);
+      return core;
+    };
+    const selectedRow = (core: VtCore, y: number) =>
+      core
+        .readAll()
+        .rows[y]!.cells.map((c) => (c.selected ? "#" : "."))
+        .join("")
+        .replace(/\.+$/, "");
+
+    test("press, drag, release selects cells; the text is what the cells say", async () => {
+      const core = await sized(20, 4);
+      core.write(bytes("hello world\r\nsecond line"));
+      expect(core.hasSelection()).toBe(false);
+      core.selectionPress({ x: 0, y: 0 }, pressPx(0, 0), 1000);
+      expect(core.hasSelection()).toBe(false); // a press alone selects nothing
+      core.selectionDrag({ x: 3, y: 1 }, px(3, 1));
+      core.selectionRelease({ x: 3, y: 1 });
+      expect(core.hasSelection()).toBe(true);
+      expect(selectedRow(core, 0)).toBe("####################");
+      expect(selectedRow(core, 1)).toBe("####");
+      expect(core.selectionText()).toBe("hello world\nseco");
+    });
+
+    test("the selection follows its content when the viewport scrolls, and reads across history", async () => {
+      const core = await sized(20, 3);
+      core.write(bytes("one\r\ntwo\r\nthree\r\nfour\r\nfive"));
+      core.selectionPress({ x: 0, y: 0 }, pressPx(0, 0), 1000); // "three" is at the top of the viewport
+      core.selectionDrag({ x: 2, y: 1 }, px(2, 1));
+      core.selectionRelease({ x: 2, y: 1 });
+      expect(core.selectionText()).toBe("three\nfou");
+      core.scroll({ delta: -2 }); // "one" at the top now; "three" is viewport row 2
+      expect(selectedRow(core, 0)).toBe("");
+      expect(selectedRow(core, 2)).toBe("####################");
+      expect(core.selectionText()).toBe("three\nfou");
+      core.scroll("bottom");
+      core.write(bytes("\r\nsix\r\nseven")); // the selected rows leave the viewport entirely
+      expect(selectedRow(core, 0)).toBe("");
+      expect(core.selectionText()).toBe("three\nfou");
+    });
+
+    test("a second click within the repeat window selects the word, a third the line", async () => {
+      const core = await sized(30, 3);
+      core.write(bytes("alpha beta-gamma delta"));
+      const click = (t: number) => {
+        core.selectionPress({ x: 7, y: 0 }, pressPx(7, 0), t);
+        core.selectionRelease({ x: 7, y: 0 });
+      };
+      click(1000);
+      expect(core.hasSelection()).toBe(false);
+      click(1200);
+      expect(core.selectionText()).toBe("beta-gamma");
+      click(1400);
+      expect(core.selectionText()).toBe("alpha beta-gamma delta");
+    });
+
+    test("a click long after the last one starts over", async () => {
+      const core = await sized(30, 3);
+      core.write(bytes("alpha beta"));
+      core.selectionPress({ x: 1, y: 0 }, pressPx(1, 0), 1000);
+      core.selectionRelease({ x: 1, y: 0 });
+      core.selectionPress({ x: 1, y: 0 }, pressPx(1, 0), 5000);
+      core.selectionRelease({ x: 1, y: 0 });
+      expect(core.hasSelection()).toBe(false);
+    });
+
+    test("clearing drops the selection and the gesture behind it", async () => {
+      const core = await sized(20, 3);
+      core.write(bytes("hello"));
+      core.selectionPress({ x: 0, y: 0 }, pressPx(0, 0), 1000);
+      core.selectionDrag({ x: 4, y: 0 }, px(4, 0));
+      core.clearSelection();
+      expect(core.hasSelection()).toBe(false);
+      expect(core.selectionText()).toBe("");
+      expect(selectedRow(core, 0)).toBe("");
+    });
+
+    test("a press off the grid is clamped, never a crash", async () => {
+      const core = await sized(10, 2);
+      core.write(bytes("x"));
+      core.selectionPress({ x: 99, y: 99 }, pressPx(99, 99), 1000);
+      core.selectionDrag({ x: -5, y: -5 }, px(-5, -5));
+      expect(core.hasSelection()).toBe(true);
+    });
+  });
+
   test("viewportActive says whether the user is looking at the live screen", async () => {
     const core = await track(20, 3);
     core.write(bytes("a\r\nb\r\nc\r\nd\r\ne"));

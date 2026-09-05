@@ -38,8 +38,22 @@ export interface Cell {
   readonly faint: boolean;
   /** SGR 8: the cell has text but must not show it. */
   readonly invisible: boolean;
+  /** Inside the terminal's active selection. */
+  readonly selected: boolean;
   /** Display columns the grapheme occupies: 2 for wide (CJK/emoji), else 1. */
   readonly width: number;
+}
+
+/** A cell position in the viewport. */
+export interface CellPos {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** A pointer position in surface pixels — the same unit as {@link VtCore.setCellPixels}. */
+export interface SurfacePos {
+  readonly x: number;
+  readonly y: number;
 }
 
 /** A cell with no styling, before colors are filled in — the common case (plain text). */
@@ -276,6 +290,39 @@ const OPT_SCROLLBACK_MAX_BYTES = 27;
 const DATA_SCROLLBACK_MAX_BYTES = 34;
 /** GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE (bool): the viewport follows the active area. */
 const DATA_VIEWPORT_ACTIVE = 32;
+/** The terminal's active selection: set with a GhosttySelection* (NULL clears), read back the same. */
+const OPT_SELECTION = 21;
+const DATA_SELECTION = 31;
+const CELLS_DATA_SELECTED = 7;
+// GhosttyPoint (wasm32): tag u32 @0; coordinate union @8 (x u16 @8, y u32 @12); 24 bytes.
+const POINT_SIZE = 24;
+const POINT_TAG_VIEWPORT = 1;
+const POINT_X = 8;
+const POINT_Y = 12;
+// GhosttyGridRef: {size_t size, void* node, u16 x, u16 y} = 12 bytes.
+const GRID_REF_SIZE = 12;
+// GhosttySelection: {size_t size, GhosttyGridRef start, GhosttyGridRef end, bool rectangle} → 32.
+const SELECTION_SIZE = 32;
+// GhosttySelectionGestureEventType / ...EventOption values.
+const GESTURE_PRESS = 0;
+const GESTURE_RELEASE = 1;
+const GESTURE_DRAG = 2;
+const GESTURE_OPT_REF = 0;
+const GESTURE_OPT_POSITION = 1;
+const GESTURE_OPT_REPEAT_DISTANCE = 2;
+const GESTURE_OPT_TIME_NS = 3;
+const GESTURE_OPT_REPEAT_INTERVAL_NS = 4;
+const GESTURE_OPT_GEOMETRY = 8;
+/** GhosttySurfacePosition {double x, double y}; GhosttySelectionGestureGeometry {4 × u32}. */
+const SURFACE_POSITION_SIZE = 16;
+const GEOMETRY_SIZE = 16;
+/** Double/triple-click detection: repeats within this distance and interval count as one gesture. */
+const REPEAT_DISTANCE_PX = 8;
+const REPEAT_INTERVAL_NS = 500_000_000n;
+/** GhosttyTerminalSelectionFormatOptions: {size_t size, format @4, unwrap @8, trim @9, selection* @12}. */
+const FORMAT_OPTIONS_SIZE = 16;
+const FORMAT_PLAIN = 0;
+const NO_VALUE = -4;
 /**
  * Scrollback budget per terminal. libghostty-vt's own default is 10 KB (a few hundred lines);
  * native Ghostty configures 50 MB. Memory is allocated only as output accumulates.
@@ -400,6 +447,27 @@ interface GhosttyExports {
   ghostty_render_state_row_cells_get(cells: number, data: number, out: number): number;
   ghostty_render_state_row_cells_free(cells: number): void;
   ghostty_unicode_grapheme_width(cps: number, len: number, outWidth: number): number;
+  ghostty_terminal_grid_ref(term: number, pointPtr: number, outRef: number): number;
+  ghostty_selection_gesture_new(alloc: number, out: number): number;
+  ghostty_selection_gesture_free(gesture: number, term: number): void;
+  ghostty_selection_gesture_reset(gesture: number, term: number): void;
+  ghostty_selection_gesture_event(
+    gesture: number,
+    term: number,
+    event: number,
+    outSelection: number,
+  ): number;
+  ghostty_selection_gesture_event_new(alloc: number, out: number, type: number): number;
+  ghostty_selection_gesture_event_free(event: number): void;
+  ghostty_selection_gesture_event_set(event: number, option: number, valuePtr: number): number;
+  ghostty_terminal_selection_format_alloc(
+    term: number,
+    alloc: number,
+    optionsPtr: number,
+    outPtr: number,
+    outLen: number,
+  ): number;
+  ghostty_free(alloc: number, ptr: number, len: number): void;
 }
 
 /**
@@ -526,6 +594,10 @@ export class VtCore {
   private readonly optAsAltPtr: number;
   private readonly mouseEncoder: number;
   private readonly mouseEvent: number;
+  private readonly gesture: number;
+  private readonly pressEvent: number;
+  private readonly dragEvent: number;
+  private readonly releaseEvent: number;
 
   private readonly fg: Rgb;
   private readonly bg: Rgb;
@@ -565,6 +637,38 @@ export class VtCore {
     this.setOptionAsAlt();
     this.mouseEncoder = this.abi.construct((slot) => e.ghostty_mouse_encoder_new(0, slot));
     this.mouseEvent = this.abi.construct((slot) => e.ghostty_mouse_event_new(0, slot));
+    this.gesture = this.abi.construct((slot) => e.ghostty_selection_gesture_new(0, slot));
+    this.pressEvent = this.newGestureEvent(GESTURE_PRESS);
+    this.dragEvent = this.newGestureEvent(GESTURE_DRAG);
+    this.releaseEvent = this.newGestureEvent(GESTURE_RELEASE);
+    this.configureRepeatClicks();
+  }
+
+  private newGestureEvent(type: number): number {
+    return this.abi.construct((slot) => this.e.ghostty_selection_gesture_event_new(0, slot, type));
+  }
+
+  /** Multi-click detection is off in libghostty until a distance and an interval are given. */
+  private configureRepeatClicks(): void {
+    const distance = this.abi.alloc(8);
+    const interval = this.abi.alloc(8);
+    try {
+      const dv = new DataView(this.e.memory.buffer);
+      dv.setFloat64(distance, REPEAT_DISTANCE_PX, true);
+      dv.setBigUint64(interval, REPEAT_INTERVAL_NS, true);
+      this.gestureSet(this.pressEvent, GESTURE_OPT_REPEAT_DISTANCE, distance);
+      this.gestureSet(this.pressEvent, GESTURE_OPT_REPEAT_INTERVAL_NS, interval);
+    } finally {
+      this.abi.free(distance, 8);
+      this.abi.free(interval, 8);
+    }
+  }
+
+  private gestureSet(event: number, option: number, valuePtr: number): void {
+    const rc = this.e.ghostty_selection_gesture_event_set(event, option, valuePtr);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: gesture option ${option} rejected (rc=${rc})`);
+    }
   }
 
   /** A bool option on the mouse encoder. */
@@ -771,6 +875,176 @@ export class VtCore {
       if (rc !== SUCCESS) {
         throw new Error(`VtCore: installing effect ${option} failed (rc=${rc})`);
       }
+    }
+  }
+
+  /**
+   * The pointer went down on {@code cell} at {@code px}: starts a selection gesture. A repeat click
+   * within libghostty's repeat window widens the unit — a second click selects the word, a third
+   * the line — and installs that selection at once. {@code timeMs} is the event's monotonic time.
+   */
+  selectionPress(cell: CellPos, px: SurfacePos, timeMs: number): void {
+    this.requireOpen();
+    this.withGridRef(cell, (ref) => {
+      this.gestureSet(this.pressEvent, GESTURE_OPT_REF, ref);
+      this.withSurfacePosition(px, (pos) => this.gestureSet(this.pressEvent, GESTURE_OPT_POSITION, pos));
+      const time = this.abi.alloc(8);
+      try {
+        new DataView(this.e.memory.buffer).setBigUint64(time, BigInt(Math.round(timeMs * 1e6)), true);
+        this.gestureSet(this.pressEvent, GESTURE_OPT_TIME_NS, time);
+      } finally {
+        this.abi.free(time, 8);
+      }
+      this.applyGesture(this.pressEvent);
+    });
+  }
+
+  /** The pointer moved to {@code cell} at {@code px} with the button held: extends the selection. */
+  selectionDrag(cell: CellPos, px: SurfacePos): void {
+    this.requireOpen();
+    this.withGridRef(cell, (ref) => {
+      this.gestureSet(this.dragEvent, GESTURE_OPT_REF, ref);
+      this.withSurfacePosition(px, (pos) => this.gestureSet(this.dragEvent, GESTURE_OPT_POSITION, pos));
+      const geometry = this.abi.alloc(GEOMETRY_SIZE);
+      try {
+        const { w, h } = this.mouseCell();
+        this.abi.writeU32(geometry, this.cols);
+        this.abi.writeU32(geometry + 4, w);
+        this.abi.writeU32(geometry + 8, 0);
+        this.abi.writeU32(geometry + 12, this.rows * h);
+        this.gestureSet(this.dragEvent, GESTURE_OPT_GEOMETRY, geometry);
+      } finally {
+        this.abi.free(geometry, GEOMETRY_SIZE);
+      }
+      this.applyGesture(this.dragEvent);
+    });
+  }
+
+  /** The pointer came up: closes the gesture so the next press can count as a repeat click. */
+  selectionRelease(cell: CellPos | null): void {
+    this.requireOpen();
+    if (cell === null) {
+      this.applyGesture(this.releaseEvent);
+      return;
+    }
+    this.withGridRef(cell, (ref) => {
+      this.gestureSet(this.releaseEvent, GESTURE_OPT_REF, ref);
+      this.applyGesture(this.releaseEvent);
+    });
+  }
+
+  /** Drops the active selection and the gesture behind it. */
+  clearSelection(): void {
+    this.requireOpen();
+    this.e.ghostty_selection_gesture_reset(this.gesture, this.term);
+    const rc = this.e.ghostty_terminal_set(this.term, OPT_SELECTION, 0);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: clearing the selection failed (rc=${rc})`);
+    }
+  }
+
+  /** Whether the terminal has an active selection. */
+  hasSelection(): boolean {
+    this.requireOpen();
+    const ptr = this.abi.alloc(SELECTION_SIZE);
+    try {
+      this.abi.bytes().fill(0, ptr, ptr + SELECTION_SIZE);
+      this.abi.writeU32(ptr, SELECTION_SIZE);
+      return this.e.ghostty_terminal_get(this.term, DATA_SELECTION, ptr) === SUCCESS;
+    } finally {
+      this.abi.free(ptr, SELECTION_SIZE);
+    }
+  }
+
+  /**
+   * The active selection as plain text — trailing whitespace trimmed per line, wrapped rows kept
+   * as one line, spanning scrollback and the screen alike. Empty when nothing is selected.
+   */
+  selectionText(): string {
+    this.requireOpen();
+    const options = this.abi.alloc(FORMAT_OPTIONS_SIZE);
+    const outPtr = this.abi.alloc(4);
+    const outLen = this.abi.alloc(4);
+    try {
+      this.abi.bytes().fill(0, options, options + FORMAT_OPTIONS_SIZE);
+      this.abi.writeU32(options, FORMAT_OPTIONS_SIZE);
+      this.abi.writeU32(options + 4, FORMAT_PLAIN);
+      this.abi.bytes()[options + 8] = 1;
+      this.abi.bytes()[options + 9] = 1;
+      const rc = this.e.ghostty_terminal_selection_format_alloc(this.term, 0, options, outPtr, outLen);
+      if (rc === NO_VALUE) {
+        return "";
+      }
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: formatting the selection failed (rc=${rc})`);
+      }
+      const ptr = this.abi.readU32(outPtr);
+      const len = this.abi.readU32(outLen);
+      try {
+        return UTF8_DECODER.decode(this.abi.bytes().subarray(ptr, ptr + len));
+      } finally {
+        this.e.ghostty_free(0, ptr, len);
+      }
+    } finally {
+      this.abi.free(outLen, 4);
+      this.abi.free(outPtr, 4);
+      this.abi.free(options, FORMAT_OPTIONS_SIZE);
+    }
+  }
+
+  /** Runs a gesture event; a produced selection snapshot becomes the terminal's selection. */
+  private applyGesture(event: number): void {
+    const selection = this.abi.alloc(SELECTION_SIZE);
+    try {
+      this.abi.bytes().fill(0, selection, selection + SELECTION_SIZE);
+      this.abi.writeU32(selection, SELECTION_SIZE);
+      const rc = this.e.ghostty_selection_gesture_event(this.gesture, this.term, event, selection);
+      if (rc === NO_VALUE) {
+        return;
+      }
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: selection gesture failed (rc=${rc})`);
+      }
+      const set = this.e.ghostty_terminal_set(this.term, OPT_SELECTION, selection);
+      if (set !== SUCCESS) {
+        throw new Error(`VtCore: installing the selection failed (rc=${set})`);
+      }
+    } finally {
+      this.abi.free(selection, SELECTION_SIZE);
+    }
+  }
+
+  /** A grid reference for a viewport cell, valid for the duration of {@code body}. */
+  private withGridRef(cell: CellPos, body: (ref: number) => void): void {
+    const point = this.abi.alloc(POINT_SIZE);
+    const ref = this.abi.alloc(GRID_REF_SIZE);
+    try {
+      this.abi.bytes().fill(0, point, point + POINT_SIZE);
+      this.abi.writeU32(point, POINT_TAG_VIEWPORT);
+      this.abi.writeU16(point + POINT_X, Math.min(Math.max(0, cell.x), this.cols - 1));
+      this.abi.writeU32(point + POINT_Y, Math.min(Math.max(0, cell.y), this.rows - 1));
+      this.abi.bytes().fill(0, ref, ref + GRID_REF_SIZE);
+      this.abi.writeU32(ref, GRID_REF_SIZE);
+      const rc = this.e.ghostty_terminal_grid_ref(this.term, point, ref);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: no grid reference for cell (${cell.x}, ${cell.y}) (rc=${rc})`);
+      }
+      body(ref);
+    } finally {
+      this.abi.free(ref, GRID_REF_SIZE);
+      this.abi.free(point, POINT_SIZE);
+    }
+  }
+
+  private withSurfacePosition(px: SurfacePos, body: (pos: number) => void): void {
+    const pos = this.abi.alloc(SURFACE_POSITION_SIZE);
+    try {
+      const dv = new DataView(this.e.memory.buffer);
+      dv.setFloat64(pos, px.x, true);
+      dv.setFloat64(pos + 8, px.y, true);
+      body(pos);
+    } finally {
+      this.abi.free(pos, SURFACE_POSITION_SIZE);
     }
   }
 
@@ -1183,6 +1457,10 @@ export class VtCore {
     this.freed = true;
     this.abi.free(this.identityPtr, this.identityLen);
     this.abi.free(this.optAsAltPtr, 4);
+    this.e.ghostty_selection_gesture_event_free(this.releaseEvent);
+    this.e.ghostty_selection_gesture_event_free(this.dragEvent);
+    this.e.ghostty_selection_gesture_event_free(this.pressEvent);
+    this.e.ghostty_selection_gesture_free(this.gesture, this.term);
     this.e.ghostty_mouse_event_free(this.mouseEvent);
     this.e.ghostty_mouse_encoder_free(this.mouseEncoder);
     this.e.ghostty_key_event_free(this.keyEvent);
@@ -1248,9 +1526,11 @@ export class VtCore {
         const fg = this.readColor(CELLS_DATA_FG_COLOR, fgPtr);
         const bg = this.readColor(CELLS_DATA_BG_COLOR, bgPtr);
         const { text, width } = this.readGrapheme(lenPtr, widthPtr);
+        const selected = this.readFlag(CELLS_DATA_SELECTED, widthPtr);
         cells.push({
           text,
           width,
+          selected,
           fg: style.inverse ? bg : fg,
           bg: style.inverse ? fg : bg,
           bold: style.bold,
@@ -1271,6 +1551,15 @@ export class VtCore {
       this.abi.free(stylePtr, STYLE_SIZE);
     }
     return cells;
+  }
+
+  /** A per-cell bool of the current cell; {@code scratch} is a reusable 1-byte buffer. */
+  private readFlag(kind: number, scratch: number): boolean {
+    const rc = this.e.ghostty_render_state_row_cells_get(this.cells, kind, scratch);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: reading cell flag ${kind} failed (rc=${rc})`);
+    }
+    return this.abi.readU8(scratch) !== 0;
   }
 
   /**

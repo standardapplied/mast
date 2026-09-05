@@ -22,12 +22,11 @@ import {
 } from "../terminal/metrics";
 import { preAttachClass, skewCard, skewOf } from "../terminal/roomDeck";
 import { TerminalRenderer } from "../terminal/renderer";
-import { type CellPos, Selection } from "../terminal/selection";
 import { decodeDataFrame } from "../terminal/dataFrames";
 import { MODS } from "../terminal/input";
 import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
-import { type MouseButton, VtCore } from "../terminal/vtCore";
+import { type CellPos, type MouseButton, type SurfacePos, VtCore } from "../terminal/vtCore";
 /** What a mounted terminal offers its host: paste routing, refit, and connection recovery. */
 export type TerminalHandle = {
   paste: (text: string) => void;
@@ -182,7 +181,9 @@ export const SessionTerminalPane = forwardRef<
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<TerminalController | null>(null);
   const geomRef = useRef<{ cw: number; ch: number; cols: number; rows: number } | null>(null);
-  const dragRef = useRef<CellPos | null>(null);
+  const cellWidthDeviceRef = useRef(1);
+  /** True while a left-button selection gesture is in progress (pointer captured). */
+  const selectingRef = useRef(false);
   const [status, setStatus] = useState<SessionStatus>({ kind: "connecting", retrying: false });
   const statusRef = useRef(status);
   statusRef.current = status;
@@ -530,6 +531,7 @@ export const SessionTerminalPane = forwardRef<
       }
       const setGeom = () => {
         geomRef.current = { cw: cellW / dpr, ch: cellH / dpr, cols, rows };
+        cellWidthDeviceRef.current = cellW;
       };
       setGeom();
 
@@ -541,7 +543,6 @@ export const SessionTerminalPane = forwardRef<
           rows = next.rows;
           paint(cols, rows);
           controller.resize(cols, rows);
-          controller.setSelection(null); // geometry changed; drop the stale highlight
           setGeom();
         }
       });
@@ -645,7 +646,7 @@ export const SessionTerminalPane = forwardRef<
       composing: e.nativeEvent.isComposing,
     });
     if (consumed) {
-      controller.setSelection(null); // typing clears the highlight...
+      controller.clearSelection(); // typing clears the highlight...
       controller.scroll("bottom"); // ...and returns to the live view
       e.preventDefault();
     }
@@ -672,7 +673,6 @@ export const SessionTerminalPane = forwardRef<
     const lines = Math.trunc(wheelAccRef.current / cellH);
     if (lines !== 0) {
       wheelAccRef.current -= lines * cellH;
-      controller.setSelection(null); // the viewport-relative highlight no longer lines up
       controller.wheel(lines, cellAt(e) ?? undefined, modsOf(e));
     }
   };
@@ -685,6 +685,13 @@ export const SessionTerminalPane = forwardRef<
     const x = Math.min(g.cols - 1, Math.max(0, Math.floor((e.clientX - rect.left) / g.cw)));
     const y = Math.min(g.rows - 1, Math.max(0, Math.floor((e.clientY - rect.top) / g.ch)));
     return { x, y };
+  };
+
+  /** The pointer in surface pixels — the unit the core's cell size is in (device pixels). */
+  const surfaceAt = (e: { clientX: number; clientY: number }): SurfacePos => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const dpr = geomRef.current ? 1 / (geomRef.current.cw / cellWidthDeviceRef.current) : 1;
+    return { x: ((e.clientX - (rect?.left ?? 0)) * dpr), y: ((e.clientY - (rect?.top ?? 0)) * dpr) };
   };
 
   /** Left and middle buttons may belong to the application; the right button stays Mast's menu. */
@@ -715,8 +722,10 @@ export const SessionTerminalPane = forwardRef<
       return;
     }
     if (button !== "left") return;
-    dragRef.current = pos;
-    controller?.setSelection(null);
+    // A local selection gesture: the core interprets press/drag/release (repeat clicks widen to
+    // the word, then the line) and owns the result, so it survives scrolling and spans history.
+    selectingRef.current = true;
+    controller?.selectPress(pos, surfaceAt(e), e.timeStamp);
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
@@ -724,14 +733,12 @@ export const SessionTerminalPane = forwardRef<
     const pos = cellAt(e);
     if (!pos) return;
     const controller = controllerRef.current;
-    const held = heldButtonRef.current;
-    if (held || dragRef.current === null) {
-      controller?.mouse({ action: "motion", button: held ?? undefined, mods: modsOf(e), ...pos });
+    if (selectingRef.current) {
+      controller?.selectDrag(pos, surfaceAt(e));
       return;
     }
-    const g = geomRef.current;
-    if (!g) return;
-    controller?.setSelection(new Selection(dragRef.current, pos, g.cols));
+    const held = heldButtonRef.current;
+    controller?.mouse({ action: "motion", button: held ?? undefined, mods: modsOf(e), ...pos });
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
@@ -741,13 +748,16 @@ export const SessionTerminalPane = forwardRef<
       const pos = cellAt(e);
       if (pos) controllerRef.current?.mouse({ action: "release", button: held, mods: modsOf(e), ...pos });
     }
-    dragRef.current = null;
+    if (selectingRef.current) {
+      selectingRef.current = false;
+      controllerRef.current?.selectRelease(cellAt(e));
+    }
   };
 
   const onCompositionEnd = (e: React.CompositionEvent) => {
     const controller = controllerRef.current;
     if (!controller || !e.data) return;
-    controller.setSelection(null);
+    controller.clearSelection();
     controller.scroll("bottom");
     controller.text(e.data);
   };

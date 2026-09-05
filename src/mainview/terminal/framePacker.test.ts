@@ -8,7 +8,6 @@ import {
   packFrame,
 } from "./framePacker";
 import type { GlyphStyle } from "./glyphAtlas";
-import { Selection } from "./selection";
 import type { SpecialKind } from "./sprites/special";
 import { TerminalGrid } from "./terminalGrid";
 import type { Cell, Cursor, Rgb } from "./vtCore";
@@ -64,6 +63,7 @@ function cell(text: string, extra: Partial<Cell> = {}): Cell {
     overline: false,
     faint: false,
     invisible: false,
+    selected: false,
     width: 1,
     ...extra,
   };
@@ -87,7 +87,7 @@ const at = (x: number, style: Cursor["style"], visible = true): Cursor => ({
   blinking: style !== "block",
 });
 
-function pack(cells: Cell[], cursor = NO_CURSOR, selection: Selection | null = null) {
+function pack(cells: Cell[], cursor = NO_CURSOR) {
   const grid = new TerminalGrid({ fg: FG, bg: BG });
   grid.resize(cells.length, 1);
   grid.apply({ dirty: "full", rows: [{ y: 0, cells }] });
@@ -96,7 +96,7 @@ function pack(cells: Cell[], cursor = NO_CURSOR, selection: Selection | null = n
     bg: new Float32Array(cells.length * BG_STRIDE),
     fg: new Float32Array((cells.length * FG_PER_CELL + 1) * FG_STRIDE),
   };
-  const count = packFrame(grid, cursor, selection, atlas, COLORS, out);
+  const count = packFrame(grid, cursor, atlas, COLORS, out);
   const instances = Array.from({ length: count }, (_, i) => {
     const o = i * FG_STRIDE;
     return {
@@ -225,9 +225,11 @@ describe("packFrame", () => {
     expect(pack([cell("a")], NO_CURSOR).instances).toHaveLength(1);
   });
 
-  test("selection recolors background and text; the cursor cell wins over selection", () => {
-    const selection = new Selection({ x: 0, y: 0 }, { x: 1, y: 0 }, 2);
-    const { instances, bg } = pack([cell("a"), cell("b")], at(0, "block"), selection);
+  test("a selected cell recolors background and text; the block cursor cell wins", () => {
+    const { instances, bg } = pack(
+      [cell("a", { selected: true }), cell("b", { selected: true })],
+      at(0, "block"),
+    );
     expect(bg).toEqual([
       [255, 0, 0],
       [0, 0, 255],

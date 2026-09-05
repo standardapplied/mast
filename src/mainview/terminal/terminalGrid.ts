@@ -32,6 +32,7 @@ export class TerminalGrid {
       overline: false,
       faint: false,
       invisible: false,
+      selected: false,
       width: 1,
     };
   }
