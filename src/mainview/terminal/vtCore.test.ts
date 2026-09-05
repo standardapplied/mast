@@ -82,6 +82,28 @@ describe("VtCore", () => {
     expect(rowText(core, 2)).toBe(`line ${lines - 1} ${"x".repeat(40)}`);
   });
 
+  test("a precompiled module serves many terminals, each with its own memory", async () => {
+    const module = await WebAssembly.compile(WASM);
+    const a = await VtCore.create(module, 10, 2);
+    const b = await VtCore.create(module, 10, 2);
+    open.push(a, b);
+    a.write(bytes("only-a"));
+    expect(rowText(a, 0)).toBe("only-a");
+    expect(rowText(b, 0)).toBe("");
+  });
+
+  test("viewportActive says whether the user is looking at the live screen", async () => {
+    const core = await track(20, 3);
+    core.write(bytes("a\r\nb\r\nc\r\nd\r\ne"));
+    expect(core.viewportActive()).toBe(true);
+    core.scroll({ delta: -1 });
+    expect(core.viewportActive()).toBe(false);
+    core.write(bytes("\r\nf")); // output while scrolled up does not move the viewport
+    expect(core.viewportActive()).toBe(false);
+    core.scroll("bottom");
+    expect(core.viewportActive()).toBe(true);
+  });
+
   test("scrolls the viewport up into scrollback and back to the live bottom", async () => {
     const core = await track(20, 4); // a 4-row viewport
     for (let i = 1; i <= 12; i++) core.write(bytes(`line${i}\r\n`));

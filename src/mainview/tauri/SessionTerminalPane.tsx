@@ -88,12 +88,12 @@ function mastIdentity(): Promise<string> {
   return identityPromise;
 }
 
-/** The pinned VT wasm, fetched once and shared by every pane (see build-tauri-web.ts). */
-let wasmPromise: Promise<ArrayBuffer> | null = null;
-function vtWasm(): Promise<ArrayBuffer> {
-  wasmPromise ??= fetch("/sail-vt.wasm").then((r) => {
+/** The pinned VT wasm, fetched and compiled once; every pane instantiates its own copy. */
+let wasmPromise: Promise<WebAssembly.Module> | null = null;
+function vtWasm(): Promise<WebAssembly.Module> {
+  wasmPromise ??= fetch("/sail-vt.wasm").then(async (r) => {
     if (!r.ok) throw new Error(`VT wasm failed to load (${r.status})`);
-    return r.arrayBuffer();
+    return WebAssembly.compile(await r.arrayBuffer());
   });
   return wasmPromise;
 }
@@ -202,6 +202,8 @@ export const SessionTerminalPane = forwardRef<
   const createdRef = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
+  const [unseenOutput, setUnseenOutput] = useState(false);
+  const unseenRef = useRef(false);
   const themeName = useThemeName();
   const palette = paletteFor(themeName);
   const bgCss = `rgb(${palette.bg[0]}, ${palette.bg[1]}, ${palette.bg[2]})`;
@@ -559,6 +561,11 @@ export const SessionTerminalPane = forwardRef<
           // The blink phase applies only when the app wants a blinking cursor; an unfocused pane
           // shows a steady hollow cursor.
           controller.frame((now - start) % BLINK_MS < BLINK_ON_MS, hasFocusRef.current);
+          const unseen = controller.hasUnseenOutput();
+          if (unseen !== unseenRef.current) {
+            unseenRef.current = unseen;
+            setUnseenOutput(unseen);
+          }
         } catch (e) {
           if (!disposed) setStatus({ kind: "failed", reason: e instanceof Error ? e.message : String(e) });
         }
@@ -789,6 +796,19 @@ export const SessionTerminalPane = forwardRef<
       }}
     >
       <canvas ref={canvasRef} />
+      {unseenOutput && (
+        <button
+          type="button"
+          className="term-jump"
+          data-testid="term-new-output"
+          onClick={() => {
+            controllerRef.current?.scroll("bottom");
+            hostRef.current?.focus();
+          }}
+        >
+          New output ↓
+        </button>
+      )}
       {overlay && (
         <div className={overlay.delayed ? "term-overlay term-overlay--delayed" : "term-overlay"}>
           <div className="term-overlay__card">
