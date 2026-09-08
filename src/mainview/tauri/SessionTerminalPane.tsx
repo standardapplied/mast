@@ -408,10 +408,16 @@ export const SessionTerminalPane = forwardRef<
     reportedFocusRef.current = focused;
   }, []);
   useEffect(() => {
-    window.addEventListener("blur", syncFocus);
+    // Releases never arrive for keys held across a focus loss; forget them rather than report them
+    // to whatever the program is by the time focus returns.
+    const blur = () => {
+      heldRef.current.clear();
+      syncFocus();
+    };
+    window.addEventListener("blur", blur);
     window.addEventListener("focus", syncFocus);
     return () => {
-      window.removeEventListener("blur", syncFocus);
+      window.removeEventListener("blur", blur);
       window.removeEventListener("focus", syncFocus);
     };
   }, [syncFocus]);
@@ -576,13 +582,16 @@ export const SessionTerminalPane = forwardRef<
         if (over() || rebuilding) return;
         rebuilding = true;
         renderer.destroy();
-        // The theme may have flipped since the attach: a rebuilt renderer paints in today's colors.
-        void services.createRenderer(canvas, { ...rendererOptions, ...paletteRef.current }).then(
+        // The theme may have flipped since the attach: a rebuilt renderer paints in today's colors —
+        // and in the colors of a flip that lands while it is still being built.
+        const theme = paletteRef.current;
+        void services.createRenderer(canvas, { ...rendererOptions, ...theme }).then(
           (next) => {
             if (over()) return void next.destroy();
             renderer = next;
             try {
               controller.replaceRenderer(next);
+              if (paletteRef.current !== theme) applyThemeRef.current?.(paletteRef.current);
             } catch (e) {
               rebuilding = false;
               fail(laneFault(e));
@@ -854,6 +863,10 @@ export const SessionTerminalPane = forwardRef<
     }
   };
 
+  /** Physical keys whose press the program heard; their release is its too. */
+  const heldRef = useRef(new Set<string>());
+  const physicalKeyOf = (e: React.KeyboardEvent) => e.code || e.key;
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     const controller = controllerRef.current;
     if (!controller) return;
@@ -895,18 +908,20 @@ export const SessionTerminalPane = forwardRef<
     }
     const consumed = controller.key(strokeOf(e));
     if (consumed) {
+      heldRef.current.add(physicalKeyOf(e));
       controller.clearSelection(); // typing clears the highlight...
       controller.scroll("bottom"); // ...and returns to the live view
       e.preventDefault();
     }
   };
 
-  // A release reaches the pty only when the program asked for key events (kitty flag 2); a chord
-  // the pane consumed on the way down is not reported on the way up either.
+  // A release is reported for exactly the presses the program heard, matched by physical key: a
+  // modifier that changed during the hold (⌘ let go before C, ⌘ pressed after A went down) can
+  // neither turn a chord the pane owned into a stray release nor swallow one the program awaits.
+  // The controller still sends it only when the program asked for key events (kitty flag 2).
   const onKeyUp = (e: React.KeyboardEvent) => {
-    const controller = controllerRef.current;
-    if (!controller || pendingPaste !== null || viewportActionOf(e) || cmdActionOf(e)) return;
-    if (controller.key({ ...strokeOf(e), release: true })) {
+    if (!heldRef.current.delete(physicalKeyOf(e))) return;
+    if (controllerRef.current?.key({ ...strokeOf(e), release: true })) {
       e.preventDefault();
     }
   };

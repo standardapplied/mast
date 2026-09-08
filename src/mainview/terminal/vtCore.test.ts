@@ -104,6 +104,27 @@ describe("VtCore", () => {
     expect(line(core, 2)).toBe("$ lsx");
   });
 
+  test("clearScreen leaves the application's saved cursor alone; its own cursor comes back by position", async () => {
+    const core = await track(20, 5);
+    core.write(bytes("one\r\ntwo\x1b7\r\nthree\r\n$ ls"));
+    expect(core.clearScreen()).toBeNull();
+    expect(core.cursor()).toMatchObject({ x: 4, y: 3 });
+    expect([line(core, 0), line(core, 1), line(core, 2), line(core, 3)]).toEqual(["", "", "", "$ ls"]);
+    core.write(bytes("\x1b8"));
+    expect(core.cursor(), "DECRC lands where the application saved, not where the clear left off").toMatchObject(
+      { x: 3, y: 1 },
+    );
+  });
+
+  test("clearScreen keeps a pending wrap: the next character still wraps", async () => {
+    const core = await track(5, 3);
+    core.write(bytes("one\r\n12345"));
+    expect(core.clearScreen()).toBeNull();
+    expect(line(core, 0)).toBe("");
+    core.write(bytes("Z"));
+    expect([line(core, 1), line(core, 2)]).toEqual(["12345", "Z"]);
+  });
+
   test("clearScreen at an OSC 133 prompt erases the screen and asks the shell to repaint", async () => {
     const core = await track(20, 3);
     core.write(bytes("old output\r\n\x1b]133;A\x1b\\$ "));

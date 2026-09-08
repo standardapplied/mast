@@ -542,13 +542,13 @@ describe("SessionTerminalPane at the channel edge", () => {
   });
 
   test("a theme flip recolors the live pane: same attachment, same renderer, new colors", async () => {
-    // happy-dom has no matchMedia, so the pane starts light; the flip is to dark.
+    // happy-dom's matchMedia never prefers dark, so the pane starts light; the flip is to dark.
     const { attachment } = await mount();
     const renderer = services.renderers[0]!;
     expect(renderer.opts.bg).toEqual(paletteFor("light").bg);
     await act(async () => {
       document.documentElement.dataset.theme = "dark";
-      // happy-dom delivers mutation records on a task, not a microtask: yield one.
+      // The observer reports on a microtask; one macrotask yield lets it and the state land.
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     await settle();
@@ -588,6 +588,7 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(services.link.writes.map((w) => new TextDecoder().decode(w.bytes))).toEqual(["a"]);
     await act(async () => {
       attachment.lanes.onData(bytes("\x1b[>3u"));
+      keyEvent("keydown", { key: "a", code: "KeyA" });
       keyEvent("keyup", { key: "a", code: "KeyA" });
     });
     expect(lastWrite()).toBe("\x1b[97;1:3u");
@@ -597,6 +598,51 @@ describe("SessionTerminalPane at the channel edge", () => {
       keyEvent("keyup", { key: "k", code: "KeyK", metaKey: true });
     });
     expect(services.link.writes).toHaveLength(before);
+  });
+
+  test("a release is reported for the press the program heard, whatever the modifiers did meanwhile", async () => {
+    const { attachment } = await mount();
+    await act(async () => {
+      attachment.lanes.onData(bytes("\x1b[>3u"));
+    });
+    // ⌘ let go before C: the chord was the pane's, so its release is nobody's.
+    await act(async () => {
+      keyEvent("keydown", { key: "c", code: "KeyC", metaKey: true });
+      keyEvent("keyup", { key: "c", code: "KeyC" });
+    });
+    expect(services.link.writes).toHaveLength(0);
+    // ⌘ pressed after A went down: the program heard the press, so it hears the release too.
+    await act(async () => {
+      keyEvent("keydown", { key: "a", code: "KeyA" });
+      keyEvent("keyup", { key: "a", code: "KeyA", metaKey: true });
+    });
+    const writes = services.link.writes.map((w) => new TextDecoder().decode(w.bytes));
+    expect(writes).toHaveLength(2);
+    expect(writes[0]).toBe("a");
+    expect(writes[1]).toMatch(/^\x1b\[97;\d+:3u$/);
+    // The release was consumed with its press: a second one is nobody's either.
+    await act(async () => {
+      keyEvent("keyup", { key: "a", code: "KeyA" });
+    });
+    expect(services.link.writes).toHaveLength(2);
+  });
+
+  test("a theme flip that lands while a renderer is being rebuilt reaches the rebuilt renderer", async () => {
+    await mount();
+    const release = services.holdRenderers();
+    await act(async () => {
+      services.renderers[0]!.opts.onLost?.("GPU device lost");
+    });
+    await act(async () => {
+      document.documentElement.dataset.theme = "dark";
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => release());
+    await settle();
+    const rebuilt = services.renderers.at(-1)!;
+    expect(services.renderers).toHaveLength(2);
+    expect(rebuilt.colors.at(-1)?.bg, "the flip is applied after the install").toEqual(paletteFor("dark").bg);
+    expect(status()).toEqual({ kind: "up" });
   });
 
   test("Shift+PageUp pages into history and ⌘K clears it; at a marked prompt ⌘K asks for a repaint", async () => {

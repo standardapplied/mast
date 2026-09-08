@@ -358,6 +358,9 @@ describe("TerminalController", () => {
     core.write(enc("\x1b[>3u"));
     expect(controller.key({ key: "a", code: "KeyA", release: true })).toBe(true);
     expect(sink.writes).toEqual([Array.from(enc("\x1b[97;1:3u"))]);
+    // ⌘ down during the hold is a modifier on the release, not a chord: the ⌘ gate is for presses.
+    expect(controller.key({ key: "a", code: "KeyA", meta: true, release: true })).toBe(true);
+    expect(sink.writes.at(-1)).toEqual(Array.from(enc("\x1b[97;9:3u")));
   });
 
   test("Shift+PgUp/PgDn page the viewport; ⌘K clears history and the screen above the prompt", async () => {

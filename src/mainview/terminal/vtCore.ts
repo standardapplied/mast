@@ -303,7 +303,11 @@ const DATA_VIEWPORT_ACTIVE = 32;
 /** GHOSTTY_TERMINAL_DATA_KITTY_KEYBOARD_FLAGS (u8): the kitty keyboard flags the app pushed. */
 const DATA_KITTY_KEYBOARD_FLAGS = 8;
 /** GHOSTTY_TERMINAL_DATA_CURSOR_Y (u16): the cursor's row in the active area. */
+/** GHOSTTY_TERMINAL_DATA_CURSOR_X (uint16): the cursor's column in the active area. */
+const DATA_CURSOR_X = 3;
 const DATA_CURSOR_Y = 4;
+/** GHOSTTY_TERMINAL_DATA_CURSOR_PENDING_WRAP (bool): the next print soft-wraps. */
+const DATA_CURSOR_PENDING_WRAP = 5;
 /** GHOSTTY_TERMINAL_DATA_VT_GROUND (bool): the parser is between sequences. */
 const DATA_VT_GROUND = 38;
 /** GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT (bool): OSC 133 says the cursor sits at a prompt. */
@@ -832,9 +836,15 @@ export class VtCore {
     }
     const y = this.terminalU16(DATA_CURSOR_Y);
     if (y > 0) {
-      // DECSC, then erase from the top of the screen through the last cell of the row above the
-      // cursor, then DECRC: the cursor, its row and its pending wrap come back untouched.
-      this.write(UTF8.encode(`\x1b7\x1b[${y};${this.cols}H\x1b[1J\x1b8`));
+      // Erase from the top of the screen through the last cell of the row above the cursor, then
+      // put the cursor back where it was — by position, so the application's own saved cursor
+      // (DECSC) is left alone. A pending wrap has no positional equivalent (CUP clears it) and
+      // origin mode makes CUP relative, so those two ride DECSC/DECRC, the one stroke that
+      // restores them exactly.
+      const x = this.terminalU16(DATA_CURSOR_X);
+      const erase = `\x1b[${y};${this.cols}H\x1b[1J`;
+      const exact = this.terminalU8(DATA_CURSOR_PENDING_WRAP) !== 0 || this.modeEnabled(6);
+      this.write(UTF8.encode(exact ? `\x1b7${erase}\x1b8` : `${erase}\x1b[${y + 1};${x + 1}H`));
     }
     return null;
   }

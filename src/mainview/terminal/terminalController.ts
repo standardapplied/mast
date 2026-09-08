@@ -231,14 +231,15 @@ export class TerminalController {
    * key. No local echo — the pty echoes. Cmd chords belong to the app and the OS — the pane
    * routes the ones it owns (copy, paste, clear) before calling here — unless the program asked
    * for every key (kitty report-all), which is how a TUI hears ⌘ chords at all. Releases reach
-   * the pty only when the program asked for release events; legacy programs never hear them.
+   * the pty only when the program asked for release events; legacy programs never hear them. The
+   * ⌘ gate is for presses: the pane reports a release only for a press the program heard, and a
+   * ⌘ that went down during the hold is a modifier on that release, not a chord.
    */
   key(stroke: KeyStroke): boolean {
     const flags = this.core.kittyKeyboardFlags();
-    if (stroke.meta && (flags & KITTY_KEY.REPORT_ALL) === 0) {
-      return false;
-    }
-    if (stroke.release && (flags & KITTY_KEY.REPORT_EVENTS) === 0) {
+    if (stroke.release) {
+      if ((flags & KITTY_KEY.REPORT_EVENTS) === 0) return false;
+    } else if (stroke.meta && (flags & KITTY_KEY.REPORT_ALL) === 0) {
       return false;
     }
     const bytes = this.core.encodeKey(keyEventFor(stroke));
