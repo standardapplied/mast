@@ -9,7 +9,9 @@ import { Styleguide } from "./styleguide";
 import { createTauriGateway } from "./tauri/gateway";
 import type { RosterSources } from "./tauri/projectRoster";
 import { tauriDeckServices } from "./tauri/RoomWorkbench";
+import { tauriTerminalServices } from "./tauri/terminalServices";
 import { TerminalWorkspace } from "./tauri/TerminalWorkspace";
+import { TerminalServicesProvider } from "./terminal/terminalServices";
 import { createTauriUpdater } from "./tauri/updater";
 import { browserThemeDeps, createThemeController } from "./theme";
 
@@ -107,6 +109,7 @@ createRoot(container).render(
       <Styleguide theme={theme} />
     ) : (
       <CrashScreen report={report}>
+      <TerminalServicesProvider value={tauriTerminalServices}>
       <App
         gateway={gateway}
         theme={theme}
@@ -121,6 +124,7 @@ createRoot(container).render(
         deck={tauriDeckServices}
         updater={createTauriUpdater()}
       />
+      </TerminalServicesProvider>
       </CrashScreen>
     )}
   </StrictMode>,

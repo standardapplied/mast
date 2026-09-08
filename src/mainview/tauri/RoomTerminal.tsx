@@ -57,7 +57,6 @@ export const RoomTerminal = forwardRef<TerminalHandle, RoomTerminalProps>(functi
     ref,
     () => ({
       paste: (text: string) => paneRef.current?.paste(text),
-      refit: () => paneRef.current?.refit(),
       revive: () => paneRef.current?.revive?.(),
       takeWrite: () => paneRef.current?.takeWrite?.(),
     }),

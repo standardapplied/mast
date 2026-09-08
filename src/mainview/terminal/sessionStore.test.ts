@@ -925,6 +925,44 @@ describe("the kill path (field bug: a kill that does nothing, silently)", () => 
   });
 });
 
+describe("lane facts (what a pane's meta events say about the session)", () => {
+  test("a resize by another writer binds the geometry until the write token moves", async () => {
+    const box = await connected([session({ name: "mast-app.1", writerFde: "uday" })]);
+    const idle = box.store.lane("mast-app.1");
+    expect(idle).toEqual({ ptySize: null, paused: false });
+    expect(box.store.lane("mast-app.1"), "idle is one stable value").toBe(idle);
+    const before = box.store.version;
+    box.store.noteResized("mast-app.1", 132, 40);
+    expect(box.store.version).toBe(before + 1);
+    expect(box.store.lane("mast-app.1").ptySize).toEqual({ cols: 132, rows: 40 });
+    box.store.noteResized("mast-app.1", 132, 40);
+    expect(box.store.version, "an identical fact is not a change").toBe(before + 1);
+    box.store.noteWriterChanged("mast-app.1", "mady");
+    expect(box.store.lane("mast-app.1").ptySize).toBeNull();
+    expect(box.store.byName("mast-app.1")?.writerFde, "the broadcast lands ahead of the listing").toBe(
+      "mady",
+    );
+  });
+
+  test("paused and resumed are the lane's own fact, cleared by a fresh attach", async () => {
+    const box = await connected([session({ name: "mast-app.1" })]);
+    box.store.notePaused("mast-app.1", true);
+    expect(box.store.lane("mast-app.1").paused).toBe(true);
+    box.store.notePaused("mast-app.1", false);
+    expect(box.store.lane("mast-app.1").paused).toBe(false);
+    box.store.noteResized("mast-app.1", 100, 30);
+    box.store.noteAttached("mast-app.1");
+    expect(box.store.lane("mast-app.1")).toEqual({ ptySize: null, paused: false });
+  });
+
+  test("with no box connected the facts have nowhere to land and read idle", () => {
+    const store = new SessionStore();
+    store.noteResized("x", 1, 1);
+    store.notePaused("x", true);
+    expect(store.lane("x")).toEqual({ ptySize: null, paused: false });
+  });
+});
+
 describe("box keying", () => {
   test("state lives under the box key; a second box never sees the first's inventory", async () => {
     const store = new SessionStore();

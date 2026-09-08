@@ -5,8 +5,10 @@
  *
  * Measures, on a cols×rows terminal: a full-screen TUI redraw (every row rewritten) fed to the
  * real VtCore and read back through the dirty-row snapshot; one echoed keystroke read the same
- * way; and packing the resulting grid into GPU instance buffers with a stub atlas. Each figure is
- * the median of many iterations, in milliseconds.
+ * way; packing the resulting grid into GPU instance buffers with a stub atlas; and a firehose of
+ * line output fed the two ways the data lane can deliver it — one message per read, and one
+ * coalesced message per window (what the Rust pump sends). Each figure is the median of many
+ * iterations, in milliseconds.
  */
 
 import { readFileSync } from "node:fs";
@@ -88,11 +90,33 @@ const colors = {
   selectionBg: [60, 80, 120] as const,
   selectionFg: [255, 255, 255] as const,
 };
-const pack = time(100, () => packFrame(grid, cursor, null, atlas, colors, out));
+const pack = time(100, () => packFrame(grid, cursor, atlas, colors, out));
+
+/** Line output the way `yes`, a build, or a log tail produces it, cut to exactly {@code bytes}. */
+function firehose(bytes: number): Uint8Array {
+  let s = "";
+  for (let i = 0; s.length < bytes; i++) {
+    s += `${String(i).padStart(8, "0")} ${"line of build output ".repeat(3)}\r\n`;
+  }
+  return enc.encode(s.slice(0, bytes));
+}
+const FIREHOSE_MIB = 4;
+const flood = firehose(FIREHOSE_MIB << 20);
+const fed = (message: number) => {
+  for (let off = 0; off < flood.length; off += message) {
+    core.write(flood.subarray(off, off + message));
+  }
+  grid.apply(core.snapshot());
+  core.clean();
+};
+const perRead = time(5, () => fed(1024)) / FIREHOSE_MIB;
+const coalesced = time(5, () => fed(256 * 1024)) / FIREHOSE_MIB;
 
 const fmt = (ms: number) => `${ms.toFixed(3)} ms`;
 console.log(`${cols}×${rows} terminal, medians:`);
 console.log(`  full TUI redraw: write + dirty-row snapshot + grid apply  ${fmt(redraw)}`);
 console.log(`  one echoed keystroke: write + dirty-row snapshot + apply  ${fmt(echo)}`);
 console.log(`  packFrame (whole grid → instance buffers)                 ${fmt(pack)}`);
+console.log(`  firehose, per MiB fed as 1 KiB messages (one per read)    ${fmt(perRead)}`);
+console.log(`  firehose, per MiB fed as 256 KiB messages (coalesced)     ${fmt(coalesced)}`);
 core.free();

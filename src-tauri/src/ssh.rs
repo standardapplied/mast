@@ -756,24 +756,35 @@ impl Backend {
         tokio::spawn(async move {
             // Output and replay markers ride ONE raw channel, in order: a mid-stream resync must
             // reset the client terminal *before* the snapshot bytes land. Raw frames skip the
-            // JSON number-array encoding an event would impose on every output byte.
-            let on_event = |event: crate::pty::SessionEvent| {
-                use crate::pty::SessionEvent;
-                if let Some(frame) = crate::session_frames::encode(&event) {
+            // JSON number-array encoding an event would impose on every output byte, and the
+            // pump coalesces output so a firehose is one message per window, not per read.
+            let (events, pending) = mpsc::unbounded_channel();
+            let pump = tokio::spawn(crate::session_frames::pump(
+                pending,
+                move |frame| {
                     let _ = on_data.send(InvokeResponseBody::Raw(frame));
-                    return;
-                }
-                match event {
-                    SessionEvent::Ended(reason) => {
-                        let _ = emitter
-                            .emit(&exit_ev, serde_json::json!({ "class": "ended", "reason": reason }));
+                },
+                move |event| {
+                    use crate::pty::SessionEvent;
+                    match event {
+                        SessionEvent::Ended(reason) => {
+                            let _ = emitter
+                                .emit(&exit_ev, serde_json::json!({ "class": "ended", "reason": reason }));
+                        }
+                        other => {
+                            let _ = emitter.emit(&meta_ev, session_meta(&other));
+                        }
                     }
-                    other => {
-                        let _ = emitter.emit(&meta_ev, session_meta(&other));
-                    }
-                }
-            };
-            if let Err(e) = crate::pty::run(stream, rx, on_event).await {
+                },
+            ));
+            let outcome = crate::pty::run(stream, rx, move |event| {
+                let _ = events.send(event);
+            })
+            .await;
+            // The driver's closure (and with it the sender) is gone: the pump drains what is
+            // pending, so an exit never overtakes the last bytes of output.
+            let _ = pump.await;
+            if let Err(e) = outcome {
                 let _ = app.emit(
                     &exit_on_error,
                     serde_json::json!({ "class": end_class(&e), "reason": e.to_string() }),

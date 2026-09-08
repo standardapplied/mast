@@ -5,8 +5,10 @@ import {
   gridFor,
   type PtySink,
   type Renderer,
+  RESIZE_SETTLE_MS,
   SYNCHRONIZED_OUTPUT_CAP_MS,
   TerminalController,
+  type Timers,
 } from "./terminalController";
 import { MODS } from "./input";
 import { TerminalGrid } from "./terminalGrid";
@@ -63,14 +65,35 @@ function gridRow(grid: TerminalGrid, y: number): string {
   return s.trimEnd();
 }
 
+/** Timers under test control: nothing fires until the test runs the clock forward. */
+class FakeTimers implements Timers {
+  private due: { at: number; fn: () => void }[] = [];
+  private clock = 0;
+  set(fn: () => void, ms: number): unknown {
+    const entry = { at: this.clock + ms, fn };
+    this.due.push(entry);
+    return entry;
+  }
+  clear(handle: unknown): void {
+    this.due = this.due.filter((d) => d !== handle);
+  }
+  advance(ms: number): void {
+    this.clock += ms;
+    const ready = this.due.filter((d) => d.at <= this.clock);
+    this.due = this.due.filter((d) => d.at > this.clock);
+    ready.forEach((d) => d.fn());
+  }
+}
+
 let cores: VtCore[] = [];
 async function harness(cols = 80, rows = 24, now?: () => number) {
   const core = await VtCore.create(WASM, cols, rows);
   cores.push(core);
   const renderer = new RecRenderer();
   const sink = new RecSink();
-  const controller = new TerminalController(core, renderer, sink, { now });
-  return { core, renderer, sink, controller };
+  const timers = new FakeTimers();
+  const controller = new TerminalController(core, renderer, sink, { now, timers });
+  return { core, renderer, sink, controller, timers };
 }
 afterEach(() => {
   cores.forEach((c) => c.free());
@@ -504,13 +527,61 @@ describe("TerminalController", () => {
     expect(sink.writes).toEqual([Array.from(enc("\x1b[200~echo a\necho b\x1b[201~"))]);
   });
 
-  test("resize reflows the core, resizes the renderer, and notifies the pty", async () => {
-    const { controller, core, renderer, sink } = await harness(80, 24);
+  test("resize reflows the core and the renderer at once; the pty hears it once it settles", async () => {
+    const { controller, core, renderer, sink, timers } = await harness(80, 24);
     controller.resize(120, 40);
     expect(core.size).toEqual({ cols: 120, rows: 40 });
     expect(renderer.resizes).toEqual([[80, 24], [120, 40]]);
-    expect(sink.resizes).toEqual([[120, 40]]);
     expect(controller.size).toEqual({ cols: 120, rows: 40 });
+    expect(sink.resizes).toEqual([]);
+    timers.advance(RESIZE_SETTLE_MS);
+    expect(sink.resizes).toEqual([[120, 40]]);
+  });
+
+  test("a splitter drag is many local reflows and one pty resize, where it settled", async () => {
+    const { controller, core, sink, timers } = await harness(80, 24);
+    for (let cols = 81; cols <= 100; cols++) {
+      controller.resize(cols, 24);
+      timers.advance(RESIZE_SETTLE_MS / 2);
+    }
+    expect(core.size).toEqual({ cols: 100, rows: 24 });
+    expect(sink.resizes).toEqual([]);
+    timers.advance(RESIZE_SETTLE_MS);
+    expect(sink.resizes).toEqual([[100, 24]]);
+  });
+
+  test("a silent resize adopts the pty's size without announcing it back", async () => {
+    const { controller, core, renderer, sink, timers } = await harness(80, 24);
+    controller.resize(90, 30);
+    controller.resize(100, 30, { silent: true });
+    timers.advance(RESIZE_SETTLE_MS * 2);
+    expect(core.size).toEqual({ cols: 100, rows: 30 });
+    expect(renderer.resizes.at(-1)).toEqual([100, 30]);
+    expect(sink.resizes, "the superseded local intent is not announced either").toEqual([]);
+  });
+
+  test("dispose drops a pending pty resize", async () => {
+    const { controller, sink, timers } = await harness(80, 24);
+    controller.resize(120, 40);
+    controller.dispose();
+    timers.advance(RESIZE_SETTLE_MS * 2);
+    expect(sink.resizes).toEqual([]);
+  });
+
+  test("a replacement renderer is painted whole from the core, with no pty traffic", async () => {
+    const { controller, renderer, sink, timers } = await harness(20, 4);
+    controller.feed(enc("first\r\nsecond"));
+    controller.frame();
+    const fresh = new RecRenderer();
+    controller.replaceRenderer(fresh);
+    expect(fresh.resizes).toEqual([[20, 4]]);
+    expect(gridRow(fresh.grid, 0)).toBe("first");
+    expect(gridRow(fresh.grid, 1)).toBe("second");
+    controller.frame();
+    expect(fresh.draws, "the next frame draws on the new renderer").toBe(1);
+    expect(renderer.draws, "the old one hears nothing more").toBe(1);
+    timers.advance(RESIZE_SETTLE_MS * 2);
+    expect(sink.resizes).toEqual([]);
   });
 
   test("after a resize the grid re-aligns to the reflowed terminal", async () => {
@@ -528,8 +599,9 @@ describe("TerminalController", () => {
   });
 
   test("a same-size resize is a no-op", async () => {
-    const { controller, renderer, sink } = await harness(80, 24);
+    const { controller, renderer, sink, timers } = await harness(80, 24);
     controller.resize(80, 24);
+    timers.advance(RESIZE_SETTLE_MS * 2);
     expect(renderer.resizes).toEqual([[80, 24]]); // only the constructor's
     expect(sink.resizes).toEqual([]);
   });

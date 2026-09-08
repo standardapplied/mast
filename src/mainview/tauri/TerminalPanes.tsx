@@ -479,7 +479,6 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       ref,
       () => ({
         paste: (text: string) => paneRefs.current.get(focused)?.paste(text),
-        refit: () => {},
         revive: () => {
           for (const [session, status] of Object.entries(statuses)) {
             if (status.kind !== "up") paneRefs.current.get(session)?.revive?.();

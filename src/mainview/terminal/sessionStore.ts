@@ -32,6 +32,18 @@ import {
 
 const KILLED_REASON = "closed from Mast";
 
+/**
+ * What a session's data lane last said about itself, per attached pane's meta events: the pty
+ * geometry another writer imposed (this pane letterboxes to it), and whether the host paused this
+ * subscriber's stream. Facts, not pane state — every surface showing the session reads them.
+ */
+export type LaneFact = {
+  readonly ptySize: { readonly cols: number; readonly rows: number } | null;
+  readonly paused: boolean;
+};
+
+const IDLE_LANE: LaneFact = { ptySize: null, paused: false };
+
 type PendingCreate = {
   command: string[];
   room: string;
@@ -64,6 +76,7 @@ type BoxState = {
   historyLoaded: Set<string>;
   /** Per-room issue counter for history reads; only the newest read's response lands. */
   historyRevisions: Map<string, number>;
+  lanes: Map<string, LaneFact>;
   refresh: () => void;
 };
 
@@ -116,6 +129,7 @@ export class SessionStore {
           closedAt: new Map(),
           historyLoaded: new Set(),
           historyRevisions: new Map(),
+          lanes: new Map(),
           refresh: () => {},
         };
     box.refresh = coalesce(async () => {
@@ -413,6 +427,50 @@ export class SessionStore {
     this.emit();
   }
 
+  /** The lane facts for a session; a stable idle value when nothing was reported. */
+  lane(name: string, key = this.active): LaneFact {
+    return this.box(key ?? undefined)?.lanes.get(name) ?? IDLE_LANE;
+  }
+
+  /** A pane attached (or reattached): the lane starts clean, whatever the last attach heard. */
+  noteAttached(name: string, key = this.active): void {
+    const box = this.box(key ?? undefined);
+    if (!box?.lanes.delete(name)) return;
+    this.emit();
+  }
+
+  /** Another writer resized the pty: the geometry is theirs until the write token moves. */
+  noteResized(name: string, cols: number, rows: number, key = this.active): void {
+    this.setLane(name, { ptySize: { cols, rows } }, key);
+  }
+
+  /** The host paused (or resumed) this subscriber's stream; a resume comes with a replay. */
+  notePaused(name: string, paused: boolean, key = this.active): void {
+    this.setLane(name, { paused }, key);
+  }
+
+  /**
+   * The write token moved (the host's broadcast, ahead of the next listing). The new writer's
+   * window sizes the pty from here on, so an imposed geometry no longer binds.
+   */
+  noteWriterChanged(name: string, fde: string, key = this.active): void {
+    const box = this.box(key ?? undefined);
+    if (!box) return;
+    const listed = box.listed?.get(name);
+    if (listed && listed.writerFde !== fde) box.listed?.set(name, { ...listed, writerFde: fde });
+    this.setLane(name, { ptySize: null }, key);
+  }
+
+  private setLane(name: string, patch: Partial<LaneFact>, key: string | null): void {
+    const box = this.box(key ?? undefined);
+    if (!box) return;
+    const current = box.lanes.get(name) ?? IDLE_LANE;
+    const next = { ...current, ...patch };
+    if (next.paused === current.paused && sameSize(next.ptySize, current.ptySize)) return;
+    box.lanes.set(name, next);
+    this.emit();
+  }
+
   /**
    * A deliberate create (open, launch, revive): the intent shows in every
    * surface immediately, and it clears the name's death record — reviving a
@@ -560,6 +618,10 @@ export class SessionStore {
     this.wantedHistory.clear();
     this.emit();
   }
+}
+
+function sameSize(a: LaneFact["ptySize"], b: LaneFact["ptySize"]): boolean {
+  return a === b || (a !== null && b !== null && a.cols === b.cols && a.rows === b.rows);
 }
 
 /** The app-wide instance; wired to the gateway in App via {@link connectSessions}. */
