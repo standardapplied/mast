@@ -157,20 +157,34 @@ export interface FakeTerminalServices extends TerminalServices {
   rendererFailure: string | null;
   /** Set to make the next renderer's first resize throw a RangeError with this message. */
   rendererResizeFailure: string | null;
+  /** Holds every renderer creation until the returned release runs; failures are held too. */
+  holdRenderers(): () => void;
 }
 
 export function fakeTerminalServices(): FakeTerminalServices {
   const renderers: FakeRenderer[] = [];
+  let gate: Promise<void> | null = null;
   const services: FakeTerminalServices = {
     link: new FakeLink(),
     renderers,
     rendererFailure: null,
     rendererResizeFailure: null,
+    holdRenderers: () => {
+      let release!: () => void;
+      gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return () => {
+        gate = null;
+        release();
+      };
+    },
     wasm: () => {
       compiled ??= WebAssembly.compile(WASM);
       return compiled;
     },
     createRenderer: async (_canvas, opts) => {
+      await gate;
       if (services.rendererFailure) {
         const message = services.rendererFailure;
         services.rendererFailure = null;
@@ -195,6 +209,10 @@ export function fakeTerminalServices(): FakeTerminalServices {
 /** A gateway that lists an empty box, enough for the session store to own lane facts. */
 export function emptyBoxGateway(): Gateway {
   return {
+    whoami: async () => ({
+      ok: true as const,
+      value: { fde: "uday", name: "uday", role: "member", capabilities: [] },
+    }),
     listSessions: async () => ({
       ok: true as const,
       value: { hostBootId: "boot-1", sessions: [] },

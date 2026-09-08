@@ -396,9 +396,12 @@ export const SessionTerminalPane = forwardRef<
         );
     };
 
-    /** The data lane threw: park on the cause, close the attachment, feed nothing more. */
+    /**
+     * The data lane threw: park on the cause, close the attachment, feed nothing more. An attach
+     * whose ending was already heard keeps that card: the session is over, not faulty.
+     */
     const fail = (reason: string) => {
-      if (halted) return;
+      if (halted || ended) return;
       halted = true;
       rebuildRef.current = null;
       setStatus({ kind: "failed", reason });
@@ -473,15 +476,17 @@ export const SessionTerminalPane = forwardRef<
       /**
        * The pixels went away, not the terminal: build a fresh renderer on the same canvas and
        * repaint it from the core. A rebuild that fails parks on the failed card, whose Retry is
-       * this same verb — never a re-dial, the session is fine.
+       * this same verb — never a re-dial, the session is fine. A rebuild that settles after the
+       * attach is over (a fault, or the session's ending) touches nothing: that card stands.
        */
+      const over = () => disposed || halted || ended;
       rebuildRenderer = (reason: string) => {
-        if (disposed || halted || rebuilding) return;
+        if (over() || rebuilding) return;
         rebuilding = true;
         renderer.destroy();
         void services.createRenderer(canvas, rendererOptions).then(
           (next) => {
-            if (disposed || halted) return void next.destroy();
+            if (over()) return void next.destroy();
             renderer = next;
             try {
               controller.replaceRenderer(next);
@@ -498,7 +503,7 @@ export const SessionTerminalPane = forwardRef<
             }
           },
           (e) => {
-            if (disposed || halted) return;
+            if (over()) return;
             rebuilding = false;
             rendererFailed = true;
             rebuildRef.current = () => rebuildRenderer(reason);

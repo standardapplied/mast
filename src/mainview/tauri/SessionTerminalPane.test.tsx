@@ -189,6 +189,16 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(renderer.resizes.at(-1)).toEqual([132, 40]);
     expect(services.link.resizes, "an imposed size is never announced back").toHaveLength(1);
 
+    // The token moving to another FDE resizes nothing: the pty is still 132×40, and a pane that
+    // refit itself now would parse the writer's output at the wrong width until the next resize.
+    await act(async () => {
+      lanes.onMeta({ kind: "writer_changed", fde: "mady" });
+    });
+    expect(container.querySelector('[data-testid="term-pty-size"]')?.textContent).toBe(
+      "sized by the writer to 132×40",
+    );
+    expect(renderer.resizes.at(-1), "still the writer's geometry").toEqual([132, 40]);
+
     const writers: string[] = [];
     await act(async () => {
       lanes.onMeta({ kind: "writer_changed", fde: "uday" });
@@ -457,6 +467,44 @@ describe("SessionTerminalPane at the channel edge", () => {
     await settle();
     expect(services.link.opens).toHaveLength(2);
     expect(status()).toEqual({ kind: "up" });
+  });
+
+  test("a rebuild that settles after the session ended paints nothing over the ended card", async () => {
+    for (const failure of [null, "no GPU adapter"]) {
+      services = fakeTerminalServices();
+      statuses = [];
+      const { attachment } = await mount();
+      const release = services.holdRenderers();
+      await act(async () => {
+        services.renderers[0]!.opts.onLost?.("GPU device lost: reset");
+      });
+      await act(async () => {
+        attachment.lanes.onExit({ class: "ended", reason: "exited(0)" });
+      });
+      expect(status()).toMatchObject({ kind: "ended", reason: "exited(0)" });
+      services.rendererFailure = failure;
+      await act(async () => release());
+      await settle();
+      expect(status(), `rebuild ${failure ? "failed" : "succeeded"} after the ending`).toMatchObject({
+        kind: "ended",
+        reason: "exited(0)",
+      });
+      if (!failure) expect(services.renderers[1]?.destroyed, "nothing draws for a dead attach").toBe(true);
+      act(() => root.unmount());
+      root = createRoot(container);
+    }
+  });
+
+  test("a lane fault after the ending keeps the ended card", async () => {
+    const { attachment } = await mount();
+    await act(async () => {
+      attachment.lanes.onExit({ class: "ended", reason: "exited(0)" });
+    });
+    await act(async () => {
+      expect(() => attachment.lanes.onData(frame(9))).not.toThrow();
+    });
+    expect(status()).toMatchObject({ kind: "ended", reason: "exited(0)" });
+    expect(services.link.closed, "the ending needs no close; the unmount's is enough").toEqual([]);
   });
 
   test("a runaway reason is capped on the card", async () => {

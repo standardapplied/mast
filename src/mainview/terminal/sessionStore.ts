@@ -77,6 +77,8 @@ type BoxState = {
   /** Per-room issue counter for history reads; only the newest read's response lands. */
   historyRevisions: Map<string, number>;
   lanes: Map<string, LaneFact>;
+  /** This box's own FDE handle once whoami lands; null until then (or when the box cannot say). */
+  me: string | null;
   refresh: () => void;
 };
 
@@ -130,8 +132,21 @@ export class SessionStore {
           historyLoaded: new Set(),
           historyRevisions: new Map(),
           lanes: new Map(),
+          me: null,
           refresh: () => {},
         };
+    // Whose window sizes the pty is a question only identity answers: the box's own handle, from
+    // its own gateway. A box that cannot say (offline, an older sail) leaves it null and the lane
+    // falls back to releasing an imposed geometry on any writer change.
+    void Promise.resolve()
+      .then(() => gateway.whoami())
+      .then(
+        (result) => {
+          if (this.boxes.get(boxKey) !== box || !result.ok || !result.value.fde) return;
+          box.me = result.value.fde;
+        },
+        () => {},
+      );
     box.refresh = coalesce(async () => {
       const requestId = ++box.listRequests;
       const result = await gateway.listSessions();
@@ -450,8 +465,10 @@ export class SessionStore {
   }
 
   /**
-   * The write token moved (the host's broadcast, ahead of the next listing). The new writer's
-   * window sizes the pty from here on, so an imposed geometry no longer binds.
+   * The write token moved (the host's broadcast, ahead of the next listing). The pty keeps its
+   * geometry until a writer resizes it, so an imposed size still binds when the token went to
+   * another FDE or to nobody; it is released only when the token came here — this box's own
+   * window sizes the pty from now on — or when the box cannot tell whose it is.
    */
   noteWriterChanged(name: string, fde: string, key = this.active): void {
     const box = this.box(key ?? undefined);
@@ -459,7 +476,8 @@ export class SessionStore {
     const listed = box.listed?.get(name);
     const writerChanged = listed !== undefined && listed.writerFde !== fde;
     if (writerChanged) box.listed!.set(name, { ...listed, writerFde: fde });
-    const laneChanged = this.patchLane(box, name, { ptySize: null });
+    const released = box.me === null || fde === box.me;
+    const laneChanged = released && this.patchLane(box, name, { ptySize: null });
     if (writerChanged || laneChanged) this.emit();
   }
 
