@@ -47,7 +47,7 @@ export type SessionStatus =
 const EXIT_CLASSES: ReadonlySet<string> = new Set(["transport", "ended", "refused"]);
 
 /**
- * Decodes the `session://exit` payload — `{class, reason}` as the Rust side emits it. Anything
+ * Decodes an ending's payload — `{class, reason}` as the Rust side sends it. Anything
  * malformed reads as a transport drop: the retryable default, since a wrongly-parked pane strands
  * the user while a wrongly-retried one merely backs off.
  */
@@ -62,7 +62,7 @@ export function toSessionEnd(payload: unknown): SessionEnd {
 }
 
 /**
- * A `session://meta` event as the Rust side emits it: the write token moved, another writer
+ * A state change as the Rust side sends it: the write token moved, another writer
  * resized the pty, or the host paused/resumed this subscriber. An unknown kind is kept as such so
  * a new host fact is never mistaken for one of these.
  */

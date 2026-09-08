@@ -4,7 +4,7 @@ import type { HostListing } from "../src/mainview/terminal/connection";
 import type { Gateway } from "../src/mainview/gateway";
 import type { RendererOptions, SurfaceRenderer } from "../src/mainview/terminal/renderer";
 import type {
-  SessionLanes,
+  SessionFrames,
   SessionLink,
   SessionOpen,
   TerminalServices,
@@ -21,12 +21,30 @@ import type { Cursor, GridSnapshot } from "../src/mainview/terminal/vtCore";
 const WASM = readFileSync(join(import.meta.dir, "../src/mainview/terminal/ghostty-vt.wasm"));
 let compiled: Promise<WebAssembly.Module> | null = null;
 
+/**
+ * The one channel an attachment answers on, by what a test wants to say: `onData` delivers a frame
+ * verbatim, `onMeta`/`onExit` frame a JSON payload exactly as the Rust core does (tags 3 and 4),
+ * so every test exercises the real decoder and the real order — a fact lands after the bytes
+ * delivered before it.
+ */
+export interface FakeLanes {
+  onData(message: ArrayBuffer | Uint8Array): void;
+  onMeta(payload: unknown): void;
+  onExit(payload: unknown): void;
+}
+
 /** One attachment the fake link accepted: what was asked, and the lanes to answer on. */
 export interface FakeAttachment {
   readonly spec: SessionOpen;
-  readonly lanes: SessionLanes;
+  readonly lanes: FakeLanes;
   detached: boolean;
 }
+
+const jsonFrame = (tag: number, payload: unknown): Uint8Array =>
+  new Uint8Array([tag, ...new TextEncoder().encode(JSON.stringify(payload))]);
+
+export const metaFrame = (payload: unknown): Uint8Array => jsonFrame(3, payload);
+export const exitFrame = (payload: unknown): Uint8Array => jsonFrame(4, payload);
 
 export class FakeLink implements SessionLink {
   listing: HostListing = { hostBootId: "boot-1", sessions: [] };
@@ -43,14 +61,19 @@ export class FakeLink implements SessionLink {
     return this.listing;
   }
 
-  async open(spec: SessionOpen, lanes: SessionLanes): Promise<() => void> {
+  async open(spec: SessionOpen, onFrame: SessionFrames): Promise<() => void> {
+    const lanes: FakeLanes = {
+      onData: onFrame,
+      onMeta: (payload) => onFrame(metaFrame(payload)),
+      onExit: (payload) => onFrame(exitFrame(payload)),
+    };
     const attachment: FakeAttachment = { spec, lanes, detached: false };
     this.opens.push(attachment);
     const waiters = this.waiters;
     this.waiters = [];
     waiters.forEach((resolve) => resolve(attachment));
-    // The host streams as soon as it attaches, ahead of the open's acknowledgement: the lanes are
-    // live from here, and a held open lets a test deliver on them before the pane hears back.
+    // The host streams as soon as it attaches, ahead of the open's acknowledgement: the channel is
+    // live from here, and a held open lets a test deliver on it before the pane hears back.
     await this.gate;
     return () => {
       attachment.detached = true;
@@ -132,6 +155,8 @@ export interface FakeTerminalServices extends TerminalServices {
   readonly renderers: FakeRenderer[];
   /** Set to make the next renderer creation fail with this message. */
   rendererFailure: string | null;
+  /** Set to make the next renderer's first resize throw a RangeError with this message. */
+  rendererResizeFailure: string | null;
 }
 
 export function fakeTerminalServices(): FakeTerminalServices {
@@ -140,6 +165,7 @@ export function fakeTerminalServices(): FakeTerminalServices {
     link: new FakeLink(),
     renderers,
     rendererFailure: null,
+    rendererResizeFailure: null,
     wasm: () => {
       compiled ??= WebAssembly.compile(WASM);
       return compiled;
@@ -151,6 +177,13 @@ export function fakeTerminalServices(): FakeTerminalServices {
         throw new Error(message);
       }
       const renderer = new FakeRenderer(opts);
+      if (services.rendererResizeFailure) {
+        const message = services.rendererResizeFailure;
+        services.rendererResizeFailure = null;
+        renderer.resize = () => {
+          throw new RangeError(message);
+        };
+      }
       renderers.push(renderer);
       return renderer;
     },

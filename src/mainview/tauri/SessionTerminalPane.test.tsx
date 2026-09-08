@@ -296,6 +296,57 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(status()).toEqual({ kind: "up" });
   });
 
+  test("a resize behind output leaves that output in the old geometry: one channel, one order", async () => {
+    const { attachment } = await mount();
+    await act(async () => {
+      attachment.lanes.onData(bytes("\x1b[1;100HX"));
+      attachment.lanes.onMeta({ kind: "resized", cols: 132, rows: 40 });
+    });
+    expect(await columnOfX()).toBe(79);
+    expect(sessionStore.lane("mast-app").ptySize).toEqual({ cols: 132, rows: 40 });
+  });
+
+  test("an ending heard during the open stands; the open resolving does not paint up", async () => {
+    const release = services.link.holdOpens();
+    await act(async () => {
+      render();
+    });
+    let attachment: FakeAttachment | null = null;
+    await act(async () => {
+      attachment = await services.link.opened();
+    });
+    await act(async () => {
+      attachment!.lanes.onExit({ class: "ended", reason: "exited(0)" });
+    });
+    const ended = { kind: "ended", reason: "exited(0)", disposition: "close-pane" };
+    expect(status()).toEqual(ended as SessionStatus);
+    await act(async () => release());
+    await settle();
+    expect(status()).toEqual(ended as SessionStatus);
+    expect(statuses.filter((s) => s.kind === "up")).toHaveLength(0);
+  });
+
+  test("a link drop during the open keeps its reattach; the open resolving does not paint up", async () => {
+    services.link.listing = { hostBootId: "boot-1", sessions: [{ name: "mast-app", live: true }] };
+    const release = services.link.holdOpens();
+    await act(async () => {
+      render();
+    });
+    let attachment: FakeAttachment | null = null;
+    await act(async () => {
+      attachment = await services.link.opened();
+    });
+    await act(async () => {
+      attachment!.lanes.onExit({ class: "transport", reason: "connection reset" });
+    });
+    await settle();
+    expect(status()).toEqual({ kind: "down", reason: "connection reset" });
+    await act(async () => release());
+    await settle();
+    expect(status()).toEqual({ kind: "down", reason: "connection reset" });
+    expect(statuses.filter((s) => s.kind === "up")).toHaveLength(0);
+  });
+
   test("facts streamed before the open resolves are this attach's own and survive it", async () => {
     const release = services.link.holdOpens();
     await act(async () => {
@@ -357,6 +408,28 @@ describe("SessionTerminalPane at the channel edge", () => {
       attachment!.spec.id,
     ]);
     root = createRoot(container);
+  });
+
+  test("a replacement renderer that fails to install parks the pane on a working Retry", async () => {
+    const { attachment } = await mount();
+    services.rendererResizeFailure = "Array buffer allocation failed";
+    await act(async () => {
+      services.renderers[0]!.opts.onLost?.("GPU device lost: reset");
+    });
+    await settle();
+    expect(status()).toEqual({ kind: "failed", reason: "Array buffer allocation failed" });
+    expect(services.link.closed).toEqual([attachment.spec.id]);
+    services.link.listing = { hostBootId: "boot-1", sessions: [{ name: "mast-app", live: true }] };
+    const redial = services.link.nextOpen();
+    await act(async () => {
+      (card()!.querySelector("button") as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      await redial;
+    });
+    await settle();
+    expect(services.link.opens).toHaveLength(2);
+    expect(status()).toEqual({ kind: "up" });
   });
 
   test("a lane fault after a failed renderer rebuild makes Retry re-dial, not rebuild", async () => {

@@ -1,10 +1,14 @@
-//! Framing for the session data channel toward the webview. Output bytes and the replay markers
-//! ride ONE ordered raw channel — a mid-stream replay must reset the client terminal before the
-//! snapshot bytes land — so every message is a tag byte followed by its payload. Byte-pinned
-//! against `src/mainview/terminal/dataFrames.ts`.
+//! Framing for the session channel toward the webview. Everything a session says — output bytes,
+//! the replay markers, state changes, and the ending — rides ONE ordered raw channel, so every
+//! message is a tag byte followed by its payload. Only one channel can hold the order: a Tauri
+//! event runs on its own lane and overtakes a large raw frame still in flight (a resize would
+//! then re-parse the bytes emitted before it at the new geometry), and a mid-stream replay must
+//! reset the client terminal before the snapshot bytes land. Byte-pinned against
+//! `src/mainview/terminal/dataFrames.ts`.
 
 use std::time::Duration;
 
+use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::time::{sleep_until, Instant};
 
@@ -13,20 +17,43 @@ use crate::pty::SessionEvent;
 const TAG_BYTES: u8 = 0;
 const TAG_REPLAY_BEGIN: u8 = 1;
 const TAG_REPLAY_END: u8 = 2;
+/// A state change as JSON: `{kind: writer_changed|resized|paused|continued, ...}`.
+const TAG_META: u8 = 3;
+/// The ending as JSON: `{class, reason}`, the same shape a failed open rejects with.
+const TAG_EXIT: u8 = 4;
 
-/// The data-channel frame for `event`, or `None` for events that travel on the meta/exit lanes.
-pub fn encode(event: &SessionEvent) -> Option<Vec<u8>> {
+/// The channel frame for `event`.
+pub fn encode(event: &SessionEvent) -> Vec<u8> {
     match event {
         SessionEvent::Output(bytes) => {
             let mut frame = Vec::with_capacity(bytes.len() + 1);
             frame.push(TAG_BYTES);
             frame.extend_from_slice(bytes);
-            Some(frame)
+            frame
         }
-        SessionEvent::Replaying { safe } => Some(vec![TAG_REPLAY_BEGIN, u8::from(*safe)]),
-        SessionEvent::ReplayDone => Some(vec![TAG_REPLAY_END]),
-        _ => None,
+        SessionEvent::Replaying { safe } => vec![TAG_REPLAY_BEGIN, u8::from(*safe)],
+        SessionEvent::ReplayDone => vec![TAG_REPLAY_END],
+        SessionEvent::Paused => json_frame(TAG_META, json!({ "kind": "paused" })),
+        SessionEvent::Continued => json_frame(TAG_META, json!({ "kind": "continued" })),
+        SessionEvent::WriterChanged(fde) => {
+            json_frame(TAG_META, json!({ "kind": "writer_changed", "fde": fde }))
+        }
+        SessionEvent::Resized { cols, rows } => {
+            json_frame(TAG_META, json!({ "kind": "resized", "cols": cols, "rows": rows }))
+        }
+        SessionEvent::Ended(reason) => exit("ended", reason),
     }
+}
+
+/// The ending frame: `class` reads as [`crate::ssh::end_class`] does, `reason` verbatim.
+pub fn exit(class: &str, reason: &str) -> Vec<u8> {
+    json_frame(TAG_EXIT, json!({ "class": class, "reason": reason }))
+}
+
+fn json_frame(tag: u8, payload: serde_json::Value) -> Vec<u8> {
+    let mut frame = vec![tag];
+    frame.extend_from_slice(payload.to_string().as_bytes());
+    frame
 }
 
 /// Output is coalesced per session into one message per window, or sooner once a batch holds
@@ -68,14 +95,12 @@ impl OutputBatch {
 }
 
 /// Drains one session's events toward the webview until the sender side is dropped. Output is
-/// batched per [`COALESCE_WINDOW`]/[`COALESCE_CAP`] into `data`; every other event flushes the
-/// batch ahead of itself, then travels as its own data frame (the replay markers) or goes to
-/// `other` (endings, meta), so nothing can overtake the bytes that preceded it. The final batch
-/// is flushed before returning.
-pub async fn pump<D, E>(mut events: mpsc::UnboundedReceiver<SessionEvent>, mut data: D, mut other: E)
+/// batched per [`COALESCE_WINDOW`]/[`COALESCE_CAP`] into one frame; every other event flushes the
+/// batch ahead of itself and then travels as its own frame, so nothing can overtake the bytes that
+/// preceded it. The final batch is flushed before returning.
+pub async fn pump<S>(mut events: mpsc::UnboundedReceiver<SessionEvent>, mut send: S)
 where
-    D: FnMut(Vec<u8>),
-    E: FnMut(SessionEvent),
+    S: FnMut(Vec<u8>),
 {
     let mut batch = OutputBatch::default();
     let mut deadline: Option<Instant> = None;
@@ -84,7 +109,7 @@ where
             event = events.recv() => match event {
                 None => {
                     if let Some(frame) = batch.take() {
-                        data(frame);
+                        send(frame);
                     }
                     return;
                 }
@@ -92,7 +117,7 @@ where
                     batch.push(&bytes);
                     if batch.is_full() {
                         if let Some(frame) = batch.take() {
-                            data(frame);
+                            send(frame);
                         }
                         deadline = None;
                     } else if deadline.is_none() {
@@ -101,18 +126,15 @@ where
                 }
                 Some(event) => {
                     if let Some(frame) = batch.take() {
-                        data(frame);
+                        send(frame);
                     }
                     deadline = None;
-                    match encode(&event) {
-                        Some(frame) => data(frame),
-                        None => other(event),
-                    }
+                    send(encode(&event));
                 }
             },
             _ = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
                 if let Some(frame) = batch.take() {
-                    data(frame);
+                    send(frame);
                 }
                 deadline = None;
             }
@@ -124,27 +146,20 @@ where
 mod tests {
     use super::*;
 
-    #[derive(Debug, PartialEq, Eq)]
-    enum Sent {
-        Data(Vec<u8>),
-        Other(SessionEvent),
-    }
-
-    /// A running pump whose every delivery lands, in order, on one channel.
-    fn pumping() -> (mpsc::UnboundedSender<SessionEvent>, mpsc::UnboundedReceiver<Sent>, tokio::task::JoinHandle<()>) {
+    /// A running pump whose every frame lands, in order, on one channel.
+    fn pumping() -> (mpsc::UnboundedSender<SessionEvent>, mpsc::UnboundedReceiver<Vec<u8>>, tokio::task::JoinHandle<()>) {
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
         let (out_tx, out_rx) = mpsc::unbounded_channel();
-        let data_tx = out_tx.clone();
-        let task = tokio::spawn(pump(
-            ev_rx,
-            move |frame| {
-                let _ = data_tx.send(Sent::Data(frame));
-            },
-            move |event| {
-                let _ = out_tx.send(Sent::Other(event));
-            },
-        ));
+        let task = tokio::spawn(pump(ev_rx, move |frame| {
+            let _ = out_tx.send(frame);
+        }));
         (ev_tx, out_rx, task)
+    }
+
+    fn tagged(tag: u8, json: &str) -> Vec<u8> {
+        let mut frame = vec![tag];
+        frame.extend_from_slice(json.as_bytes());
+        frame
     }
 
     #[tokio::test]
@@ -153,14 +168,14 @@ mod tests {
         for chunk in [&b"ab"[..], b"c", b"", b"de"] {
             ev_tx.send(SessionEvent::Output(chunk.to_vec())).unwrap();
         }
-        assert_eq!(out.recv().await.unwrap(), Sent::Data(b"\x00abcde".to_vec()));
+        assert_eq!(out.recv().await.unwrap(), b"\x00abcde".to_vec());
         drop(ev_tx);
         task.await.unwrap();
         assert!(out.recv().await.is_none(), "nothing is sent twice");
     }
 
     #[tokio::test]
-    async fn a_marker_or_ending_flushes_the_batch_ahead_of_itself() {
+    async fn every_other_event_flushes_the_batch_ahead_of_itself_on_the_same_channel() {
         let (ev_tx, mut out, task) = pumping();
         ev_tx.send(SessionEvent::Output(b"before".to_vec())).unwrap();
         ev_tx.send(SessionEvent::Replaying { safe: true }).unwrap();
@@ -178,13 +193,13 @@ mod tests {
         assert_eq!(
             sent,
             vec![
-                Sent::Data(b"\x00before".to_vec()),
-                Sent::Data(vec![TAG_REPLAY_BEGIN, 1]),
-                Sent::Data(b"\x00snapshot".to_vec()),
-                Sent::Data(vec![TAG_REPLAY_END]),
-                Sent::Other(SessionEvent::Resized { cols: 100, rows: 30 }),
-                Sent::Data(b"\x00tail".to_vec()),
-                Sent::Other(SessionEvent::Ended("exited(0)".into())),
+                b"\x00before".to_vec(),
+                vec![TAG_REPLAY_BEGIN, 1],
+                b"\x00snapshot".to_vec(),
+                vec![TAG_REPLAY_END],
+                tagged(TAG_META, r#"{"cols":100,"kind":"resized","rows":30}"#),
+                b"\x00tail".to_vec(),
+                tagged(TAG_EXIT, r#"{"class":"ended","reason":"exited(0)"}"#),
             ]
         );
     }
@@ -196,10 +211,9 @@ mod tests {
         ev_tx.send(SessionEvent::Output(half.clone())).unwrap();
         ev_tx.send(SessionEvent::Output(half.clone())).unwrap();
         ev_tx.send(SessionEvent::Output(b"next".to_vec())).unwrap();
-        let first = out.recv().await.unwrap();
-        let Sent::Data(frame) = first else { panic!("expected data, got {first:?}") };
+        let frame = out.recv().await.unwrap();
         assert_eq!(frame.len(), 1 + half.len() * 2, "the two halves close one batch at the cap");
-        assert_eq!(out.recv().await.unwrap(), Sent::Data(b"\x00next".to_vec()));
+        assert_eq!(out.recv().await.unwrap(), b"\x00next".to_vec());
         drop(ev_tx);
         task.await.unwrap();
     }
@@ -216,24 +230,41 @@ mod tests {
 
     #[test]
     fn output_is_tag_zero_then_the_bytes_verbatim() {
-        let frame = encode(&SessionEvent::Output(vec![0x1b, 0x5b, 0x48, 0x00, 0xff])).unwrap();
+        let frame = encode(&SessionEvent::Output(vec![0x1b, 0x5b, 0x48, 0x00, 0xff]));
         assert_eq!(frame, vec![0, 0x1b, 0x5b, 0x48, 0x00, 0xff]);
-        assert_eq!(encode(&SessionEvent::Output(vec![])).unwrap(), vec![0]);
+        assert_eq!(encode(&SessionEvent::Output(vec![])), vec![0]);
     }
 
     #[test]
     fn replay_markers_are_tags_one_and_two() {
-        assert_eq!(encode(&SessionEvent::Replaying { safe: true }).unwrap(), vec![1, 1]);
-        assert_eq!(encode(&SessionEvent::Replaying { safe: false }).unwrap(), vec![1, 0]);
-        assert_eq!(encode(&SessionEvent::ReplayDone).unwrap(), vec![2]);
+        assert_eq!(encode(&SessionEvent::Replaying { safe: true }), vec![1, 1]);
+        assert_eq!(encode(&SessionEvent::Replaying { safe: false }), vec![1, 0]);
+        assert_eq!(encode(&SessionEvent::ReplayDone), vec![2]);
     }
 
     #[test]
-    fn other_events_do_not_travel_on_the_data_channel() {
-        assert_eq!(encode(&SessionEvent::Paused), None);
-        assert_eq!(encode(&SessionEvent::Continued), None);
-        assert_eq!(encode(&SessionEvent::WriterChanged("uday".into())), None);
-        assert_eq!(encode(&SessionEvent::Resized { cols: 80, rows: 24 }), None);
-        assert_eq!(encode(&SessionEvent::Ended("exited(0)".into())), None);
+    fn state_changes_are_tag_three_json() {
+        assert_eq!(encode(&SessionEvent::Paused), tagged(3, r#"{"kind":"paused"}"#));
+        assert_eq!(encode(&SessionEvent::Continued), tagged(3, r#"{"kind":"continued"}"#));
+        assert_eq!(
+            encode(&SessionEvent::WriterChanged("uday".into())),
+            tagged(3, r#"{"fde":"uday","kind":"writer_changed"}"#)
+        );
+        assert_eq!(
+            encode(&SessionEvent::Resized { cols: 80, rows: 24 }),
+            tagged(3, r#"{"cols":80,"kind":"resized","rows":24}"#)
+        );
+    }
+
+    #[test]
+    fn endings_are_tag_four_json_in_the_shape_a_failed_open_rejects_with() {
+        assert_eq!(
+            encode(&SessionEvent::Ended("exited(0)".into())),
+            tagged(4, r#"{"class":"ended","reason":"exited(0)"}"#)
+        );
+        assert_eq!(
+            exit("transport", "connection reset"),
+            tagged(4, r#"{"class":"transport","reason":"connection reset"}"#)
+        );
     }
 }

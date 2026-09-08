@@ -399,20 +399,6 @@ struct DownloadPlan {
 const CHUNK: usize = 64 * 1024;
 const EMIT_EVERY: u64 = 256 * 1024;
 
-/// Maps a session's non-data event to the JSON the webview renders as terminal-state UI.
-fn session_meta(event: &crate::pty::SessionEvent) -> serde_json::Value {
-    use crate::pty::SessionEvent;
-    match event {
-        SessionEvent::Replaying { safe } => json!({ "kind": "replaying", "safe": safe }),
-        SessionEvent::ReplayDone => json!({ "kind": "replay_done" }),
-        SessionEvent::Paused => json!({ "kind": "paused" }),
-        SessionEvent::Continued => json!({ "kind": "continued" }),
-        SessionEvent::WriterChanged(fde) => json!({ "kind": "writer_changed", "fde": fde }),
-        SessionEvent::Resized { cols, rows } => json!({ "kind": "resized", "cols": cols, "rows": rows }),
-        SessionEvent::Output(_) | SessionEvent::Ended(_) => json!({ "kind": "other" }),
-    }
-}
-
 /// How the pane should read a session failure: a host refusal (bad token, foreign session, dead
 /// container, protocol skew) would fail identically on every retry; only a genuine transport
 /// failure is worth reattaching for.
@@ -707,14 +693,13 @@ impl Backend {
     /// Attaches a terminal ({@code id}) to a host-owned pty session over a streamlocal channel,
     /// speaking the pty-host protocol directly. Resolves once the host has acknowledged the
     /// Create (when asked) and the Attach, so a caller that gets `Ok` knows the session exists;
-    /// a prologue failure is the error, classified by [`end_class`]. From then on output bytes
-    /// and replay markers travel as raw frames on `on_data` (see `session_frames`), the ending
-    /// becomes `session://exit/{id}`, and flow-control/roster/resize become `session://meta/{id}`.
-    /// Keystrokes/resize/detach ride the returned sender via the session_* methods. The session
-    /// survives this connection on the host — closing here only detaches.
+    /// a prologue failure is the error, classified by [`end_class`]. From then on everything the
+    /// session says — output, replay markers, flow-control/roster/resize, and the ending — travels
+    /// as raw frames on `on_data`, in order (see `session_frames`). Keystrokes/resize/detach ride
+    /// the returned sender via the session_* methods. The session survives this connection on the
+    /// host — closing here only detaches.
     pub async fn session_open(
         &self,
-        app: AppHandle,
         id: String,
         socket_path: String,
         mut req: crate::pty::AttachRequest,
@@ -748,47 +733,28 @@ impl Backend {
         };
 
         let sessions = self.sessions.clone();
-        let cleanup_id = id.clone();
-        let emitter = app.clone();
-        let exit_ev = format!("session://exit/{id}");
-        let meta_ev = format!("session://meta/{id}");
-        let exit_on_error = exit_ev.clone();
+        let cleanup_id = id;
+        let ending = on_data.clone();
         tokio::spawn(async move {
-            // Output and replay markers ride ONE raw channel, in order: a mid-stream resync must
-            // reset the client terminal *before* the snapshot bytes land. Raw frames skip the
-            // JSON number-array encoding an event would impose on every output byte, and the
-            // pump coalesces output so a firehose is one message per window, not per read.
+            // Everything rides ONE raw channel, in order: a Tauri event runs on its own lane and
+            // would overtake a large frame still in flight, so a resize or an ending could land
+            // before the bytes that preceded it. Raw frames skip the JSON number-array encoding
+            // an event would impose on every output byte, and the pump coalesces output so a
+            // firehose is one message per window, not per read.
             let (events, pending) = mpsc::unbounded_channel();
-            let pump = tokio::spawn(crate::session_frames::pump(
-                pending,
-                move |frame| {
-                    let _ = on_data.send(InvokeResponseBody::Raw(frame));
-                },
-                move |event| {
-                    use crate::pty::SessionEvent;
-                    match event {
-                        SessionEvent::Ended(reason) => {
-                            let _ = emitter
-                                .emit(&exit_ev, serde_json::json!({ "class": "ended", "reason": reason }));
-                        }
-                        other => {
-                            let _ = emitter.emit(&meta_ev, session_meta(&other));
-                        }
-                    }
-                },
-            ));
+            let pump = tokio::spawn(crate::session_frames::pump(pending, move |frame| {
+                let _ = on_data.send(InvokeResponseBody::Raw(frame));
+            }));
             let outcome = crate::pty::run(stream, rx, move |event| {
                 let _ = events.send(event);
             })
             .await;
             // The driver's closure (and with it the sender) is gone: the pump drains what is
-            // pending, so an exit never overtakes the last bytes of output.
+            // pending, so a transport ending never overtakes the last bytes of output.
             let _ = pump.await;
             if let Err(e) = outcome {
-                let _ = app.emit(
-                    &exit_on_error,
-                    serde_json::json!({ "class": end_class(&e), "reason": e.to_string() }),
-                );
+                let frame = crate::session_frames::exit(end_class(&e), &e.to_string());
+                let _ = ending.send(InvokeResponseBody::Raw(frame));
             }
             // Evict the id whether the session ended on its own, detached, or the
             // transport failed — the map must not keep a sender to a dead driver.

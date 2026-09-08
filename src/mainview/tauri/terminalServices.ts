@@ -1,13 +1,12 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import type { HostListing } from "../terminal/connection";
 import { TerminalRenderer } from "../terminal/renderer";
 import type { SessionLink, TerminalServices } from "../terminal/terminalServices";
 
 /**
- * The Tauri side of the pane's seam: `session_*` commands over `invoke`, the data lane as a raw
- * `Channel`, meta/exit as `session://` events, the bundled wasm, and the WebGPU/WebGL2 renderer.
+ * The Tauri side of the pane's seam: `session_*` commands over `invoke`, the session channel as
+ * one raw `Channel`, the bundled wasm, and the WebGPU/WebGL2 renderer.
  */
 
 /** The pinned VT wasm, fetched and compiled once; every pane instantiates its own copy. */
@@ -49,16 +48,18 @@ async function readClipboard(): Promise<string> {
 
 const link: SessionLink = {
   list: (socketPath, token) => invoke<HostListing>("session_list", { socketPath, token }),
-  async open(spec, lanes) {
-    // One ordered raw channel carries bytes AND replay markers: only one channel can guarantee
-    // that a mid-stream replay resets the terminal before its snapshot bytes land.
+  async open(spec, onFrame) {
+    // One ordered raw channel carries everything the session says: a `Channel` delivers by index,
+    // so a resize or an ending waits for the large output frame still being fetched ahead of it,
+    // where a separate event would overtake it.
+    let attached = true;
     const onData = new Channel<ArrayBuffer>();
-    onData.onmessage = (message) => lanes.onData(message);
-    const unlisten = await Promise.all([
-      listen<unknown>(`session://meta/${spec.id}`, (e) => lanes.onMeta(e.payload)),
-      listen<unknown>(`session://exit/${spec.id}`, (e) => lanes.onExit(e.payload)),
-    ]);
-    const detach = () => unlisten.forEach((off) => off());
+    onData.onmessage = (message) => {
+      if (attached) onFrame(message);
+    };
+    const detach = () => {
+      attached = false;
+    };
     try {
       await invoke("session_open", { ...spec, onData });
     } catch (e) {

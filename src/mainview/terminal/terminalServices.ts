@@ -4,7 +4,7 @@ import type { RendererOptions, SurfaceRenderer } from "./renderer";
 
 /**
  * What a session pane needs from the platform, behind one injectable seam: the session link (the
- * Rust core's `session_*` commands and the lanes they answer on), the VT wasm, the renderer, and
+ * Rust core's `session_*` commands and the channel they answer on), the VT wasm, the renderer, and
  * the identity the terminal reports. The Tauri implementation lives in `tauri/terminalServices.ts`
  * and is provided once at the entry; tests provide fakes, so the pane itself — the transport edge
  * that used to be the untested surface — runs under happy-dom with a scripted channel.
@@ -32,23 +32,20 @@ export interface SessionOpen {
 }
 
 /**
- * What an attachment hears back. `onData` is the one ordered raw channel carrying output bytes and
- * replay markers (see dataFrames.ts); `onMeta` carries flow control, roster, and resize facts;
- * `onExit` the ending. Every handler is total on the pane's side: a throw must never park the lane.
+ * What an attachment hears back: the one ordered raw channel carrying output bytes, replay
+ * markers, state changes, and the ending (see dataFrames.ts). Total on the pane's side: a throw
+ * must never park the channel.
  */
-export interface SessionLanes {
-  onData(message: ArrayBuffer | Uint8Array): void;
-  onMeta(payload: unknown): void;
-  onExit(payload: unknown): void;
-}
+export type SessionFrames = (message: ArrayBuffer | Uint8Array) => void;
 
 export interface SessionLink {
   list(socketPath: string, token: string): Promise<HostListing>;
   /**
-   * Attaches (creating first when asked). Resolves once the host acknowledged the attach, with the
-   * detach that silences the lanes; rejects with the `{class, reason}` an ending carries.
+   * Attaches (creating first when asked). Frames stream as soon as the host attaches, ahead of the
+   * acknowledgement. Resolves once the host acknowledged the attach, with the detach that silences
+   * the channel; rejects with the `{class, reason}` an ending carries.
    */
-  open(spec: SessionOpen, lanes: SessionLanes): Promise<() => void>;
+  open(spec: SessionOpen, onFrame: SessionFrames): Promise<() => void>;
   write(id: string, bytes: Uint8Array): Promise<void>;
   resize(id: string, cols: number, rows: number): Promise<void>;
   takeWrite(id: string): Promise<void>;

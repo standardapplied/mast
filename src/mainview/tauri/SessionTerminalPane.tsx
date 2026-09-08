@@ -18,9 +18,9 @@ import {
   Reconnector,
   resolveTransportEnd,
   type SessionEnd,
+  type SessionMeta,
   type SessionStatus,
   toSessionEnd,
-  toSessionMeta,
 } from "../terminal/connection";
 import {
   TERMINAL_FONT_FAMILY as FONT_FAMILY,
@@ -37,7 +37,7 @@ import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
 import {
   type SessionCreate,
-  type SessionLanes,
+  type SessionFrames,
   useTerminalServices,
 } from "../terminal/terminalServices";
 import { type CellPos, type MouseButton, type SurfacePos, VtCore } from "../terminal/vtCore";
@@ -344,6 +344,8 @@ export const SessionTerminalPane = forwardRef<
     let disposed = false;
     /** The lane threw: nothing more is fed or drawn until the user retries. */
     let halted = false;
+    /** The session's ending was heard (or the open rejected): this attach is over, whatever the open resolves to. */
+    let ended = false;
     let raf = 0;
     const cleanups: Array<() => void> = [];
     const id = crypto.randomUUID();
@@ -380,7 +382,8 @@ export const SessionTerminalPane = forwardRef<
      * listing failing means the link itself is down — the reconnect path's own case.
      */
     const onEnd = (end: SessionEnd) => {
-      if (disposed || halted) return;
+      if (disposed || halted || ended) return;
+      ended = true;
       if (end.klass !== "transport") return park(end);
       void link
         .list(socketPath, token)
@@ -395,6 +398,7 @@ export const SessionTerminalPane = forwardRef<
 
     /** The data lane threw: park on the cause, close the attachment, feed nothing more. */
     const fail = (reason: string) => {
+      if (halted) return;
       halted = true;
       rebuildRef.current = null;
       setStatus({ kind: "failed", reason });
@@ -479,7 +483,13 @@ export const SessionTerminalPane = forwardRef<
           (next) => {
             if (disposed || halted) return void next.destroy();
             renderer = next;
-            controller.replaceRenderer(next);
+            try {
+              controller.replaceRenderer(next);
+            } catch (e) {
+              rebuilding = false;
+              fail(laneFault(e));
+              return;
+            }
             rebuilding = false;
             rebuildRef.current = null;
             if (rendererFailed) {
@@ -537,59 +547,58 @@ export const SessionTerminalPane = forwardRef<
         geometryRef.current = null;
       });
 
-      const lanes: SessionLanes = {
-        // One ordered raw channel carries bytes AND replay markers: a mid-stream replay means the
-        // host dropped part of the stream (flow-control pause) and is re-baselining us — the
-        // terminal resets so the snapshot lands clean, then snaps back to the live view. Total:
-        // a throw here parks the pane, it never parks the channel.
-        onData: (message) => {
-          if (disposed || halted) return;
-          try {
-            const frame = decodeDataFrame(message);
-            if (frame.kind === "bytes") {
-              controller.feed(frame.data);
-            } else if (frame.kind === "replay-begin") {
-              controller.resetForReplay();
-            } else {
-              controller.endReplay();
-              controller.scroll("bottom");
-              // The replay just restored the app's modes; a pane without keyboard focus owes it a
-              // focus-lost report (the attach itself is assumed focused, which is wrong for a
-              // split's far side or a view that is not on screen).
-              if (!hasFocusRef.current) {
-                controller.setFocus(false);
-              }
+      /** Facts about the session, not this pane: they land in the store and render from it. */
+      const onMeta = (meta: SessionMeta) => {
+        switch (meta.kind) {
+          case "writer_changed":
+            sessionStore.noteWriterChanged(session, meta.fde);
+            onWriterRef.current?.(meta.fde);
+            return;
+          case "resized":
+            // Output after this frame is already in the new geometry: adopt it before the next
+            // byte, not on the effect the store update schedules.
+            adopt(meta.cols, meta.rows);
+            if (!halted) sessionStore.noteResized(session, meta.cols, meta.rows);
+            return;
+          case "paused":
+            sessionStore.notePaused(session, true);
+            return;
+          case "continued":
+            sessionStore.notePaused(session, false);
+            return;
+          case "unknown":
+            return;
+        }
+      };
+      // One ordered raw channel carries everything the session says, so a resize or an ending
+      // lands after the bytes that preceded it. A mid-stream replay means the host dropped part
+      // of the stream (flow-control pause) and is re-baselining us — the terminal resets so the
+      // snapshot lands clean, then snaps back to the live view. Total: a throw here parks the
+      // pane, it never parks the channel.
+      const onFrame: SessionFrames = (message) => {
+        if (disposed) return;
+        try {
+          const frame = decodeDataFrame(message);
+          if (frame.kind === "meta") return onMeta(frame.meta);
+          if (frame.kind === "exit") return onEnd(frame.end);
+          if (halted) return;
+          if (frame.kind === "bytes") {
+            controller.feed(frame.data);
+          } else if (frame.kind === "replay-begin") {
+            controller.resetForReplay();
+          } else {
+            controller.endReplay();
+            controller.scroll("bottom");
+            // The replay just restored the app's modes; a pane without keyboard focus owes it a
+            // focus-lost report (the attach itself is assumed focused, which is wrong for a
+            // split's far side or a view that is not on screen).
+            if (!hasFocusRef.current) {
+              controller.setFocus(false);
             }
-          } catch (e) {
-            fail(laneFault(e));
           }
-        },
-        // Facts about the session, not this pane: they land in the store and render from it.
-        onMeta: (payload) => {
-          if (disposed) return;
-          const meta = toSessionMeta(payload);
-          switch (meta.kind) {
-            case "writer_changed":
-              sessionStore.noteWriterChanged(session, meta.fde);
-              onWriterRef.current?.(meta.fde);
-              return;
-            case "resized":
-              // Output after this event is already in the new geometry: adopt it before the
-              // next byte, not on the effect the store update schedules.
-              adopt(meta.cols, meta.rows);
-              if (!halted) sessionStore.noteResized(session, meta.cols, meta.rows);
-              return;
-            case "paused":
-              sessionStore.notePaused(session, true);
-              return;
-            case "continued":
-              sessionStore.notePaused(session, false);
-              return;
-            case "unknown":
-              return;
-          }
-        },
-        onExit: (payload) => onEnd(toSessionEnd(payload)),
+        } catch (e) {
+          fail(laneFault(e));
+        }
       };
 
       try {
@@ -608,7 +617,7 @@ export const SessionTerminalPane = forwardRef<
           return;
         }
         seenUnderRef.current = listing.hostBootId;
-        // The lanes are live before the open resolves (the host streams as soon as it attaches),
+        // The channel is live before the open resolves (the host streams as soon as it attaches),
         // so the lane starts clean here — a fact heard during the open is this attach's own.
         sessionStore.noteAttached(session);
         // Resolves only once the host has acknowledged Create and Attach: a link that drops
@@ -622,7 +631,7 @@ export const SessionTerminalPane = forwardRef<
             write,
             create: alive || !spec ? null : { ...spec, cols, rows },
           },
-          lanes,
+          onFrame,
         );
         if (disposed) {
           // The unmount's close ran before the host registered this attachment; close it now.
@@ -640,12 +649,14 @@ export const SessionTerminalPane = forwardRef<
         onEnd(end.klass === "transport" ? { ...end, klass: preAttachClass(end.reason) } : end);
         return;
       }
+      // The channel may already have failed on a frame the open streamed, or carried the ending
+      // (a shell that exited at once, a link that dropped right after attaching): that card — and
+      // the retry it may have scheduled — stands; the open resolving settles nothing.
+      if (halted || ended) return;
       // A theme flip can re-run this effect and attach while a retry timer still pends; landing
       // here settles the connection, so a stale timer must not force another remount.
       clearTimeout(retryTimer.current);
       reconnector.current.opened();
-      // The lane may already have failed on a frame the open streamed: that card stands.
-      if (halted) return;
       setStatus({ kind: "up" });
 
       // Tell the pty our real geometry (a fresh session was created at this size; an existing one
