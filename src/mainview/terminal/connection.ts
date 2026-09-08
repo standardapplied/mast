@@ -47,7 +47,7 @@ export type SessionStatus =
 const EXIT_CLASSES: ReadonlySet<string> = new Set(["transport", "ended", "refused"]);
 
 /**
- * Decodes the `session://exit` payload — `{class, reason}` as the Rust side emits it. Anything
+ * Decodes an ending's payload — `{class, reason}` as the Rust side sends it. Anything
  * malformed reads as a transport drop: the retryable default, since a wrongly-parked pane strands
  * the user while a wrongly-retried one merely backs off.
  */
@@ -59,6 +59,38 @@ export function toSessionEnd(payload: unknown): SessionEnd {
     }
   }
   return { klass: "transport", reason: String(payload) };
+}
+
+/**
+ * A state change as the Rust side sends it: the write token moved, another writer
+ * resized the pty, or the host paused/resumed this subscriber. An unknown kind is kept as such so
+ * a new host fact is never mistaken for one of these.
+ */
+export type SessionMeta =
+  | { kind: "writer_changed"; fde: string }
+  | { kind: "resized"; cols: number; rows: number }
+  | { kind: "paused" }
+  | { kind: "continued" }
+  | { kind: "unknown"; raw: string };
+
+export function toSessionMeta(payload: unknown): SessionMeta {
+  const p = (payload !== null && typeof payload === "object" ? payload : {}) as Record<string, unknown>;
+  switch (p.kind) {
+    case "writer_changed":
+      return { kind: "writer_changed", fde: typeof p.fde === "string" ? p.fde : "" };
+    case "resized":
+      if (isDim(p.cols) && isDim(p.rows)) return { kind: "resized", cols: p.cols, rows: p.rows };
+      break;
+    case "paused":
+      return { kind: "paused" };
+    case "continued":
+      return { kind: "continued" };
+  }
+  return { kind: "unknown", raw: JSON.stringify(payload) };
+}
+
+function isDim(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 /** Whether a status deserves a warning marker in chrome (tab dots, chips). A quiet first connect doesn't. */
@@ -188,4 +220,29 @@ export function resolveTransportEnd(
   if (listed?.live) return end;
   if (listed) return { klass: "ended", reason: "ended" };
   return { klass: "ended", reason: absenceReason(seenUnder, listing.hostBootId) };
+}
+
+/** Reason strings from the host or the Rust core render on cards verbatim; longer ones are cut here. */
+export const MAX_REASON_CHARS = 200;
+
+/** One line, at most {@link MAX_REASON_CHARS} characters, so a runaway message never becomes a wall. */
+export function capReason(reason: string): string {
+  const flat = reason.replace(/\s+/g, " ").trim();
+  return flat.length <= MAX_REASON_CHARS ? flat : `${flat.slice(0, MAX_REASON_CHARS - 1)}…`;
+}
+
+/**
+ * Names the cause of a throw on the session data lane, for the failed card. A frame the decoder
+ * refuses means the two sides of the channel disagree on the framing; a wasm trap means the
+ * terminal core itself died; anything else reads as its own message.
+ */
+export function laneFault(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (typeof WebAssembly !== "undefined" && error instanceof WebAssembly.RuntimeError) {
+    return `terminal core crashed: ${message}`;
+  }
+  if (message.startsWith("session data frame")) {
+    return `protocol skew: ${message}`;
+  }
+  return message;
 }

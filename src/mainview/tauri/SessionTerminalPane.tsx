@@ -1,16 +1,24 @@
-import { getVersion } from "@tauri-apps/api/app";
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ThemeName } from "../../shared/types";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
 import {
   absenceReason,
+  capReason,
   type EndedDisposition,
   type HostListing,
+  laneFault,
   Reconnector,
   resolveTransportEnd,
   type SessionEnd,
+  type SessionMeta,
   type SessionStatus,
   toSessionEnd,
 } from "../terminal/connection";
@@ -21,20 +29,25 @@ import {
   TERMINAL_PAD_Y as PAD_Y,
 } from "../terminal/metrics";
 import { preAttachClass, skewCard, skewOf } from "../terminal/roomDeck";
-import { TerminalRenderer } from "../terminal/renderer";
+import type { RendererOptions, SurfaceRenderer } from "../terminal/renderer";
 import { decodeDataFrame } from "../terminal/dataFrames";
 import { MODS } from "../terminal/input";
+import { sessionStore } from "../terminal/sessionStore";
 import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
+import {
+  type SessionCreate,
+  type SessionFrames,
+  useTerminalServices,
+} from "../terminal/terminalServices";
 import { type CellPos, type MouseButton, type SurfacePos, VtCore } from "../terminal/vtCore";
-/** What a mounted terminal offers its host: paste routing, refit, and connection recovery. */
+
+export type { SessionCreate } from "../terminal/terminalServices";
+
+/** What a mounted terminal offers its host: paste routing and connection recovery. */
 export type TerminalHandle = {
   paste: (text: string) => void;
-  /** Refit the VT to the pane's *settled* size — a splitter drag resizes the
-   *  host without a window resize, and fitting at a stale mid-drag size
-   *  garbles the PTY geometry. */
-  refit: () => void;
-  /** Reattach a dead link now, skipping any scheduled backoff. */
+  /** Recover now: rebuild a lost renderer, or reattach a dead link skipping any scheduled backoff. */
   revive?: () => void;
   /** Claim the write token; the grant arrives as the host's WriterChanged broadcast. */
   takeWrite?: () => void;
@@ -44,9 +57,10 @@ export type TerminalHandle = {
  * SessionTerminalPane — a durable, host-owned pty rendered by our own WebGPU terminal.
  *
  * This is the transport edge: it owns a canvas, wires the pure {@link TerminalController} (VtCore +
- * renderer + a Tauri-backed {@link PtySink}) to the `session_*` commands and `session://` events,
- * and runs the frame loop. All terminal logic lives in the tested `terminal/` modules; this file
- * only bridges them to the live IPC host, so it is the untested, Mac-verified surface — kept thin.
+ * renderer + a {@link PtySink}) to the session link, and runs the frame loop. The platform reaches
+ * it only through {@link useTerminalServices} — the link, the wasm, the renderer — so the pane runs
+ * under happy-dom with a scripted channel, and the tests here are at the edge where a detached
+ * call or a throwing handler actually bites.
  *
  * Connection lifecycle: the host session outlives any one link, so a dead transport (lid close,
  * network change, keepalive timeout) auto-reattaches on the {@link Reconnector}'s backoff — after
@@ -55,6 +69,10 @@ export type TerminalHandle = {
  * immediately when the window becomes visible or the network returns. A shell that exited is a
  * different matter: the pane reports `ended` and its host decides — it leaves the layout, or parks
  * on the scope's ended card. A create spec is spent on the first attach: a reattach never creates.
+ *
+ * The data lane is total: whatever a message provokes — a frame the decoder refuses, a wasm trap,
+ * an allocation failure — the handler returns, the pane parks on the failed card naming the cause,
+ * and the attachment closes. Nothing parks in the channel and nothing grows.
  */
 
 const BLINK_MS = 1060;
@@ -75,36 +93,6 @@ function useThemeName(): ThemeName {
     };
   }, []);
   return name;
-}
-
-/** What the terminal answers to XTVERSION (CSI > q); resolved once. */
-let identityPromise: Promise<string> | null = null;
-function mastIdentity(): Promise<string> {
-  identityPromise ??= getVersion().then(
-    (version) => `mast ${version}`,
-    () => "mast",
-  );
-  return identityPromise;
-}
-
-/** The pinned VT wasm, fetched and compiled once; every pane instantiates its own copy. */
-let wasmPromise: Promise<WebAssembly.Module> | null = null;
-function vtWasm(): Promise<WebAssembly.Module> {
-  wasmPromise ??= fetch("/sail-vt.wasm").then(async (r) => {
-    if (!r.ok) throw new Error(`VT wasm failed to load (${r.status})`);
-    return WebAssembly.compile(await r.arrayBuffer());
-  });
-  return wasmPromise;
-}
-
-export interface SessionCreate {
-  readonly command: string[];
-  readonly cwd: string;
-  readonly project: string;
-  /** Bind the session to a room; the host gates admission and refuses verbatim. */
-  readonly room?: string;
-  readonly cols: number;
-  readonly rows: number;
 }
 
 export interface SessionTerminalProps {
@@ -141,22 +129,11 @@ const noop = () => {};
 let lastWakeProbe = 0;
 const WAKE_PROBE_GAP_MS = 3000;
 
-/**
- * The system clipboard as text: the Rust side (`pbpaste`) first — WKWebView's own clipboard read
- * is gesture-gated and its paste event never fires on a non-editable surface — then the browser
- * API as the non-Tauri fallback. Empty string when both decline.
- */
-async function readClipboard(): Promise<string> {
-  try {
-    return await invoke<string>("clipboard_read_text");
-  } catch {
-    try {
-      return (await navigator.clipboard?.readText()) ?? "";
-    } catch {
-      return "";
-    }
-  }
-}
+/** What the attach effect exposes to the geometry effect: adopt an imposed pty size, or refit. */
+type Geometry = {
+  adopt: (cols: number, rows: number) => void;
+  refit: () => void;
+};
 
 export const SessionTerminalPane = forwardRef<
   TerminalHandle,
@@ -177,6 +154,8 @@ export const SessionTerminalPane = forwardRef<
   },
   ref,
 ) {
+  const services = useTerminalServices();
+  const { link } = services;
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<TerminalController | null>(null);
@@ -201,6 +180,9 @@ export const SessionTerminalPane = forwardRef<
   const seenUnderRef = useRef<string | null>(null);
   /** True once the create spec has been spent — a reattach attaches, never recreates. */
   const createdRef = useRef(false);
+  /** Set while the renderer is the broken part: Retry rebuilds it instead of re-dialing. */
+  const rebuildRef = useRef<(() => void) | null>(null);
+  const geometryRef = useRef<Geometry | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [unseenOutput, setUnseenOutput] = useState(false);
@@ -208,6 +190,14 @@ export const SessionTerminalPane = forwardRef<
   const themeName = useThemeName();
   const palette = paletteFor(themeName);
   const bgCss = `rgb(${palette.bg[0]}, ${palette.bg[1]}, ${palette.bg[2]})`;
+  // What the lane last said about the session, owned by the store so every surface agrees.
+  const lane = useSyncExternalStore(sessionStore.subscribe, () => sessionStore.lane(session));
+  const laneRef = useRef(lane);
+  laneRef.current = lane;
+  const writerFde = useSyncExternalStore(
+    sessionStore.subscribe,
+    () => sessionStore.byName(session)?.writerFde ?? "",
+  );
 
   useEffect(() => {
     onStatus?.(status);
@@ -221,11 +211,16 @@ export const SessionTerminalPane = forwardRef<
   }, []);
 
   /**
-   * The one recovery verb: reattach a dead link now, skipping any scheduled backoff. An ended
-   * shell is not revived here — the pane's host decides what an ending means (the pane leaves the
-   * layout, or parks on its scope's ended card whose Restart mints a fresh session).
+   * The one recovery verb. A lost renderer is rebuilt in place — the session never went anywhere.
+   * Otherwise reattach a dead link now, skipping any scheduled backoff. An ended shell is not
+   * revived here — the pane's host decides what an ending means (the pane leaves the layout, or
+   * parks on its scope's ended card whose Restart mints a fresh session).
    */
   const revive = useCallback(() => {
+    if (rebuildRef.current) {
+      rebuildRef.current();
+      return;
+    }
     reconnector.current.reset();
     reattach();
   }, [reattach]);
@@ -241,8 +236,8 @@ export const SessionTerminalPane = forwardRef<
   }, []);
 
   const pasteFromClipboard = useCallback(() => {
-    void readClipboard().then(tryPaste);
-  }, [tryPaste]);
+    void link.readClipboard().then(tryPaste);
+  }, [link, tryPaste]);
 
   const copySelection = useCallback((): boolean => {
     const text = controllerRef.current?.selectedText() ?? "";
@@ -251,21 +246,19 @@ export const SessionTerminalPane = forwardRef<
     return true;
   }, []);
 
-  // Drop-to-paste routes through here; the pane refits itself from its own ResizeObserver, so the
-  // workbench's post-splitter-drag refit is a no-op. A drop is scripted insertion (single-line
-  // shell-quoted paths), not a clipboard paste — never parked on the confirm card.
+  // Drop-to-paste routes through here. A drop is scripted insertion (single-line shell-quoted
+  // paths), not a clipboard paste — never parked on the confirm card.
   useImperativeHandle(
     ref,
     () => ({
       paste: (text: string) => controllerRef.current?.paste(text, { force: true }),
-      refit: () => {},
       revive,
       takeWrite: () => {
         const id = attachIdRef.current;
-        if (id) void invoke("session_take_write", { id }).catch(noop);
+        if (id) void link.takeWrite(id).catch(noop);
       },
     }),
-    [revive],
+    [link, revive],
   );
 
   // A lid reopening or the network returning is the moment a waiting retry should fire — the user
@@ -285,7 +278,7 @@ export const SessionTerminalPane = forwardRef<
       // channel-opens would serialize the backend for nothing.
       if (s.kind === "up" && Date.now() - lastWakeProbe > WAKE_PROBE_GAP_MS) {
         lastWakeProbe = Date.now();
-        void invoke("session_list", { socketPath, token }).catch(noop);
+        void link.list(socketPath, token).catch(noop);
       }
     };
     const onVisible = () => {
@@ -297,7 +290,7 @@ export const SessionTerminalPane = forwardRef<
       window.removeEventListener("online", wake);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [reattach, socketPath, token]);
+  }, [link, reattach, socketPath, token]);
 
   // The retry timer must survive effect re-runs (a theme flip mid-wait) and die with the pane.
   useEffect(() => () => clearTimeout(retryTimer.current), []);
@@ -335,16 +328,29 @@ export const SessionTerminalPane = forwardRef<
     if (active !== false && visible) hostRef.current?.focus();
   }, [active, visible, epoch]);
 
+  // Another writer's geometry binds this pane: the core letterboxes to the pty's size (so output
+  // wraps as the writer sees it) until the write token moves and the fit is ours again.
+  const ptySize = lane.ptySize;
+  useEffect(() => {
+    if (ptySize) geometryRef.current?.adopt(ptySize.cols, ptySize.rows);
+    else geometryRef.current?.refit();
+  }, [ptySize]);
+
   useEffect(() => {
     const host = hostRef.current;
     const canvas = canvasRef.current;
     if (!host || !canvas) return;
 
     let disposed = false;
+    /** The lane threw: nothing more is fed or drawn until the user retries. */
+    let halted = false;
+    /** The session's ending was heard (or the open rejected): this attach is over, whatever the open resolves to. */
+    let ended = false;
     let raf = 0;
     const cleanups: Array<() => void> = [];
     const id = crypto.randomUUID();
     attachIdRef.current = id;
+    rebuildRef.current = null;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
     /**
@@ -376,9 +382,11 @@ export const SessionTerminalPane = forwardRef<
      * listing failing means the link itself is down — the reconnect path's own case.
      */
     const onEnd = (end: SessionEnd) => {
-      if (disposed) return;
+      if (disposed || halted || ended) return;
+      ended = true;
       if (end.klass !== "transport") return park(end);
-      void invoke<HostListing>("session_list", { socketPath, token })
+      void link
+        .list(socketPath, token)
         .then(
           (listing) => listing,
           () => null,
@@ -388,26 +396,45 @@ export const SessionTerminalPane = forwardRef<
         );
     };
 
+    /**
+     * The data lane threw: park on the cause, close the attachment, feed nothing more. An attach
+     * whose ending was already heard keeps that card: the session is over, not faulty.
+     */
+    const fail = (reason: string) => {
+      if (halted || ended) return;
+      halted = true;
+      rebuildRef.current = null;
+      setStatus({ kind: "failed", reason });
+      void link.close(id).catch(noop);
+    };
+
     const run = async () => {
       await waitStableSize(host);
       if (disposed) return;
 
-      const [renderer, wasm] = await Promise.all([
-        TerminalRenderer.create(canvas, {
-          fontFamily: FONT_FAMILY,
-          fontPx: FONT_PX,
-          dpr,
-          bg: palette.bg,
-          fg: palette.fg,
-          cursor: palette.cursor,
-          selectionBg: palette.selectionBg,
-          selectionFg: palette.selectionFg,
-          onError: (message) => {
-            if (!disposed) setStatus({ kind: "failed", reason: message });
-          },
-        }),
-        vtWasm(),
+      let rebuilding = false;
+      let rendererFailed = false;
+      // Assigned once the controller exists; a loss reported before that has nothing to rebuild.
+      let rebuildRenderer: (reason: string) => void = noop;
+      const rendererOptions: RendererOptions = {
+        fontFamily: FONT_FAMILY,
+        fontPx: FONT_PX,
+        dpr,
+        bg: palette.bg,
+        fg: palette.fg,
+        cursor: palette.cursor,
+        selectionBg: palette.selectionBg,
+        selectionFg: palette.selectionFg,
+        onError: (message) => {
+          if (!disposed) setStatus({ kind: "failed", reason: message });
+        },
+        onLost: (reason) => rebuildRenderer(reason),
+      };
+      const [created, wasm] = await Promise.all([
+        services.createRenderer(canvas, rendererOptions),
+        services.wasm(),
       ]);
+      let renderer: SurfaceRenderer = created;
       if (disposed) return void renderer.destroy();
       cleanups.push(() => renderer.destroy());
 
@@ -430,7 +457,7 @@ export const SessionTerminalPane = forwardRef<
       const sized = host.clientWidth > 0 && host.clientHeight > 0;
       let { cols, rows } = sized ? fit() : { cols: 80, rows: 24 };
       const core = await VtCore.create(wasm, cols, rows, palette, {
-        identity: await mastIdentity(),
+        identity: await services.identity(),
         scheme: themeName === "light" ? "light" : "dark",
       });
       if (disposed) return void core.free();
@@ -439,53 +466,151 @@ export const SessionTerminalPane = forwardRef<
       paint(cols, rows);
 
       const sink: PtySink = {
-        // Raw body, id in a header: no JSON number array per keystroke byte.
-        write: (bytes) =>
-          void invoke("session_write", bytes, { headers: { "x-mast-session": id } }).catch(noop),
-        resize: (c, r) => void invoke("session_resize", { id, cols: c, rows: r }).catch(noop),
+        write: (bytes) => void link.write(id, bytes).catch(noop),
+        resize: (c, r) => void link.resize(id, c, r).catch(noop),
       };
       const controller = new TerminalController(core, renderer, sink);
       controllerRef.current = controller;
+      cleanups.push(() => controller.dispose());
+
+      /**
+       * The pixels went away, not the terminal: build a fresh renderer on the same canvas and
+       * repaint it from the core. A rebuild that fails parks on the failed card, whose Retry is
+       * this same verb — never a re-dial, the session is fine. A rebuild that settles after the
+       * attach is over (a fault, or the session's ending) touches nothing: that card stands.
+       */
+      const over = () => disposed || halted || ended;
+      rebuildRenderer = (reason: string) => {
+        if (over() || rebuilding) return;
+        rebuilding = true;
+        renderer.destroy();
+        void services.createRenderer(canvas, rendererOptions).then(
+          (next) => {
+            if (over()) return void next.destroy();
+            renderer = next;
+            try {
+              controller.replaceRenderer(next);
+            } catch (e) {
+              rebuilding = false;
+              fail(laneFault(e));
+              return;
+            }
+            rebuilding = false;
+            rebuildRef.current = null;
+            if (rendererFailed) {
+              rendererFailed = false;
+              setStatus({ kind: "up" });
+            }
+          },
+          (e) => {
+            if (over()) return;
+            rebuilding = false;
+            rendererFailed = true;
+            rebuildRef.current = () => rebuildRenderer(reason);
+            const message = e instanceof Error ? e.message : String(e);
+            setStatus({ kind: "failed", reason: `${reason}; rebuild failed: ${message}` });
+          },
+        );
+      };
 
       controller.hooks.onClipboard = (text) =>
         void navigator.clipboard?.writeText(text).catch(noop);
       controller.hooks.onTitle = (title) => onTitleRef.current?.(title);
-      // One ordered raw channel carries bytes AND replay markers: a mid-stream replay means the
-      // host dropped part of the stream (flow-control pause) and is re-baselining us — the
-      // terminal resets so the snapshot lands clean, then snaps back to the live view.
-      const onData = new Channel<ArrayBuffer>();
-      onData.onmessage = (message) => {
-        if (disposed) return;
-        const frame = decodeDataFrame(message);
-        if (frame.kind === "bytes") {
-          controller.feed(frame.data);
-        } else if (frame.kind === "replay-begin") {
-          controller.resetForReplay();
-        } else {
-          controller.endReplay();
-          controller.scroll("bottom");
-          // The replay just restored the app's modes; a pane without keyboard focus owes it a
-          // focus-lost report (the attach itself is assumed focused, which is wrong for a split's
-          // far side or a view that is not on screen).
-          if (!hasFocusRef.current) {
-            controller.setFocus(false);
-          }
+
+      const setGeom = () => {
+        geomRef.current = { cw: cellW / dpr, ch: cellH / dpr, cols, rows };
+        cellWidthDeviceRef.current = cellW;
+      };
+      setGeom();
+
+      const apply = (next: { cols: number; rows: number }, silent: boolean) => {
+        if (next.cols === cols && next.rows === rows) return;
+        cols = next.cols;
+        rows = next.rows;
+        paint(cols, rows);
+        controller.resize(cols, rows, { silent });
+        setGeom();
+      };
+      // A geometry change is part of the data lane: a size the core refuses, or a grid it cannot
+      // allocate, parks this pane on its card — it never escapes into React and unmounts the app.
+      const contained = (change: () => void) => {
+        if (disposed || halted) return;
+        try {
+          change();
+        } catch (e) {
+          fail(laneFault(e));
         }
       };
-      cleanups.push(
-        await listen<{ kind: string; fde?: string }>(`session://meta/${id}`, (e) => {
-          if (e.payload.kind === "writer_changed") {
-            onWriterRef.current?.(e.payload.fde ?? "");
+      const refit = () =>
+        contained(() => {
+          if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden tab
+          apply(fit(), false);
+        });
+      const adopt = (c: number, r: number) => contained(() => apply({ cols: c, rows: r }, true));
+      geometryRef.current = { adopt, refit };
+      cleanups.push(() => {
+        geometryRef.current = null;
+      });
+
+      /** Facts about the session, not this pane: they land in the store and render from it. */
+      const onMeta = (meta: SessionMeta) => {
+        switch (meta.kind) {
+          case "writer_changed":
+            sessionStore.noteWriterChanged(session, meta.fde);
+            onWriterRef.current?.(meta.fde);
+            return;
+          case "resized":
+            // Output after this frame is already in the new geometry: adopt it before the next
+            // byte, not on the effect the store update schedules.
+            adopt(meta.cols, meta.rows);
+            if (!halted) sessionStore.noteResized(session, meta.cols, meta.rows);
+            return;
+          case "paused":
+            sessionStore.notePaused(session, true);
+            return;
+          case "continued":
+            sessionStore.notePaused(session, false);
+            return;
+          case "unknown":
+            return;
+        }
+      };
+      // One ordered raw channel carries everything the session says, so a resize or an ending
+      // lands after the bytes that preceded it. A mid-stream replay means the host dropped part
+      // of the stream (flow-control pause) and is re-baselining us — the terminal resets so the
+      // snapshot lands clean, then snaps back to the live view. Total: a throw here parks the
+      // pane, it never parks the channel.
+      const onFrame: SessionFrames = (message) => {
+        if (disposed) return;
+        try {
+          const frame = decodeDataFrame(message);
+          if (frame.kind === "meta") return onMeta(frame.meta);
+          if (frame.kind === "exit") return onEnd(frame.end);
+          if (halted) return;
+          if (frame.kind === "bytes") {
+            controller.feed(frame.data);
+          } else if (frame.kind === "replay-begin") {
+            controller.resetForReplay();
+          } else {
+            controller.endReplay();
+            controller.scroll("bottom");
+            // The replay just restored the app's modes; a pane without keyboard focus owes it a
+            // focus-lost report (the attach itself is assumed focused, which is wrong for a
+            // split's far side or a view that is not on screen).
+            if (!hasFocusRef.current) {
+              controller.setFocus(false);
+            }
           }
-        }),
-      );
-      cleanups.push(await listen<unknown>(`session://exit/${id}`, (e) => onEnd(toSessionEnd(e.payload))));
+        } catch (e) {
+          fail(laneFault(e));
+        }
+      };
 
       try {
         // Reattach when the named session is already live; create it only when the host asked
         // for a create (a launch). Absent with no create is an ending to report — never a
         // silent recreate, and never a refusal to retry into.
-        const listing = await invoke<HostListing>("session_list", { socketPath, token });
+        const listing = await link.list(socketPath, token);
         if (disposed) return;
         const alive = listing.sessions.some((s) => s.name === session && s.live);
         const spec = createdRef.current ? undefined : create;
@@ -497,17 +622,29 @@ export const SessionTerminalPane = forwardRef<
           return;
         }
         seenUnderRef.current = listing.hostBootId;
+        // The channel is live before the open resolves (the host streams as soon as it attaches),
+        // so the lane starts clean here — a fact heard during the open is this attach's own.
+        sessionStore.noteAttached(session);
         // Resolves only once the host has acknowledged Create and Attach: a link that drops
         // before that keeps the create for the next attempt, since nothing was created.
-        await invoke("session_open", {
-          id,
-          socketPath,
-          token,
-          session,
-          write,
-          create: alive || !spec ? null : { ...spec, cols, rows },
-          onData,
-        });
+        const detach = await link.open(
+          {
+            id,
+            socketPath,
+            token,
+            session,
+            write,
+            create: alive || !spec ? null : { ...spec, cols, rows },
+          },
+          onFrame,
+        );
+        if (disposed) {
+          // The unmount's close ran before the host registered this attachment; close it now.
+          detach();
+          await link.close(id).catch(noop);
+          return;
+        }
+        cleanups.push(detach);
         createdRef.current = true;
       } catch (e) {
         // An open rejects with the same `{class, reason}` an ending carries; a listing rejects
@@ -517,7 +654,10 @@ export const SessionTerminalPane = forwardRef<
         onEnd(end.klass === "transport" ? { ...end, klass: preAttachClass(end.reason) } : end);
         return;
       }
-      if (disposed) return;
+      // The channel may already have failed on a frame the open streamed, or carried the ending
+      // (a shell that exited at once, a link that dropped right after attaching): that card — and
+      // the retry it may have scheduled — stands; the open resolving settles nothing.
+      if (halted || ended) return;
       // A theme flip can re-run this effect and attach while a retry timer still pends; landing
       // here settles the connection, so a stale timer must not force another remount.
       clearTimeout(retryTimer.current);
@@ -529,32 +669,23 @@ export const SessionTerminalPane = forwardRef<
       if (sized) {
         sink.resize(cols, rows);
       }
-      const setGeom = () => {
-        geomRef.current = { cw: cellW / dpr, ch: cellH / dpr, cols, rows };
-        cellWidthDeviceRef.current = cellW;
-      };
-      setGeom();
 
+      // Every layout tick reflows locally; the controller tells the pty once the size settles.
+      // While another writer's size binds, the pane's own size is a letterbox, not a geometry.
       const observer = new ResizeObserver(() => {
-        if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden tab
-        const next = fit();
-        if (next.cols !== cols || next.rows !== rows) {
-          cols = next.cols;
-          rows = next.rows;
-          paint(cols, rows);
-          controller.resize(cols, rows);
-          setGeom();
-        }
+        if (laneRef.current.ptySize) return;
+        refit();
       });
       observer.observe(host);
       cleanups.push(() => observer.disconnect());
 
       const start = performance.now();
       const loop = (now: number) => {
-        if (disposed) return;
+        if (disposed || halted) return;
         // A hidden pane keeps its session and buffers bytes, but burns no GPU: skip the draw and
-        // let the accumulated damage paint in one catch-up frame on reveal.
-        if (!visibleRef.current) {
+        // let the accumulated damage paint in one catch-up frame on reveal. A renderer mid-rebuild
+        // has nothing to draw on yet.
+        if (!visibleRef.current || rebuilding) {
           raf = requestAnimationFrame(loop);
           return;
         }
@@ -568,7 +699,8 @@ export const SessionTerminalPane = forwardRef<
             setUnseenOutput(unseen);
           }
         } catch (e) {
-          if (!disposed) setStatus({ kind: "failed", reason: e instanceof Error ? e.message : String(e) });
+          fail(laneFault(e));
+          return;
         }
         raf = requestAnimationFrame(loop);
       };
@@ -588,7 +720,7 @@ export const SessionTerminalPane = forwardRef<
       disposed = true;
       cancelAnimationFrame(raf);
       controllerRef.current = null;
-      void invoke("session_close", { id }).catch(noop);
+      void link.close(id).catch(noop);
       for (const cleanup of cleanups.reverse()) {
         try {
           cleanup();
@@ -599,7 +731,7 @@ export const SessionTerminalPane = forwardRef<
     };
     // The session identity — not the one-shot create spec — is the dependency; `epoch` re-dials it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socketPath, token, session, write, themeName, epoch]);
+  }, [services, socketPath, token, session, write, themeName, epoch]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     const controller = controllerRef.current;
@@ -806,6 +938,20 @@ export const SessionTerminalPane = forwardRef<
       }}
     >
       <canvas ref={canvasRef} />
+      {(lane.ptySize || lane.paused) && (
+        <div className="term-chips">
+          {lane.ptySize && (
+            <span className="term-chip" data-testid="term-pty-size">
+              sized by {writerFde || "the writer"} to {lane.ptySize.cols}×{lane.ptySize.rows}
+            </span>
+          )}
+          {lane.paused && (
+            <span className="term-chip term-chip--paused" data-testid="term-paused">
+              paused
+            </span>
+          )}
+        </div>
+      )}
       {unseenOutput && (
         <button
           type="button"
@@ -904,7 +1050,7 @@ function previewOf(text: string): string {
 }
 
 /** The overlay card for a non-up status; null when the terminal should stand alone. */
-function overlayFor(status: SessionStatus): {
+export function overlayFor(status: SessionStatus): {
   title: string;
   reason?: string;
   action?: string;
@@ -924,13 +1070,13 @@ function overlayFor(status: SessionStatus): {
     case "down":
       return {
         title: "Connection lost — retrying…",
-        reason: status.reason,
+        reason: capReason(status.reason),
         action: "Reconnect now",
         tone: "warn",
         spin: true,
       };
     case "ended":
-      return { title: `Shell ended (${status.reason})`, tone: "muted" };
+      return { title: `Shell ended (${capReason(status.reason)})`, tone: "muted" };
     case "failed": {
       // A protocol skew is not a fault to retry into — name the older side and
       // the fix; the pane recovers only after one end is upgraded.
@@ -941,7 +1087,7 @@ function overlayFor(status: SessionStatus): {
       }
       return {
         title: "Terminal failed",
-        reason: status.reason,
+        reason: capReason(status.reason),
         action: "Retry",
         tone: "warn",
       };

@@ -334,8 +334,8 @@ struct SessionCreate {
     rows: u32,
 }
 
-/// How `session_open` fails: the same `{class, reason}` shape as a `session://exit` payload, so
-/// the pane reads a failure before the attach exactly like one after it.
+/// How `session_open` fails: the same `{class, reason}` shape as the ending frame on the session
+/// channel, so the pane reads a failure before the attach exactly like one after it.
 #[derive(serde::Serialize)]
 struct SessionEnd {
     class: &'static str,
@@ -360,12 +360,11 @@ impl From<String> for SessionEnd {
 
 /// Attach a terminal to a host-owned pty session over SSH direct-streamlocal. Resolves once the
 /// host has acknowledged the (optional) Create and the Attach; a failure before that is the
-/// rejection, as `{class, reason}`. Output and replay markers then arrive as raw frames on
-/// `on_data` (see `session_frames`), the ending on `session://exit/{id}`, terminal-state changes
-/// on `session://meta/{id}`. A `create` mints the session first (durable, survives the app).
+/// rejection, as `{class, reason}`. Everything after — output, replay markers, terminal-state
+/// changes, the ending — arrives as raw frames on `on_data`, in order (see `session_frames`). A
+/// `create` mints the session first (durable, survives the app).
 #[tauri::command]
 async fn session_open(
-    app: AppHandle,
     state: State<'_, AppState>,
     id: String,
     socket_path: String,
@@ -391,7 +390,7 @@ async fn session_open(
     state
         .backend()
         .await?
-        .session_open(app, id, socket_path, req, on_data)
+        .session_open(id, socket_path, req, on_data)
         .await
         .map_err(SessionEnd::from)
 }

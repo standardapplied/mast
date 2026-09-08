@@ -23,7 +23,7 @@ describe("terminal font metrics", () => {
   });
 
   test("SessionTerminalPane sources its metrics from this module alone", async () => {
-    // The pane imports @tauri-apps/* so it cannot load under bun test; pin its source.
+    // Pinned at the source: the guard is about where the constants come from, not their values.
     const source = await Bun.file(
       new URL("../tauri/SessionTerminalPane.tsx", import.meta.url).pathname,
     ).text();

@@ -19,6 +19,10 @@ pub const MAX_FRAME: usize = 1 << 20;
 /// The host clamps a session listing page to this many entries.
 pub const PAGE_LIMIT: u32 = 16;
 
+/// Input toward the pty travels in frames of at most this many bytes: a paste larger than
+/// [`MAX_FRAME`] would otherwise be one frame the host refuses, closing the connection.
+pub const INPUT_CHUNK: usize = 64 * 1024;
+
 /// One session as the host lists it. `name` is reusable across lives; `instance_id` names this
 /// life of it, minted at create and never reused, so two corpses of one name are distinguishable.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -590,8 +594,12 @@ where
             }
             cmd = cmds.recv() => match cmd {
                 Some(SessionCmd::Input(bytes)) => {
-                    seq += 1;
-                    write_frame(&mut wr, &Frame::Input { seq, bytes }).await?;
+                    // The byte stream is split verbatim, so bracketed-paste markers ride the
+                    // first and last chunk and the pty sees exactly the bytes that were sent.
+                    for chunk in input_chunks(&bytes) {
+                        seq += 1;
+                        write_frame(&mut wr, &Frame::Input { seq, bytes: chunk.to_vec() }).await?;
+                    }
                 }
                 Some(SessionCmd::Resize { cols, rows }) => {
                     write_frame(&mut wr, &Frame::Resize { cols, rows }).await?;
@@ -606,6 +614,15 @@ where
             }
         }
     }
+}
+
+/// One input command as the frames it travels in: at most [`INPUT_CHUNK`] bytes each, and an
+/// empty write still goes out as one empty frame (it is a command, not silence).
+fn input_chunks(bytes: &[u8]) -> Vec<&[u8]> {
+    if bytes.is_empty() {
+        return vec![bytes];
+    }
+    bytes.chunks(INPUT_CHUNK).collect()
 }
 
 /// Aborts a spawned task when the driver returns, so a reader parked on a quiet
@@ -1417,5 +1434,74 @@ mod async_tests {
         assert_eq!(ev_rx.recv().await.unwrap(), SessionEvent::Ended("exited(0)".into()));
         driver.await.unwrap().unwrap();
         host.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_paste_larger_than_a_frame_arrives_as_chunks_that_reassemble_verbatim() {
+        let (client, mut server) = duplex(4096);
+        // A bracketed paste past the host's frame cap: the markers must ride the first and
+        // last chunk, and the pty must see exactly these bytes, in this order.
+        let mut paste = b"\x1b[200~".to_vec();
+        paste.extend(std::iter::repeat(b'p').take(MAX_FRAME + INPUT_CHUNK / 2));
+        paste.extend_from_slice(b"\x1b[201~");
+        let expected = paste.clone();
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            assert!(matches!(read_frame(&mut server).await.unwrap(), Frame::Attach { .. }));
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
+            let mut seen = Vec::new();
+            let mut seqs = Vec::new();
+            while seen.len() < expected.len() {
+                match read_frame(&mut server).await.unwrap() {
+                    Frame::Input { seq, bytes } => {
+                        assert!(bytes.len() <= INPUT_CHUNK, "chunk of {} bytes", bytes.len());
+                        seqs.push(seq);
+                        seen.extend(bytes);
+                    }
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+            assert_eq!(seen, expected, "the chunks concatenate to the original paste");
+            let count = seqs.len() as i64;
+            assert_eq!(seqs, (1..=count).collect::<Vec<_>>(), "one seq per chunk, in order");
+            assert!(count >= 17, "{} chunks", count);
+            write_frame(&mut server, &Frame::SessionEnded("done".into())).await.unwrap();
+        });
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+        let driver = tokio::spawn(async move {
+            drive(
+                client,
+                AttachRequest {
+                    token: "t".into(),
+                    session: "s".into(),
+                    write: true,
+                    create: None,
+                },
+                cmd_rx,
+                move |ev| {
+                    let _ = ev_tx.send(ev);
+                },
+            )
+            .await
+        });
+        cmd_tx.send(SessionCmd::Input(paste)).await.unwrap();
+        loop {
+            if let SessionEvent::Ended(reason) = ev_rx.recv().await.unwrap() {
+                assert_eq!(reason, "done");
+                break;
+            }
+        }
+        driver.await.unwrap().unwrap();
+        host.await.unwrap();
+    }
+
+    #[test]
+    fn input_chunking_keeps_an_empty_write_and_splits_at_the_cap() {
+        assert_eq!(input_chunks(b""), vec![&b""[..]]);
+        assert_eq!(input_chunks(b"abc"), vec![&b"abc"[..]]);
+        let big = vec![1u8; INPUT_CHUNK * 2 + 1];
+        let chunks = input_chunks(&big);
+        assert_eq!(chunks.iter().map(|c| c.len()).collect::<Vec<_>>(), vec![INPUT_CHUNK, INPUT_CHUNK, 1]);
     }
 }

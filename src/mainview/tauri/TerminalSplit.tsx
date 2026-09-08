@@ -112,18 +112,10 @@ export function TerminalSplit({
   const [confirmDel, setConfirmDel] = useState<FileEntry[] | null>(null);
   const [pendingViewer, setPendingViewer] = useState<PendingViewerAction | null>(null);
 
-  // A splitter drag resizes the terminal without a window resize; refit the VT
-  // once the drag settles so the PTY geometry never sticks at a stale size.
-  const refitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const scheduleRefit = () => {
-    clearTimeout(refitTimer.current);
-    refitTimer.current = setTimeout(() => termRef.current?.refit(), 120);
-  };
-  useEffect(() => () => clearTimeout(refitTimer.current), []);
-
+  // A splitter drag resizes the terminal without a window resize; the pane follows every layout
+  // tick from its own ResizeObserver and tells the pty once the geometry settles.
   const setPane = (pane: keyof PaneWidths) => (width: number) => {
     setWidths((w) => ({ ...w, [pane]: width }));
-    scheduleRefit();
   };
   const commitPane = (pane: keyof PaneWidths) => (width: number) => {
     setWidths((w) => {
@@ -131,7 +123,6 @@ export function TerminalSplit({
       saveWidths(localStorage, target, next);
       return next;
     });
-    scheduleRefit();
   };
 
   const transfer = () => crypto.randomUUID();

@@ -38,8 +38,13 @@ export interface RendererOptions {
   /** Selection highlight background and the text color drawn over it. */
   readonly selectionBg: Rgb;
   readonly selectionFg: Rgb;
-  /** Reports an async GPU error (uncaptured validation error, device loss) that no throw surfaces. */
+  /** Reports an async GPU error (an uncaptured validation error) that no throw surfaces. */
   readonly onError?: (message: string) => void;
+  /**
+   * The device or context is gone (the GPU reset, the system reclaimed it) and this renderer will
+   * never draw again: the owner builds a new one on the same canvas and repaints from the core.
+   */
+  readonly onLost?: (reason: string) => void;
   /** Where the glyph atlas draws; defaults to an OffscreenCanvas. */
   readonly raster?: RasterFactory;
 }
@@ -71,7 +76,16 @@ interface Backend {
   destroy(): void;
 }
 
-export class TerminalRenderer implements Renderer {
+/** What a pane needs from a renderer bound to its canvas: the controller seam plus its geometry and end. */
+export interface SurfaceRenderer extends Renderer {
+  readonly cellSize: { w: number; h: number };
+  destroy(): void;
+}
+
+/** How long a lost WebGL context may take to come back before a rebuild gives up on it. */
+const GL_RESTORE_TIMEOUT_MS = 5000;
+
+export class TerminalRenderer implements SurfaceRenderer {
   private readonly opts: RendererOptions;
   private readonly atlas: GlyphAtlas;
   private backend!: Backend;
@@ -111,7 +125,7 @@ export class TerminalRenderer implements Renderer {
   static async create(canvas: HTMLCanvasElement, opts: RendererOptions): Promise<TerminalRenderer> {
     const self = new TerminalRenderer(opts);
     self.backend =
-      (await WebGpuBackend.tryCreate(canvas, opts.onError)) ?? WebGl2Backend.create(canvas);
+      (await WebGpuBackend.tryCreate(canvas, opts)) ?? (await WebGl2Backend.create(canvas, opts));
     return self;
   }
 
@@ -260,7 +274,7 @@ class WebGpuBackend implements Backend {
 
   static async tryCreate(
     canvas: HTMLCanvasElement,
-    onError?: (message: string) => void,
+    { onError, onLost }: Pick<RendererOptions, "onError" | "onLost">,
   ): Promise<WebGpuBackend | null> {
     const gpu = (navigator as unknown as { gpu?: GPU }).gpu;
     if (!gpu) return null;
@@ -271,8 +285,11 @@ class WebGpuBackend implements Backend {
       device.addEventListener("uncapturederror", (event) => {
         onError(`GPU error: ${(event as GPUUncapturedErrorEvent).error.message}`);
       });
-      void device.lost.then((info) => onError(`GPU device lost: ${info.message}`));
     }
+    // Our own destroy() also settles `lost`, with reason "destroyed"; that is an end, not a loss.
+    void device.lost.then((info) => {
+      if (info.reason !== "destroyed") onLost?.(`GPU device lost: ${info.message}`);
+    });
     const ctx = canvas.getContext("webgpu") as GPUCanvasContext | null;
     if (!ctx) return null;
     const format = gpu.getPreferredCanvasFormat();
@@ -521,11 +538,27 @@ class WebGl2Backend implements Backend {
     private readonly bgVao: WebGLVertexArrayObject,
     private readonly fgVao: WebGLVertexArrayObject,
     private readonly tex: WebGLTexture,
+    private readonly unwatch: () => void,
   ) {}
 
-  static create(canvas: HTMLCanvasElement): WebGl2Backend {
+  /**
+   * A canvas hands out one WebGL context for its lifetime, so a rebuild after a loss gets the same
+   * context back and must wait for the browser to restore it before compiling anything into it.
+   */
+  static async create(
+    canvas: HTMLCanvasElement,
+    { onLost }: Pick<RendererOptions, "onLost">,
+  ): Promise<WebGl2Backend> {
     const gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
     if (!gl) throw new Error("TerminalRenderer: neither WebGPU nor WebGL2 is available.");
+    if (gl.isContextLost()) await contextRestored(canvas);
+    // preventDefault tells the browser we want the context back; the owner rebuilds on the report.
+    const lost = (event: Event) => {
+      event.preventDefault();
+      onLost?.("WebGL context lost");
+    };
+    canvas.addEventListener("webglcontextlost", lost);
+    const unwatch = () => canvas.removeEventListener("webglcontextlost", lost);
     const bgProg = link(gl, GL_BG_VS, GL_BG_FS);
     const fgProg = link(gl, GL_FG_VS, GL_FG_FS);
     const bgBuf = gl.createBuffer()!;
@@ -546,7 +579,7 @@ class WebGl2Backend implements Backend {
     const tex = gl.createTexture()!;
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    return new WebGl2Backend(canvas, gl, bgProg, fgProg, bgBuf, fgBuf, bgVao, fgVao, tex);
+    return new WebGl2Backend(canvas, gl, bgProg, fgProg, bgBuf, fgBuf, bgVao, fgVao, tex, unwatch);
   }
 
   resize(pxW: number, pxH: number): void {
@@ -607,9 +640,24 @@ class WebGl2Backend implements Backend {
   }
 
   destroy(): void {
-    const l = this.gl.getExtension("WEBGL_lose_context");
-    l?.loseContext();
+    this.unwatch();
+    if (this.gl.isContextLost()) return;
+    this.gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
+}
+
+function contextRestored(canvas: HTMLCanvasElement): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      canvas.removeEventListener("webglcontextrestored", restored);
+      reject(new Error("WebGL context lost and not restored"));
+    }, GL_RESTORE_TIMEOUT_MS);
+    const restored = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    canvas.addEventListener("webglcontextrestored", restored, { once: true });
+  });
 }
 
 function link(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {

@@ -37,10 +37,24 @@ export interface PtySink {
   resize(cols: number, rows: number): void;
 }
 
+/** The timers a resize settles on; injected so the trailing-edge behavior is testable without waiting. */
+export interface Timers {
+  set(fn: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+}
+
 export interface ControllerOptions {
   /** Monotonic milliseconds; injected so the synchronized-output cap is testable. */
   readonly now?: () => number;
+  readonly timers?: Timers;
 }
+
+/**
+ * How long the geometry must hold before the pty hears it. A splitter drag resizes the pane every
+ * layout tick; the local reflow follows each tick, but the host — which forces a `Resized` at every
+ * other subscriber per SIGWINCH — hears only where the drag settled.
+ */
+export const RESIZE_SETTLE_MS = 60;
 
 /**
  * How long a frame may be held under synchronized output (mode 2026). An app that begins a
@@ -61,6 +75,8 @@ export class TerminalController {
   private syncSince: number | null = null;
   private replaying = false;
   private readonly now: () => number;
+  private readonly timers: Timers;
+  private pendingResize: unknown = null;
 
   /** Side-channel intents found in the stream; the host wires these to the platform. */
   readonly hooks: {
@@ -71,11 +87,15 @@ export class TerminalController {
 
   constructor(
     private readonly core: VtCore,
-    private readonly renderer: Renderer,
+    private renderer: Renderer,
     private readonly sink: PtySink,
     options: ControllerOptions = {},
   ) {
     this.now = options.now ?? (() => performance.now());
+    this.timers = options.timers ?? {
+      set: (fn, ms) => setTimeout(fn, ms),
+      clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    };
     const size = core.size;
     this.cols = size.cols;
     this.rows = size.rows;
@@ -338,11 +358,14 @@ export class TerminalController {
   }
 
   /**
-   * Resizes the terminal to {@code cols}×{@code rows}: VtCore reflows, the renderer resizes its
-   * surface, and the pty learns the new geometry (SIGWINCH). A no-op when the size is unchanged, so
-   * a stream of identical resize events costs nothing.
+   * Resizes the terminal to {@code cols}×{@code rows}: VtCore reflows and the renderer resizes its
+   * surface at once; the pty learns the geometry (SIGWINCH) once it has held for
+   * {@link RESIZE_SETTLE_MS}. {@code silent} adopts a size the pty already has — another writer
+   * resized it — so nothing is announced back. A no-op when the size is unchanged, so a stream of
+   * identical resize events costs nothing.
    */
-  resize(cols: number, rows: number): void {
+  resize(cols: number, rows: number, opts: { silent?: boolean } = {}): void {
+    this.cancelPendingResize();
     if (cols === this.cols && rows === this.rows) {
       return;
     }
@@ -350,9 +373,38 @@ export class TerminalController {
     this.rows = rows;
     this.core.resize(cols, rows);
     this.renderer.resize(cols, rows);
-    this.sink.resize(cols, rows);
     this.dirty = true;
     this.redraw = true;
+    if (!opts.silent) {
+      this.pendingResize = this.timers.set(() => {
+        this.pendingResize = null;
+        this.sink.resize(cols, rows);
+      }, RESIZE_SETTLE_MS);
+    }
+  }
+
+  private cancelPendingResize(): void {
+    if (this.pendingResize !== null) {
+      this.timers.clear(this.pendingResize);
+      this.pendingResize = null;
+    }
+  }
+
+  /**
+   * Swaps in a fresh renderer (the GPU device or GL context was lost and rebuilt) and repaints it
+   * whole from the core: the terminal state never left, only the pixels did.
+   */
+  replaceRenderer(renderer: Renderer): void {
+    this.renderer = renderer;
+    renderer.resize(this.cols, this.rows);
+    renderer.apply(this.core.readAll());
+    this.lastCursor = null;
+    this.redraw = true;
+  }
+
+  /** Drops a pending pty resize; the pane is going away and the sink with it. */
+  dispose(): void {
+    this.cancelPendingResize();
   }
 
   get size(): { cols: number; rows: number } {

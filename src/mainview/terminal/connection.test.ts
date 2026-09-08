@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   absenceReason,
+  capReason,
   HOST_RESTARTED,
+  laneFault,
+  MAX_REASON_CHARS,
   isUnwell,
   NOT_RUNNING,
   Reconnector,
@@ -11,6 +14,7 @@ import {
   STABLE_MS,
   statusEqual,
   toSessionEnd,
+  toSessionMeta,
   worstStatus,
 } from "./connection";
 
@@ -188,5 +192,62 @@ describe("resolveTransportEnd — one reconcile listing before any backoff", () 
     expect(resolveTransportEnd(ended, "mast-a", "boot-1", null)).toEqual(ended);
     const refused: SessionEnd = { klass: "refused", reason: "no" };
     expect(resolveTransportEnd(refused, "mast-a", "boot-1", listing(false))).toEqual(refused);
+  });
+});
+
+describe("laneFault — a throw on the data lane names its cause", () => {
+  test("a frame the decoder refuses is a protocol skew", () => {
+    expect(laneFault(new Error("session data frame: unknown tag 9"))).toBe(
+      "protocol skew: session data frame: unknown tag 9",
+    );
+  });
+
+  test("a wasm trap is the terminal core crashing", () => {
+    expect(laneFault(new WebAssembly.RuntimeError("unreachable"))).toBe(
+      "terminal core crashed: unreachable",
+    );
+  });
+
+  test("anything else reads as its own message", () => {
+    expect(laneFault(new Error("libghostty-vt: out of wasm memory"))).toBe(
+      "libghostty-vt: out of wasm memory",
+    );
+    expect(laneFault("plain")).toBe("plain");
+  });
+});
+
+describe("capReason", () => {
+  test("a short reason passes through on one line", () => {
+    expect(capReason("  exited(1)\n ")).toBe("exited(1)");
+  });
+
+  test("a runaway reason is cut at the cap with an ellipsis", () => {
+    const wall = "x".repeat(MAX_REASON_CHARS * 3);
+    const capped = capReason(wall);
+    expect(capped.length).toBe(MAX_REASON_CHARS);
+    expect(capped.endsWith("…")).toBe(true);
+  });
+});
+
+describe("toSessionMeta", () => {
+  test("decodes the kinds the Rust side emits", () => {
+    expect(toSessionMeta({ kind: "writer_changed", fde: "mady" })).toEqual({
+      kind: "writer_changed",
+      fde: "mady",
+    });
+    expect(toSessionMeta({ kind: "writer_changed" })).toEqual({ kind: "writer_changed", fde: "" });
+    expect(toSessionMeta({ kind: "resized", cols: 132, rows: 40 })).toEqual({
+      kind: "resized",
+      cols: 132,
+      rows: 40,
+    });
+    expect(toSessionMeta({ kind: "paused" })).toEqual({ kind: "paused" });
+    expect(toSessionMeta({ kind: "continued" })).toEqual({ kind: "continued" });
+  });
+
+  test("a new or malformed kind is unknown, never one of the others", () => {
+    expect(toSessionMeta({ kind: "resized", cols: 0, rows: 40 }).kind).toBe("unknown");
+    expect(toSessionMeta({ kind: "throttled" }).kind).toBe("unknown");
+    expect(toSessionMeta(null).kind).toBe("unknown");
   });
 });

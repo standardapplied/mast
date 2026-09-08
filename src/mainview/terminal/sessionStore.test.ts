@@ -49,8 +49,13 @@ function makeGateway(host: DeckSession[]) {
   let hostBootId = "boot-1";
   let deferredListings: Array<(sessions: DeckSession[]) => void> | null = null;
   const listeners = new Set<(e: SailEvent) => void>();
+  let me: string | null = "uday";
   const gateway = {
     connection: async () => ({ server: "ssh://devbox", phase: "ready" }),
+    whoami: async () =>
+      me === null
+        ? { ok: false as const, error: { status: 0, code: "offline", message: "no box" } }
+        : { ok: true as const, value: { fde: me, name: me, role: "member", capabilities: [] } },
     listSessions: async () => {
       calls.list++;
       if (deferredListings) {
@@ -115,6 +120,8 @@ function makeGateway(host: DeckSession[]) {
     gateway: gateway as unknown as Gateway,
     host,
     calls,
+    /** What whoami answers from now on; null makes it fail, as an offline box would. */
+    setMe: (handle: string | null) => (me = handle),
     failListings: (message: string | null) => (listFailure = message),
     /** Every listing from now on waits; each entry answers one, in issue order. */
     deferListings: (): Array<(sessions: DeckSession[]) => void> => (deferredListings = []),
@@ -922,6 +929,75 @@ describe("the kill path (field bug: a kill that does nothing, silently)", () => 
     const result = await box.store.kill("room-design-talk");
     expect(result.ok).toBe(true);
     expect(box.store.byName("room-design-talk")).toBeUndefined();
+  });
+});
+
+describe("lane facts (what a pane's meta events say about the session)", () => {
+  test("a resize by another writer binds the geometry until the write token moves", async () => {
+    const box = await connected([session({ name: "mast-app.1", writerFde: "uday" })]);
+    const idle = box.store.lane("mast-app.1");
+    expect(idle).toEqual({ ptySize: null, paused: false });
+    expect(box.store.lane("mast-app.1"), "idle is one stable value").toBe(idle);
+    const before = box.store.version;
+    box.store.noteResized("mast-app.1", 132, 40);
+    expect(box.store.version).toBe(before + 1);
+    expect(box.store.lane("mast-app.1").ptySize).toEqual({ cols: 132, rows: 40 });
+    box.store.noteResized("mast-app.1", 132, 40);
+    expect(box.store.version, "an identical fact is not a change").toBe(before + 1);
+    box.store.noteWriterChanged("mast-app.1", "mady");
+    expect(
+      box.store.lane("mast-app.1").ptySize,
+      "the token moving to another FDE resizes nothing: the pty keeps its geometry",
+    ).toEqual({ cols: 132, rows: 40 });
+    expect(box.store.byName("mast-app.1")?.writerFde, "the broadcast lands ahead of the listing").toBe(
+      "mady",
+    );
+    box.store.noteWriterChanged("mast-app.1", "");
+    expect(box.store.lane("mast-app.1").ptySize, "a release leaves the pty as it was").toEqual({
+      cols: 132,
+      rows: 40,
+    });
+    box.store.noteWriterChanged("mast-app.1", "uday");
+    expect(box.store.lane("mast-app.1").ptySize, "the token coming here frees the fit").toBeNull();
+  });
+
+  test("a box that cannot say who it is releases an imposed geometry on any writer change", async () => {
+    const fake = makeGateway([session({ name: "mast-app.1", writerFde: "uday" })]);
+    fake.setMe(null);
+    const store = new SessionStore();
+    store.connect(fake.gateway, "devbox");
+    await flush();
+    store.noteResized("mast-app.1", 132, 40);
+    store.noteWriterChanged("mast-app.1", "mady");
+    expect(store.lane("mast-app.1").ptySize, "unknown identity falls back to today's release").toBeNull();
+  });
+
+  test("the write token moving is a change on its own, with no geometry to release", async () => {
+    const box = await connected([session({ name: "mast-app.1", writerFde: "uday" })]);
+    const before = box.store.version;
+    box.store.noteWriterChanged("mast-app.1", "mady");
+    expect(box.store.byName("mast-app.1")?.writerFde).toBe("mady");
+    expect(box.store.version, "subscribers hear the new writer").toBe(before + 1);
+    box.store.noteWriterChanged("mast-app.1", "mady");
+    expect(box.store.version, "the same writer again is not a change").toBe(before + 1);
+  });
+
+  test("paused and resumed are the lane's own fact, cleared by a fresh attach", async () => {
+    const box = await connected([session({ name: "mast-app.1" })]);
+    box.store.notePaused("mast-app.1", true);
+    expect(box.store.lane("mast-app.1").paused).toBe(true);
+    box.store.notePaused("mast-app.1", false);
+    expect(box.store.lane("mast-app.1").paused).toBe(false);
+    box.store.noteResized("mast-app.1", 100, 30);
+    box.store.noteAttached("mast-app.1");
+    expect(box.store.lane("mast-app.1")).toEqual({ ptySize: null, paused: false });
+  });
+
+  test("with no box connected the facts have nowhere to land and read idle", () => {
+    const store = new SessionStore();
+    store.noteResized("x", 1, 1);
+    store.notePaused("x", true);
+    expect(store.lane("x")).toEqual({ ptySize: null, paused: false });
   });
 });
 
