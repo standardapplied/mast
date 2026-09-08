@@ -37,6 +37,7 @@ export class FakeLink implements SessionLink {
   readonly takes: string[] = [];
   clipboard = "";
   private waiters: Array<(attachment: FakeAttachment) => void> = [];
+  private gate: Promise<void> | null = null;
 
   async list(): Promise<HostListing> {
     return this.listing;
@@ -48,8 +49,23 @@ export class FakeLink implements SessionLink {
     const waiters = this.waiters;
     this.waiters = [];
     waiters.forEach((resolve) => resolve(attachment));
+    // The host streams as soon as it attaches, ahead of the open's acknowledgement: the lanes are
+    // live from here, and a held open lets a test deliver on them before the pane hears back.
+    await this.gate;
     return () => {
       attachment.detached = true;
+    };
+  }
+
+  /** Holds every open's acknowledgement until the returned release runs; the lanes stay live. */
+  holdOpens(): () => void {
+    let release!: () => void;
+    this.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return () => {
+      this.gate = null;
+      release();
     };
   }
 

@@ -944,6 +944,16 @@ describe("lane facts (what a pane's meta events say about the session)", () => {
     );
   });
 
+  test("the write token moving is a change on its own, with no geometry to release", async () => {
+    const box = await connected([session({ name: "mast-app.1", writerFde: "uday" })]);
+    const before = box.store.version;
+    box.store.noteWriterChanged("mast-app.1", "mady");
+    expect(box.store.byName("mast-app.1")?.writerFde).toBe("mady");
+    expect(box.store.version, "subscribers hear the new writer").toBe(before + 1);
+    box.store.noteWriterChanged("mast-app.1", "mady");
+    expect(box.store.version, "the same writer again is not a change").toBe(before + 1);
+  });
+
   test("paused and resumed are the lane's own fact, cleared by a fresh attach", async () => {
     const box = await connected([session({ name: "mast-app.1" })]);
     box.store.notePaused("mast-app.1", true);

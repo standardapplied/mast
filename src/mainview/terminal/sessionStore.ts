@@ -457,18 +457,24 @@ export class SessionStore {
     const box = this.box(key ?? undefined);
     if (!box) return;
     const listed = box.listed?.get(name);
-    if (listed && listed.writerFde !== fde) box.listed?.set(name, { ...listed, writerFde: fde });
-    this.setLane(name, { ptySize: null }, key);
+    const writerChanged = listed !== undefined && listed.writerFde !== fde;
+    if (writerChanged) box.listed!.set(name, { ...listed, writerFde: fde });
+    const laneChanged = this.patchLane(box, name, { ptySize: null });
+    if (writerChanged || laneChanged) this.emit();
   }
 
   private setLane(name: string, patch: Partial<LaneFact>, key: string | null): void {
     const box = this.box(key ?? undefined);
-    if (!box) return;
+    if (box && this.patchLane(box, name, patch)) this.emit();
+  }
+
+  /** Applies the patch to the session's lane; true when it changed anything. */
+  private patchLane(box: BoxState, name: string, patch: Partial<LaneFact>): boolean {
     const current = box.lanes.get(name) ?? IDLE_LANE;
     const next = { ...current, ...patch };
-    if (next.paused === current.paused && sameSize(next.ptySize, current.ptySize)) return;
+    if (next.paused === current.paused && sameSize(next.ptySize, current.ptySize)) return false;
     box.lanes.set(name, next);
-    this.emit();
+    return true;
   }
 
   /**

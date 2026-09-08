@@ -53,23 +53,40 @@ const bytes = (text: string) => frame(0, ...new TextEncoder().encode(text));
 const status = () => statuses.at(-1)!;
 const card = () => container.querySelector(".term-overlay__card");
 
+/** Renders a pane; the attach runs on from here (see {@link mount} for the settled form). */
+function render(over: { session?: string; onWriter?: (fde: string) => void } = {}) {
+  const handle = createRef<TerminalHandle>();
+  root.render(
+    <TerminalServicesProvider value={services}>
+      <SessionTerminalPane
+        ref={handle}
+        socketPath="~/.sail/pty.sock"
+        token=""
+        session={over.session ?? "mast-app"}
+        create={{ command: ["bash"], cwd: "~", project: "app", cols: 80, rows: 24 }}
+        onStatus={(s) => statuses.push(s)}
+        onWriter={over.onWriter}
+      />
+    </TerminalServicesProvider>,
+  );
+  return handle;
+}
+
+/** Where the core put "X" on row 0, read through a renderer rebuild's full repaint. */
+async function columnOfX(): Promise<number> {
+  await act(async () => {
+    services.renderers.at(-1)!.opts.onLost?.("probe");
+  });
+  await settle();
+  const row = services.renderers.at(-1)!.applied[0]?.rows.find((r) => r.y === 0);
+  return row?.cells.findIndex((c) => c.text === "X") ?? -1;
+}
+
 /** Mounts a pane and drives it through its attach; resolves with the attachment the link took. */
 async function mount(over: { session?: string; onWriter?: (fde: string) => void } = {}) {
-  const handle = createRef<TerminalHandle>();
+  let handle!: ReturnType<typeof render>;
   await act(async () => {
-    root.render(
-      <TerminalServicesProvider value={services}>
-        <SessionTerminalPane
-          ref={handle}
-          socketPath="~/.sail/pty.sock"
-          token=""
-          session={over.session ?? "mast-app"}
-          create={{ command: ["bash"], cwd: "~", project: "app", cols: 80, rows: 24 }}
-          onStatus={(s) => statuses.push(s)}
-          onWriter={over.onWriter}
-        />
-      </TerminalServicesProvider>,
-    );
+    handle = render(over);
   });
   let attachment: FakeAttachment | null = null;
   await act(async () => {
@@ -254,6 +271,119 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(services.link.opens).toHaveLength(1);
     expect(status()).toEqual({ kind: "up" });
     expect(attachment.detached).toBe(false);
+  });
+
+  test("a resize the core refuses parks this pane, never the app", async () => {
+    const { attachment } = await mount();
+    await act(async () => {
+      expect(() => attachment.lanes.onMeta({ kind: "resized", cols: 65536, rows: 24 })).not.toThrow();
+    });
+    await settle();
+    expect(status().kind).toBe("failed");
+    expect(status()).toMatchObject({ reason: expect.stringContaining("65536x24") });
+    expect(services.link.closed).toEqual([attachment.spec.id]);
+    expect(sessionStore.lane("mast-app").ptySize, "a refused size binds nothing").toBeNull();
+    expect(card()?.textContent).toContain("Terminal failed");
+  });
+
+  test("output right behind a resize is parsed in the new geometry, not the old one", async () => {
+    const { attachment } = await mount();
+    await act(async () => {
+      attachment.lanes.onMeta({ kind: "resized", cols: 132, rows: 40 });
+      attachment.lanes.onData(bytes("\x1b[1;100HX"));
+    });
+    expect(await columnOfX()).toBe(99);
+    expect(status()).toEqual({ kind: "up" });
+  });
+
+  test("facts streamed before the open resolves are this attach's own and survive it", async () => {
+    const release = services.link.holdOpens();
+    await act(async () => {
+      render();
+    });
+    let attachment: FakeAttachment | null = null;
+    await act(async () => {
+      attachment = await services.link.opened();
+    });
+    await act(async () => {
+      attachment!.lanes.onMeta({ kind: "resized", cols: 132, rows: 40 });
+    });
+    await act(async () => release());
+    await settle();
+    expect(status()).toEqual({ kind: "up" });
+    expect(sessionStore.lane("mast-app").ptySize).toEqual({ cols: 132, rows: 40 });
+    expect(container.querySelector('[data-testid="term-pty-size"]')?.textContent).toBe(
+      "sized by the writer to 132×40",
+    );
+  });
+
+  test("a lane fault during the open keeps its card; the open resolving does not paint up", async () => {
+    const release = services.link.holdOpens();
+    await act(async () => {
+      render();
+    });
+    let attachment: FakeAttachment | null = null;
+    await act(async () => {
+      attachment = await services.link.opened();
+    });
+    await act(async () => {
+      attachment!.lanes.onData(frame(9));
+    });
+    expect(status().kind).toBe("failed");
+    await act(async () => release());
+    await settle();
+    expect(status()).toEqual({
+      kind: "failed",
+      reason: "protocol skew: session data frame: unknown tag 9",
+    });
+    expect(services.link.closed).toEqual([attachment!.spec.id]);
+  });
+
+  test("an unmount during the open closes the attachment the host registered afterwards", async () => {
+    const release = services.link.holdOpens();
+    await act(async () => {
+      render();
+    });
+    let attachment: FakeAttachment | null = null;
+    await act(async () => {
+      attachment = await services.link.opened();
+    });
+    act(() => root.unmount());
+    const closedBeforeOpen = services.link.closed.length;
+    await act(async () => release());
+    await settle();
+    expect(attachment!.detached).toBe(true);
+    expect(services.link.closed.slice(closedBeforeOpen), "closed again once it existed").toEqual([
+      attachment!.spec.id,
+    ]);
+    root = createRoot(container);
+  });
+
+  test("a lane fault after a failed renderer rebuild makes Retry re-dial, not rebuild", async () => {
+    const { attachment } = await mount();
+    services.rendererFailure = "no GPU adapter";
+    await act(async () => {
+      services.renderers[0]!.opts.onLost?.("GPU device lost: reset");
+    });
+    await settle();
+    await act(async () => {
+      attachment.lanes.onData(frame(9));
+    });
+    expect(status()).toEqual({
+      kind: "failed",
+      reason: "protocol skew: session data frame: unknown tag 9",
+    });
+    services.link.listing = { hostBootId: "boot-1", sessions: [{ name: "mast-app", live: true }] };
+    const redial = services.link.nextOpen();
+    await act(async () => {
+      (card()!.querySelector("button") as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      await redial;
+    });
+    await settle();
+    expect(services.link.opens).toHaveLength(2);
+    expect(status()).toEqual({ kind: "up" });
   });
 
   test("a runaway reason is capped on the card", async () => {

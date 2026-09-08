@@ -396,6 +396,7 @@ export const SessionTerminalPane = forwardRef<
     /** The data lane threw: park on the cause, close the attachment, feed nothing more. */
     const fail = (reason: string) => {
       halted = true;
+      rebuildRef.current = null;
       setStatus({ kind: "failed", reason });
       void link.close(id).catch(noop);
     };
@@ -476,7 +477,7 @@ export const SessionTerminalPane = forwardRef<
         renderer.destroy();
         void services.createRenderer(canvas, rendererOptions).then(
           (next) => {
-            if (disposed) return void next.destroy();
+            if (disposed || halted) return void next.destroy();
             renderer = next;
             controller.replaceRenderer(next);
             rebuilding = false;
@@ -487,7 +488,7 @@ export const SessionTerminalPane = forwardRef<
             }
           },
           (e) => {
-            if (disposed) return;
+            if (disposed || halted) return;
             rebuilding = false;
             rendererFailed = true;
             rebuildRef.current = () => rebuildRenderer(reason);
@@ -500,6 +501,41 @@ export const SessionTerminalPane = forwardRef<
       controller.hooks.onClipboard = (text) =>
         void navigator.clipboard?.writeText(text).catch(noop);
       controller.hooks.onTitle = (title) => onTitleRef.current?.(title);
+
+      const setGeom = () => {
+        geomRef.current = { cw: cellW / dpr, ch: cellH / dpr, cols, rows };
+        cellWidthDeviceRef.current = cellW;
+      };
+      setGeom();
+
+      const apply = (next: { cols: number; rows: number }, silent: boolean) => {
+        if (next.cols === cols && next.rows === rows) return;
+        cols = next.cols;
+        rows = next.rows;
+        paint(cols, rows);
+        controller.resize(cols, rows, { silent });
+        setGeom();
+      };
+      // A geometry change is part of the data lane: a size the core refuses, or a grid it cannot
+      // allocate, parks this pane on its card — it never escapes into React and unmounts the app.
+      const contained = (change: () => void) => {
+        if (disposed || halted) return;
+        try {
+          change();
+        } catch (e) {
+          fail(laneFault(e));
+        }
+      };
+      const refit = () =>
+        contained(() => {
+          if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden tab
+          apply(fit(), false);
+        });
+      const adopt = (c: number, r: number) => contained(() => apply({ cols: c, rows: r }, true));
+      geometryRef.current = { adopt, refit };
+      cleanups.push(() => {
+        geometryRef.current = null;
+      });
 
       const lanes: SessionLanes = {
         // One ordered raw channel carries bytes AND replay markers: a mid-stream replay means the
@@ -538,7 +574,10 @@ export const SessionTerminalPane = forwardRef<
               onWriterRef.current?.(meta.fde);
               return;
             case "resized":
-              sessionStore.noteResized(session, meta.cols, meta.rows);
+              // Output after this event is already in the new geometry: adopt it before the
+              // next byte, not on the effect the store update schedules.
+              adopt(meta.cols, meta.rows);
+              if (!halted) sessionStore.noteResized(session, meta.cols, meta.rows);
               return;
             case "paused":
               sessionStore.notePaused(session, true);
@@ -569,6 +608,9 @@ export const SessionTerminalPane = forwardRef<
           return;
         }
         seenUnderRef.current = listing.hostBootId;
+        // The lanes are live before the open resolves (the host streams as soon as it attaches),
+        // so the lane starts clean here — a fact heard during the open is this attach's own.
+        sessionStore.noteAttached(session);
         // Resolves only once the host has acknowledged Create and Attach: a link that drops
         // before that keeps the create for the next attempt, since nothing was created.
         const detach = await link.open(
@@ -582,7 +624,12 @@ export const SessionTerminalPane = forwardRef<
           },
           lanes,
         );
-        if (disposed) return detach();
+        if (disposed) {
+          // The unmount's close ran before the host registered this attachment; close it now.
+          detach();
+          await link.close(id).catch(noop);
+          return;
+        }
         cleanups.push(detach);
         createdRef.current = true;
       } catch (e) {
@@ -597,7 +644,8 @@ export const SessionTerminalPane = forwardRef<
       // here settles the connection, so a stale timer must not force another remount.
       clearTimeout(retryTimer.current);
       reconnector.current.opened();
-      sessionStore.noteAttached(session);
+      // The lane may already have failed on a frame the open streamed: that card stands.
+      if (halted) return;
       setStatus({ kind: "up" });
 
       // Tell the pty our real geometry (a fresh session was created at this size; an existing one
@@ -605,31 +653,6 @@ export const SessionTerminalPane = forwardRef<
       if (sized) {
         sink.resize(cols, rows);
       }
-      const setGeom = () => {
-        geomRef.current = { cw: cellW / dpr, ch: cellH / dpr, cols, rows };
-        cellWidthDeviceRef.current = cellW;
-      };
-      setGeom();
-
-      const apply = (next: { cols: number; rows: number }, silent: boolean) => {
-        if (next.cols === cols && next.rows === rows) return;
-        cols = next.cols;
-        rows = next.rows;
-        paint(cols, rows);
-        controller.resize(cols, rows, { silent });
-        setGeom();
-      };
-      const refit = () => {
-        if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden tab
-        apply(fit(), false);
-      };
-      geometryRef.current = {
-        adopt: (c, r) => apply({ cols: c, rows: r }, true),
-        refit,
-      };
-      cleanups.push(() => {
-        geometryRef.current = null;
-      });
 
       // Every layout tick reflows locally; the controller tells the pty once the size settles.
       // While another writer's size binds, the pane's own size is a letterbox, not a geometry.
