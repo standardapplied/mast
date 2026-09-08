@@ -13,21 +13,35 @@
  */
 
 import { keyEventFor, type KeyStroke, MODS } from "./input";
-import type {
-  CellPos,
-  Cursor,
-  GridSnapshot,
-  MouseEventSpec,
-  Scroll,
-  SurfacePos,
-  VtCore,
+import {
+  type CellPos,
+  type ColorScheme,
+  type Cursor,
+  type GridSnapshot,
+  KITTY_KEY,
+  type MouseEventSpec,
+  type Rgb,
+  type Scroll,
+  type SurfacePos,
+  type Theme,
+  type VtCore,
 } from "./vtCore";
+
+/** The colors a renderer paints with that the core does not resolve per cell. */
+export interface RendererColors {
+  readonly bg: Rgb;
+  readonly fg: Rgb;
+  readonly cursor: Rgb;
+  readonly selectionBg: Rgb;
+  readonly selectionFg: Rgb;
+}
 
 /** What the controller needs from a renderer; the WebGPU renderer implements this structurally. */
 export interface Renderer {
   resize(cols: number, rows: number): void;
   apply(snapshot: GridSnapshot): void;
   setCursor(cursor: Cursor): void;
+  setColors(colors: RendererColors): void;
   draw(): void;
 }
 
@@ -100,9 +114,9 @@ export class TerminalController {
     this.cols = size.cols;
     this.rows = size.rows;
     this.renderer.resize(this.cols, this.rows);
-    // The core's effects fire synchronously inside feed(). A replayed query or OSC 52 is history:
-    // answering a stale query or clobbering the clipboard the user filled since would be wrong. A
-    // replayed title is current state and always applies.
+    // The core's effects fire synchronously inside feed(). A replayed query, OSC 52 or bell is
+    // history: answering a stale query, clobbering the clipboard the user filled since, or ringing
+    // for output long gone would be wrong. A replayed title is current state and always applies.
     core.hooks.onWritePty = (reply) => {
       if (!this.replaying) this.sink.write(reply);
     };
@@ -110,7 +124,9 @@ export class TerminalController {
       if (!this.replaying) this.hooks.onClipboard?.(text);
     };
     core.hooks.onTitle = (title) => this.hooks.onTitle?.(title);
-    core.hooks.onBell = () => this.hooks.onBell?.();
+    core.hooks.onBell = () => {
+      if (!this.replaying) this.hooks.onBell?.();
+    };
   }
 
   /**
@@ -212,11 +228,18 @@ export class TerminalController {
    * Encodes a key press through libghostty's mode-aware key encoder (DECCKM, kitty protocol,
    * modifyOtherKeys — see {@link VtCore#encodeKey}) and sends it to the pty. Returns whether
    * anything was sent, so the caller can preventDefault exactly when the terminal consumed the
-   * key. No local echo — the pty echoes. Cmd chords never reach the pty: they belong to the app
-   * and the OS, and the pane routes the ones it owns (copy, paste, splits) before calling here.
+   * key. No local echo — the pty echoes. Cmd chords belong to the app and the OS — the pane
+   * routes the ones it owns (copy, paste, clear) before calling here — unless the program asked
+   * for every key (kitty report-all), which is how a TUI hears ⌘ chords at all. Releases reach
+   * the pty only when the program asked for release events; legacy programs never hear them. The
+   * ⌘ gate is for presses: the pane reports a release only for a press the program heard, and a
+   * ⌘ that went down during the hold is a modifier on that release, not a chord.
    */
   key(stroke: KeyStroke): boolean {
-    if (stroke.meta) {
+    const flags = this.core.kittyKeyboardFlags();
+    if (stroke.release) {
+      if ((flags & KITTY_KEY.REPORT_EVENTS) === 0) return false;
+    } else if (stroke.meta && (flags & KITTY_KEY.REPORT_ALL) === 0) {
       return false;
     }
     const bytes = this.core.encodeKey(keyEventFor(stroke));
@@ -263,6 +286,38 @@ export class TerminalController {
     this.dirty = true;
   }
 
+  /** Moves the viewport one screen through scrollback ({@code -1} = up, towards history). */
+  scrollPage(direction: -1 | 1): void {
+    this.scroll({ delta: direction * this.rows });
+  }
+
+  /**
+   * Ghostty's ⌘K: scrollback gone, the screen above the prompt blanked, the viewport live again.
+   * When prompt marks let the core erase everything, the shell is asked to repaint its prompt.
+   */
+  clearScreen(): void {
+    this.scroll("bottom");
+    const repaint = this.core.clearScreen();
+    if (repaint !== null) {
+      this.sink.write(repaint);
+    }
+  }
+
+  /**
+   * Applies a new theme to the live terminal: the core's defaults and palette, the renderer's
+   * own colors, then a full repaint so every default-colored cell re-resolves. The session is
+   * untouched. A program under mode 2031 hears that the scheme flipped.
+   */
+  setTheme(theme: Theme & RendererColors, scheme: ColorScheme): void {
+    this.core.setTheme(theme, scheme);
+    this.renderer.setColors(theme);
+    this.renderer.apply(this.core.readAll());
+    this.redraw = true;
+    if (this.core.colorSchemeReporting()) {
+      this.sink.write(this.core.encodeColorSchemeReport());
+    }
+  }
+
   /**
    * Offers a mouse event to the application. Consumed (true) when the application tracks the
    * mouse — the event is encoded in its requested format and sent, or deduplicated away — so the
@@ -294,7 +349,8 @@ export class TerminalController {
    * wheel buttons at the cell under the pointer (unless Shift bypasses it); otherwise the local
    * scrollback scrolls — except on the alternate screen, which has no scrollback: a full-screen
    * TUI (vim, less) gets arrow keys, one per line, encoded mode-aware so DECCKM applications hear
-   * their own dialect.
+   * their own dialect — unless it turned alternate scroll (mode 1007) off, in which case the
+   * wheel means nothing there.
    */
   wheel(lines: number, at?: { x: number; y: number }, mods = 0): void {
     if (lines === 0) {
@@ -309,6 +365,9 @@ export class TerminalController {
     }
     if (!this.core.altScreen()) {
       this.scroll({ delta: lines });
+      return;
+    }
+    if (!this.core.alternateScroll()) {
       return;
     }
     const key = lines < 0 ? "ArrowUp" : "ArrowDown";
@@ -418,8 +477,14 @@ function sameCursor(a: Cursor, b: Cursor): boolean {
     a.visible === b.visible &&
     a.x === b.x &&
     a.y === b.y &&
-    a.style === b.style
+    a.style === b.style &&
+    sameColor(a.color, b.color)
   );
+}
+
+function sameColor(a: Rgb | null, b: Rgb | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 }
 
 /**

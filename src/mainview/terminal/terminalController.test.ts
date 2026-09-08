@@ -5,6 +5,7 @@ import {
   gridFor,
   type PtySink,
   type Renderer,
+  type RendererColors,
   RESIZE_SETTLE_MS,
   SYNCHRONIZED_OUTPUT_CAP_MS,
   TerminalController,
@@ -35,6 +36,10 @@ class RecRenderer implements Renderer {
   }
   setCursor(cursor: Cursor): void {
     this.cursors.push(cursor);
+  }
+  colors: RendererColors[] = [];
+  setColors(colors: RendererColors): void {
+    this.colors.push(colors);
   }
   draw(): void {
     this.draws++;
@@ -336,11 +341,74 @@ describe("TerminalController", () => {
     expect(sink.writes).toEqual([]);
   });
 
-  test("Cmd chords never reach the pty — they belong to the app and the OS", async () => {
-    const { controller, sink } = await harness();
+  test("Cmd chords stay with the app and the OS — until the program asks for every key", async () => {
+    const { controller, core, sink } = await harness();
     expect(controller.key({ key: "v", code: "KeyV", meta: true })).toBe(false);
     expect(controller.key({ key: "ArrowLeft", code: "ArrowLeft", meta: true })).toBe(false);
     expect(sink.writes).toEqual([]);
+    core.write(enc("\x1b[>11u")); // kitty: disambiguate + events + report all keys
+    expect(controller.key({ key: "v", code: "KeyV", meta: true })).toBe(true);
+    expect(sink.writes).toEqual([Array.from(enc("\x1b[118;9u"))]);
+  });
+
+  test("releases reach the pty only when the program asked for key events", async () => {
+    const { controller, core, sink } = await harness();
+    expect(controller.key({ key: "a", code: "KeyA", release: true })).toBe(false);
+    expect(sink.writes).toEqual([]);
+    core.write(enc("\x1b[>3u"));
+    expect(controller.key({ key: "a", code: "KeyA", release: true })).toBe(true);
+    expect(sink.writes).toEqual([Array.from(enc("\x1b[97;1:3u"))]);
+    // ⌘ down during the hold is a modifier on the release, not a chord: the ⌘ gate is for presses.
+    expect(controller.key({ key: "a", code: "KeyA", meta: true, release: true })).toBe(true);
+    expect(sink.writes.at(-1)).toEqual(Array.from(enc("\x1b[97;9:3u")));
+  });
+
+  test("Shift+PgUp/PgDn page the viewport; ⌘K clears history and the screen above the prompt", async () => {
+    const { controller, core, renderer, sink } = await harness(20, 3);
+    const lines = Array.from({ length: 10 }, (_, i) => `L${i + 1}`);
+    controller.feed(enc(lines.join("\r\n")));
+    controller.frame();
+    expect(gridRow(renderer.grid, 0)).toBe("L8");
+    controller.scrollPage(-1);
+    controller.frame();
+    expect(gridRow(renderer.grid, 0)).toBe("L5");
+    controller.scrollPage(1);
+    controller.frame();
+    expect(gridRow(renderer.grid, 0)).toBe("L8");
+
+    controller.scrollPage(-1);
+    controller.clearScreen();
+    controller.frame();
+    expect(core.viewportActive(), "the viewport is live again").toBe(true);
+    expect([0, 1, 2].map((y) => gridRow(renderer.grid, y))).toEqual(["", "", "L10"]);
+    expect(sink.writes, "no prompt marks: nothing for the shell to repaint").toEqual([]);
+    controller.feed(enc("\r\n\x1b]133;A\x1b\\$ "));
+    controller.clearScreen();
+    expect(sink.writes).toEqual([[0x0c]]);
+  });
+
+  test("a theme swap repaints the live terminal in place and tells a program under mode 2031", async () => {
+    const { controller, core, renderer, sink } = await harness(20, 3);
+    controller.feed(enc("hi"));
+    controller.frame();
+    const draws = renderer.draws;
+    const theme = {
+      fg: [1, 2, 3] as const,
+      bg: [4, 5, 6] as const,
+      cursor: [7, 8, 9] as const,
+      palette: Array.from({ length: 16 }, (_, i) => [i, i, i] as const),
+      selectionBg: [10, 11, 12] as const,
+      selectionFg: [13, 14, 15] as const,
+    };
+    controller.setTheme(theme, "light");
+    expect(renderer.colors).toEqual([theme]);
+    expect(renderer.grid.cell(0, 0)).toMatchObject({ text: "h", fg: [1, 2, 3], bg: [4, 5, 6] });
+    controller.frame();
+    expect(renderer.draws).toBe(draws + 1);
+    expect(sink.writes, "the program did not ask").toEqual([]);
+    core.write(enc("\x1b[?2031h"));
+    controller.setTheme(theme, "dark");
+    expect(sink.writes).toEqual([Array.from(enc("\x1b[?997;1n"))]);
   });
 
   test("an OSC 52 clipboard write in the stream reaches the clipboard hook, and still renders around it", async () => {
@@ -390,12 +458,18 @@ describe("TerminalController", () => {
     expect(sink.writes).toHaveLength(2);
   });
 
-  test("a bell in the stream reaches the bell hook", async () => {
+  test("a bell in the stream reaches the bell hook; a replayed bell is history and stays silent", async () => {
     const { controller } = await harness(20, 3);
     let bells = 0;
     controller.hooks.onBell = () => bells++;
     controller.feed(enc("\x07"));
     expect(bells).toBe(1);
+    controller.resetForReplay();
+    controller.feed(enc("old\x07"));
+    controller.endReplay();
+    expect(bells).toBe(1);
+    controller.feed(enc("\x07"));
+    expect(bells).toBe(2);
   });
 
   test("resetForReplay wipes state so a journal snapshot lands on a clean terminal", async () => {
@@ -435,6 +509,10 @@ describe("TerminalController", () => {
     core.write(enc("\x1b[?1h")); // and with DECCKM on, the arrows follow it
     controller.wheel(-1);
     expect(sink.writes.at(-1)).toEqual(Array.from(enc("\x1bOA")));
+    core.write(enc("\x1b[?1007l")); // a TUI that turned alternate scroll off hears nothing
+    controller.wheel(-1);
+    controller.wheel(2);
+    expect(sink.writes).toHaveLength(3);
   });
 
   test("a mouse event is local until the app tracks the mouse; Shift always keeps it local", async () => {

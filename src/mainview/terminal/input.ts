@@ -21,6 +21,8 @@ export interface KeyStroke {
   readonly shift?: boolean;
   readonly caps?: boolean;
   readonly repeat?: boolean;
+  /** A key-up: encodes only when the program asked for release events (kitty flag 2). */
+  readonly release?: boolean;
   readonly composing?: boolean;
 }
 
@@ -123,22 +125,33 @@ function charLength(s: string): number {
   return [...s].length;
 }
 
+/** The letter or digit a physical `Key*`/`Digit*` code names, or 0 for any other code. */
+function physicalCodepoint(code: string | undefined): number {
+  if (code?.startsWith("Key") && code.length === 4) return code.toLowerCase().codePointAt(3)!;
+  if (code?.startsWith("Digit") && code.length === 6) return code.codePointAt(5)!;
+  return 0;
+}
+
 /**
  * The unmodified codepoint of the pressed key. The active LAYOUT wins for letters and digits —
  * QWERTZ Ctrl+Z arrives on physical KeyY but must byte as 'z', and a Cyrillic 'ф' carries its own
  * codepoint — while shifted punctuation falls back to the physical key's base char (Shift+2
- * produces '@' but the key without shift is '2', which the produced char cannot reveal).
+ * produces '@' but the key without shift is '2', which the produced char cannot reveal). With
+ * Option held, macOS composes a symbol (Option+F is 'ƒ', Option+A 'å', Option+S 'ß') that is
+ * itself a letter, so the produced char cannot reveal the key either: the physical code does.
  */
-function unshiftedOf(code: string | undefined, key: string): number {
+function unshiftedOf(code: string | undefined, key: string, alt: boolean): number {
+  if (alt) {
+    const physical = physicalCodepoint(code);
+    if (physical !== 0) return physical;
+  }
   if (charLength(key) === 1 && /[\p{L}\p{N}]/u.test(key)) {
     return key.toLowerCase().codePointAt(0)!;
   }
-  if (code) {
-    if (code.startsWith("Key") && code.length === 4) return code.toLowerCase().codePointAt(3)!;
-    if (code.startsWith("Digit") && code.length === 6) return code.codePointAt(5)!;
-    const base = BASE_CHAR[code];
-    if (base !== undefined) return base.codePointAt(0)!;
-  }
+  const physical = physicalCodepoint(code);
+  if (physical !== 0) return physical;
+  const base = code === undefined ? undefined : BASE_CHAR[code];
+  if (base !== undefined) return base.codePointAt(0)!;
   return charLength(key) === 1 ? key.toLowerCase().codePointAt(0)! : 0;
 }
 
@@ -154,7 +167,7 @@ export function keyEventFor(stroke: KeyStroke): KeyEventSpec {
   // Every single-char key carries its text — the ENCODER decides what a chord suppresses or maps
   // (Ctrl+[ → ESC needs the '[' to reach it). Cmd chords are gated once, in the controller.
   const utf8 = charLength(key) === 1 ? key : "";
-  const unshifted = unshiftedOf(code, key);
+  const unshifted = unshiftedOf(code, key, alt);
   const consumedMods =
     utf8 !== "" && shift && utf8.codePointAt(0) !== unshifted ? MODS.SHIFT : 0;
   return {
@@ -163,7 +176,7 @@ export function keyEventFor(stroke: KeyStroke): KeyEventSpec {
     consumedMods,
     utf8,
     unshifted,
-    action: stroke.repeat ? ACTION.REPEAT : ACTION.PRESS,
+    action: stroke.release ? ACTION.RELEASE : stroke.repeat ? ACTION.REPEAT : ACTION.PRESS,
     composing: stroke.composing === true || key === "Dead",
   };
 }

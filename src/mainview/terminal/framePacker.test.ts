@@ -76,6 +76,7 @@ const NO_CURSOR: Cursor = {
   visible: false,
   style: "block",
   blinking: false,
+  color: null,
 };
 
 const at = (x: number, style: Cursor["style"], visible = true): Cursor => ({
@@ -85,6 +86,7 @@ const at = (x: number, style: Cursor["style"], visible = true): Cursor => ({
   visible,
   style,
   blinking: style !== "block",
+  color: null,
 });
 
 function pack(cells: Cell[], cursor = NO_CURSOR) {

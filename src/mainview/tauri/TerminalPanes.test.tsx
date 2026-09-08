@@ -114,6 +114,32 @@ describe("TerminalPanes over the channel", () => {
     expect(services.renderers[0]!.resizes.at(-1)).toEqual([100, 30]);
   });
 
+  test("a bell in an unfocused pane dots its chip until that pane is focused again", async () => {
+    const { attachment: first } = await mount();
+    const bell = (a: FakeAttachment) => act(async () => a.lanes.onData(new Uint8Array([0, 0x07])));
+    await bell(first);
+    expect(container.querySelector('[data-testid="term-bell-dot"]'), "the focused pane rang").toBeNull();
+
+    const second = services.link.nextOpen();
+    await act(async () => {
+      (container.querySelector('[aria-label="New shell — ⌘T"]') as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      await second;
+    });
+    await settle();
+    expect(container.querySelectorAll(".term-pane-chip")).toHaveLength(2);
+    await bell(first);
+    const chips = container.querySelectorAll(".term-pane-chip");
+    expect(chips[0]!.querySelector('[data-testid="term-bell-dot"]')).not.toBeNull();
+    expect(chips[1]!.querySelector('[data-testid="term-bell-dot"]')).toBeNull();
+
+    await act(async () => {
+      (chips[0] as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="term-bell-dot"]')).toBeNull();
+  });
+
   test("renderer loss in a pane is invisible to the tab: it rebuilds without a status change", async () => {
     await mount();
     const before = reports.length;

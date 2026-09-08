@@ -116,3 +116,33 @@ describe("keyEventFor", () => {
     expect(keyEventFor({ key: "Dead", code: "KeyE" }).composing).toBe(true);
   });
 });
+
+describe("keyEventFor with Option held", () => {
+  test("the unshifted codepoint comes from the physical key, never the composed macOS character", () => {
+    const composed: [string, string, string][] = [
+      ["ƒ", "KeyF", "f"],
+      ["å", "KeyA", "a"],
+      ["ß", "KeyS", "s"],
+      ["œ", "KeyQ", "q"],
+      ["∂", "KeyD", "d"],
+      ["∫", "KeyB", "b"],
+      ["¡", "Digit1", "1"],
+    ];
+    for (const [key, code, base] of composed) {
+      const spec = keyEventFor({ key, code, alt: true });
+      expect(spec.unshifted, `${key} on ${code}`).toBe(base.codePointAt(0)!);
+      expect(spec.utf8).toBe(key);
+      expect(spec.mods & MODS.ALT).toBe(MODS.ALT);
+    }
+  });
+
+  test("without Option the layout still wins for letters — QWERTZ z arrives on KeyY", () => {
+    expect(keyEventFor({ key: "z", code: "KeyY" }).unshifted).toBe("z".codePointAt(0)!);
+    expect(keyEventFor({ key: "ф", code: "KeyA" }).unshifted).toBe("ф".codePointAt(0)!);
+  });
+
+  test("a release carries the RELEASE action", () => {
+    expect(keyEventFor({ key: "a", code: "KeyA", release: true }).action).toBe(ACTION.RELEASE);
+    expect(keyEventFor({ key: "a", code: "KeyA", repeat: true }).action).toBe(ACTION.REPEAT);
+  });
+});

@@ -3892,6 +3892,9 @@ button.room-section-head:hover {
 .term-status__dot--off {
   background: var(--subtle-foreground);
 }
+.term-status__dot--bell {
+  background: var(--primary);
+}
 .term-status__action {
   color: var(--foreground);
 }
@@ -4032,6 +4035,15 @@ button.room-section-head:hover {
 }
 .term-jump:hover {
   border-color: var(--primary);
+}
+
+.term-bell {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--foreground);
+  opacity: 0.14;
+  pointer-events: none;
 }
 
 .term-chips {

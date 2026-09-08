@@ -132,6 +132,13 @@ function storageKey(base: string): string {
   return `mast.panes.${base}`;
 }
 
+function without(set: ReadonlySet<string>, drop: readonly string[]): ReadonlySet<string> {
+  if (!drop.some((s) => set.has(s))) return set;
+  const next = new Set(set);
+  for (const s of drop) next.delete(s);
+  return next;
+}
+
 export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
   function TerminalPanes({ target, room, active, onStatus }, ref) {
     const base = room ? roomSessionBase(room.roomId) : baseSessionFor(target);
@@ -143,6 +150,8 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const [renaming, setRenaming] = useState<string | null>(null);
     const [chipMenu, setChipMenu] = useState<{ x: number; y: number; group: number } | null>(null);
     const [titles, setTitles] = useState<Record<string, string>>({});
+    /** Panes that rang the bell while not the focused one; the dot stays until they are. */
+    const [rang, setRang] = useState<ReadonlySet<string>>(new Set());
     /** Sessions this client opened or revived, with their picked commands. */
     const [launched, setLaunched] = useState<ReadonlyMap<string, LaunchSpec>>(new Map());
     const [lastGlyph, setLastGlyph] = useState<DeckGlyph>(room?.launch ?? "shell");
@@ -367,7 +376,13 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         for (const session of sessions) delete next[session];
         return next;
       });
+      setRang((prev) => without(prev, sessions));
     };
+
+    const focusedPane = active && layout?.groups[layout.active]?.panes.includes(focused) ? focused : null;
+    useEffect(() => {
+      if (focusedPane !== null) setRang((prev) => without(prev, [focusedPane]));
+    }, [focusedPane]);
 
     /** Lands a layout with the focus on a survivor of its active group. */
     const applyKeepingFocus = (next: PaneLayout) => {
@@ -565,6 +580,9 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         const t = shortTitle(raw);
         setTitles((prev) => (prev[session] === t ? prev : { ...prev, [session]: t }));
       };
+      const onBell = () => {
+        if (session !== focusedPane) setRang((prev) => (prev.has(session) ? prev : new Set(prev).add(session)));
+      };
       const menuExtras = paneMenuItems(layout, session, base, menuActions, titles);
       if (room) {
         return (
@@ -581,6 +599,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
             writerFde={plan.writerFde}
             onStatus={onPaneReport}
             onTitle={onTitle}
+            onBell={onBell}
             menuExtras={menuExtras}
           />
         );
@@ -598,6 +617,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
           visible={active && groupActive}
           onStatus={onPaneReport}
           onTitle={onTitle}
+          onBell={onBell}
           menuExtras={menuExtras}
         />
       );
@@ -614,6 +634,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               const st = statuses[s];
               return st !== undefined && isUnwell(st);
             });
+            const belled = group.panes.some((s) => rang.has(s));
             const plainLabel = group.panes.map((s) => titleOf(layout, s, base, titles)).join("·");
             return (
               <button
@@ -630,6 +651,13 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                 }}
               >
                 {unwell && <span className="term-status__dot term-status__dot--warn" aria-hidden />}
+                {!unwell && belled && (
+                  <span
+                    className="term-status__dot term-status__dot--bell"
+                    data-testid="term-bell-dot"
+                    aria-hidden
+                  />
+                )}
                 {group.panes.map((s, p) => {
                   const color = layout.meta?.[s]?.color;
                   return (
