@@ -507,6 +507,20 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(services.link.closed, "the ending needs no close; the unmount's is enough").toEqual([]);
   });
 
+  test("a mid-stream replay re-baselines the terminal: the snapshot replaces what came before", async () => {
+    const { attachment } = await mount();
+    const { lanes } = attachment;
+    await act(async () => {
+      lanes.onData(bytes("stale line"));
+      lanes.onData(frame(1, 1));
+      lanes.onData(bytes("fresh"));
+      lanes.onData(frame(2));
+    });
+    expect(status()).toEqual({ kind: "up" });
+    const row = services.renderers[0]!.applied.at(-1)?.rows.find((r) => r.y === 0);
+    expect(row?.cells.map((c) => c.text).join("").trimEnd(), "only the snapshot remains").toBe("fresh");
+  });
+
   test("a runaway reason is capped on the card", async () => {
     const { attachment } = await mount();
     await act(async () => {
