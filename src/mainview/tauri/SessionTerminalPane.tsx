@@ -576,7 +576,8 @@ export const SessionTerminalPane = forwardRef<
         if (over() || rebuilding) return;
         rebuilding = true;
         renderer.destroy();
-        void services.createRenderer(canvas, rendererOptions).then(
+        // The theme may have flipped since the attach: a rebuilt renderer paints in today's colors.
+        void services.createRenderer(canvas, { ...rendererOptions, ...paletteRef.current }).then(
           (next) => {
             if (over()) return void next.destroy();
             renderer = next;

@@ -560,6 +560,13 @@ describe("SessionTerminalPane at the channel edge", () => {
       attachment.lanes.onData(bytes("\x1b[?996n"));
     });
     expect(lastWrite(), "the program now hears a dark scheme").toBe("\x1b[?997;1n");
+    await act(async () => {
+      renderer.opts.onLost?.("GPU device lost");
+    });
+    await settle();
+    expect(services.renderers.at(-1)!.opts.bg, "a rebuilt renderer paints in today's colors").toEqual(
+      paletteFor("dark").bg,
+    );
   });
 
   test("a bell flashes the pane and reaches the host", async () => {
