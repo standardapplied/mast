@@ -17,27 +17,24 @@ import { BG_STRIDE, FG_PER_CELL, FG_STRIDE, packFrame } from "./framePacker";
 import { GlyphAtlas } from "./glyphAtlas";
 import { offscreenRaster, type RasterFactory } from "./raster";
 import type { Renderer } from "./terminalController";
+import type { RendererColors } from "./terminalController";
 import { TerminalGrid } from "./terminalGrid";
 import type { Cursor, GridSnapshot, Rgb } from "./vtCore";
 
 export type BackendName = "webgpu" | "webgl2";
 
-export interface RendererOptions {
+/**
+ * {@link RendererColors}: `bg` is the canvas clear and the color under the block cursor, `fg`
+ * paints blank cells (default-colored text arrives resolved from VtCore), `cursor` the block
+ * cursor, `selectionBg`/`selectionFg` the highlight and the text drawn over it.
+ */
+export interface RendererOptions extends RendererColors {
   /** Monospace family used to rasterize glyphs; must be loaded before the first frame. */
   readonly fontFamily: string;
   /** Font size in CSS pixels; the cell is derived from the face's metrics (see fontMetrics.ts). */
   readonly fontPx: number;
   /** Device pixel ratio to render at (crispness on retina). */
   readonly dpr: number;
-  /** Theme background — the canvas clear and the color drawn under the block cursor. */
-  readonly bg: Rgb;
-  /** Theme foreground — blank cells; default-colored text already arrives resolved from VtCore. */
-  readonly fg: Rgb;
-  /** Block-cursor color. */
-  readonly cursor: Rgb;
-  /** Selection highlight background and the text color drawn over it. */
-  readonly selectionBg: Rgb;
-  readonly selectionFg: Rgb;
   /** Reports an async GPU error (an uncaptured validation error) that no throw surfaces. */
   readonly onError?: (message: string) => void;
   /**
@@ -87,6 +84,7 @@ const GL_RESTORE_TIMEOUT_MS = 5000;
 
 export class TerminalRenderer implements SurfaceRenderer {
   private readonly opts: RendererOptions;
+  private colors: RendererColors;
   private readonly atlas: GlyphAtlas;
   private backend!: Backend;
   private readonly grid: TerminalGrid;
@@ -99,6 +97,7 @@ export class TerminalRenderer implements SurfaceRenderer {
     visible: false,
     style: "block",
     blinking: false,
+    color: null,
   };
   // Instance buffers reused across frames — sized on resize, never per frame.
   private bgInstances = new Float32Array(0);
@@ -106,8 +105,9 @@ export class TerminalRenderer implements SurfaceRenderer {
 
   private constructor(opts: RendererOptions) {
     this.opts = opts;
+    this.colors = opts;
     this.atlas = new GlyphAtlas(opts.raster ?? offscreenRaster, opts.fontFamily, opts.fontPx, opts.dpr);
-    this.grid = new TerminalGrid({ fg: opts.fg, bg: opts.bg });
+    this.grid = new TerminalGrid(opts);
   }
 
   /** The cell size in device pixels, so the harness can size the terminal to the canvas. */
@@ -148,11 +148,17 @@ export class TerminalRenderer implements SurfaceRenderer {
     this.cursor = cursor;
   }
 
+  /** A theme flip: the next frame clears and paints in the new colors. */
+  setColors(colors: RendererColors): void {
+    this.colors = colors;
+    this.grid.setBlank(colors);
+  }
+
   /** Packs the current grid into the reused instance buffers and draws one frame. */
   draw(): void {
     const bg = this.bgInstances;
     const fg = this.fgInstances;
-    const fgCount = packFrame(this.grid, this.cursor, this.atlas, this.opts, {
+    const fgCount = packFrame(this.grid, this.cursor, this.atlas, this.colors, {
       bg,
       fg,
     });
@@ -170,7 +176,7 @@ export class TerminalRenderer implements SurfaceRenderer {
       atlasHeight: this.atlas.height,
       atlasPixels: () => this.atlas.pixels(),
       atlasVersion: this.atlas.version,
-      clear: this.opts.bg,
+      clear: this.colors.bg,
     });
   }
 

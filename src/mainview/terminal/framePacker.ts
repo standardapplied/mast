@@ -71,6 +71,7 @@ export function packFrame(
 ): number {
   const cursorShown = cursor.present && cursor.visible;
   const blockCursor = cursorShown && cursor.style === "block";
+  const cursorColor = cursor.color ?? colors.cursor;
   let fgCount = 0;
   const put = (x: number, y: number, id: number, color: Rgb, wide: boolean, mode: number) => {
     const { u, v } = atlas.cell(id);
@@ -94,7 +95,7 @@ export function packFrame(
       const cell = grid.cell(x, y);
       const onBlockCursor = blockCursor && cursor.x === x && cursor.y === y;
       const selected = !onBlockCursor && cell.selected;
-      const cellBg = onBlockCursor ? colors.cursor : selected ? colors.selectionBg : cell.bg;
+      const cellBg = onBlockCursor ? cursorColor : selected ? colors.selectionBg : cell.bg;
       const bi = (y * grid.cols + x) * BG_STRIDE;
       out.bg[bi] = cellBg[0] / 255;
       out.bg[bi + 1] = cellBg[1] / 255;
@@ -132,7 +133,7 @@ export function packFrame(
   const sprite = cursorShown ? CURSOR_SPRITE[cursor.style] : undefined;
   if (sprite) {
     const wide = grid.cell(cursor.x, cursor.y).width === 2;
-    put(cursor.x, cursor.y, atlas.special(sprite, wide), colors.cursor, wide, MODE_TINT);
+    put(cursor.x, cursor.y, atlas.special(sprite, wide), cursorColor, wide, MODE_TINT);
   }
   return fgCount;
 }

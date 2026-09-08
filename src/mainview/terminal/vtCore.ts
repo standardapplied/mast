@@ -117,6 +117,8 @@ export interface Cursor {
   readonly style: CursorStyle;
   /** Whether the application wants it to blink (DECSCUSR odd values, mode 12). */
   readonly blinking: boolean;
+  /** The effective cursor color: OSC 12 when the app set one, else the theme's (OSC 112 resets). */
+  readonly color: Rgb | null;
 }
 
 /** GhosttyRenderStateCursorVisualStyle values, in enum order. */
@@ -170,6 +172,12 @@ const MODES_ALT_SCREEN = [1049, 1047, 47] as const;
 const MODE_FOCUS_REPORTING = 1004;
 /** DEC private mode 2026 — synchronized output: hold frames until the app finishes a redraw. */
 const MODE_SYNCHRONIZED_OUTPUT = 2026;
+/** DEC private mode 1007 — alternate scroll: the wheel becomes arrow keys on the alternate screen. */
+const MODE_ALTERNATE_SCROLL = 1007;
+/** DEC private mode 2031 — the app wants to hear when the color scheme flips (CSI ? 997 ; n). */
+const MODE_COLOR_SCHEME_REPORTING = 2031;
+/** GhosttyKittyKeyFlags bits the embedder's routing depends on (key_encoder.h). */
+export const KITTY_KEY = { REPORT_EVENTS: 1 << 1, REPORT_ALL: 1 << 3 } as const;
 /** The mouse tracking modes (X10, normal, button-event, any-event) — any one means the app wants the mouse. */
 const MODES_MOUSE_TRACKING = [9, 1000, 1002, 1003] as const;
 /** GhosttyMouseAction / GhosttyMouseButton values. */
@@ -205,6 +213,8 @@ const MAX_DIM = 65535;
 // Enum values from ghostty/vt/render.h (build 1.3.2 +d9840f3), pinned alongside the wasm.
 const RS_DATA_DIRTY = 3;
 const RS_DATA_ROW_ITERATOR = 4;
+const RS_DATA_COLOR_CURSOR = 7;
+const RS_DATA_COLOR_CURSOR_HAS_VALUE = 8;
 const RS_DATA_COLOR_PALETTE = 9;
 const RS_DATA_CURSOR_VISUAL_STYLE = 10;
 const RS_DATA_CURSOR_VISIBLE = 11;
@@ -290,6 +300,16 @@ const OPT_SCROLLBACK_MAX_BYTES = 27;
 const DATA_SCROLLBACK_MAX_BYTES = 34;
 /** GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE (bool): the viewport follows the active area. */
 const DATA_VIEWPORT_ACTIVE = 32;
+/** GHOSTTY_TERMINAL_DATA_KITTY_KEYBOARD_FLAGS (u8): the kitty keyboard flags the app pushed. */
+const DATA_KITTY_KEYBOARD_FLAGS = 8;
+/** GHOSTTY_TERMINAL_DATA_CURSOR_Y (u16): the cursor's row in the active area. */
+const DATA_CURSOR_Y = 4;
+/** GHOSTTY_TERMINAL_DATA_VT_GROUND (bool): the parser is between sequences. */
+const DATA_VT_GROUND = 38;
+/** GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT (bool): OSC 133 says the cursor sits at a prompt. */
+const DATA_CURSOR_AT_PROMPT = 39;
+/** Ghostty's clear_screen asks the shell to repaint its prompt with a form feed. */
+const FORM_FEED = new Uint8Array([0x0c]);
 /** The terminal's active selection: set with a GhosttySelection* (NULL clears), read back the same. */
 const OPT_SELECTION = 21;
 const DATA_SELECTION = 31;
@@ -599,9 +619,9 @@ export class VtCore {
   private readonly dragEvent: number;
   private readonly releaseEvent: number;
 
-  private readonly fg: Rgb;
-  private readonly bg: Rgb;
-  private readonly scheme: ColorScheme;
+  private fg: Rgb;
+  private bg: Rgb;
+  private scheme: ColorScheme;
   private readonly identityPtr: number;
   private readonly identityLen: number;
   private cellPx = { w: 0, h: 0 };
@@ -698,11 +718,28 @@ export class VtCore {
    * colors then resolve to the embedder's design; true-color and default cells are unaffected.
    */
   private configure(theme: Theme): void {
+    this.applyTheme(theme);
+    this.setBool(OPT_DEFAULT_CURSOR_BLINK, true);
+    this.setSize(OPT_SCROLLBACK_MAX_BYTES, SCROLLBACK_MAX_BYTES);
+  }
+
+  /**
+   * Swaps the theme in place — the terminal's defaults and palette change, nothing else does:
+   * the screen, scrollback and modes stay, and the app's own OSC 4/10/11/12 overrides still win.
+   * {@code scheme} is what CSI ? 996 n answers from now on.
+   */
+  setTheme(theme: Theme, scheme: ColorScheme = this.scheme): void {
+    this.requireOpen();
+    this.applyTheme(theme);
+    this.scheme = scheme;
+  }
+
+  private applyTheme(theme: Theme): void {
+    this.fg = theme.fg;
+    this.bg = theme.bg;
     this.setColor(OPT_COLOR_FOREGROUND, theme.fg);
     this.setColor(OPT_COLOR_BACKGROUND, theme.bg);
     this.setColor(OPT_COLOR_CURSOR, theme.cursor);
-    this.setBool(OPT_DEFAULT_CURSOR_BLINK, true);
-    this.setSize(OPT_SCROLLBACK_MAX_BYTES, SCROLLBACK_MAX_BYTES);
 
     const ptr = this.abi.alloc(256 * 3);
     try {
@@ -738,17 +775,68 @@ export class VtCore {
    * history, where new output lands below what they are looking at.
    */
   viewportActive(): boolean {
+    return this.terminalU8(DATA_VIEWPORT_ACTIVE) !== 0;
+  }
+
+  /** The kitty keyboard flags the app pushed (see {@link KITTY_KEY}); 0 in legacy mode. */
+  kittyKeyboardFlags(): number {
+    return this.terminalU8(DATA_KITTY_KEYBOARD_FLAGS);
+  }
+
+  /** A one-byte terminal datum (a bool or a small bitmask). */
+  private terminalU8(data: number): number {
     this.requireOpen();
     const ptr = this.abi.alloc(1);
     try {
-      const rc = this.e.ghostty_terminal_get(this.term, DATA_VIEWPORT_ACTIVE, ptr);
+      const rc = this.e.ghostty_terminal_get(this.term, data, ptr);
       if (rc !== SUCCESS) {
-        throw new Error(`VtCore: reading the viewport state failed (rc=${rc})`);
+        throw new Error(`VtCore: reading terminal datum ${data} failed (rc=${rc})`);
       }
-      return this.abi.readU8(ptr) !== 0;
+      return this.abi.readU8(ptr);
     } finally {
       this.abi.free(ptr, 1);
     }
+  }
+
+  private terminalU16(data: number): number {
+    this.requireOpen();
+    const ptr = this.abi.alloc(2);
+    try {
+      const rc = this.e.ghostty_terminal_get(this.term, data, ptr);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: reading terminal datum ${data} failed (rc=${rc})`);
+      }
+      return this.abi.readU16(ptr);
+    } finally {
+      this.abi.free(ptr, 2);
+    }
+  }
+
+  /**
+   * Ghostty's clear_screen, done with the sequences a program would send, since the C ABI has no
+   * clear of its own: scrollback is erased and the rows above the cursor blanked, leaving the
+   * prompt line in place. With OSC 133 prompt marks the whole screen is erased instead and the
+   * returned bytes — a form feed — ask the shell to repaint its prompt. Null means nothing to
+   * send. A no-op on the alternate screen (a TUI owns every cell) and while the parser is inside
+   * a sequence (injecting bytes there would corrupt it).
+   */
+  clearScreen(): Uint8Array | null {
+    this.requireOpen();
+    if (this.altScreen() || this.terminalU8(DATA_VT_GROUND) === 0) {
+      return null;
+    }
+    this.write(UTF8.encode("\x1b[3J"));
+    if (this.terminalU8(DATA_CURSOR_AT_PROMPT) !== 0) {
+      this.write(UTF8.encode("\x1b[2J"));
+      return FORM_FEED;
+    }
+    const y = this.terminalU16(DATA_CURSOR_Y);
+    if (y > 0) {
+      // DECSC, then erase from the top of the screen through the last cell of the row above the
+      // cursor, then DECRC: the cursor, its row and its pending wrap come back untouched.
+      this.write(UTF8.encode(`\x1b7\x1b[${y};${this.cols}H\x1b[1J\x1b8`));
+    }
+    return null;
   }
 
   /** The scrollback budget in bytes the terminal is running with. */
@@ -1186,6 +1274,21 @@ export class VtCore {
     return this.modeEnabled(MODE_SYNCHRONIZED_OUTPUT);
   }
 
+  /** Whether the wheel should drive the alternate screen with arrow keys (mode 1007, on by default). */
+  alternateScroll(): boolean {
+    return this.modeEnabled(MODE_ALTERNATE_SCROLL);
+  }
+
+  /** Whether the application asked to hear about color-scheme flips (mode 2031). */
+  colorSchemeReporting(): boolean {
+    return this.modeEnabled(MODE_COLOR_SCHEME_REPORTING);
+  }
+
+  /** The CSI ? 997 ; 1|2 n report an app under mode 2031 hears when the scheme flips. */
+  encodeColorSchemeReport(): Uint8Array {
+    return UTF8.encode(`\x1b[?997;${this.scheme === "dark" ? 1 : 2}n`);
+  }
+
   /** Whether the application asked to hear about the mouse (modes 9/1000/1002/1003). */
   mouseTracking(): boolean {
     return MODES_MOUSE_TRACKING.some((mode) => this.modeEnabled(mode));
@@ -1401,7 +1504,7 @@ export class VtCore {
     this.refresh();
     const present = this.getBool(RS_DATA_CURSOR_VIEWPORT_HAS_VALUE);
     if (!present) {
-      return { present: false, x: 0, y: 0, visible: false, style: "block", blinking: false };
+      return { present: false, x: 0, y: 0, visible: false, style: "block", blinking: false, color: null };
     }
     const style = CURSOR_STYLES[this.getU32(RS_DATA_CURSOR_VISUAL_STYLE)];
     if (style === undefined) {
@@ -1414,7 +1517,24 @@ export class VtCore {
       visible: this.getBool(RS_DATA_CURSOR_VISIBLE),
       style,
       blinking: this.getBool(RS_DATA_CURSOR_BLINKING),
+      color: this.cursorColor(),
     };
+  }
+
+  private cursorColor(): Rgb | null {
+    if (!this.getBool(RS_DATA_COLOR_CURSOR_HAS_VALUE)) {
+      return null;
+    }
+    const ptr = this.abi.alloc(3);
+    try {
+      const rc = this.e.ghostty_render_state_get(this.state, RS_DATA_COLOR_CURSOR, ptr);
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: reading the cursor color failed (rc=${rc})`);
+      }
+      return this.abi.readRgb(ptr);
+    } finally {
+      this.abi.free(ptr, 3);
+    }
   }
 
   /**

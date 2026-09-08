@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -31,16 +32,22 @@ import {
 import { preAttachClass, skewCard, skewOf } from "../terminal/roomDeck";
 import type { RendererOptions, SurfaceRenderer } from "../terminal/renderer";
 import { decodeDataFrame } from "../terminal/dataFrames";
-import { MODS } from "../terminal/input";
+import { type KeyStroke, MODS } from "../terminal/input";
 import { sessionStore } from "../terminal/sessionStore";
-import { paletteFor, resolveThemeName } from "../terminal/terminalPalette";
+import { paletteFor, resolveThemeName, type TerminalColors } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
 import {
   type SessionCreate,
   type SessionFrames,
   useTerminalServices,
 } from "../terminal/terminalServices";
-import { type CellPos, type MouseButton, type SurfacePos, VtCore } from "../terminal/vtCore";
+import {
+  type CellPos,
+  type ColorScheme,
+  type MouseButton,
+  type SurfacePos,
+  VtCore,
+} from "../terminal/vtCore";
 
 export type { SessionCreate } from "../terminal/terminalServices";
 
@@ -77,6 +84,71 @@ export type TerminalHandle = {
 
 const BLINK_MS = 1060;
 const BLINK_ON_MS = 600;
+/** How long the pane flashes on BEL. */
+export const BELL_FLASH_MS = 120;
+
+type ViewportAction = "pageUp" | "pageDown" | "top" | "bottom";
+/** Scrollback navigation, on Shift or ⌘ (Ghostty's defaults), keyed by the DOM key name. */
+const VIEWPORT_KEYS: Readonly<Record<string, ViewportAction>> = {
+  PageUp: "pageUp",
+  PageDown: "pageDown",
+  Home: "top",
+  End: "bottom",
+};
+
+type CmdAction = "copy" | "paste" | "clear" | "host" | "swallow";
+/**
+ * The ⌘ chords the pane owns, keyed by the lowercased DOM key. "host" chords bubble to the pane
+ * bar (⌘T new shell, ⌘D split) with the default kept; "swallow" ones are reserved — their WebKit
+ * defaults (find, zoom, select-all, history navigation) would wreck the view over the app DOM.
+ * Anything else stays with the app and the OS, unless the program asked for every key.
+ */
+const CMD_SHORTCUTS: Readonly<Record<string, CmdAction>> = {
+  c: "copy",
+  v: "paste",
+  k: "clear",
+  t: "host",
+  d: "host",
+  f: "swallow",
+  a: "swallow",
+  "+": "swallow",
+  "=": "swallow",
+  "-": "swallow",
+  _: "swallow",
+  arrowup: "swallow",
+  arrowdown: "swallow",
+  arrowleft: "swallow",
+  arrowright: "swallow",
+};
+
+/** The viewport action a key event asks for: Shift or ⌘ (never both, never with Ctrl/Alt) + a nav key. */
+function viewportActionOf(e: React.KeyboardEvent): ViewportAction | undefined {
+  if (e.ctrlKey || e.altKey || e.shiftKey === e.metaKey) return undefined;
+  return VIEWPORT_KEYS[e.key];
+}
+
+function cmdActionOf(e: React.KeyboardEvent): CmdAction | undefined {
+  if (!e.metaKey || e.ctrlKey || e.altKey) return undefined;
+  return CMD_SHORTCUTS[e.key.toLowerCase()];
+}
+
+function strokeOf(e: React.KeyboardEvent): KeyStroke {
+  return {
+    key: e.key,
+    code: e.code,
+    ctrl: e.ctrlKey,
+    alt: e.altKey,
+    meta: e.metaKey,
+    shift: e.shiftKey,
+    caps: e.getModifierState?.("CapsLock") ?? false,
+    repeat: e.repeat,
+    composing: e.nativeEvent.isComposing,
+  };
+}
+
+function schemeOf(name: ThemeName): ColorScheme {
+  return name === "light" ? "light" : "dark";
+}
 
 /** Tracks Mast's resolved theme, re-rendering when the user flips it or the OS scheme changes. */
 function useThemeName(): ThemeName {
@@ -121,6 +193,8 @@ export interface SessionTerminalProps {
   readonly onTitle?: (title: string) => void;
   /** The write token moved (the host's WriterChanged broadcast); "" means released. */
   readonly onWriter?: (fde: string) => void;
+  /** The program rang the bell (BEL); the pane flashes itself, the host marks the tab. */
+  readonly onBell?: () => void;
 }
 
 const noop = () => {};
@@ -151,6 +225,7 @@ export const SessionTerminalPane = forwardRef<
     menuExtras,
     onTitle,
     onWriter,
+    onBell,
   },
   ref,
 ) {
@@ -175,6 +250,8 @@ export const SessionTerminalPane = forwardRef<
   onTitleRef.current = onTitle;
   const onWriterRef = useRef(onWriter);
   onWriterRef.current = onWriter;
+  const onBellRef = useRef(onBell);
+  onBellRef.current = onBell;
   const attachIdRef = useRef<string | null>(null);
   /** The host boot id this pane last saw the session listed under (see absenceReason). */
   const seenUnderRef = useRef<string | null>(null);
@@ -187,8 +264,14 @@ export const SessionTerminalPane = forwardRef<
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [unseenOutput, setUnseenOutput] = useState(false);
   const unseenRef = useRef(false);
+  const [ringing, setRinging] = useState(false);
+  const bellTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const themeName = useThemeName();
-  const palette = paletteFor(themeName);
+  const palette = useMemo(() => paletteFor(themeName), [themeName]);
+  const paletteRef = useRef(palette);
+  paletteRef.current = palette;
+  /** Applies a theme to the live terminal; set by the attach effect once a controller exists. */
+  const applyThemeRef = useRef<((colors: TerminalColors) => void) | null>(null);
   const bgCss = `rgb(${palette.bg[0]}, ${palette.bg[1]}, ${palette.bg[2]})`;
   // What the lane last said about the session, owned by the store so every surface agrees.
   const lane = useSyncExternalStore(sessionStore.subscribe, () => sessionStore.lane(session));
@@ -292,8 +375,20 @@ export const SessionTerminalPane = forwardRef<
     };
   }, [link, reattach, socketPath, token]);
 
-  // The retry timer must survive effect re-runs (a theme flip mid-wait) and die with the pane.
-  useEffect(() => () => clearTimeout(retryTimer.current), []);
+  // The retry timer must survive effect re-runs and die with the pane; so must the bell flash.
+  useEffect(
+    () => () => {
+      clearTimeout(retryTimer.current);
+      clearTimeout(bellTimer.current);
+    },
+    [],
+  );
+
+  // A theme flip recolors the live terminal in place — the session, its history and its modes
+  // stay; re-dialing every pane at dusk when macOS switches appearance is what this replaces.
+  useEffect(() => {
+    applyThemeRef.current?.(palette);
+  }, [palette]);
 
   // Focus is a fact of the DOM, not a prop: the cursor reads as focused, and apps that asked for
   // focus reports (mode 1004) hear CSI I/O, exactly when keystrokes would reach this pane — the
@@ -416,15 +511,12 @@ export const SessionTerminalPane = forwardRef<
       let rendererFailed = false;
       // Assigned once the controller exists; a loss reported before that has nothing to rebuild.
       let rebuildRenderer: (reason: string) => void = noop;
+      const theme = paletteRef.current;
       const rendererOptions: RendererOptions = {
         fontFamily: FONT_FAMILY,
         fontPx: FONT_PX,
         dpr,
-        bg: palette.bg,
-        fg: palette.fg,
-        cursor: palette.cursor,
-        selectionBg: palette.selectionBg,
-        selectionFg: palette.selectionFg,
+        ...theme,
         onError: (message) => {
           if (!disposed) setStatus({ kind: "failed", reason: message });
         },
@@ -456,9 +548,9 @@ export const SessionTerminalPane = forwardRef<
       // client. Attach at a sane default instead; the ResizeObserver fits it on first reveal.
       const sized = host.clientWidth > 0 && host.clientHeight > 0;
       let { cols, rows } = sized ? fit() : { cols: 80, rows: 24 };
-      const core = await VtCore.create(wasm, cols, rows, palette, {
+      const core = await VtCore.create(wasm, cols, rows, theme, {
         identity: await services.identity(),
-        scheme: themeName === "light" ? "light" : "dark",
+        scheme: schemeOf(resolveThemeName()),
       });
       if (disposed) return void core.free();
       cleanups.push(() => core.free());
@@ -516,6 +608,13 @@ export const SessionTerminalPane = forwardRef<
       controller.hooks.onClipboard = (text) =>
         void navigator.clipboard?.writeText(text).catch(noop);
       controller.hooks.onTitle = (title) => onTitleRef.current?.(title);
+      controller.hooks.onBell = () => {
+        if (disposed) return;
+        clearTimeout(bellTimer.current);
+        setRinging(true);
+        bellTimer.current = setTimeout(() => setRinging(false), BELL_FLASH_MS);
+        onBellRef.current?.();
+      };
 
       const setGeom = () => {
         geomRef.current = { cw: cellW / dpr, ch: cellH / dpr, cols, rows };
@@ -548,9 +647,16 @@ export const SessionTerminalPane = forwardRef<
         });
       const adopt = (c: number, r: number) => contained(() => apply({ cols: c, rows: r }, true));
       geometryRef.current = { adopt, refit };
+      applyThemeRef.current = (colors) =>
+        contained(() => controller.setTheme(colors, schemeOf(resolveThemeName())));
       cleanups.push(() => {
         geometryRef.current = null;
+        applyThemeRef.current = null;
       });
+      // The theme may have flipped while the renderer and the wasm were loading.
+      if (paletteRef.current !== theme) {
+        applyThemeRef.current(paletteRef.current);
+      }
 
       /** Facts about the session, not this pane: they land in the store and render from it. */
       const onMeta = (meta: SessionMeta) => {
@@ -658,8 +764,8 @@ export const SessionTerminalPane = forwardRef<
       // (a shell that exited at once, a link that dropped right after attaching): that card — and
       // the retry it may have scheduled — stands; the open resolving settles nothing.
       if (halted || ended) return;
-      // A theme flip can re-run this effect and attach while a retry timer still pends; landing
-      // here settles the connection, so a stale timer must not force another remount.
+      // A re-run of this effect (a prop change) can attach while a retry timer still pends;
+      // landing here settles the connection, so a stale timer must not force another remount.
       clearTimeout(retryTimer.current);
       reconnector.current.opened();
       setStatus({ kind: "up" });
@@ -731,7 +837,21 @@ export const SessionTerminalPane = forwardRef<
     };
     // The session identity — not the one-shot create spec — is the dependency; `epoch` re-dials it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [services, socketPath, token, session, write, themeName, epoch]);
+  }, [services, socketPath, token, session, write, epoch]);
+
+  /** Scrollback navigation the pane owns; consumed even on the alternate screen, as in Ghostty. */
+  const moveViewport = (controller: TerminalController, action: ViewportAction) => {
+    switch (action) {
+      case "pageUp":
+        return controller.scrollPage(-1);
+      case "pageDown":
+        return controller.scrollPage(1);
+      case "top":
+        return controller.scroll("top");
+      case "bottom":
+        return controller.scroll("bottom");
+    }
+  };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     const controller = controllerRef.current;
@@ -748,38 +868,44 @@ export const SessionTerminalPane = forwardRef<
       e.preventDefault();
       return;
     }
-    if (e.metaKey && !e.ctrlKey && !e.altKey) {
-      if ((e.key === "c" || e.key === "C") && copySelection()) {
-        e.preventDefault();
+    const viewport = viewportActionOf(e);
+    if (viewport) {
+      moveViewport(controller, viewport);
+      e.preventDefault();
+      return;
+    }
+    switch (cmdActionOf(e)) {
+      case "copy":
+        if (copySelection()) e.preventDefault();
         return;
-      }
-      if (e.key === "v" || e.key === "V") {
+      case "paste":
         pasteFromClipboard();
         e.preventDefault();
         return;
-      }
-      // Cmd chords produce no pty bytes, but a few WebKit defaults would wreck the view over the
-      // app DOM (select-all flash, history navigation). Swallow those; everything else stays with
-      // the app and the OS (⌘T/⌘D bubble to the pane bar, ⌘Q to the menu).
-      if (e.key === "a" || e.key === "A" || e.key.startsWith("Arrow")) {
+      case "clear":
+        controller.clearScreen();
         e.preventDefault();
-      }
-      return;
+        return;
+      case "swallow":
+        e.preventDefault();
+        return;
+      case "host":
+        return;
     }
-    const consumed = controller.key({
-      key: e.key,
-      code: e.code,
-      ctrl: e.ctrlKey,
-      alt: e.altKey,
-      meta: e.metaKey,
-      shift: e.shiftKey,
-      caps: e.getModifierState?.("CapsLock") ?? false,
-      repeat: e.repeat,
-      composing: e.nativeEvent.isComposing,
-    });
+    const consumed = controller.key(strokeOf(e));
     if (consumed) {
       controller.clearSelection(); // typing clears the highlight...
       controller.scroll("bottom"); // ...and returns to the live view
+      e.preventDefault();
+    }
+  };
+
+  // A release reaches the pty only when the program asked for key events (kitty flag 2); a chord
+  // the pane consumed on the way down is not reported on the way up either.
+  const onKeyUp = (e: React.KeyboardEvent) => {
+    const controller = controllerRef.current;
+    if (!controller || pendingPaste !== null || viewportActionOf(e) || cmdActionOf(e)) return;
+    if (controller.key({ ...strokeOf(e), release: true })) {
       e.preventDefault();
     }
   };
@@ -915,6 +1041,7 @@ export const SessionTerminalPane = forwardRef<
       ref={hostRef}
       tabIndex={0}
       onKeyDown={onKeyDown}
+      onKeyUp={onKeyUp}
       onFocus={syncFocus}
       onBlur={syncFocus}
       onCompositionEnd={onCompositionEnd}
@@ -938,6 +1065,7 @@ export const SessionTerminalPane = forwardRef<
       }}
     >
       <canvas ref={canvasRef} />
+      {ringing && <div className="term-bell" data-testid="term-bell" aria-hidden />}
       {(lane.ptySize || lane.paused) && (
         <div className="term-chips">
           {lane.ptySize && (

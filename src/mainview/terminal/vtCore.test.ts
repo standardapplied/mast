@@ -21,6 +21,18 @@ function rowText(core: VtCore, y: number): string {
   return row ? row.cells.map((c) => c.text).join("").replace(/\u0000/g, "").trimEnd() : "";
 }
 
+/** A row as the renderer would see it, whatever the damage state. */
+function line(core: VtCore, y: number): string {
+  return core.readAll().rows[y]!.cells.map((c) => c.text).join("").replace(/\u0000/g, "").trimEnd();
+}
+
+const THEME = {
+  fg: [1, 2, 3] as const,
+  bg: [4, 5, 6] as const,
+  cursor: [7, 8, 9] as const,
+  palette: Array.from({ length: 16 }, (_, i) => [i * 15, 200 - i, i] as const),
+};
+
 let open: VtCore[] = [];
 afterEach(() => {
   open.forEach((c) => c.free());
@@ -46,6 +58,77 @@ describe("VtCore", () => {
     expect(cells[0]!.fg).toEqual(palette[1]!); // ANSI red → the configured palette entry, not ghostty's
     expect(cells[1]!.fg).toEqual([100, 150, 200]); // true color is untouched
     expect(cells[2]!.fg).toEqual(theme.fg); // an unstyled cell falls back to the theme foreground
+  });
+
+  test("the cursor color follows OSC 12 and returns to the theme's on OSC 112", async () => {
+    const core = await VtCore.create(WASM, 20, 3, { ...THEME, cursor: [7, 8, 9] });
+    open.push(core);
+    expect(core.cursor().color).toEqual([7, 8, 9]);
+    core.write(bytes("\x1b]12;#ff0000\x1b\\"));
+    expect(core.cursor().color).toEqual([255, 0, 0]);
+    core.write(bytes("\x1b]112\x1b\\"));
+    expect(core.cursor().color).toEqual([7, 8, 9]);
+  });
+
+  test("a theme swap recolors defaults and palette in place; screen, modes and queries follow", async () => {
+    const core = await track(20, 3);
+    core.write(bytes("\x1b[31mA\x1b[0mB\x1b[?2004h"));
+    const palette = Array.from({ length: 16 }, (_, i) => [i, 100 + i, 200 - i] as const);
+    core.setTheme({ ...THEME, palette }, "light");
+    const cells = core.readAll().rows[0]!.cells;
+    expect(cells[0]!.fg).toEqual(palette[1]!);
+    expect(cells[1]!.fg).toEqual(THEME.fg);
+    expect(cells[1]!.bg).toEqual(THEME.bg);
+    expect(cells[1]!.text).toBe("B");
+    expect(core.bracketedPaste()).toBe(true);
+    expect(core.cursor().color).toEqual(THEME.cursor);
+    const replies: string[] = [];
+    core.hooks.onWritePty = (b) => replies.push(new TextDecoder().decode(b));
+    core.write(bytes("\x1b]11;?\x1b\\\x1b[?996n"));
+    expect(replies).toEqual(["\x1b]11;rgb:0404/0505/0606\x1b\\", "\x1b[?997;2n"]);
+    expect(new TextDecoder().decode(core.encodeColorSchemeReport())).toBe("\x1b[?997;2n");
+  });
+
+  test("clearScreen without prompt marks: history and the rows above the cursor go, the prompt line stays", async () => {
+    const core = await track(20, 3);
+    core.write(bytes("one\r\ntwo\r\nthree\r\nfour\r\n$ ls"));
+    core.scroll("top");
+    expect(line(core, 0)).toBe("one");
+    core.scroll("bottom");
+    expect(core.clearScreen()).toBeNull();
+    expect([line(core, 0), line(core, 1), line(core, 2)]).toEqual(["", "", "$ ls"]);
+    expect(core.cursor()).toMatchObject({ x: 4, y: 2 });
+    core.scroll("top");
+    expect(line(core, 0), "the scrollback is gone").toBe("");
+    core.write(bytes("x"));
+    expect(line(core, 2)).toBe("$ lsx");
+  });
+
+  test("clearScreen at an OSC 133 prompt erases the screen and asks the shell to repaint", async () => {
+    const core = await track(20, 3);
+    core.write(bytes("old output\r\n\x1b]133;A\x1b\\$ "));
+    expect(core.clearScreen()).toEqual(new Uint8Array([0x0c]));
+    expect([line(core, 0), line(core, 1)]).toEqual(["", ""]);
+  });
+
+  test("clearScreen is a no-op on the alternate screen and while the parser is mid-sequence", async () => {
+    const core = await track(20, 3);
+    core.write(bytes("\x1b[?1049hTUI"));
+    expect(core.clearScreen()).toBeNull();
+    expect(line(core, 0)).toBe("TUI");
+    core.write(bytes("\x1b[?1049la\r\nb\x1b["));
+    expect(core.clearScreen()).toBeNull();
+    expect(line(core, 0)).toBe("a");
+  });
+
+  test("alternate scroll (mode 1007) is on by default and the app can turn it off", async () => {
+    const core = await track();
+    expect(core.alternateScroll()).toBe(true);
+    core.write(bytes("\x1b[?1007l"));
+    expect(core.alternateScroll()).toBe(false);
+    expect(core.colorSchemeReporting()).toBe(false);
+    core.write(bytes("\x1b[?2031h"));
+    expect(core.colorSchemeReporting()).toBe(true);
   });
 
   test("reports display width: wide CJK and emoji are 2 columns, ASCII is 1", async () => {
@@ -529,9 +612,33 @@ describe("key encoding", () => {
     expect(press(core, { key: "ArrowRight", code: "ArrowRight", alt: true })).toBe("\x1b[1;3C");
   });
 
-  test("option-as-alt sends ESC plus the unshifted key, not the composed character", async () => {
+  test("option-as-alt sends ESC plus the unshifted key for every composed macOS character", async () => {
     const core = await track();
-    expect(press(core, { key: "∫", code: "KeyB", alt: true })).toBe("\x1bb");
+    const composed: [string, string, string][] = [
+      ["ƒ", "KeyF", "f"],
+      ["å", "KeyA", "a"],
+      ["ß", "KeyS", "s"],
+      ["œ", "KeyQ", "q"],
+      ["∂", "KeyD", "d"],
+      ["∫", "KeyB", "b"],
+      ["¡", "Digit1", "1"],
+    ];
+    for (const [key, code, base] of composed) {
+      expect(press(core, { key, code, alt: true }), `Option+${base}`).toBe(`\x1b${base}`);
+    }
+  });
+
+  test("kitty flags are readable; releases encode under report-events, ⌘ chords under report-all", async () => {
+    const core = await track();
+    expect(core.kittyKeyboardFlags()).toBe(0);
+    expect(press(core, { key: "a", code: "KeyA", release: true })).toBeNull();
+    core.write(bytes("\x1b[>3u")); // disambiguate + report events
+    expect(core.kittyKeyboardFlags()).toBe(3);
+    expect(press(core, { key: "a", code: "KeyA" })).toBe("a");
+    expect(press(core, { key: "a", code: "KeyA", release: true })).toBe("\x1b[97;1:3u");
+    core.write(bytes("\x1b[>11u")); // + report all keys as escape codes
+    expect(core.kittyKeyboardFlags()).toBe(11);
+    expect(press(core, { key: "c", code: "KeyC", meta: true })).toBe("\x1b[99;9u");
   });
 
   test("a bare modifier encodes nothing", async () => {

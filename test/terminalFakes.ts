@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { HostListing } from "../src/mainview/terminal/connection";
 import type { Gateway } from "../src/mainview/gateway";
 import type { RendererOptions, SurfaceRenderer } from "../src/mainview/terminal/renderer";
+import type { RendererColors } from "../src/mainview/terminal/terminalController";
 import type {
   SessionFrames,
   SessionLink,
@@ -141,6 +142,10 @@ export class FakeRenderer implements SurfaceRenderer {
   }
   setCursor(cursor: Cursor): void {
     this.cursors.push(cursor);
+  }
+  colors: RendererColors[] = [];
+  setColors(colors: RendererColors): void {
+    this.colors.push(colors);
   }
   draw(): void {
     this.draws++;

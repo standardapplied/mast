@@ -29,6 +29,7 @@ export interface RoomTerminalProps {
   readonly writerFde?: string;
   readonly onStatus?: (status: SessionStatus) => void;
   readonly onTitle?: (title: string) => void;
+  readonly onBell?: () => void;
   /** Extra context-menu entries (the pane host's rename/color/close). */
   readonly menuExtras?: MenuNode[];
 }
@@ -46,6 +47,7 @@ export const RoomTerminal = forwardRef<TerminalHandle, RoomTerminalProps>(functi
     writerFde,
     onStatus,
     onTitle,
+    onBell,
     menuExtras,
   },
   ref,
@@ -93,6 +95,7 @@ export const RoomTerminal = forwardRef<TerminalHandle, RoomTerminalProps>(functi
         visible={visible}
         onStatus={onStatus}
         onTitle={onTitle}
+        onBell={onBell}
         onWriter={setWriter}
         menuExtras={menuExtras}
       />

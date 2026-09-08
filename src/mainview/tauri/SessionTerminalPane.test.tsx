@@ -10,6 +10,7 @@ import {
 } from "../../../test/terminalFakes";
 import type { SessionStatus } from "../terminal/connection";
 import { sessionStore } from "../terminal/sessionStore";
+import { paletteFor } from "../terminal/terminalPalette";
 import { TerminalServicesProvider } from "../terminal/terminalServices";
 import { SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane";
 
@@ -41,7 +42,13 @@ afterEach(() => {
   container.remove();
   sessionStore.reset();
   restoreLayout();
+  delete document.documentElement.dataset.theme;
 });
+
+const host = () => container.querySelector("[tabindex]") as HTMLElement;
+const keyEvent = (type: "keydown" | "keyup", init: KeyboardEventInit) =>
+  host().dispatchEvent(new KeyboardEvent(type, { bubbles: true, cancelable: true, ...init }));
+const lastWrite = () => new TextDecoder().decode(services.link.writes.at(-1)?.bytes ?? new Uint8Array());
 
 const settle = async () => {
   await act(async () => {});
@@ -54,7 +61,9 @@ const status = () => statuses.at(-1)!;
 const card = () => container.querySelector(".term-overlay__card");
 
 /** Renders a pane; the attach runs on from here (see {@link mount} for the settled form). */
-function render(over: { session?: string; onWriter?: (fde: string) => void } = {}) {
+type Over = { session?: string; onWriter?: (fde: string) => void; onBell?: () => void };
+
+function render(over: Over = {}) {
   const handle = createRef<TerminalHandle>();
   root.render(
     <TerminalServicesProvider value={services}>
@@ -66,6 +75,7 @@ function render(over: { session?: string; onWriter?: (fde: string) => void } = {
         create={{ command: ["bash"], cwd: "~", project: "app", cols: 80, rows: 24 }}
         onStatus={(s) => statuses.push(s)}
         onWriter={over.onWriter}
+        onBell={over.onBell}
       />
     </TerminalServicesProvider>,
   );
@@ -83,7 +93,7 @@ async function columnOfX(): Promise<number> {
 }
 
 /** Mounts a pane and drives it through its attach; resolves with the attachment the link took. */
-async function mount(over: { session?: string; onWriter?: (fde: string) => void } = {}) {
+async function mount(over: Over = {}) {
   let handle!: ReturnType<typeof render>;
   await act(async () => {
     handle = render(over);
@@ -529,6 +539,78 @@ describe("SessionTerminalPane at the channel edge", () => {
     const reason = card()?.querySelector(".term-overlay__reason")?.textContent ?? "";
     expect(reason.length).toBe(200);
     expect(reason.endsWith("…")).toBe(true);
+  });
+
+  test("a theme flip recolors the live pane: same attachment, same renderer, new colors", async () => {
+    // happy-dom has no matchMedia, so the pane starts light; the flip is to dark.
+    const { attachment } = await mount();
+    const renderer = services.renderers[0]!;
+    expect(renderer.opts.bg).toEqual(paletteFor("light").bg);
+    await act(async () => {
+      document.documentElement.dataset.theme = "dark";
+      // happy-dom delivers mutation records on a task, not a microtask: yield one.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await settle();
+    expect(services.link.opens, "no re-dial").toEqual([attachment]);
+    expect(services.renderers, "no new renderer").toHaveLength(1);
+    expect(renderer.colors.at(-1)?.bg).toEqual(paletteFor("dark").bg);
+    expect(status()).toEqual({ kind: "up" });
+    await act(async () => {
+      attachment.lanes.onData(bytes("\x1b[?996n"));
+    });
+    expect(lastWrite(), "the program now hears a dark scheme").toBe("\x1b[?997;1n");
+  });
+
+  test("a bell flashes the pane and reaches the host", async () => {
+    let bells = 0;
+    const { attachment } = await mount({ onBell: () => bells++ });
+    await act(async () => {
+      attachment.lanes.onData(bytes("ding\x07"));
+    });
+    expect(container.querySelector('[data-testid="term-bell"]')).not.toBeNull();
+    expect(bells).toBe(1);
+  });
+
+  test("key releases reach the pty once the program asks for them; ⌘ chords the pane owns never do", async () => {
+    const { attachment } = await mount();
+    await act(async () => {
+      keyEvent("keydown", { key: "a", code: "KeyA" });
+      keyEvent("keyup", { key: "a", code: "KeyA" });
+    });
+    expect(services.link.writes.map((w) => new TextDecoder().decode(w.bytes))).toEqual(["a"]);
+    await act(async () => {
+      attachment.lanes.onData(bytes("\x1b[>3u"));
+      keyEvent("keyup", { key: "a", code: "KeyA" });
+    });
+    expect(lastWrite()).toBe("\x1b[97;1:3u");
+    const before = services.link.writes.length;
+    await act(async () => {
+      keyEvent("keydown", { key: "k", code: "KeyK", metaKey: true });
+      keyEvent("keyup", { key: "k", code: "KeyK", metaKey: true });
+    });
+    expect(services.link.writes).toHaveLength(before);
+  });
+
+  test("Shift+PageUp pages into history and ⌘K clears it; at a marked prompt ⌘K asks for a repaint", async () => {
+    const { attachment } = await mount();
+    await act(async () => {
+      attachment.lanes.onData(bytes(Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\r\n")));
+      keyEvent("keydown", { key: "PageUp", code: "PageUp", shiftKey: true });
+      attachment.lanes.onData(bytes("\r\nmore"));
+    });
+    await act(async () => {
+      services.renderers[0]!.opts.onLost?.("probe");
+    });
+    await settle();
+    expect(services.link.writes, "paging is local").toHaveLength(0);
+    const top = services.renderers.at(-1)!.applied[0]?.rows.find((r) => r.y === 0);
+    expect(top?.cells.map((c) => c.text).join("").trimEnd(), "one page up").toBe("line 12");
+    await act(async () => {
+      attachment.lanes.onData(bytes("\r\n\x1b]133;A\x1b\\$ "));
+      keyEvent("keydown", { key: "k", code: "KeyK", metaKey: true });
+    });
+    expect(services.link.writes.map((w) => Array.from(w.bytes))).toEqual([[0x0c]]);
   });
 
   test("unmount closes the attachment and detaches the lanes", async () => {

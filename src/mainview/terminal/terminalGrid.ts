@@ -16,10 +16,15 @@ export class TerminalGrid {
   private colsN = 0;
   private rowsN = 0;
   private cells: Cell[] = [];
-  private readonly blank: Cell;
+  private blank!: Cell;
 
   /** Blank cells (and out-of-range reads) paint in these theme colors; defaults to the dark theme. */
   constructor(blank: { fg: Rgb; bg: Rgb } = { fg: BLANK_FG, bg: BLANK_BG }) {
+    this.setBlank(blank);
+  }
+
+  /** Re-colors the blank cell for a new theme; cells already applied keep their resolved colors. */
+  setBlank(blank: { fg: Rgb; bg: Rgb }): void {
     this.blank = {
       text: " ",
       fg: blank.fg,
