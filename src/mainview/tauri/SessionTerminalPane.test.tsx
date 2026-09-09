@@ -10,6 +10,7 @@ import {
 } from "../../../test/terminalFakes";
 import type { SessionStatus } from "../terminal/connection";
 import { sessionStore } from "../terminal/sessionStore";
+import { RESIZE_SETTLE_MS } from "../terminal/terminalController";
 import { paletteFor } from "../terminal/terminalPalette";
 import { TerminalServicesProvider } from "../terminal/terminalServices";
 import { SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane";
@@ -117,8 +118,85 @@ describe("SessionTerminalPane at the channel edge", () => {
       cols: 80,
       rows: 24,
     });
-    expect(services.link.resizes).toEqual([{ id: attachment.spec.id, cols: 80, rows: 24 }]);
+    expect(services.link.resizes, "nothing is pushed at the pty before the host answers").toEqual([]);
     expect(services.renderers).toHaveLength(1);
+  });
+
+  test("the attach answer sizes the replay to the pty; the token coming here refits and tells the pty once", async () => {
+    const { attachment } = await mount();
+    const { lanes } = attachment;
+    const renderer = services.renderers[0]!;
+    await act(async () => {
+      lanes.onMeta({ kind: "resized", cols: 126, rows: 40 });
+    });
+    expect(renderer.resizes.at(-1), "the core is the pty's size before a replay byte lands").toEqual([126, 40]);
+    await act(async () => {
+      lanes.onData(frame(1, 1));
+      lanes.onData(bytes("history at 126 columns"));
+      lanes.onData(frame(2));
+    });
+    expect(renderer.resizes.at(-1)).toEqual([126, 40]);
+    expect(services.link.resizes, "no resize while the replay lands").toEqual([]);
+
+    await act(async () => {
+      lanes.onMeta({ kind: "writer_changed", fde: "uday" });
+    });
+    expect(renderer.resizes.at(-1), "the token is here: the pane's own fit binds").toEqual([80, 24]);
+    expect(container.querySelector('[data-testid="term-pty-size"]')).toBeNull();
+    services.timers.advance(RESIZE_SETTLE_MS);
+    expect(services.link.resizes).toEqual([{ id: attachment.spec.id, cols: 80, rows: 24 }]);
+  });
+
+  test("an attach answer that drains in one tick still hands the pane its own fit", async () => {
+    const { attachment } = await mount();
+    const { lanes } = attachment;
+    const renderer = services.renderers[0]!;
+    await act(async () => {
+      lanes.onMeta({ kind: "resized", cols: 126, rows: 40 });
+      lanes.onData(frame(1, 1));
+      lanes.onData(bytes("history at 126 columns"));
+      lanes.onData(frame(2));
+      lanes.onMeta({ kind: "writer_changed", fde: "uday" });
+    });
+    expect(renderer.resizes.slice(-2), "the replay landed at the pty's size, then the token freed the fit").toEqual([
+      [126, 40],
+      [80, 24],
+    ]);
+    expect(container.querySelector('[data-testid="term-pty-size"]')).toBeNull();
+    services.timers.advance(RESIZE_SETTLE_MS);
+    expect(services.link.resizes).toEqual([{ id: attachment.spec.id, cols: 80, rows: 24 }]);
+  });
+
+  test("a refused keystroke says why the keys do nothing; Take write re-dials with write; the token arriving clears it", async () => {
+    const { attachment } = await mount();
+    const chip = () => container.querySelector('[data-testid="term-refused"]');
+    await act(async () => {
+      attachment.lanes.onMeta({ kind: "refused", reason: "You do not hold the write token." });
+    });
+    expect(chip()?.textContent).toContain("read-only — You do not hold the write token.");
+    expect(status(), "a refusal is not a fault: the attachment lives").toEqual({ kind: "up" });
+
+    services.link.listing = { hostBootId: "boot-1", sessions: [{ name: "mast-app", live: true }] };
+    const redial = services.link.nextOpen();
+    await act(async () => {
+      (chip()!.querySelector("button") as HTMLButtonElement).click();
+    });
+    let next: FakeAttachment | null = null;
+    await act(async () => {
+      next = await redial;
+    });
+    await settle();
+    expect(next!.spec.write, "the re-dial asks for the token").toBe(true);
+    expect(chip(), "a fresh attach starts without the old refusal").toBeNull();
+
+    await act(async () => {
+      next!.lanes.onMeta({ kind: "refused", reason: "You do not hold the write token." });
+    });
+    expect(chip()).not.toBeNull();
+    await act(async () => {
+      next!.lanes.onMeta({ kind: "writer_changed", fde: "uday" });
+    });
+    expect(chip(), "the token moved: whatever was refused is history").toBeNull();
   });
 
   test("a throw in the data handler parks the pane on its cause and closes the attachment; nothing parks", async () => {
@@ -191,13 +269,15 @@ describe("SessionTerminalPane at the channel edge", () => {
     const { lanes } = attachment;
     const renderer = services.renderers[0]!;
     await act(async () => {
+      lanes.onData(frame(1, 1));
+      lanes.onData(frame(2));
       lanes.onMeta({ kind: "resized", cols: 132, rows: 40 });
     });
     expect(sessionStore.lane("mast-app").ptySize).toEqual({ cols: 132, rows: 40 });
     const chip = container.querySelector('[data-testid="term-pty-size"]');
     expect(chip?.textContent).toBe("sized by the writer to 132×40");
     expect(renderer.resizes.at(-1)).toEqual([132, 40]);
-    expect(services.link.resizes, "an imposed size is never announced back").toHaveLength(1);
+    expect(services.link.resizes, "an imposed size is never announced back").toEqual([]);
 
     // The token moving to another FDE resizes nothing: the pty is still 132×40, and a pane that
     // refit itself now would parse the writer's output at the wrong width until the next resize.

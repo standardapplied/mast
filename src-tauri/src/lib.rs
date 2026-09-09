@@ -344,11 +344,10 @@ struct SessionEnd {
 
 impl From<ssh::Error> for SessionEnd {
     fn from(e: ssh::Error) -> Self {
-        let class = match &e {
-            ssh::Error::Io(io) => ssh::end_class(io),
-            _ => "transport",
-        };
-        SessionEnd { class, reason: e.to_string() }
+        match &e {
+            ssh::Error::Io(io) => SessionEnd { class: ssh::end_class(io), reason: ssh::end_reason(io) },
+            _ => SessionEnd { class: "transport", reason: e.to_string() },
+        }
     }
 }
 

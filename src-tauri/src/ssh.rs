@@ -103,6 +103,8 @@ pub enum Error {
     NoSession(String),
     #[error("pty session: {0}")]
     PtySession(String),
+    #[error("{LINK_DROPPED}")]
+    LinkDropped,
     #[error("sftp: {0}")]
     Sftp(String),
     #[error("too large: {path} is {size} bytes (limit {max} bytes) — download it instead")]
@@ -407,6 +409,30 @@ pub fn end_class(e: &std::io::Error) -> &'static str {
         std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::InvalidData => "refused",
         _ => "transport",
     }
+}
+
+/// What the operator reads when the link itself died under a session.
+pub const LINK_DROPPED: &str = "the link to the box dropped";
+
+/// The reason a session failure renders with. An `UnexpectedEof` on the streamlocal channel is
+/// the SSH link dying under it (a lid closed, a network changed) — true but meaningless as the io
+/// crate's `early eof` — so it reads as [`LINK_DROPPED`]; the raw text goes to the stderr log
+/// only. Anything else speaks for itself.
+pub fn end_reason(e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::UnexpectedEof {
+        eprintln!("mast session: link dropped ({e})");
+        return LINK_DROPPED.to_string();
+    }
+    e.to_string()
+}
+
+/// A failed one-shot host request (a listing, a kill) as the error the pane reads.
+fn pty_failure(e: std::io::Error) -> Error {
+    if e.kind() == std::io::ErrorKind::UnexpectedEof {
+        eprintln!("mast session: link dropped ({e})");
+        return Error::LinkDropped;
+    }
+    Error::PtySession(e.to_string())
 }
 
 fn emit_transfer(app: &AppHandle, progress: &TransferProgress) {
@@ -753,7 +779,7 @@ impl Backend {
             // pending, so a transport ending never overtakes the last bytes of output.
             let _ = pump.await;
             if let Err(e) = outcome {
-                let frame = crate::session_frames::exit(end_class(&e), &e.to_string());
+                let frame = crate::session_frames::exit(end_class(&e), &end_reason(&e));
                 let _ = ending.send(InvokeResponseBody::Raw(frame));
             }
             // Evict the id whether the session ended on its own, detached, or the
@@ -807,7 +833,7 @@ impl Backend {
         let channel = self.open_streamlocal(&socket_path).await?;
         crate::pty::list_sessions(channel.into_stream(), &token)
             .await
-            .map_err(|e| Error::PtySession(e.to_string()))
+            .map_err(pty_failure)
     }
 
     /// Ends a host-owned session and its process — ordered after any launch of the same name
@@ -832,7 +858,7 @@ impl Backend {
         let channel = self.open_streamlocal(&socket_path).await?;
         crate::pty::control(channel.into_stream(), &token, request)
             .await
-            .map_err(|e| Error::PtySession(e.to_string()))
+            .map_err(pty_failure)
     }
 
     /// The cached SSH session for a project container, dialing (and caching) it
@@ -2409,6 +2435,22 @@ fn default_port(scheme: &str) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_link_that_died_under_a_session_reads_as_such_not_as_early_eof() {
+        let eof = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "early eof");
+        assert_eq!(end_class(&eof), "transport");
+        assert_eq!(end_reason(&eof), LINK_DROPPED);
+        assert_eq!(pty_failure(eof).to_string(), LINK_DROPPED);
+
+        let refused = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "attach: not yours");
+        assert_eq!(end_class(&refused), "refused");
+        assert_eq!(end_reason(&refused), "attach: not yours");
+        assert_eq!(
+            pty_failure(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad frame")).to_string(),
+            "pty session: bad frame"
+        );
+    }
 
     #[test]
     fn every_hop_probes_the_link_with_keepalives() {
