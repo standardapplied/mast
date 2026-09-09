@@ -147,6 +147,26 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(services.link.resizes).toEqual([{ id: attachment.spec.id, cols: 80, rows: 24 }]);
   });
 
+  test("an attach answer that drains in one tick still hands the pane its own fit", async () => {
+    const { attachment } = await mount();
+    const { lanes } = attachment;
+    const renderer = services.renderers[0]!;
+    await act(async () => {
+      lanes.onMeta({ kind: "resized", cols: 126, rows: 40 });
+      lanes.onData(frame(1, 1));
+      lanes.onData(bytes("history at 126 columns"));
+      lanes.onData(frame(2));
+      lanes.onMeta({ kind: "writer_changed", fde: "uday" });
+    });
+    expect(renderer.resizes.slice(-2), "the replay landed at the pty's size, then the token freed the fit").toEqual([
+      [126, 40],
+      [80, 24],
+    ]);
+    expect(container.querySelector('[data-testid="term-pty-size"]')).toBeNull();
+    services.timers.advance(RESIZE_SETTLE_MS);
+    expect(services.link.resizes).toEqual([{ id: attachment.spec.id, cols: 80, rows: 24 }]);
+  });
+
   test("a refused keystroke says why the keys do nothing; Take write re-dials with write; the token arriving clears it", async () => {
     const { attachment } = await mount();
     const chip = () => container.querySelector('[data-testid="term-refused"]');

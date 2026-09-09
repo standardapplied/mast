@@ -696,6 +696,10 @@ export const SessionTerminalPane = forwardRef<
           case "writer_changed":
             setRefusal(null);
             sessionStore.noteWriterChanged(session, meta.fde);
+            // The token naming this FDE frees the geometry: refit on the channel, here, because
+            // the attach answer (Resized, replay, WriterChanged) can drain in one tick — the
+            // store's size then starts and ends null and no effect ever sees it change.
+            if (!sessionStore.lane(session).ptySize) refit();
             onWriterRef.current?.(meta.fde);
             return;
           case "resized":
