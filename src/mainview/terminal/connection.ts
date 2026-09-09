@@ -63,7 +63,8 @@ export function toSessionEnd(payload: unknown): SessionEnd {
 
 /**
  * A state change as the Rust side sends it: the write token moved, another writer
- * resized the pty, or the host paused/resumed this subscriber. An unknown kind is kept as such so
+ * resized the pty, the host paused/resumed this subscriber, or it refused a command (a keystroke
+ * without the write token) while the attachment lives on. An unknown kind is kept as such so
  * a new host fact is never mistaken for one of these.
  */
 export type SessionMeta =
@@ -71,6 +72,7 @@ export type SessionMeta =
   | { kind: "resized"; cols: number; rows: number }
   | { kind: "paused" }
   | { kind: "continued" }
+  | { kind: "refused"; reason: string }
   | { kind: "unknown"; raw: string };
 
 export function toSessionMeta(payload: unknown): SessionMeta {
@@ -85,6 +87,8 @@ export function toSessionMeta(payload: unknown): SessionMeta {
       return { kind: "paused" };
     case "continued":
       return { kind: "continued" };
+    case "refused":
+      return { kind: "refused", reason: typeof p.reason === "string" ? p.reason : "" };
   }
   return { kind: "unknown", raw: JSON.stringify(payload) };
 }

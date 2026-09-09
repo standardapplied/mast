@@ -9,8 +9,8 @@ import {
   RESIZE_SETTLE_MS,
   SYNCHRONIZED_OUTPUT_CAP_MS,
   TerminalController,
-  type Timers,
 } from "./terminalController";
+import { FakeTimers } from "../../../test/terminalFakes";
 import { MODS } from "./input";
 import { TerminalGrid } from "./terminalGrid";
 import type { Cursor, GridSnapshot } from "./vtCore";
@@ -68,26 +68,6 @@ function gridRow(grid: TerminalGrid, y: number): string {
   let s = "";
   for (let x = 0; x < grid.cols; x++) s += grid.cell(x, y).text;
   return s.trimEnd();
-}
-
-/** Timers under test control: nothing fires until the test runs the clock forward. */
-class FakeTimers implements Timers {
-  private due: { at: number; fn: () => void }[] = [];
-  private clock = 0;
-  set(fn: () => void, ms: number): unknown {
-    const entry = { at: this.clock + ms, fn };
-    this.due.push(entry);
-    return entry;
-  }
-  clear(handle: unknown): void {
-    this.due = this.due.filter((d) => d !== handle);
-  }
-  advance(ms: number): void {
-    this.clock += ms;
-    const ready = this.due.filter((d) => d.at <= this.clock);
-    this.due = this.due.filter((d) => d.at > this.clock);
-    ready.forEach((d) => d.fn());
-  }
 }
 
 let cores: VtCore[] = [];

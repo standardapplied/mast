@@ -17,7 +17,7 @@ use crate::pty::SessionEvent;
 const TAG_BYTES: u8 = 0;
 const TAG_REPLAY_BEGIN: u8 = 1;
 const TAG_REPLAY_END: u8 = 2;
-/// A state change as JSON: `{kind: writer_changed|resized|paused|continued, ...}`.
+/// A state change as JSON: `{kind: writer_changed|resized|paused|continued|refused, ...}`.
 const TAG_META: u8 = 3;
 /// The ending as JSON: `{class, reason}`, the same shape a failed open rejects with.
 const TAG_EXIT: u8 = 4;
@@ -40,6 +40,9 @@ pub fn encode(event: &SessionEvent) -> Vec<u8> {
         }
         SessionEvent::Resized { cols, rows } => {
             json_frame(TAG_META, json!({ "kind": "resized", "cols": cols, "rows": rows }))
+        }
+        SessionEvent::Refused(reason) => {
+            json_frame(TAG_META, json!({ "kind": "refused", "reason": reason }))
         }
         SessionEvent::Ended(reason) => exit("ended", reason),
     }
@@ -160,6 +163,14 @@ mod tests {
         let mut frame = vec![tag];
         frame.extend_from_slice(json.as_bytes());
         frame
+    }
+
+    #[test]
+    fn a_refusal_is_a_meta_frame_carrying_the_hosts_reason() {
+        assert_eq!(
+            encode(&SessionEvent::Refused("You do not hold the write token.".into())),
+            tagged(TAG_META, r#"{"kind":"refused","reason":"You do not hold the write token."}"#)
+        );
     }
 
     #[tokio::test]

@@ -453,6 +453,9 @@ pub enum SessionEvent {
     Continued,
     WriterChanged(String),
     Resized { cols: u32, rows: u32 },
+    /// The host refused a command after the prologue (an input without the write token, a
+    /// full input backlog): the connection lives, the pane must say why its keys do nothing.
+    Refused(String),
     Ended(String),
 }
 
@@ -585,6 +588,7 @@ where
                     Frame::Continued => on_event(SessionEvent::Continued),
                     Frame::WriterChanged(fde) => on_event(SessionEvent::WriterChanged(fde)),
                     Frame::Resized { cols, rows } => on_event(SessionEvent::Resized { cols, rows }),
+                    Frame::Err(message) => on_event(SessionEvent::Refused(message)),
                     Frame::SessionEnded(reason) => {
                         on_event(SessionEvent::Ended(reason));
                         return Ok(());
@@ -1404,6 +1408,45 @@ mod async_tests {
         let err = list_sessions(client, "tok").await.unwrap_err();
         assert!(err.to_string().contains("unbounded"), "{err}");
         host.abort();
+    }
+
+    #[tokio::test]
+    async fn a_refusal_after_the_prologue_is_an_event_not_a_dropped_frame_nor_an_ending() {
+        let (client, mut server) = duplex(1024);
+        let host = tokio::spawn(async move {
+            host_handshake_hello(&mut server).await;
+            read_frame(&mut server).await.unwrap(); // Attach
+            write_frame(&mut server, &Frame::Ok).await.unwrap();
+            assert!(matches!(read_frame(&mut server).await.unwrap(), Frame::Input { .. }));
+            write_frame(&mut server, &Frame::Err("You do not hold the write token.".into()))
+                .await
+                .unwrap();
+            write_frame(&mut server, &Frame::Output { last_input_seq: -1, bytes: b"still live".to_vec() })
+                .await
+                .unwrap();
+            write_frame(&mut server, &Frame::SessionEnded("exited(0)".into())).await.unwrap();
+        });
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+        let driver = tokio::spawn(async move {
+            drive(
+                client,
+                AttachRequest { token: "t".into(), session: "s".into(), write: true, create: None },
+                cmd_rx,
+                move |ev| { let _ = ev_tx.send(ev); },
+            )
+            .await
+        });
+        cmd_tx.send(SessionCmd::Input(b"x".to_vec())).await.unwrap();
+        assert_eq!(
+            ev_rx.recv().await.unwrap(),
+            SessionEvent::Refused("You do not hold the write token.".into())
+        );
+        assert_eq!(ev_rx.recv().await.unwrap(), SessionEvent::Output(b"still live".to_vec()));
+        assert_eq!(ev_rx.recv().await.unwrap(), SessionEvent::Ended("exited(0)".into()));
+        driver.await.unwrap().unwrap();
+        host.await.unwrap();
     }
 
     #[tokio::test]

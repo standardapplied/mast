@@ -4072,6 +4072,23 @@ button.room-section-head:hover {
   color: var(--warning);
   border-color: var(--warning);
 }
+.term-chip--refused {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--warning);
+  border-color: var(--warning);
+  pointer-events: auto;
+}
+.term-chip__action {
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
 
 .term-overlay {
   position: absolute;

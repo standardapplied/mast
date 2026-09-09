@@ -243,6 +243,11 @@ describe("toSessionMeta", () => {
     });
     expect(toSessionMeta({ kind: "paused" })).toEqual({ kind: "paused" });
     expect(toSessionMeta({ kind: "continued" })).toEqual({ kind: "continued" });
+    expect(toSessionMeta({ kind: "refused", reason: "You do not hold the write token." })).toEqual({
+      kind: "refused",
+      reason: "You do not hold the write token.",
+    });
+    expect(toSessionMeta({ kind: "refused" })).toEqual({ kind: "refused", reason: "" });
   });
 
   test("a new or malformed kind is unknown, never one of the others", () => {

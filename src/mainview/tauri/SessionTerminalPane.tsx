@@ -265,6 +265,8 @@ export const SessionTerminalPane = forwardRef<
   const [unseenOutput, setUnseenOutput] = useState(false);
   const unseenRef = useRef(false);
   const [ringing, setRinging] = useState(false);
+  /** The host's last refusal on this attach (a keystroke without the write token), or null. */
+  const [refusal, setRefusal] = useState<string | null>(null);
   const bellTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const themeName = useThemeName();
   const palette = useMemo(() => paletteFor(themeName), [themeName]);
@@ -289,9 +291,21 @@ export const SessionTerminalPane = forwardRef<
   /** Tears the current attach down and dials again, painting the "reconnecting" state. */
   const reattach = useCallback(() => {
     clearTimeout(retryTimer.current);
+    setRefusal(null);
     setStatus({ kind: "connecting", retrying: true });
     setEpoch((e) => e + 1);
   }, []);
+
+  /**
+   * The refused chip's verb: attach again asking for write. The host hands the token over when
+   * its holder is a ghost of this same FDE (the connection a sleeping laptop left behind) and
+   * otherwise says again who holds it — never a takeover of another FDE's keyboard, which is the
+   * banner's explicit Take write.
+   */
+  const reclaim = useCallback(() => {
+    reconnector.current.reset();
+    reattach();
+  }, [reattach]);
 
   /**
    * The one recovery verb. A lost renderer is rebuilt in place — the session never went anywhere.
@@ -447,6 +461,12 @@ export const SessionTerminalPane = forwardRef<
     let halted = false;
     /** The session's ending was heard (or the open rejected): this attach is over, whatever the open resolves to. */
     let ended = false;
+    /**
+     * The host has answered the attach — the pty's geometry, the replay, then the token's holder.
+     * Until then this pane's own size is not a geometry to push at the pty: the replay must be
+     * parsed at the size that produced it, and only a writer's fit means anything.
+     */
+    let announced = false;
     let raf = 0;
     const cleanups: Array<() => void> = [];
     const id = crypto.randomUUID();
@@ -567,7 +587,7 @@ export const SessionTerminalPane = forwardRef<
         write: (bytes) => void link.write(id, bytes).catch(noop),
         resize: (c, r) => void link.resize(id, c, r).catch(noop),
       };
-      const controller = new TerminalController(core, renderer, sink);
+      const controller = new TerminalController(core, renderer, sink, { timers: services.timers });
       controllerRef.current = controller;
       cleanups.push(() => controller.dispose());
 
@@ -652,6 +672,7 @@ export const SessionTerminalPane = forwardRef<
       };
       const refit = () =>
         contained(() => {
+          if (!announced) return;
           if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden tab
           apply(fit(), false);
         });
@@ -672,6 +693,8 @@ export const SessionTerminalPane = forwardRef<
       const onMeta = (meta: SessionMeta) => {
         switch (meta.kind) {
           case "writer_changed":
+            announced = true;
+            setRefusal(null);
             sessionStore.noteWriterChanged(session, meta.fde);
             onWriterRef.current?.(meta.fde);
             return;
@@ -686,6 +709,9 @@ export const SessionTerminalPane = forwardRef<
             return;
           case "continued":
             sessionStore.notePaused(session, false);
+            return;
+          case "refused":
+            setRefusal(meta.reason);
             return;
           case "unknown":
             return;
@@ -780,12 +806,10 @@ export const SessionTerminalPane = forwardRef<
       reconnector.current.opened();
       setStatus({ kind: "up" });
 
-      // Tell the pty our real geometry (a fresh session was created at this size; an existing one
-      // is resized to the writer's window) — only when we actually have one.
-      if (sized) {
-        sink.resize(cols, rows);
-      }
-
+      // The pty learns this pane's geometry only once the host has answered the attach and the
+      // token is here: the store releases the imposed size when WriterChanged names this FDE, and
+      // that refit is the one resize (see `announced`). Nothing is pushed at the pty before the
+      // replay landed in the geometry that produced it.
       // Every layout tick reflows locally; the controller tells the pty once the size settles.
       // While another writer's size binds, the pane's own size is a letterbox, not a geometry.
       const observer = new ResizeObserver(() => {
@@ -1082,7 +1106,7 @@ export const SessionTerminalPane = forwardRef<
     >
       <canvas ref={canvasRef} />
       {ringing && <div className="term-bell" data-testid="term-bell" aria-hidden />}
-      {(lane.ptySize || lane.paused) && (
+      {(lane.ptySize || lane.paused || refusal) && (
         <div className="term-chips">
           {lane.ptySize && (
             <span className="term-chip" data-testid="term-pty-size">
@@ -1092,6 +1116,16 @@ export const SessionTerminalPane = forwardRef<
           {lane.paused && (
             <span className="term-chip term-chip--paused" data-testid="term-paused">
               paused
+            </span>
+          )}
+          {refusal && (
+            <span className="term-chip term-chip--refused" data-testid="term-refused">
+              read-only — {refusal}
+              {write && (
+                <button type="button" className="term-chip__action" onClick={reclaim}>
+                  Take write
+                </button>
+              )}
             </span>
           )}
         </div>

@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import type { HostListing } from "./connection";
 import type { RendererOptions, SurfaceRenderer } from "./renderer";
+import type { Timers } from "./terminalController";
 
 /**
  * What a session pane needs from the platform, behind one injectable seam: the session link (the
@@ -65,6 +66,8 @@ export interface TerminalServices {
   ) => Promise<SurfaceRenderer>;
   /** What the terminal answers to XTVERSION (CSI > q). */
   readonly identity: () => Promise<string>;
+  /** The timers a pane's resize settles on; absent means the window's own. */
+  readonly timers?: Timers;
 }
 
 const TerminalServicesContext = createContext<TerminalServices | null>(null);

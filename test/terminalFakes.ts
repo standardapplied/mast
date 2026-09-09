@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { HostListing } from "../src/mainview/terminal/connection";
 import type { Gateway } from "../src/mainview/gateway";
 import type { RendererOptions, SurfaceRenderer } from "../src/mainview/terminal/renderer";
-import type { RendererColors } from "../src/mainview/terminal/terminalController";
+import type { RendererColors, Timers } from "../src/mainview/terminal/terminalController";
 import type {
   SessionFrames,
   SessionLink,
@@ -155,9 +155,30 @@ export class FakeRenderer implements SurfaceRenderer {
   }
 }
 
+/** Timers a test advances by hand, so a settled resize needs no waiting. */
+export class FakeTimers implements Timers {
+  private due: { at: number; fn: () => void }[] = [];
+  private clock = 0;
+  set(fn: () => void, ms: number): unknown {
+    const entry = { at: this.clock + ms, fn };
+    this.due.push(entry);
+    return entry;
+  }
+  clear(handle: unknown): void {
+    this.due = this.due.filter((d) => d !== handle);
+  }
+  advance(ms: number): void {
+    this.clock += ms;
+    const ready = this.due.filter((d) => d.at <= this.clock);
+    this.due = this.due.filter((d) => d.at > this.clock);
+    ready.forEach((d) => d.fn());
+  }
+}
+
 export interface FakeTerminalServices extends TerminalServices {
   readonly link: FakeLink;
   readonly renderers: FakeRenderer[];
+  readonly timers: FakeTimers;
   /** Set to make the next renderer creation fail with this message. */
   rendererFailure: string | null;
   /** Set to make the next renderer's first resize throw a RangeError with this message. */
@@ -172,6 +193,7 @@ export function fakeTerminalServices(): FakeTerminalServices {
   const services: FakeTerminalServices = {
     link: new FakeLink(),
     renderers,
+    timers: new FakeTimers(),
     rendererFailure: null,
     rendererResizeFailure: null,
     holdRenderers: () => {
