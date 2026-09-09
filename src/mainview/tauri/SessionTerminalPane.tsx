@@ -462,11 +462,12 @@ export const SessionTerminalPane = forwardRef<
     /** The session's ending was heard (or the open rejected): this attach is over, whatever the open resolves to. */
     let ended = false;
     /**
-     * The host has answered the attach — the pty's geometry, the replay, then the token's holder.
-     * Until then this pane's own size is not a geometry to push at the pty: the replay must be
-     * parsed at the size that produced it, and only a writer's fit means anything.
+     * The attach's replay has landed. Until then this pane's own size is not a geometry to push at
+     * the pty: the host answers an attach with the pty's geometry, then the replay, then the
+     * token's holder, and the replay must be parsed at the size that produced it. A resize that
+     * won the race against the replay is exactly the staircase this guards against.
      */
-    let announced = false;
+    let replayed = false;
     let raf = 0;
     const cleanups: Array<() => void> = [];
     const id = crypto.randomUUID();
@@ -672,7 +673,7 @@ export const SessionTerminalPane = forwardRef<
       };
       const refit = () =>
         contained(() => {
-          if (!announced) return;
+          if (!replayed) return;
           if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden tab
           apply(fit(), false);
         });
@@ -693,7 +694,6 @@ export const SessionTerminalPane = forwardRef<
       const onMeta = (meta: SessionMeta) => {
         switch (meta.kind) {
           case "writer_changed":
-            announced = true;
             setRefusal(null);
             sessionStore.noteWriterChanged(session, meta.fde);
             onWriterRef.current?.(meta.fde);
@@ -734,6 +734,7 @@ export const SessionTerminalPane = forwardRef<
           } else if (frame.kind === "replay-begin") {
             controller.resetForReplay();
           } else {
+            replayed = true;
             controller.endReplay();
             controller.scroll("bottom");
             // The replay just restored the app's modes; a pane without keyboard focus owes it a
@@ -808,7 +809,7 @@ export const SessionTerminalPane = forwardRef<
 
       // The pty learns this pane's geometry only once the host has answered the attach and the
       // token is here: the store releases the imposed size when WriterChanged names this FDE, and
-      // that refit is the one resize (see `announced`). Nothing is pushed at the pty before the
+      // that refit is the one resize (see `replayed`). Nothing is pushed at the pty before the
       // replay landed in the geometry that produced it.
       // Every layout tick reflows locally; the controller tells the pty once the size settles.
       // While another writer's size binds, the pane's own size is a letterbox, not a geometry.

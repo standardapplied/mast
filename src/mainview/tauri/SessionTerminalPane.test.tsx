@@ -249,6 +249,8 @@ describe("SessionTerminalPane at the channel edge", () => {
     const { lanes } = attachment;
     const renderer = services.renderers[0]!;
     await act(async () => {
+      lanes.onData(frame(1, 1));
+      lanes.onData(frame(2));
       lanes.onMeta({ kind: "resized", cols: 132, rows: 40 });
     });
     expect(sessionStore.lane("mast-app").ptySize).toEqual({ cols: 132, rows: 40 });
