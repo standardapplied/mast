@@ -2429,7 +2429,7 @@ dependencies = [
 
 [[package]]
 name = "mast"
-version = "0.1.87"
+version = "0.1.88"
 dependencies = [
  "async-trait",
  "dirs 5.0.1",
