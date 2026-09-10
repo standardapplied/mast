@@ -667,6 +667,29 @@ describe("SessionTerminalPane at the channel edge", () => {
     }
   });
 
+  test("a rebuild that settles after the session ended leaves the draw loop suspended", async () => {
+    const { attachment } = await mount();
+    const release = services.holdRenderers();
+    const lost = services.renderers[0]!;
+    await act(async () => {
+      lost.opts.onLost?.("GPU device lost: reset");
+    });
+    expect(lost.destroyed).toBe(true);
+    const drawn = lost.draws;
+    await act(async () => {
+      attachment.lanes.onData(bytes("last words"));
+      attachment.lanes.onExit({ class: "ended", reason: "exited(0)" });
+    });
+    await act(async () => release());
+    await settle();
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(lost.draws, "nothing draws through the renderer the rebuild destroyed").toBe(drawn);
+    expect(status()).toMatchObject({ kind: "ended", reason: "exited(0)" });
+  });
+
   test("a lane fault after the ending keeps the ended card", async () => {
     const { attachment } = await mount();
     await act(async () => {

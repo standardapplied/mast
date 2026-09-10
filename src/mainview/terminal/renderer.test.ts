@@ -78,7 +78,12 @@ function fakeCanvas() {
     },
   } as unknown as HTMLCanvasElement;
   const names = (name: string) => calls.filter((c) => c.name === name);
-  return { canvas, calls, names, listeners };
+  const loseContext = () => {
+    const event = new Event("webglcontextlost", { cancelable: true });
+    for (const fn of listeners.get("webglcontextlost") ?? []) fn(event);
+    return event.defaultPrevented;
+  };
+  return { canvas, calls, names, loseContext };
 }
 
 describe("TerminalRenderer on WebGL2", () => {
@@ -91,24 +96,31 @@ describe("TerminalRenderer on WebGL2", () => {
   });
 
   test("destroy frees its GPU objects and leaves the context alive for the next renderer on the canvas", async () => {
-    const { canvas, names, listeners } = fakeCanvas();
-    const first = await TerminalRenderer.create(canvas, OPTS);
+    const { canvas, names, loseContext } = fakeCanvas();
+    const reported: string[] = [];
+    const first = await TerminalRenderer.create(canvas, { ...OPTS, onLost: (reason) => reported.push(reason) });
     expect(first.backendName).toBe("webgl2");
-    expect(listeners.get("webglcontextlost")?.size).toBe(1);
+    expect(loseContext(), "a loss is claimed for restoration").toBe(true);
+    expect(reported).toEqual(["WebGL context lost"]);
 
     first.destroy();
 
     expect(names("loseContext"), "a lost context stays lost for every later renderer on this canvas").toEqual([]);
-    expect(listeners.get("webglcontextlost")?.size).toBe(0);
+    expect(loseContext(), "a loss with no renderer alive is still claimed, or the canvas stays lost for good").toBe(true);
+    expect(reported, "a dead renderer reports nothing").toEqual(["WebGL context lost"]);
     expect(names("deleteProgram").length).toBe(2);
     expect(names("deleteShader").length).toBe(4);
     expect(names("deleteBuffer").length).toBe(2);
     expect(names("deleteVertexArray").length).toBe(2);
     expect(names("deleteTexture").length).toBe(1);
 
-    const second = await TerminalRenderer.create(canvas, OPTS);
+    const second = await TerminalRenderer.create(canvas, { ...OPTS, onLost: (reason) => reported.push(reason) });
     expect(second.backendName).toBe("webgl2");
-    expect(listeners.get("webglcontextlost")?.size).toBe(1);
+    expect(loseContext()).toBe(true);
+    expect(reported, "one report per loss, not one per renderer ever built here").toEqual([
+      "WebGL context lost",
+      "WebGL context lost",
+    ]);
     second.destroy();
   });
 });

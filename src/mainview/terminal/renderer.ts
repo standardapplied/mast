@@ -575,12 +575,9 @@ class WebGl2Backend implements Backend {
   ): Promise<WebGl2Backend> {
     const gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
     if (!gl) throw new Error("TerminalRenderer: neither WebGPU nor WebGL2 is available.");
+    keepRestorable(canvas);
     if (gl.isContextLost()) await contextRestored(canvas);
-    // preventDefault tells the browser we want the context back; the owner rebuilds on the report.
-    const lost = (event: Event) => {
-      event.preventDefault();
-      onLost?.("WebGL context lost");
-    };
+    const lost = () => onLost?.("WebGL context lost");
     canvas.addEventListener("webglcontextlost", lost);
     const unwatch = () => canvas.removeEventListener("webglcontextlost", lost);
     const bgProg = link(gl, GL_BG_VS, GL_BG_FS);
@@ -699,6 +696,19 @@ class WebGl2Backend implements Backend {
       gl.deleteProgram(program);
     }
   }
+}
+
+const restorable = new WeakSet<HTMLCanvasElement>();
+
+/**
+ * A loss whose event is not defaultPrevented stays lost for good, and a canvas hands out one
+ * context for its lifetime. The claim on restoration therefore outlives any renderer: a pane
+ * shed while hidden must still get its context back when it is shown and rebuilt on this canvas.
+ */
+function keepRestorable(canvas: HTMLCanvasElement): void {
+  if (restorable.has(canvas)) return;
+  restorable.add(canvas);
+  canvas.addEventListener("webglcontextlost", (event) => event.preventDefault());
 }
 
 function contextRestored(canvas: HTMLCanvasElement): Promise<void> {

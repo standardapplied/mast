@@ -696,9 +696,11 @@ export const SessionTerminalPane = forwardRef<
         const theme = paletteRef.current;
         void services.createRenderer(canvas, { ...rendererOptions, ...theme }).then(
           (next) => {
+            // Built for an attach that is over: the loop stays suspended, or it would draw through
+            // the renderer this rebuild already destroyed. Hid meanwhile: show() builds anew.
+            if (over()) return void next.destroy();
             rebuilding = false;
-            // Built for a pane that ended or hid meanwhile: nothing to draw on; show() builds anew.
-            if (over() || asleep) return void next.destroy();
+            if (asleep) return void next.destroy();
             renderer = next;
             try {
               controller.replaceRenderer(next);
