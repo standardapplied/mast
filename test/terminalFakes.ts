@@ -135,13 +135,16 @@ export class FakeLink implements SessionLink {
 }
 
 export class FakeRenderer implements SurfaceRenderer {
-  readonly cellSize = { w: 10, h: 20 };
+  /** 10×20 at the default 15px; a zoomed pane's cell scales with its size. */
+  readonly cellSize: { w: number; h: number };
   readonly resizes: [number, number][] = [];
   readonly applied: GridSnapshot[] = [];
   cursors: Cursor[] = [];
   draws = 0;
   destroyed = false;
-  constructor(readonly opts: RendererOptions) {}
+  constructor(readonly opts: RendererOptions) {
+    this.cellSize = { w: Math.round((opts.fontPx * 2) / 3), h: Math.round((opts.fontPx * 4) / 3) };
+  }
   resize(cols: number, rows: number): void {
     this.resizes.push([cols, rows]);
   }

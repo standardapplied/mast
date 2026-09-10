@@ -18,6 +18,7 @@ import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
 import type { DeckServices, RoomTerminalRequest } from "./terminal/roomDeck";
 import { clipboardPolicy } from "./terminal/clipboardPolicy";
+import { terminalFontSize } from "./terminal/fontSize";
 import { scrollbackBudget } from "./terminal/scrollbackBudget";
 import { connectSessions, sessionStore } from "./terminal/sessionStore";
 import type { ThemeController } from "./theme";
@@ -192,6 +193,7 @@ export function App({
   useEffect(() => {
     clipboardPolicy.connect(window.localStorage);
     scrollbackBudget.connect(window.localStorage);
+    terminalFontSize.connect(window.localStorage);
   }, []);
 
   useEffect(() => {

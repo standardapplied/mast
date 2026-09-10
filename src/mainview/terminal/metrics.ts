@@ -11,6 +11,7 @@
  */
 
 export const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, "SF Mono", monospace';
+/** The default size; the live one is the terminalFontSize setting (fontSize.ts), which ⌘+/⌘−/⌘0 move. */
 export const TERMINAL_FONT_PX = 15;
 /** Ghostty-style window padding: breathing room between the pane edge and the first glyph. */
 export const TERMINAL_PAD_X = 10;

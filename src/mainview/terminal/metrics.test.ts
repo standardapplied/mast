@@ -28,7 +28,11 @@ describe("terminal font metrics", () => {
       new URL("../tauri/SessionTerminalPane.tsx", import.meta.url).pathname,
     ).text();
     expect(source).toContain('from "../terminal/metrics"');
+    expect(source, "the size comes from the one setting, whose default is pinned here").toContain(
+      "fontPx: terminalFontSize.px()",
+    );
     expect(source).not.toMatch(/const FONT_PX\s*=/);
+    expect(source).not.toMatch(/fontPx:\s*\d/);
     expect(source).not.toMatch(/const FONT_FAMILY\s*=/);
     expect(source).not.toMatch(/const PAD_[XY]\s*=/);
   });
