@@ -959,3 +959,59 @@ describe("paste", () => {
     expect(decode(core.encodePaste(text))).toBe(text);
   });
 });
+
+describe("VtCore read path", () => {
+  const text = (s: string) => new TextEncoder().encode(s);
+
+  test("a frame's reads allocate nothing in wasm memory", async () => {
+    const instantiate = WebAssembly.instantiate;
+    let allocs = 0;
+    (WebAssembly as { instantiate: unknown }).instantiate = async (
+      module: WebAssembly.Module,
+      imports?: WebAssembly.Imports,
+    ) => {
+      // The effect trampolines instantiate their own module from bytes; only the core is counted.
+      if (!(module instanceof WebAssembly.Module)) return instantiate.call(WebAssembly, module, imports);
+      const instance = await instantiate.call(WebAssembly, module, imports);
+      const exports = { ...instance.exports } as Record<string, unknown>;
+      const alloc = exports.ghostty_wasm_alloc as (len: number) => number;
+      exports.ghostty_wasm_alloc = (len: number) => {
+        allocs++;
+        return alloc(len);
+      };
+      return { exports };
+    };
+    let core: VtCore;
+    try {
+      core = await VtCore.create(WASM, 40, 4);
+    } finally {
+      WebAssembly.instantiate = instantiate;
+    }
+    core.write(text("\x1b[1;4;38;5;1m\x1b[58;5;2mhello 世界 \x1b[0mplain\r\n\x1b[?2026h"));
+    allocs = 0;
+    const all = core.readAll();
+    core.snapshot();
+    core.clean();
+    core.cursor();
+    core.viewportActive();
+    core.synchronizedOutput();
+    core.kittyKeyboardFlags();
+    expect(allocs).toBe(0);
+    const row = all.rows[0]!.cells;
+    expect(row.map((c) => c.text).join("").trimEnd()).toBe("hello 世界 plain");
+    expect(row[0]).toMatchObject({ bold: true, underline: "single" });
+    expect(row[0]!.underlineColor, "palette index 2, resolved through the cached palette").toHaveLength(3);
+    expect(row[6]!.width).toBe(2);
+    expect(core.synchronizedOutput()).toBe(true);
+    core.free();
+  });
+
+  test("the scrollback budget is an option applied at create", async () => {
+    const core = await VtCore.create(WASM, 10, 2, undefined, { scrollbackMaxBytes: 5 * 1024 * 1024 });
+    expect(core.scrollbackMaxBytes()).toBe(5 * 1024 * 1024);
+    core.free();
+    await expect(VtCore.create(WASM, 10, 2, undefined, { scrollbackMaxBytes: -1 })).rejects.toThrow(
+      "scrollback budget",
+    );
+  });
+});

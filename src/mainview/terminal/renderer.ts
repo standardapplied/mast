@@ -11,11 +11,14 @@
  * the way native Ghostty does. WebGL2 is the fallback for webviews without `navigator.gpu`
  * (macOS < 26). The atlas, the grid model, and the instance packing are backend-agnostic and shared;
  * only the device, the shaders, and the draw call differ.
+ *
+ * The glyph atlas is one per (font, size, dpr) for the whole app ({@link glyphAtlasPool}): every
+ * renderer holds a reference while it lives and its own texture copy, refreshed by the slots
+ * written since its last upload — a new glyph costs one slot's bytes, not the bitmap's.
  */
 
 import { BG_STRIDE, FG_PER_CELL, FG_STRIDE, packFrame } from "./framePacker";
-import { GlyphAtlas } from "./glyphAtlas";
-import { offscreenRaster, type RasterFactory } from "./raster";
+import { type AtlasPatch, type GlyphAtlas, glyphAtlasPool } from "./glyphAtlas";
 import type { Renderer } from "./terminalController";
 import type { RendererColors } from "./terminalController";
 import { TerminalGrid } from "./terminalGrid";
@@ -42,8 +45,6 @@ export interface RendererOptions extends RendererColors {
    * never draw again: the owner builds a new one on the same canvas and repaints from the core.
    */
   readonly onLost?: (reason: string) => void;
-  /** Where the glyph atlas draws; defaults to an OffscreenCanvas. */
-  readonly raster?: RasterFactory;
 }
 
 interface FrameData {
@@ -52,6 +53,7 @@ interface FrameData {
   readonly cellW: number;
   readonly cellH: number;
   readonly atlasCols: number;
+  readonly atlasRows: number;
   /** Per-cell background, row-major: cols*rows*BG_STRIDE floats (0..1). */
   readonly bg: Float32Array;
   /** Per-glyph-cell foreground: packed [x,y, r,g,b, u,v, w, mode] * n. */
@@ -59,9 +61,9 @@ interface FrameData {
   readonly fgCount: number;
   readonly atlasWidth: number;
   readonly atlasHeight: number;
-  /** The atlas bitmap's pixels, read when {@link atlasVersion} changed. */
-  readonly atlasPixels: () => Uint8ClampedArray;
-  readonly atlasVersion: number;
+  /** The atlas's draw count; a backend that uploaded through an earlier count fetches the patches since. */
+  readonly atlasWrites: number;
+  readonly atlasPatches: (since: number) => AtlasPatch[];
   /** Canvas clear color (theme background). */
   readonly clear: Rgb;
 }
@@ -107,7 +109,7 @@ export class TerminalRenderer implements SurfaceRenderer {
   private constructor(opts: RendererOptions) {
     this.opts = opts;
     this.colors = opts;
-    this.atlas = new GlyphAtlas(opts.raster ?? offscreenRaster, opts.fontFamily, opts.fontPx, opts.dpr);
+    this.atlas = glyphAtlasPool.acquire(opts.fontFamily, opts.fontPx, opts.dpr);
     this.grid = new TerminalGrid(opts);
   }
 
@@ -125,8 +127,13 @@ export class TerminalRenderer implements SurfaceRenderer {
    */
   static async create(canvas: HTMLCanvasElement, opts: RendererOptions): Promise<TerminalRenderer> {
     const self = new TerminalRenderer(opts);
-    self.backend =
-      (await WebGpuBackend.tryCreate(canvas, opts)) ?? (await WebGl2Backend.create(canvas, opts));
+    try {
+      self.backend =
+        (await WebGpuBackend.tryCreate(canvas, opts)) ?? (await WebGl2Backend.create(canvas, opts));
+    } catch (e) {
+      glyphAtlasPool.release(self.atlas);
+      throw e;
+    }
     return self;
   }
 
@@ -163,6 +170,7 @@ export class TerminalRenderer implements SurfaceRenderer {
   draw(): void {
     const bg = this.bgInstances;
     const fg = this.fgInstances;
+    this.atlas.nextFrame();
     const fgCount = packFrame(this.grid, this.cursor, this.atlas, this.colors, { bg, fg }, this.hover);
 
     this.backend.frame({
@@ -171,19 +179,22 @@ export class TerminalRenderer implements SurfaceRenderer {
       cellW: this.atlas.metrics.cellW,
       cellH: this.atlas.metrics.cellH,
       atlasCols: this.atlas.atlasCols,
+      atlasRows: this.atlas.atlasRows,
       bg,
       fg,
       fgCount,
       atlasWidth: this.atlas.width,
       atlasHeight: this.atlas.height,
-      atlasPixels: () => this.atlas.pixels(),
-      atlasVersion: this.atlas.version,
+      atlasWrites: this.atlas.writes,
+      atlasPatches: (since) => this.atlas.patchesSince(since),
       clear: this.colors.bg,
     });
   }
 
+  /** Ends this renderer: its GPU objects go, and its hold on the shared atlas with them. */
   destroy(): void {
     this.backend.destroy();
+    glyphAtlasPool.release(this.atlas);
   }
 }
 
@@ -193,7 +204,7 @@ const WGSL = /* wgsl */ `
 struct Uniforms {
   view : vec2f,      // canvas size in px
   cell : vec2f,      // cell size in px
-  atlas : vec2f,     // x: atlas grid cols
+  atlas : vec2f,     // atlas grid cols, rows
   grid : vec2f,      // x: terminal cols (background instances index the grid row-major)
 };
 @group(0) @binding(0) var<uniform> U : Uniforms;
@@ -244,7 +255,7 @@ fn fg_vs(@builtin(vertex_index) vi : u32,
   let c = vec2f(base.x * w, base.y); // a wide glyph spans w cells in x, sampling w atlas cells
   let px = (grid + c) * U.cell;
   let ndc = vec2f(px.x / U.view.x * 2.0 - 1.0, 1.0 - px.y / U.view.y * 2.0);
-  let uv = (atlasCell + c) / vec2f(U.atlas.x, U.atlas.x);
+  let uv = (atlasCell + c) / U.atlas;
   var o : FgOut;
   o.pos = vec4f(ndc, 0.0, 1.0);
   o.color = color;
@@ -263,7 +274,9 @@ fn fg_fs(i : FgOut) -> @location(0) vec4f {
 
 class WebGpuBackend implements Backend {
   readonly name = "webgpu" as const;
-  private uploadedAtlas = -1;
+  /** The atlas draw count this texture holds; 0 is an empty texture. */
+  private uploaded = 0;
+  private readonly uniforms = new Float32Array(8);
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -383,6 +396,11 @@ class WebGpuBackend implements Backend {
     });
   }
 
+  /**
+   * The texture, sized to the atlas, holding every slot drawn through {@code d.atlasWrites}: a
+   * fresh texture takes every slot ever drawn, a live one only the slots drawn since its last frame.
+   * The bind group and view are made with the texture and reused until it is replaced.
+   */
   private ensureAtlas(d: FrameData): void {
     if (
       !this.texture ||
@@ -393,37 +411,32 @@ class WebGpuBackend implements Backend {
       this.texture = this.device.createTexture({
         size: [d.atlasWidth, d.atlasHeight],
         format: "rgba8unorm",
-        usage:
-          GPUTextureUsage.TEXTURE_BINDING |
-          GPUTextureUsage.COPY_DST |
-          GPUTextureUsage.RENDER_ATTACHMENT,
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
       });
-      this.uploadedAtlas = -1;
-    }
-    if (this.uploadedAtlas !== d.atlasVersion) {
-      const pixels = d.atlasPixels();
-      this.device.queue.writeTexture(
-        { texture: this.texture },
-        pixels.buffer as ArrayBuffer,
-        { offset: pixels.byteOffset, bytesPerRow: d.atlasWidth * 4, rowsPerImage: d.atlasHeight },
-        { width: d.atlasWidth, height: d.atlasHeight },
-      );
-      this.uploadedAtlas = d.atlasVersion;
-    }
-    if (!this.uniform) {
-      this.uniform = this.device.createBuffer({
-        size: 8 * 4,
+      this.uploaded = 0;
+      this.uniform ??= this.device.createBuffer({
+        size: this.uniforms.byteLength,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
+      this.bind = this.device.createBindGroup({
+        layout: this.bindLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.uniform } },
+          { binding: 1, resource: this.texture.createView() },
+          { binding: 2, resource: this.sampler },
+        ],
+      });
     }
-    this.bind = this.device.createBindGroup({
-      layout: this.bindLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.uniform } },
-        { binding: 1, resource: this.texture.createView() },
-        { binding: 2, resource: this.sampler },
-      ],
-    });
+    if (this.uploaded === d.atlasWrites) return;
+    for (const patch of d.atlasPatches(this.uploaded)) {
+      this.device.queue.writeTexture(
+        { texture: this.texture, origin: [patch.x, patch.y] },
+        patch.pixels.buffer as ArrayBuffer,
+        { offset: patch.pixels.byteOffset, bytesPerRow: patch.width * 4, rowsPerImage: patch.height },
+        { width: patch.width, height: patch.height },
+      );
+    }
+    this.uploaded = d.atlasWrites;
   }
 
   // ES2023 types Float32Array over ArrayBufferLike, which writeBuffer rejects; pass the
@@ -440,19 +453,16 @@ class WebGpuBackend implements Backend {
 
   frame(d: FrameData): void {
     this.ensureAtlas(d);
-    this.writeF32(
-      this.uniform,
-      new Float32Array([
-        this.canvas.width,
-        this.canvas.height,
-        d.cellW,
-        d.cellH,
-        d.atlasCols,
-        0,
-        d.cols,
-        0,
-      ]),
-    );
+    const u = this.uniforms;
+    u[0] = this.canvas.width;
+    u[1] = this.canvas.height;
+    u[2] = d.cellW;
+    u[3] = d.cellH;
+    u[4] = d.atlasCols;
+    u[5] = d.atlasRows;
+    u[6] = d.cols;
+    u[7] = 0;
+    this.writeF32(this.uniform, u);
 
     const bgBytes = d.cols * d.rows * BG_STRIDE * 4;
     this.bgBuf = this.vertexBuffer(this.bgBuf, bgBytes);
@@ -517,24 +527,27 @@ layout(location=1) in vec3 color;
 layout(location=2) in vec2 atlasCell;
 layout(location=3) in float w;
 layout(location=4) in float mode;
-uniform vec2 uView; uniform vec2 uCell; uniform float uAtlasCols;
+uniform vec2 uView; uniform vec2 uCell; uniform vec2 uAtlas;
 out vec3 vColor; out vec2 vUv; flat out float vMode;
 const vec2 C[6] = vec2[6](vec2(0,0),vec2(1,0),vec2(0,1),vec2(0,1),vec2(1,0),vec2(1,1));
 void main(){
   vec2 c = vec2(C[gl_VertexID].x * w, C[gl_VertexID].y); // wide glyph spans w cells
   vec2 px = (grid + c) * uCell;
   gl_Position = vec4(px.x/uView.x*2.0-1.0, 1.0-px.y/uView.y*2.0, 0.0, 1.0);
-  vUv = (atlasCell + c) / vec2(uAtlasCols, uAtlasCols);
+  vUv = (atlasCell + c) / uAtlas;
   vColor = color;
   vMode = mode;
 }`;
 const GL_FG_FS = `#version 300 es
-precision highp float; in vec3 vColor; in vec2 vUv; flat in float vMode; uniform sampler2D uAtlas; out vec4 o;
-void main(){ vec4 t = texture(uAtlas, vUv); o = vMode > 0.5 ? t : vec4(vColor, t.a); }`;
+precision highp float; in vec3 vColor; in vec2 vUv; flat in float vMode; uniform sampler2D uAtlasTex; out vec4 o;
+void main(){ vec4 t = texture(uAtlasTex, vUv); o = vMode > 0.5 ? t : vec4(vColor, t.a); }`;
 
 class WebGl2Backend implements Backend {
   readonly name = "webgl2" as const;
-  private uploadedAtlas = -1;
+  private uploaded = 0;
+  private texW = 0;
+  private texH = 0;
+  private readonly locations = new Map<string, WebGLUniformLocation | null>();
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -596,36 +609,51 @@ class WebGl2Backend implements Backend {
     this.gl.viewport(0, 0, pxW, pxH);
   }
 
-  frame(d: FrameData): void {
+  private ensureAtlas(d: FrameData): void {
     const gl = this.gl;
-    if (this.uploadedAtlas !== d.atlasVersion) {
-      const pixels = d.atlasPixels();
-      gl.bindTexture(gl.TEXTURE_2D, this.tex);
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA,
-        d.atlasWidth,
-        d.atlasHeight,
-        0,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        pixels,
-      );
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    if (this.texW !== d.atlasWidth || this.texH !== d.atlasHeight) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, d.atlasWidth, d.atlasHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      this.uploadedAtlas = d.atlasVersion;
+      this.texW = d.atlasWidth;
+      this.texH = d.atlasHeight;
+      this.uploaded = 0;
     }
+    if (this.uploaded === d.atlasWrites) return;
+    for (const p of d.atlasPatches(this.uploaded)) {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, p.x, p.y, p.width, p.height, gl.RGBA, gl.UNSIGNED_BYTE, p.pixels);
+    }
+    this.uploaded = d.atlasWrites;
+  }
+
+  private location(prog: WebGLProgram, name: string): WebGLUniformLocation | null {
+    const key = `${prog === this.bgProg ? "bg" : "fg"}.${name}`;
+    let loc = this.locations.get(key);
+    if (loc === undefined) {
+      loc = this.gl.getUniformLocation(prog, name);
+      this.locations.set(key, loc);
+    }
+    return loc;
+  }
+
+  private uni2(prog: WebGLProgram, name: string, a: number, b: number): void {
+    this.gl.uniform2f(this.location(prog, name), a, b);
+  }
+
+  frame(d: FrameData): void {
+    const gl = this.gl;
+    this.ensureAtlas(d);
 
     gl.clearColor(d.clear[0] / 255, d.clear[1] / 255, d.clear[2] / 255, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
     gl.useProgram(this.bgProg);
-    uni2(gl, this.bgProg, "uView", this.canvas.width, this.canvas.height);
-    uni2(gl, this.bgProg, "uCell", d.cellW, d.cellH);
-    gl.uniform1i(gl.getUniformLocation(this.bgProg, "uCols"), d.cols);
+    this.uni2(this.bgProg, "uView", this.canvas.width, this.canvas.height);
+    this.uni2(this.bgProg, "uCell", d.cellW, d.cellH);
+    gl.uniform1i(this.location(this.bgProg, "uCols"), d.cols);
     gl.bindVertexArray(this.bgVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.bgBuf);
     gl.bufferData(gl.ARRAY_BUFFER, d.bg.subarray(0, d.cols * d.rows * BG_STRIDE), gl.DYNAMIC_DRAW);
@@ -633,10 +661,10 @@ class WebGl2Backend implements Backend {
 
     if (d.fgCount > 0) {
       gl.useProgram(this.fgProg);
-      uni2(gl, this.fgProg, "uView", this.canvas.width, this.canvas.height);
-      uni2(gl, this.fgProg, "uCell", d.cellW, d.cellH);
-      gl.uniform1f(gl.getUniformLocation(this.fgProg, "uAtlasCols"), d.atlasCols);
-      gl.uniform1i(gl.getUniformLocation(this.fgProg, "uAtlas"), 0);
+      this.uni2(this.fgProg, "uView", this.canvas.width, this.canvas.height);
+      this.uni2(this.fgProg, "uCell", d.cellW, d.cellH);
+      this.uni2(this.fgProg, "uAtlas", d.atlasCols, d.atlasRows);
+      gl.uniform1i(this.location(this.fgProg, "uAtlasTex"), 0);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.tex);
       gl.bindVertexArray(this.fgVao);
@@ -698,8 +726,4 @@ function attr(
   gl.enableVertexAttribArray(loc);
   gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride, offset);
   gl.vertexAttribDivisor(loc, 1);
-}
-
-function uni2(gl: WebGL2RenderingContext, prog: WebGLProgram, name: string, a: number, b: number) {
-  gl.uniform2f(gl.getUniformLocation(prog, name), a, b);
 }

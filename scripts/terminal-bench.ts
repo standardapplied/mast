@@ -7,8 +7,11 @@
  * real VtCore and read back through the dirty-row snapshot; one echoed keystroke read the same
  * way; packing the resulting grid into GPU instance buffers with a stub atlas; and a firehose of
  * line output fed the two ways the data lane can deliver it — one message per read, and one
- * coalesced message per window (what the Rust pump sends). Each figure is the median of many
- * iterations, in milliseconds.
+ * coalesced message per window (what the Rust pump sends). Then two scenes that are about what a
+ * pane costs rather than how fast it is: ten idle panes ticking their frame loops, and a CJK
+ * document — thousands of distinct wide glyphs — rasterized into the shared atlas, with the bytes
+ * a backend uploads per frame and what a second pane on the same atlas pays. Each figure is the
+ * median of many iterations, in milliseconds.
  */
 
 import { readFileSync } from "node:fs";
@@ -17,8 +20,13 @@ import { rasterStubFactory } from "../test/rasterStub";
 import { BG_STRIDE, FG_PER_CELL, FG_STRIDE, packFrame } from "../src/mainview/terminal/framePacker";
 import { GlyphAtlas } from "../src/mainview/terminal/glyphAtlas";
 import { TERMINAL_FONT_FAMILY, TERMINAL_FONT_PX } from "../src/mainview/terminal/metrics";
+import {
+  type PtySink,
+  type Renderer,
+  TerminalController,
+} from "../src/mainview/terminal/terminalController";
 import { TerminalGrid } from "../src/mainview/terminal/terminalGrid";
-import type { Cursor } from "../src/mainview/terminal/vtCore";
+import type { Cursor, GridSnapshot } from "../src/mainview/terminal/vtCore";
 import { VtCore } from "../src/mainview/terminal/vtCore";
 
 const cols = Number(process.argv[2] ?? 200);
@@ -112,11 +120,99 @@ const fed = (message: number) => {
 const perRead = time(5, () => fed(1024)) / FIREHOSE_MIB;
 const coalesced = time(5, () => fed(256 * 1024)) / FIREHOSE_MIB;
 
+/** A pane's renderer with the pixels left out: the grid model the real one keeps, and nothing drawn. */
+class GridRenderer implements Renderer {
+  readonly grid = new TerminalGrid();
+  draws = 0;
+  resize(cols: number, rows: number): void {
+    this.grid.resize(cols, rows);
+  }
+  apply(snapshot: GridSnapshot): void {
+    this.grid.apply(snapshot);
+  }
+  setCursor(): void {}
+  setHover(): void {}
+  setColors(): void {}
+  draw(): void {
+    this.draws++;
+  }
+}
+const nullSink: PtySink = { write: () => {}, resize: () => {} };
+
+const panes = await Promise.all(
+  Array.from({ length: 10 }, async () => {
+    const paneCore = await VtCore.create(wasm, cols, rows);
+    const controller = new TerminalController(paneCore, new GridRenderer(), nullSink);
+    controller.feed(tuiFrame(0));
+    controller.frame(true, true);
+    return { core: paneCore, controller };
+  }),
+);
+const idle = time(200, () => {
+  for (const pane of panes) pane.controller.frame(true, true);
+});
+for (const pane of panes) pane.core.free();
+
+/** A line of distinct wide ideographs from {@code from}, as `cat` of a novel paints one. */
+function cjkLine(from: number): string {
+  let line = "";
+  for (let x = 0; x + 1 < cols; x += 2) line += String.fromCodePoint(from++);
+  return line;
+}
+function cjkPage(from: number): Uint8Array {
+  let s = "\x1b[H";
+  for (let y = 0; y < rows; y++) {
+    s += `${cjkLine(from + y * cols)}\x1b[K${y < rows - 1 ? "\r\n" : ""}`;
+  }
+  return enc.encode(s);
+}
+const raster = rasterStubFactory({ advance: 18, ascent: 30.6, descent: 9, capHeight: 21.9, exHeight: 16.5 });
+const shared = new GlyphAtlas(raster, TERMINAL_FONT_FAMILY, TERMINAL_FONT_PX, 2);
+const slotBytes = shared.metrics.cellW * shared.metrics.cellH * 4;
+const patchBytes = (since: number) => shared.patchesSince(since).reduce((n, p) => n + p.pixels.length, 0);
+const cjk = await VtCore.create(wasm, cols, rows);
+const cjkGrid = new TerminalGrid();
+cjkGrid.resize(cols, rows);
+cjk.write(cjkPage(0x4e00));
+cjkGrid.apply(cjk.readAll());
+cjk.clean();
+shared.nextFrame();
+const cjkFirst = time(1, () => packFrame(cjkGrid, cursor, shared, colors, out));
+const cjkGlyphs = shared.size;
+const cjkFirstUpload = patchBytes(0);
+let mark = shared.writes;
+shared.nextFrame();
+const cjkSteady = time(20, () => packFrame(cjkGrid, cursor, shared, colors, out));
+const cjkSteadyUpload = patchBytes(mark);
+mark = shared.writes;
+cjk.write(enc.encode(`\x1b[${rows};1H\r\n${cjkLine(0x9000)}`));
+cjkGrid.apply(cjk.readAll());
+cjk.clean();
+shared.nextFrame();
+const cjkNewLine = time(1, () => packFrame(cjkGrid, cursor, shared, colors, out));
+const cjkLineUpload = patchBytes(mark);
+const secondGrid = new TerminalGrid();
+secondGrid.resize(cols, rows);
+secondGrid.apply(cjk.readAll());
+mark = shared.writes;
+shared.nextFrame();
+const cjkSecondPane = time(20, () => packFrame(secondGrid, cursor, shared, colors, out));
+const cjkSecondUpload = patchBytes(mark);
+cjk.free();
+
 const fmt = (ms: number) => `${ms.toFixed(3)} ms`;
+const mib = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 console.log(`${cols}×${rows} terminal, medians:`);
 console.log(`  full TUI redraw: write + dirty-row snapshot + grid apply  ${fmt(redraw)}`);
 console.log(`  one echoed keystroke: write + dirty-row snapshot + apply  ${fmt(echo)}`);
 console.log(`  packFrame (whole grid → instance buffers)                 ${fmt(pack)}`);
 console.log(`  firehose, per MiB fed as 1 KiB messages (one per read)    ${fmt(perRead)}`);
 console.log(`  firehose, per MiB fed as 256 KiB messages (coalesced)     ${fmt(coalesced)}`);
+console.log(`10 panes idle: one frame-loop tick across all ten           ${fmt(idle)}`);
+console.log(`CJK document (${cjkGlyphs} distinct wide glyphs on screen), shared atlas ${shared.atlasCols}×${shared.atlasRows}:`);
+console.log(`  first frame: rasterize + pack                              ${fmt(cjkFirst)}`);
+console.log(`  first frame: texture upload                                ${mib(cjkFirstUpload)} (whole bitmap: ${mib(shared.width * shared.height * 4)})`);
+console.log(`  steady frame: pack / upload                                ${fmt(cjkSteady)} / ${cjkSteadyUpload} B`);
+console.log(`  one new line of glyphs: pack / upload                      ${fmt(cjkNewLine)} / ${mib(cjkLineUpload)} (${cjkLineUpload / slotBytes} slots)`);
+console.log(`  second pane, same document, same atlas: pack / upload      ${fmt(cjkSecondPane)} / ${cjkSecondUpload} B`);
 core.free();

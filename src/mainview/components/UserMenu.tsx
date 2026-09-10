@@ -5,6 +5,7 @@ import { Person } from "./icons";
 import { ToggleButton } from "./ToggleButton";
 import { Button } from "./ui";
 import { type ClipboardWrite, clipboardPolicy } from "../terminal/clipboardPolicy";
+import { SCROLLBACK_CHOICES_MIB, type ScrollbackMib, scrollbackBudget } from "../terminal/scrollbackBudget";
 import type { ThemeController, ThemeMode } from "../theme";
 import { useUpdater, type Updater, type UpdaterView } from "../updater";
 
@@ -18,6 +19,8 @@ const CLIPBOARD_OPTIONS = [
   { value: "allow", label: "Allow" },
   { value: "deny", label: "Deny" },
 ];
+
+const SCROLLBACK_OPTIONS = SCROLLBACK_CHOICES_MIB.map((mib) => ({ value: String(mib), label: `${mib} MB` }));
 
 /**
  * Top-right user menu ported from light-grid-wapp: avatar trigger, outside
@@ -44,6 +47,7 @@ export function UserMenu({
   const [isOpen, setIsOpen] = useState(false);
   const [mode, setMode] = useState<ThemeMode>(theme.mode());
   const clipboardWrite = useSyncExternalStore(clipboardPolicy.subscribe, clipboardPolicy.mode);
+  const scrollbackMib = useSyncExternalStore(scrollbackBudget.subscribe, scrollbackBudget.mib);
   const menuRef = useRef<HTMLDivElement>(null);
   const upd = useUpdater(updater);
   const hasUpdate = upd.phase === "available" || upd.phase === "ready";
@@ -110,6 +114,15 @@ export function UserMenu({
               options={CLIPBOARD_OPTIONS}
               value={clipboardWrite}
               onChange={(value) => clipboardPolicy.set(value as ClipboardWrite)}
+            />
+          </div>
+
+          <div className="user-menu-section" data-testid="scrollback-budget">
+            <span className="eyebrow">Scrollback per terminal</span>
+            <ToggleButton
+              options={SCROLLBACK_OPTIONS}
+              value={String(scrollbackMib)}
+              onChange={(value) => scrollbackBudget.set(Number(value) as ScrollbackMib)}
             />
           </div>
 

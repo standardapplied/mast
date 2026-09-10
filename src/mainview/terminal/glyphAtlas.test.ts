@@ -1,18 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { opInside, type RasterOp, type Rect, rasterStubFactory } from "../../../test/rasterStub";
-import { GlyphAtlas } from "./glyphAtlas";
+import { GlyphAtlas, GlyphAtlasPool } from "./glyphAtlas";
 
 /** JetBrains Mono at 15 CSS px × 2, as a 2D context measures it. */
 const FACE = { advance: 18, ascent: 30.6, descent: 9, capHeight: 21.9, exHeight: 16.5 };
 const FAMILY = '"JetBrains Mono", monospace';
 
-function atlas(opts: { colored?: string[]; cols?: number; rows?: number } = {}) {
+function atlas(opts: { colored?: string[]; cols?: number; rows?: number; maxRows?: number } = {}) {
   const raster = rasterStubFactory(FACE, new Set(opts.colored ?? []));
-  const a = new GlyphAtlas(raster, FAMILY, 15, 2, opts.cols ?? 64, opts.rows ?? 64);
+  const a = new GlyphAtlas(raster, FAMILY, 15, 2, opts.cols ?? 64, opts.rows ?? 64, opts.maxRows);
   // surfaces[0] is the measuring probe; surfaces[1] is the atlas bitmap.
   const ops = () => raster.surfaces[1]!.ops;
   return { a, ops, raster };
 }
+
+/** The slot rects a set of patches covers, as (x, y, width) triples. */
+const rects = (a: GlyphAtlas, since: number) => a.patchesSince(since).map((p) => [p.x, p.y, p.width]);
 
 function slotOf(a: GlyphAtlas, id: number, span = 1): Rect {
   const { u, v } = a.cell(id);
@@ -54,9 +57,9 @@ describe("GlyphAtlas", () => {
       font: `30px ${FAMILY}`,
       clip: slot,
     });
-    const before = a.version;
+    const before = a.writes;
     expect(a.glyph("A", PLAIN)).toBe(1);
-    expect(a.version).toBe(before);
+    expect(a.writes).toBe(before);
     expect(ops().filter((o) => o.kind === "fillText")).toHaveLength(1);
   });
 
@@ -111,7 +114,7 @@ describe("GlyphAtlas", () => {
     expect(a.cell(wide)).toEqual({ u: 0, v: 1 });
     const text = ops().find((o) => o.kind === "fillText" && o.text === "世");
     expect(text).toMatchObject({ clip: slotOf(a, wide, 2) });
-    expect(a.glyph("C", PLAIN)).toBe(6);
+    expect(a.glyph("C", PLAIN), "the slot the wide glyph skipped is not wasted").toBe(3);
   });
 
   test("a color glyph (emoji) is flagged so the renderer draws it untinted", () => {
@@ -123,13 +126,96 @@ describe("GlyphAtlas", () => {
     expect(a.isColor(0)).toBe(false);
   });
 
-  test("a full atlas yields blank rather than overwriting a slot", () => {
-    const { a } = atlas({ cols: 2, rows: 2 });
-    expect(a.glyph("A", PLAIN)).toBe(1);
+  test("a full atlas evicts the entry least recently referenced, never one referenced this frame", () => {
+    const { a, raster } = atlas({ cols: 2, rows: 2 });
+    a.glyph("A", PLAIN);
+    a.glyph("B", PLAIN);
+    a.glyph("C", PLAIN);
+    a.nextFrame();
     expect(a.glyph("B", PLAIN)).toBe(2);
     expect(a.glyph("C", PLAIN)).toBe(3);
-    expect(a.glyph("D", PLAIN)).toBe(0);
+    a.nextFrame();
+    expect(a.glyph("C", PLAIN)).toBe(3);
+    const d = a.glyph("D", PLAIN);
+    expect(d, "A, untouched longest, gives up its slot").toBe(1);
+    expect(a.has("A")).toBe(false);
+    expect(raster.surfaces[1]!.clears.at(-1), "the slot is wiped before D is drawn into it").toEqual(
+      slotOf(a, 1),
+    );
+    expect(a.glyph("E", PLAIN), "B, referenced a frame ago, goes next; C is this frame's").toBe(2);
+    expect(a.glyph("C", PLAIN)).toBe(3);
+    expect(a.size).toBe(3);
+  });
+
+  test("a wide entry evicts the pair whose newer half is oldest, whole entries at a time", () => {
+    const { a } = atlas({ cols: 4, rows: 1 });
+    a.glyph("A", PLAIN);
+    a.glyph("B", PLAIN);
+    a.glyph("C", PLAIN);
+    a.nextFrame();
+    a.glyph("B", PLAIN);
+    a.nextFrame();
+    expect(a.glyph("世", PLAIN, true), "A and B are older together than B and C").toBe(1);
+    expect(a.has("A")).toBe(false);
+    expect(a.has("B")).toBe(false);
+    expect(a.has("C")).toBe(true);
+    a.nextFrame();
+    a.glyph("C", PLAIN);
+    expect(a.glyph("D", PLAIN), "the narrow entry that evicts the wide one frees both its slots").toBe(1);
+    expect(a.has("世", PLAIN, true)).toBe(false);
+    expect(a.glyph("E", PLAIN)).toBe(2);
+  });
+
+  test("a frame that needs more slots than exist grows the atlas instead of blanking", () => {
+    const { a, raster } = atlas({ cols: 2, rows: 2, maxRows: 4 });
+    a.glyph("A", PLAIN);
+    a.glyph("B", PLAIN);
+    a.glyph("C", PLAIN);
+    expect(a.glyph("D", PLAIN)).toBe(4);
+    expect(a.atlasRows).toBe(4);
+    expect(a.height).toBe(4 * 40);
     expect(a.glyph("A", PLAIN)).toBe(1);
+    const grown = raster.surfaces.at(-1)!;
+    expect(grown.ops.filter((o) => o.kind === "fillText").map((o) => o.kind === "fillText" && o.text)).toEqual(
+      ["A", "B", "C", "D"],
+    );
+    for (const text of ["E", "F", "G"]) a.glyph(text, PLAIN);
+    expect(() => a.glyph("H", PLAIN)).toThrow("more glyphs than the atlas can hold");
+  });
+
+  test("patches since a mark cover exactly the slots written after it, one row-run each", () => {
+    const { a } = atlas({ cols: 4, rows: 2 });
+    a.glyph("A", PLAIN);
+    a.glyph("B", PLAIN);
+    const mark = a.writes;
+    expect(mark).toBe(2);
+    expect(rects(a, mark)).toEqual([]);
+    a.glyph("C", PLAIN);
+    a.glyph("世", PLAIN, true);
+    expect(rects(a, mark), "C at 3, the wide glyph at 4-5 on the next row").toEqual([
+      [3 * 18, 0, 18],
+      [0, 40, 36],
+    ]);
+    const patch = a.patchesSince(mark)[0]!;
+    expect(patch.pixels.length, "one slot's bytes for one new glyph").toBe(18 * 40 * 4);
+    expect(rects(a, 0), "a fresh texture takes every slot ever drawn").toEqual([
+      [18, 0, 3 * 18],
+      [0, 40, 36],
+    ]);
+    expect(rects(a, a.writes)).toEqual([]);
+  });
+
+  test("a re-referenced entry is not a write; a re-drawn slot is", () => {
+    const { a } = atlas({ cols: 2, rows: 2 });
+    a.glyph("A", PLAIN);
+    a.glyph("B", PLAIN);
+    a.glyph("C", PLAIN);
+    const mark = a.writes;
+    a.nextFrame();
+    a.glyph("A", PLAIN);
+    expect(rects(a, mark)).toEqual([]);
+    a.glyph("D", PLAIN);
+    expect(rects(a, mark), "D took B's slot").toEqual([[0, 40, 18]]);
   });
 
   test("no draw for any glyph can reach outside its own slot", () => {
@@ -162,9 +248,21 @@ describe("GlyphAtlas", () => {
     }
   });
 
-  test("pixels() reads the whole bitmap back", () => {
-    const { a } = atlas({ cols: 2, rows: 2 });
-    expect(a.pixels().length).toBe(a.width * a.height * 4);
+  test("a pool hands every renderer at one face the same atlas and drops it after the last release", () => {
+    const raster = rasterStubFactory(FACE);
+    const pool = new GlyphAtlasPool(raster);
+    const one = pool.acquire(FAMILY, 15, 2);
+    const two = pool.acquire(FAMILY, 15, 2);
+    const other = pool.acquire(FAMILY, 15, 1);
+    expect(two).toBe(one);
+    expect(other).not.toBe(one);
+    expect(pool.size).toBe(2);
+    pool.release(one);
+    expect(pool.size).toBe(2);
+    pool.release(two);
+    expect(pool.size).toBe(1);
+    expect(pool.acquire(FAMILY, 15, 2), "a fresh atlas once every holder let go").not.toBe(one);
+    expect(() => pool.release(one)).toThrow("does not hold");
   });
 
   test("fails loudly when the raster cannot report face metrics", () => {

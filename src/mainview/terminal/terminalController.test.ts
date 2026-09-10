@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -207,6 +207,30 @@ describe("TerminalController", () => {
     controller.selectDrag({ x: 2, y: 0 }, { x: 28, y: 10 });
     controller.frame();
     expect(renderer.draws).toBe(draws + 1);
+  });
+
+  test("an idle frame never touches the core; a blink phase redraws from the cursor it cached", async () => {
+    const { controller, core, renderer } = await harness();
+    controller.feed(enc("$ "));
+    controller.frame(true, true);
+    const snapshot = spyOn(core, "snapshot");
+    const cursor = spyOn(core, "cursor");
+    const draws = renderer.draws;
+    controller.frame(true, true);
+    controller.frame(true, true);
+    expect(renderer.draws).toBe(draws);
+    controller.frame(false, true);
+    expect(renderer.draws, "the blink's off phase is a redraw").toBe(draws + 1);
+    expect(renderer.cursors.at(-1)?.visible).toBe(false);
+    controller.frame(false, false);
+    expect(renderer.cursors.at(-1)?.style, "an unfocused pane shows the hollow cursor").toBe("hollow");
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(cursor).not.toHaveBeenCalled();
+    controller.feed(enc("x"));
+    controller.frame(true, true);
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(cursor).toHaveBeenCalledTimes(1);
+    expect(renderer.cursors.at(-1)?.x).toBe(3);
   });
 
   test("a scroll repaints at the new viewport, with no new pty output", async () => {

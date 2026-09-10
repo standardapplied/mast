@@ -75,7 +75,12 @@ const status = () => statuses.at(-1)!;
 const card = () => container.querySelector(".term-overlay__card");
 
 /** Renders a pane; the attach runs on from here (see {@link mount} for the settled form). */
-type Over = { session?: string; onWriter?: (fde: string) => void; onBell?: () => void };
+type Over = {
+  session?: string;
+  visible?: boolean;
+  onWriter?: (fde: string) => void;
+  onBell?: () => void;
+};
 
 function render(over: Over = {}) {
   const handle = createRef<TerminalHandle>();
@@ -87,6 +92,7 @@ function render(over: Over = {}) {
         token=""
         session={over.session ?? "mast-app"}
         create={{ command: ["bash"], cwd: "~", project: "app", cols: 80, rows: 24 }}
+        visible={over.visible}
         onStatus={(s) => statuses.push(s)}
         onWriter={over.onWriter}
         onBell={over.onBell}
@@ -362,6 +368,44 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(services.link.opens, "the session never went anywhere").toHaveLength(1);
     expect(services.link.closed).toEqual([]);
     expect(status()).toEqual({ kind: "up" });
+  });
+
+  test("a hidden pane sheds its renderer and keeps its terminal; shown again, it rebuilds and repaints whole", async () => {
+    const { attachment } = await mount();
+    await act(async () => {
+      attachment.lanes.onData(bytes("kept"));
+    });
+    const shed = services.renderers[0]!;
+    await act(async () => {
+      render({ visible: false });
+    });
+    expect(shed.destroyed).toBe(true);
+    expect(services.renderers, "nothing replaces it while hidden").toHaveLength(1);
+    await act(async () => {
+      shed.opts.onLost?.("GPU device lost: reset");
+      attachment.lanes.onData(bytes(" on"));
+    });
+    await settle();
+    expect(services.renderers, "a loss while hidden builds nothing").toHaveLength(1);
+    await act(async () => {
+      render({ visible: true });
+    });
+    await settle();
+    expect(services.renderers).toHaveLength(2);
+    const fresh = services.renderers[1]!;
+    expect(fresh.destroyed).toBe(false);
+    expect(fresh.resizes).toEqual([[80, 24]]);
+    expect(fresh.applied[0]?.dirty).toBe("full");
+    const firstRow = fresh.applied[0]?.rows.find((r) => r.y === 0);
+    expect(firstRow?.cells.map((c) => c.text).join("").trimEnd()).toBe("kept on");
+    expect(services.link.opens, "the session never went anywhere").toHaveLength(1);
+    expect(status()).toEqual({ kind: "up" });
+  });
+
+  test("a pane mounted hidden attaches with no renderer to keep", async () => {
+    await mount({ visible: false });
+    expect(services.renderers).toHaveLength(1);
+    expect(services.renderers[0]!.destroyed).toBe(true);
   });
 
   test("a rebuild that fails parks on the failed card whose Retry rebuilds again, not re-dials", async () => {

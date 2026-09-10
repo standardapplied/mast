@@ -30,8 +30,9 @@ const MODE_COLOR = 1;
 export interface AtlasLike {
   glyph(text: string, style: GlyphStyle, wide: boolean): number;
   special(kind: SpecialKind, wide: boolean): number;
-  cell(id: number): { u: number; v: number };
   isColor(id: number): boolean;
+  /** Slots per atlas row: an id's cell is (id % cols, id / cols). */
+  readonly atlasCols: number;
 }
 
 export interface FrameColors {
@@ -75,8 +76,8 @@ export function packFrame(
   const blockCursor = cursorShown && cursor.style === "block";
   const cursorColor = cursor.color ?? colors.cursor;
   let fgCount = 0;
+  const atlasCols = atlas.atlasCols;
   const put = (x: number, y: number, id: number, color: Rgb, wide: boolean, mode: number) => {
-    const { u, v } = atlas.cell(id);
     const o = fgCount * FG_STRIDE;
     const fg = out.fg;
     fg[o] = x;
@@ -84,8 +85,8 @@ export function packFrame(
     fg[o + 2] = color[0] / 255;
     fg[o + 3] = color[1] / 255;
     fg[o + 4] = color[2] / 255;
-    fg[o + 5] = u;
-    fg[o + 6] = v;
+    fg[o + 5] = id % atlasCols;
+    fg[o + 6] = Math.floor(id / atlasCols);
     fg[o + 7] = wide ? 2 : 1;
     fg[o + 8] = mode;
     fgCount++;

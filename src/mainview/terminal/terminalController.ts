@@ -8,8 +8,9 @@
  * the WebGPU renderer are the thin, untested edge that wires these seams to the live app.
  *
  * Damage-driven: {@link #frame} applies only the rows VtCore reports dirty, then draws only when
- * something visible changed — rows, cursor. An idle terminal costs one mode query per
- * frame and nothing else; the caller decides how often to call it (an animation frame is fine).
+ * something visible changed — rows, cursor. An idle terminal — no bytes since the last frame —
+ * never touches the core: the cursor it read with the last damage is reused, so a frame costs a
+ * comparison; the caller decides how often to call it (an animation frame is fine).
  */
 
 import { keyEventFor, type KeyStroke, MODS } from "./input";
@@ -86,6 +87,8 @@ export class TerminalController {
   private dirty = true;
   /** Something visible changed that the grid does not carry (selection, geometry): draw. */
   private redraw = true;
+  /** The core's cursor as of the last dirty read; only bytes (or a scroll, a resize) can move it. */
+  private rawCursor: Cursor | null = null;
   private lastCursor: Cursor | null = null;
   /** Where the pointer rests, for the link under it; null once it left the surface. */
   private hoverCell: CellPos | null = null;
@@ -197,10 +200,10 @@ export class TerminalController {
    * hold is released regardless.
    */
   frame(blinkOn = true, focused = true): void {
-    if (this.holdForSynchronizedOutput()) {
-      return;
-    }
     if (this.dirty) {
+      if (this.holdForSynchronizedOutput()) {
+        return;
+      }
       const snapshot = this.core.snapshot();
       if (snapshot.dirty !== "none") {
         this.renderer.apply(snapshot);
@@ -210,9 +213,10 @@ export class TerminalController {
         }
       }
       this.core.clean();
+      this.rawCursor = this.core.cursor();
       this.dirty = false;
     }
-    const cursor = this.core.cursor();
+    const cursor = this.rawCursor!;
     const shown = cursor.visible && (!focused || !cursor.blinking || blinkOn);
     const next: Cursor = { ...cursor, visible: shown, style: focused ? cursor.style : "hollow" };
     if (!this.redraw && this.lastCursor !== null && sameCursor(this.lastCursor, next)) {
