@@ -97,7 +97,8 @@ export function shortTitle(raw: string): string {
   const afterColon = trimmed.match(/^\S+@\S+:\s*(.+)$/)?.[1];
   const path = afterColon?.trim();
   const name = path ? (path === "/" ? "/" : (path.split("/").filter(Boolean).pop() ?? path)) : trimmed;
-  return name.length > 40 ? `${name.slice(0, 39)}…` : name;
+  const chars = [...name];
+  return chars.length > 40 ? `${chars.slice(0, 39).join("")}…` : name;
 }
 
 /**

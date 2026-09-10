@@ -682,6 +682,34 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(host().style.cursor).toBe("");
   });
 
+  test("a link hovered when the transport drops is gone from the chrome; the next attach starts unhovered", async () => {
+    const { handle, attachment } = await mount();
+    await act(async () => {
+      attachment.lanes.onData(bytes("go \x1b]8;;https://a.b/c\x1b\\here\x1b]8;;\x1b\\ now"));
+    });
+    act(() => pointer("pointermove", 4, 0));
+    expect(linkTip()).toBe("https://a.b/c");
+    await act(async () => {
+      attachment.lanes.onExit({ class: "transport", reason: "connection reset" });
+    });
+    await settle();
+    expect(linkTip(), "an ended card names no link").toBeNull();
+    expect(host().style.cursor).toBe("");
+
+    act(() => handle.current!.revive!());
+    let next: FakeAttachment | null = null;
+    await act(async () => {
+      next = await services.link.opened();
+    });
+    await settle();
+    await act(async () => {
+      next!.lanes.onData(bytes("fresh shell, no links"));
+    });
+    act(() => pointer("pointermove", 4, 0));
+    expect(linkTip(), "the pointer resting in the same cell is re-asked of the new core").toBeNull();
+    expect(services.renderers.at(-1)!.hovers.at(-1) ?? null).toBeNull();
+  });
+
   test("⌘-click opens a link on the Mac; a refused scheme lands in the pane by name and nothing opens", async () => {
     const { attachment } = await mount();
     await act(async () => {

@@ -297,6 +297,12 @@ describe("pane identity (rename + color)", () => {
     expect(shortTitle("a\tb\u0000c\u200dd")).toBe("abcd");
   });
 
+  test("the cap counts characters, never cutting one in half", () => {
+    expect(shortTitle("😀".repeat(25))).toBe("😀".repeat(25));
+    const capped = shortTitle("😀".repeat(45));
+    expect(capped).toBe(`${"😀".repeat(39)}…`);
+  });
+
   test("renaming to blank clears back to the ordinal; color survives independently", () => {
     let l = withPaneMeta(layout, "mast-a", { label: "agent", color: 3 });
     l = withPaneMeta(l, "mast-a", { label: "" });

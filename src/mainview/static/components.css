@@ -4099,6 +4099,7 @@ button.room-section-head:hover {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: isolate;
   z-index: 2;
   pointer-events: none;
 }

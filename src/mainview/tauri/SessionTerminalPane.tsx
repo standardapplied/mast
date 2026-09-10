@@ -527,8 +527,16 @@ export const SessionTerminalPane = forwardRef<
      * the host delivered as the shell's own exit closes the pane; one this pane inferred from a
      * listing (the session is gone) parks it on its card — see {@link EndedDisposition}.
      */
+    /** The pointer's link is chrome for a live screen: an ending, or the next attach, has none. */
+    const clearHover = () => {
+      hoverCellRef.current = null;
+      controllerRef.current?.hover(null);
+      setHoverLink(null);
+    };
+
     const park = (end: SessionEnd, disposition: EndedDisposition = "close-pane") => {
       if (disposed) return;
+      clearHover();
       if (end.klass === "ended") {
         setStatus({ kind: "ended", reason: end.reason, disposition });
         return;
@@ -572,6 +580,7 @@ export const SessionTerminalPane = forwardRef<
     const fail = (reason: string) => {
       if (halted || ended) return;
       halted = true;
+      clearHover();
       rebuildRef.current = null;
       setStatus({ kind: "failed", reason });
       void link.close(id).catch(noop);
@@ -924,6 +933,7 @@ export const SessionTerminalPane = forwardRef<
     return () => {
       disposed = true;
       cancelAnimationFrame(raf);
+      clearHover();
       controllerRef.current = null;
       void link.close(id).catch(noop);
       for (const cleanup of cleanups.reverse()) {
