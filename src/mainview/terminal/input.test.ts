@@ -118,7 +118,7 @@ describe("keyEventFor", () => {
 });
 
 describe("keyEventFor with Option held", () => {
-  test("the composed macOS character is withheld; the unshifted codepoint names the physical key", () => {
+  test("the composed macOS character gives way to the physical key's base; the unshifted codepoint names that key", () => {
     const composed: [string, string, string][] = [
       ["ƒ", "KeyF", "f"],
       ["å", "KeyA", "a"],
@@ -131,9 +131,15 @@ describe("keyEventFor with Option held", () => {
     for (const [key, code, base] of composed) {
       const spec = keyEventFor({ key, code, alt: true });
       expect(spec.unshifted, `${key} on ${code}`).toBe(base.codePointAt(0)!);
-      expect(spec.utf8).toBe("");
+      expect(spec.utf8, "the text the encoder sees is the key Option was held on").toBe(base);
       expect(spec.mods & MODS.ALT).toBe(MODS.ALT);
     }
+  });
+
+  test("a composed character with no physical key behind it is withheld, never substituted", () => {
+    const spec = keyEventFor({ key: "ü", code: "", alt: true });
+    expect(spec.utf8).toBe("");
+    expect(spec.unshifted).toBe("ü".codePointAt(0)!);
   });
 
   test("ASCII text under Option is kept — the encoder prefixes a single byte as is", () => {

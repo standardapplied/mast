@@ -157,14 +157,17 @@ function unshiftedOf(code: string | undefined, key: string, alt: boolean): numbe
 
 /**
  * The text a key press carries. With Option held, macOS composes a symbol (Option+F is 'ƒ') that
- * the encoder, which is not built for macOS and so never applies option-as-alt itself, would
- * ESC-prefix verbatim. Withholding that text makes it fall back to the physical key's unshifted
- * codepoint, so Option+F bytes as ESC f — the meta-sends-escape behavior this terminal has always
- * had. Plain ASCII text stays: the encoder prefixes a single byte as is.
+ * the encoder, which is not built for macOS and so never applies option-as-alt itself, would take
+ * as the key: ESC ƒ in the legacy encoding, Meta+ƒ (codepoint 402) under modifyOtherKeys. Option
+ * is Alt in this terminal, so the text becomes the key Option was held on — 'f' — and every
+ * encoding names that key: ESC f, CSI 27;3;102~, plain f with the ESC prefix turned off. A
+ * composed character with no ASCII key behind it is withheld instead, and the encoder falls back
+ * to the unshifted codepoint. Plain ASCII text stays: the encoder prefixes a single byte as is.
  */
-function textOf(key: string, alt: boolean): string {
+function textOf(key: string, alt: boolean, unshifted: number): string {
   if (charLength(key) !== 1) return "";
-  return alt && key.codePointAt(0)! > 0x7f ? "" : key;
+  if (!alt || key.codePointAt(0)! <= 0x7f) return key;
+  return unshifted > 0 && unshifted < 0x80 ? String.fromCodePoint(unshifted) : "";
 }
 
 /** Translates one DOM key press into the event libghostty's encoder consumes. */
@@ -178,8 +181,8 @@ export function keyEventFor(stroke: KeyStroke): KeyEventSpec {
     (caps ? MODS.CAPS : 0);
   // Every single-char key carries its text — the ENCODER decides what a chord suppresses or maps
   // (Ctrl+[ → ESC needs the '[' to reach it). Cmd chords are gated once, in the controller.
-  const utf8 = textOf(key, alt);
   const unshifted = unshiftedOf(code, key, alt);
+  const utf8 = textOf(key, alt, unshifted);
   const consumedMods =
     utf8 !== "" && shift && utf8.codePointAt(0) !== unshifted ? MODS.SHIFT : 0;
   return {

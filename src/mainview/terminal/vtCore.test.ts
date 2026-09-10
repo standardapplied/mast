@@ -986,6 +986,36 @@ describe("paste", () => {
   });
 });
 
+describe("Option as Alt on the real encoder", () => {
+  const stroke = { key: "ƒ", code: "KeyF", alt: true };
+  const hex = (b: Uint8Array | null) => (b ? Array.from(b, (x) => x.toString(16).padStart(2, "0")).join(" ") : null);
+
+  test("Option+F is ESC f, never ESC ƒ", async () => {
+    const core = await track();
+    expect(hex(core.encodeKey(keyEventFor(stroke)))).toBe("1b 66");
+    expect(hex(core.encodeKey(keyEventFor({ key: "≥", code: "Period", alt: true })))).toBe("1b 2e");
+  });
+
+  test("under modifyOtherKeys the chord is Meta+f in the CSI 27 form, with the key's own codepoint", async () => {
+    const core = await track();
+    core.write(bytes("\x1b[>4;2m"));
+    expect(hex(core.encodeKey(keyEventFor(stroke)))).toBe(hex(bytes("\x1b[27;3;102~")));
+    expect(hex(core.encodeKey(keyEventFor({ ...stroke, key: "Ï", shift: true })))).toBe(hex(bytes("\x1b[27;4;102~")));
+  });
+
+  test("with the ESC prefix turned off (DECRST 1036) the key still types its base, not nothing", async () => {
+    const core = await track();
+    core.write(bytes("\x1b[?1036l"));
+    expect(hex(core.encodeKey(keyEventFor(stroke)))).toBe("66");
+  });
+
+  test("the kitty protocol names the physical key whatever Option composed", async () => {
+    const core = await track();
+    core.write(bytes("\x1b[>31u"));
+    expect(hex(core.encodeKey(keyEventFor(stroke)))).toBe(hex(bytes("\x1b[102;3u")));
+  });
+});
+
 describe("VtCore read path", () => {
   const text = (s: string) => new TextEncoder().encode(s);
 
