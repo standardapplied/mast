@@ -215,9 +215,6 @@ const MODE_CONFIG_VALUE_OFFSET = 2;
 /** `ESC[200~` + `ESC[201~` around a bracketed paste. */
 const PASTE_FRAME_OVERHEAD = 12;
 
-/** GhosttyKeyEncoderOption: macOS option-as-alt (an int-typed enum; TRUE = 1). */
-const KEY_OPT_MACOS_OPTION_AS_ALT = 6;
-const OPTION_AS_ALT_TRUE = 1;
 /** Encoded key sequences are tiny; one retry handles the out-of-space contract regardless. */
 const KEY_BUF_LEN = 64;
 
@@ -632,7 +629,6 @@ export class VtCore {
 
   private readonly keyEncoder: number;
   private readonly keyEvent: number;
-  private readonly optAsAltPtr: number;
   private readonly mouseEncoder: number;
   private readonly mouseEvent: number;
   private readonly gesture: number;
@@ -688,9 +684,6 @@ export class VtCore {
     this.cells = this.abi.construct((slot) => e.ghostty_render_state_row_cells_new(0, slot));
     this.keyEncoder = this.abi.construct((slot) => e.ghostty_key_encoder_new(0, slot));
     this.keyEvent = this.abi.construct((slot) => e.ghostty_key_event_new(0, slot));
-    this.optAsAltPtr = this.abi.alloc(4);
-    this.abi.writeI32(this.optAsAltPtr, OPTION_AS_ALT_TRUE);
-    this.setOptionAsAlt();
     this.mouseEncoder = this.abi.construct((slot) => e.ghostty_mouse_encoder_new(0, slot));
     this.mouseEvent = this.abi.construct((slot) => e.ghostty_mouse_event_new(0, slot));
     this.gesture = this.abi.construct((slot) => e.ghostty_selection_gesture_new(0, slot));
@@ -736,16 +729,6 @@ export class VtCore {
     } finally {
       this.abi.free(ptr, 1);
     }
-  }
-
-  /**
-   * Option is Alt (meta-sends-escape), the behavior this terminal has always had. Terminal state
-   * cannot express this preference, so {@code setopt_from_terminal} resets it — re-apply after
-   * every sync (the header documents exactly this dance). The value never changes, so it lives in
-   * one preallocated slot rather than an alloc per keystroke.
-   */
-  private setOptionAsAlt(): void {
-    this.e.ghostty_key_encoder_setopt(this.keyEncoder, KEY_OPT_MACOS_OPTION_AS_ALT, this.optAsAltPtr);
   }
 
   /**
@@ -1306,7 +1289,6 @@ export class VtCore {
     }
     const e = this.e;
     e.ghostty_key_encoder_setopt_from_terminal(this.keyEncoder, this.term);
-    this.setOptionAsAlt();
     e.ghostty_key_event_set_action(this.keyEvent, spec.action);
     e.ghostty_key_event_set_key(this.keyEvent, spec.key);
     e.ghostty_key_event_set_mods(this.keyEvent, spec.mods);
@@ -1652,7 +1634,6 @@ export class VtCore {
     }
     this.freed = true;
     this.abi.free(this.identityPtr, this.identityLen);
-    this.abi.free(this.optAsAltPtr, 4);
     this.abi.free(this.scalarPtr, 8);
     this.abi.free(this.stylePtr, STYLE_SIZE);
     this.abi.free(this.palettePtr, PALETTE_BYTES);

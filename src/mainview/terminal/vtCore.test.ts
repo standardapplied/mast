@@ -479,6 +479,20 @@ describe("VtCore", () => {
     expect(after.rows.length).toBeGreaterThan(0);
   });
 
+  test("erasing a wrapped wide char also dirties the row that held its spacer head", async () => {
+    const core = await track(6, 3);
+    core.write(bytes("abcde漢"));
+    expect(line(core, 0)).toBe("abcde");
+    expect(line(core, 1)).toBe("漢");
+    core.clean();
+
+    core.write(bytes("\x1b[2;1H\x1b[X"));
+    const snap = core.snapshot();
+    expect(snap.dirty).toBe("partial");
+    expect(snap.rows.map((r) => r.y)).toEqual([0, 1]);
+    expect(line(core, 1)).toBe("");
+  });
+
   test("reports the cursor advancing with the text", async () => {
     const core = await track();
     const start = core.cursor();
@@ -854,6 +868,18 @@ describe("paste", () => {
     expect(core.linkAt({ x: 21, y: 1 })).toBeNull();
   });
 
+  test("a kitty graphics stream is swallowed whole: the grid stays intact and no reply goes to the pty", async () => {
+    const core = await track(10, 2);
+    const replies: Uint8Array[] = [];
+    core.hooks.onWritePty = (b) => replies.push(b);
+    const chunked = "\x1b_Gi=1,a=T,f=24,s=1,v=1,m=1;AA\x1b\\\x1b_Gm=0;AA\x1b\\";
+    const query = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\";
+    core.write(bytes(`ab${chunked}${query}cd`));
+    expect(line(core, 0)).toBe("abcd");
+    expect(core.cursor()).toMatchObject({ x: 4, y: 0 });
+    expect(replies).toEqual([]);
+  });
+
   test("BEL reaches onBell and never the screen", async () => {
     const core = await track(20, 2);
     let bells = 0;
@@ -957,6 +983,36 @@ describe("paste", () => {
     const core = await track();
     const text = "x".repeat(100_000);
     expect(decode(core.encodePaste(text))).toBe(text);
+  });
+});
+
+describe("Option as Alt on the real encoder", () => {
+  const stroke = { key: "ƒ", code: "KeyF", alt: true };
+  const hex = (b: Uint8Array | null) => (b ? Array.from(b, (x) => x.toString(16).padStart(2, "0")).join(" ") : null);
+
+  test("Option+F is ESC f, never ESC ƒ", async () => {
+    const core = await track();
+    expect(hex(core.encodeKey(keyEventFor(stroke)))).toBe("1b 66");
+    expect(hex(core.encodeKey(keyEventFor({ key: "≥", code: "Period", alt: true })))).toBe("1b 2e");
+  });
+
+  test("under modifyOtherKeys the chord is Meta+f in the CSI 27 form, with the key's own codepoint", async () => {
+    const core = await track();
+    core.write(bytes("\x1b[>4;2m"));
+    expect(hex(core.encodeKey(keyEventFor(stroke)))).toBe(hex(bytes("\x1b[27;3;102~")));
+    expect(hex(core.encodeKey(keyEventFor({ ...stroke, key: "Ï", shift: true })))).toBe(hex(bytes("\x1b[27;4;102~")));
+  });
+
+  test("with the ESC prefix turned off (DECRST 1036) the key still types its base, not nothing", async () => {
+    const core = await track();
+    core.write(bytes("\x1b[?1036l"));
+    expect(hex(core.encodeKey(keyEventFor(stroke)))).toBe("66");
+  });
+
+  test("the kitty protocol names the physical key whatever Option composed", async () => {
+    const core = await track();
+    core.write(bytes("\x1b[>31u"));
+    expect(hex(core.encodeKey(keyEventFor(stroke)))).toBe(hex(bytes("\x1b[102;3u")));
   });
 });
 

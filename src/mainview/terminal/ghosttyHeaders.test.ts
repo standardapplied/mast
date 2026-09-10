@@ -35,17 +35,6 @@ describe("vendored header parity", () => {
     expect(GHOSTTY_KEY).toEqual(fromHeader);
   });
 
-  test("the encoder option ordinal for macos-option-as-alt matches the header", () => {
-    const m = headers("key_encoder.h").match(
-      /GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT = (\d+)/,
-    );
-    // vtCore.ts KEY_OPT_MACOS_OPTION_AS_ALT must equal this; it is private, so pin the source.
-    expect(m![1]).toBe("6");
-    expect(readFileSync(join(import.meta.dir, "vtCore.ts"), "utf8")).toContain(
-      "const KEY_OPT_MACOS_OPTION_AS_ALT = 6",
-    );
-  });
-
   test("the key action values match the header", () => {
     const block = headers("key_event.h").match(
       /typedef enum GHOSTTY_ENUM_TYPED \{([^{}]*)\} GhosttyKeyAction;/,
