@@ -54,6 +54,12 @@ export interface SessionLink {
   close(id: string): Promise<void>;
   /** The system clipboard as text; empty when unavailable. */
   readClipboard(): Promise<string>;
+  /**
+   * Opens a link in the Mac's default browser, never in the webview and never on the box. The
+   * Rust side allows http, https and mailto only; a refusal rejects with a message naming the
+   * scheme.
+   */
+  openUrl(url: string): Promise<void>;
 }
 
 export interface TerminalServices {

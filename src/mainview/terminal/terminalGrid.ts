@@ -38,6 +38,7 @@ export class TerminalGrid {
       faint: false,
       invisible: false,
       selected: false,
+      link: false,
       width: 1,
     };
   }

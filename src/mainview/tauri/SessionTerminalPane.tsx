@@ -31,11 +31,12 @@ import {
 } from "../terminal/metrics";
 import { preAttachClass, skewCard, skewOf } from "../terminal/roomDeck";
 import type { RendererOptions, SurfaceRenderer } from "../terminal/renderer";
+import { clipboardPolicy } from "../terminal/clipboardPolicy";
 import { decodeDataFrame } from "../terminal/dataFrames";
 import { type KeyStroke, MODS } from "../terminal/input";
 import { sessionStore } from "../terminal/sessionStore";
 import { paletteFor, resolveThemeName, type TerminalColors } from "../terminal/terminalPalette";
-import { gridFor, type PtySink, TerminalController } from "../terminal/terminalController";
+import { gridFor, type PtySink, TerminalController, type Timers } from "../terminal/terminalController";
 import {
   type SessionCreate,
   type SessionFrames,
@@ -44,6 +45,7 @@ import {
 import {
   type CellPos,
   type ColorScheme,
+  type LinkRun,
   type MouseButton,
   type SurfacePos,
   VtCore,
@@ -199,6 +201,17 @@ export interface SessionTerminalProps {
 
 const noop = () => {};
 
+/** How long a pane's notice (a clipboard write, a refused link) stays up. */
+export const NOTICE_MS = 4000;
+
+const WINDOW_TIMERS: Timers = {
+  set: (fn, ms) => setTimeout(fn, ms),
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+/** A transient line in the pane's chip cluster: what a program just did, or was refused. */
+type Notice = { readonly text: string; readonly tone: "info" | "warn" };
+
 /** Shared across panes: the sleep-wake liveness probe needs to fire once, not once per pane. */
 let lastWakeProbe = 0;
 const WAKE_PROBE_GAP_MS = 3000;
@@ -231,6 +244,7 @@ export const SessionTerminalPane = forwardRef<
 ) {
   const services = useTerminalServices();
   const { link } = services;
+  const timers = services.timers ?? WINDOW_TIMERS;
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controllerRef = useRef<TerminalController | null>(null);
@@ -268,6 +282,11 @@ export const SessionTerminalPane = forwardRef<
   /** The host's last refusal on this attach (a keystroke without the write token), or null. */
   const [refusal, setRefusal] = useState<string | null>(null);
   const bellTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const noticeTimer = useRef<unknown>(null);
+  /** The link under the resting pointer; the controller owns it, this mirrors it for the chrome. */
+  const [hoverLink, setHoverLink] = useState<LinkRun | null>(null);
+  const hoverCellRef = useRef<CellPos | null>(null);
   const themeName = useThemeName();
   const palette = useMemo(() => paletteFor(themeName), [themeName]);
   const paletteRef = useRef(palette);
@@ -287,6 +306,34 @@ export const SessionTerminalPane = forwardRef<
   useEffect(() => {
     onStatus?.(status);
   }, [status, onStatus]);
+
+  const notify = useCallback(
+    (text: string, tone: Notice["tone"]) => {
+      if (noticeTimer.current !== null) timers.clear(noticeTimer.current);
+      setNotice({ text, tone });
+      noticeTimer.current = timers.set(() => {
+        noticeTimer.current = null;
+        setNotice(null);
+      }, NOTICE_MS);
+    },
+    [timers],
+  );
+  useEffect(
+    () => () => {
+      if (noticeTimer.current !== null) timers.clear(noticeTimer.current);
+    },
+    [timers],
+  );
+
+  /** ⌘-click on a link: the Mac's browser opens it, or the refusal lands here, naming the scheme. */
+  const openLink = useCallback(
+    (uri: string) => {
+      link.openUrl(uri).catch((e: unknown) => {
+        notify(e instanceof Error ? e.message : String(e), "warn");
+      });
+    },
+    [link, notify],
+  );
 
   /** Tears the current attach down and dials again, painting the "reconnecting" state. */
   const reattach = useCallback(() => {
@@ -636,8 +683,21 @@ export const SessionTerminalPane = forwardRef<
         );
       };
 
-      controller.hooks.onClipboard = (text) =>
+      // A program replacing the clipboard is allowed (as in Ghostty) but never silent; under the
+      // deny setting it is refused and told so.
+      controller.hooks.onClipboard = (text) => {
+        if (disposed) return false;
+        if (clipboardPolicy.mode() === "deny") {
+          notify("shell clipboard write refused", "warn");
+          return false;
+        }
         void navigator.clipboard?.writeText(text).catch(noop);
+        notify("shell wrote to the clipboard", "info");
+        return true;
+      };
+      controller.hooks.onHover = (run) => {
+        if (!disposed) setHoverLink(run);
+      };
       controller.hooks.onTitle = (title) => onTitleRef.current?.(title);
       controller.hooks.onBell = () => {
         if (disposed) return;
@@ -1016,6 +1076,14 @@ export const SessionTerminalPane = forwardRef<
     const pos = cellAt(e);
     if (!button || !pos) return;
     const controller = controllerRef.current;
+    if (button === "left" && e.metaKey && !e.ctrlKey && !e.altKey) {
+      const run = controller?.linkAt(pos);
+      if (run) {
+        openLink(run.uri);
+        e.preventDefault();
+        return;
+      }
+    }
     // An application tracking the mouse gets the press (unless Shift keeps it local); the
     // release and any drag follow it there too, whatever the app does with tracking meanwhile.
     if (controller?.mouse({ action: "press", button, mods: modsOf(e), ...pos })) {
@@ -1042,6 +1110,17 @@ export const SessionTerminalPane = forwardRef<
     }
     const held = heldButtonRef.current;
     controller?.mouse({ action: "motion", button: held ?? undefined, mods: modsOf(e), ...pos });
+    if (held || !controller) return;
+    const last = hoverCellRef.current;
+    if (last && last.x === pos.x && last.y === pos.y) return;
+    hoverCellRef.current = pos;
+    setHoverLink(controller.hover(pos));
+  };
+
+  const onPointerLeave = () => {
+    hoverCellRef.current = null;
+    controllerRef.current?.hover(null);
+    setHoverLink(null);
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
@@ -1096,7 +1175,9 @@ export const SessionTerminalPane = forwardRef<
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerLeave={onPointerLeave}
       style={{
+        cursor: hoverLink ? "pointer" : undefined,
         position: "relative",
         width: "100%",
         height: "100%",
@@ -1111,8 +1192,21 @@ export const SessionTerminalPane = forwardRef<
     >
       <canvas ref={canvasRef} />
       {ringing && <div className="term-bell" data-testid="term-bell" aria-hidden />}
-      {(lane.ptySize || lane.paused || refusal) && (
+      {hoverLink && (
+        <div className="term-link-tip" data-testid="term-link-tip">
+          {hoverLink.uri}
+        </div>
+      )}
+      {(lane.ptySize || lane.paused || refusal || notice) && (
         <div className="term-chips">
+          {notice && (
+            <span
+              className={`term-chip ${notice.tone === "warn" ? "term-chip--refused" : "term-chip--notice"}`}
+              data-testid="term-notice"
+            >
+              {notice.text}
+            </span>
+          )}
           {lane.ptySize && (
             <span className="term-chip" data-testid="term-pty-size">
               sized by {writerFde || "the writer"} to {lane.ptySize.cols}×{lane.ptySize.rows}

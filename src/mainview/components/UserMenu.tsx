@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { WhoAmI } from "../../shared/sail-models";
 import { cx } from "./cx";
 import { Person } from "./icons";
 import { ToggleButton } from "./ToggleButton";
 import { Button } from "./ui";
+import { type ClipboardWrite, clipboardPolicy } from "../terminal/clipboardPolicy";
 import type { ThemeController, ThemeMode } from "../theme";
 import { useUpdater, type Updater, type UpdaterView } from "../updater";
 
@@ -11,6 +12,11 @@ const THEME_OPTIONS = [
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
   { value: "system", label: "Auto" },
+];
+
+const CLIPBOARD_OPTIONS = [
+  { value: "allow", label: "Allow" },
+  { value: "deny", label: "Deny" },
 ];
 
 /**
@@ -37,6 +43,7 @@ export function UserMenu({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [mode, setMode] = useState<ThemeMode>(theme.mode());
+  const clipboardWrite = useSyncExternalStore(clipboardPolicy.subscribe, clipboardPolicy.mode);
   const menuRef = useRef<HTMLDivElement>(null);
   const upd = useUpdater(updater);
   const hasUpdate = upd.phase === "available" || upd.phase === "ready";
@@ -95,6 +102,15 @@ export function UserMenu({
           <div className="user-menu-section">
             <span className="eyebrow">Theme</span>
             <ToggleButton options={THEME_OPTIONS} value={mode} onChange={setTheme} />
+          </div>
+
+          <div className="user-menu-section" data-testid="clipboard-write">
+            <span className="eyebrow">Shell clipboard writes</span>
+            <ToggleButton
+              options={CLIPBOARD_OPTIONS}
+              value={clipboardWrite}
+              onChange={(value) => clipboardPolicy.set(value as ClipboardWrite)}
+            />
           </div>
 
           <div className="user-menu-section">

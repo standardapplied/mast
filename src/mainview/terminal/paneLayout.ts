@@ -86,10 +86,14 @@ export function titleOf(
 /**
  * Distills a shell's OSC title into a chip-sized name. The stock bash PS1 emits
  * `user@host: dir` — the directory's last segment is the part a human scans for (ghostty's
- * convention); anything else is shown as-is, trimmed and capped.
+ * convention); anything else is shown as-is, trimmed and capped. Control and format characters
+ * are dropped first: libghostty strips C0, but a bidi override (U+202E) survives it and would let
+ * a program spell a chip, toast or confirm dialog backwards.
  */
+const FORMAT_CONTROLS = /[\p{Cc}\p{Cf}]/gu;
+
 export function shortTitle(raw: string): string {
-  const trimmed = raw.trim();
+  const trimmed = raw.replace(FORMAT_CONTROLS, "").trim();
   const afterColon = trimmed.match(/^\S+@\S+:\s*(.+)$/)?.[1];
   const path = afterColon?.trim();
   const name = path ? (path === "/" ? "/" : (path.split("/").filter(Boolean).pop() ?? path)) : trimmed;

@@ -10,7 +10,7 @@ import type {
   SessionOpen,
   TerminalServices,
 } from "../src/mainview/terminal/terminalServices";
-import type { Cursor, GridSnapshot } from "../src/mainview/terminal/vtCore";
+import type { Cursor, GridSnapshot, LinkRun } from "../src/mainview/terminal/vtCore";
 
 /**
  * The pane's platform seam, scripted: a link whose lanes the test drives by hand, a renderer that
@@ -55,6 +55,9 @@ export class FakeLink implements SessionLink {
   readonly closed: string[] = [];
   readonly takes: string[] = [];
   clipboard = "";
+  readonly openedUrls: string[] = [];
+  /** Set to make every openUrl reject with this message (the Rust scheme refusal). */
+  openRefusal: string | null = null;
   private waiters: Array<(attachment: FakeAttachment) => void> = [];
   private gate: Promise<void> | null = null;
 
@@ -124,6 +127,11 @@ export class FakeLink implements SessionLink {
   async readClipboard(): Promise<string> {
     return this.clipboard;
   }
+
+  async openUrl(url: string): Promise<void> {
+    if (this.openRefusal) throw new Error(this.openRefusal);
+    this.openedUrls.push(url);
+  }
 }
 
 export class FakeRenderer implements SurfaceRenderer {
@@ -142,6 +150,10 @@ export class FakeRenderer implements SurfaceRenderer {
   }
   setCursor(cursor: Cursor): void {
     this.cursors.push(cursor);
+  }
+  hovers: (LinkRun | null)[] = [];
+  setHover(run: LinkRun | null): void {
+    this.hovers.push(run);
   }
   colors: RendererColors[] = [];
   setColors(colors: RendererColors): void {

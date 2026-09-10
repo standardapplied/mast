@@ -3954,6 +3954,7 @@ button.room-section-head:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  unicode-bidi: isolate;
 }
 .term-pane-chip__sep {
   color: var(--subtle-foreground);
@@ -4079,6 +4080,27 @@ button.room-section-head:hover {
   color: var(--warning);
   border-color: var(--warning);
   pointer-events: auto;
+}
+.term-chip--notice {
+  color: var(--foreground);
+}
+.term-link-tip {
+  position: absolute;
+  left: 8px;
+  bottom: 6px;
+  max-width: calc(100% - 16px);
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 2;
+  pointer-events: none;
 }
 .term-chip__action {
   padding: 0 6px;

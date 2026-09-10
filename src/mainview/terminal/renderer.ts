@@ -19,7 +19,7 @@ import { offscreenRaster, type RasterFactory } from "./raster";
 import type { Renderer } from "./terminalController";
 import type { RendererColors } from "./terminalController";
 import { TerminalGrid } from "./terminalGrid";
-import type { Cursor, GridSnapshot, Rgb } from "./vtCore";
+import type { Cursor, GridSnapshot, LinkRun, Rgb } from "./vtCore";
 
 export type BackendName = "webgpu" | "webgl2";
 
@@ -99,6 +99,7 @@ export class TerminalRenderer implements SurfaceRenderer {
     blinking: false,
     color: null,
   };
+  private hover: LinkRun | null = null;
   // Instance buffers reused across frames — sized on resize, never per frame.
   private bgInstances = new Float32Array(0);
   private fgInstances = new Float32Array(0);
@@ -148,6 +149,10 @@ export class TerminalRenderer implements SurfaceRenderer {
     this.cursor = cursor;
   }
 
+  setHover(run: LinkRun | null): void {
+    this.hover = run;
+  }
+
   /** A theme flip: the next frame clears and paints in the new colors. */
   setColors(colors: RendererColors): void {
     this.colors = colors;
@@ -158,10 +163,7 @@ export class TerminalRenderer implements SurfaceRenderer {
   draw(): void {
     const bg = this.bgInstances;
     const fg = this.fgInstances;
-    const fgCount = packFrame(this.grid, this.cursor, this.atlas, this.colors, {
-      bg,
-      fg,
-    });
+    const fgCount = packFrame(this.grid, this.cursor, this.atlas, this.colors, { bg, fg }, this.hover);
 
     this.backend.frame({
       cols: this.cols,

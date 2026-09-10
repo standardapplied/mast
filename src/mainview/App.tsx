@@ -17,6 +17,7 @@ import { Button } from "./components/ui";
 import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
 import type { DeckServices, RoomTerminalRequest } from "./terminal/roomDeck";
+import { clipboardPolicy } from "./terminal/clipboardPolicy";
 import { connectSessions, sessionStore } from "./terminal/sessionStore";
 import type { ThemeController } from "./theme";
 import type { Updater } from "./updater";
@@ -187,6 +188,10 @@ export function App({
   // that, progress and agent_presence events keep the store live. The session
   // inventory and the rooms/specs/projects catalog connect beside it: one
   // owner each, seeded by a listing, accelerated (never carried) by events.
+  useEffect(() => {
+    clipboardPolicy.connect(window.localStorage);
+  }, []);
+
   useEffect(() => {
     if (!ready) return;
     connectCatalog(gateway);

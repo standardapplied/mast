@@ -5,6 +5,7 @@ import { App } from "./App";
 import { catalogStore } from "./board/catalogStore";
 import { createDemoGateway, type DemoGateway } from "./gateway";
 import { dispatchPush } from "./push";
+import { clipboardPolicy } from "./terminal/clipboardPolicy";
 import { sessionStore } from "./terminal/sessionStore";
 import { browserThemeDeps, createThemeController } from "./theme";
 
@@ -763,5 +764,24 @@ describe("App cockpit", () => {
       document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     });
     expect(container.querySelector('[data-testid="user-menu-panel"]')).toBeNull();
+  });
+
+  test("the user menu's shell clipboard toggle is the stored setting", async () => {
+    localStorage.setItem("mast.terminal.clipboard-write", "deny");
+    await render();
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="user-menu-trigger"]')?.click();
+    });
+    const section = container.querySelector('[data-testid="clipboard-write"]');
+    const option = (label: string) =>
+      [...section!.querySelectorAll<HTMLButtonElement>(".toggle-option")].find((b) => b.textContent === label);
+    expect(option("Deny")?.getAttribute("aria-checked"), "seeded from storage").toBe("true");
+    expect(clipboardPolicy.mode()).toBe("deny");
+    act(() => option("Allow")?.click());
+    expect(option("Allow")?.getAttribute("aria-checked")).toBe("true");
+    expect(clipboardPolicy.mode()).toBe("allow");
+    expect(localStorage.getItem("mast.terminal.clipboard-write")).toBe("allow");
+    localStorage.removeItem("mast.terminal.clipboard-write");
+    clipboardPolicy.reset();
   });
 });
