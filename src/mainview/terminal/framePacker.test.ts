@@ -24,9 +24,8 @@ class StubAtlas implements AtlasLike {
   special(kind: SpecialKind, wide: boolean): number {
     return this.id(`${kind}${wide ? ":wide" : ""}`);
   }
-  cell(id: number) {
-    return { u: id, v: 0 };
-  }
+  /** Wider than any id, so an instance's u reads back as the id itself. */
+  readonly atlasCols = 1 << 20;
   isColor(id: number): boolean {
     return this.names[id]?.startsWith("glyph:😀") ?? false;
   }

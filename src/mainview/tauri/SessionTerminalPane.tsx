@@ -30,6 +30,7 @@ import {
   TERMINAL_PAD_Y as PAD_Y,
 } from "../terminal/metrics";
 import { preAttachClass, skewCard, skewOf } from "../terminal/roomDeck";
+import { scrollbackBudget } from "../terminal/scrollbackBudget";
 import type { RendererOptions, SurfaceRenderer } from "../terminal/renderer";
 import { clipboardPolicy } from "../terminal/clipboardPolicy";
 import { decodeDataFrame } from "../terminal/dataFrames";
@@ -184,7 +185,8 @@ export interface SessionTerminalProps {
   readonly active?: boolean;
   /**
    * True when the pane is on screen (its sub-tab and workspace tab are the visible ones). A hidden
-   * pane stays attached but stops drawing, and never pushes its zero-size geometry at the pty.
+   * pane stays attached and keeps its terminal, but sheds its renderer — GPU buffers, texture, its
+   * hold on the shared glyph atlas — and never pushes its zero-size geometry at the pty.
    */
   readonly visible?: boolean;
   /** Lifecycle reporting for the tab bar's status cluster. */
@@ -221,6 +223,26 @@ type Geometry = {
   adopt: (cols: number, rows: number) => void;
   refit: () => void;
 };
+
+/** What the attach effect exposes to the visibility effect: shed the renderer, or rebuild it. */
+type Presence = {
+  hide: () => void;
+  show: () => void;
+};
+
+/** Stands in for a hidden pane's renderer: the controller keeps its geometry, nothing is drawn. */
+function dormantRenderer(w: number, h: number): SurfaceRenderer {
+  return {
+    cellSize: { w, h },
+    resize: noop,
+    apply: noop,
+    setCursor: noop,
+    setHover: noop,
+    setColors: noop,
+    draw: noop,
+    destroy: noop,
+  };
+}
 
 export const SessionTerminalPane = forwardRef<
   TerminalHandle,
@@ -274,6 +296,7 @@ export const SessionTerminalPane = forwardRef<
   /** Set while the renderer is the broken part: Retry rebuilds it instead of re-dialing. */
   const rebuildRef = useRef<(() => void) | null>(null);
   const geometryRef = useRef<Geometry | null>(null);
+  const presenceRef = useRef<Presence | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [unseenOutput, setUnseenOutput] = useState(false);
@@ -498,6 +521,13 @@ export const SessionTerminalPane = forwardRef<
     else geometryRef.current?.refit();
   }, [ptySize]);
 
+  // Off screen, the pixels are the one thing this pane can give back: ten hidden shells hold ten
+  // terminals and no GPU. Back on screen, the renderer is rebuilt and repainted from the core.
+  useEffect(() => {
+    if (visible) presenceRef.current?.show();
+    else presenceRef.current?.hide();
+  }, [visible]);
+
   useEffect(() => {
     const host = hostRef.current;
     const canvas = canvasRef.current;
@@ -634,6 +664,7 @@ export const SessionTerminalPane = forwardRef<
       const core = await VtCore.create(wasm, cols, rows, theme, {
         identity: await services.identity(),
         scheme: schemeOf(resolveThemeName()),
+        scrollbackMaxBytes: scrollbackBudget.bytes(),
       });
       if (disposed) return void core.free();
       cleanups.push(() => core.free());
@@ -655,8 +686,9 @@ export const SessionTerminalPane = forwardRef<
        * attach is over (a fault, or the session's ending) touches nothing: that card stands.
        */
       const over = () => disposed || halted || ended;
+      let asleep = false;
       rebuildRenderer = (reason: string) => {
-        if (over() || rebuilding) return;
+        if (over() || rebuilding || asleep) return;
         rebuilding = true;
         renderer.destroy();
         // The theme may have flipped since the attach: a rebuilt renderer paints in today's colors —
@@ -664,17 +696,19 @@ export const SessionTerminalPane = forwardRef<
         const theme = paletteRef.current;
         void services.createRenderer(canvas, { ...rendererOptions, ...theme }).then(
           (next) => {
+            // Built for an attach that is over: the loop stays suspended, or it would draw through
+            // the renderer this rebuild already destroyed. Hid meanwhile: show() builds anew.
             if (over()) return void next.destroy();
+            rebuilding = false;
+            if (asleep) return void next.destroy();
             renderer = next;
             try {
               controller.replaceRenderer(next);
               if (paletteRef.current !== theme) applyThemeRef.current?.(paletteRef.current);
             } catch (e) {
-              rebuilding = false;
               fail(laneFault(e));
               return;
             }
-            rebuilding = false;
             rebuildRef.current = null;
             if (rendererFailed) {
               rendererFailed = false;
@@ -691,6 +725,30 @@ export const SessionTerminalPane = forwardRef<
           },
         );
       };
+
+      /**
+       * A hidden pane keeps its terminal — the wasm is the durable state — and sheds the pixels:
+       * its GPU buffers, its texture and its hold on the shared atlas go, and a dormant renderer
+       * stands in until it is shown, when a fresh one is built on the same canvas and repainted
+       * from the core by the same path a lost device takes.
+       */
+      const hide = () => {
+        if (over() || asleep) return;
+        asleep = true;
+        renderer.destroy();
+        renderer = dormantRenderer(cellW, cellH);
+        controller.replaceRenderer(renderer);
+      };
+      const show = () => {
+        if (over() || !asleep) return;
+        asleep = false;
+        rebuildRenderer("renderer released while hidden");
+      };
+      presenceRef.current = { hide, show };
+      cleanups.push(() => {
+        presenceRef.current = null;
+      });
+      if (!visibleRef.current) hide();
 
       // A program replacing the clipboard is allowed (as in Ghostty) but never silent; under the
       // deny setting it is refused and told so.

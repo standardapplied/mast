@@ -75,7 +75,12 @@ const status = () => statuses.at(-1)!;
 const card = () => container.querySelector(".term-overlay__card");
 
 /** Renders a pane; the attach runs on from here (see {@link mount} for the settled form). */
-type Over = { session?: string; onWriter?: (fde: string) => void; onBell?: () => void };
+type Over = {
+  session?: string;
+  visible?: boolean;
+  onWriter?: (fde: string) => void;
+  onBell?: () => void;
+};
 
 function render(over: Over = {}) {
   const handle = createRef<TerminalHandle>();
@@ -87,6 +92,7 @@ function render(over: Over = {}) {
         token=""
         session={over.session ?? "mast-app"}
         create={{ command: ["bash"], cwd: "~", project: "app", cols: 80, rows: 24 }}
+        visible={over.visible}
         onStatus={(s) => statuses.push(s)}
         onWriter={over.onWriter}
         onBell={over.onBell}
@@ -364,6 +370,69 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(status()).toEqual({ kind: "up" });
   });
 
+  test("a hidden pane sheds its renderer and keeps its terminal; shown again, it rebuilds and repaints whole", async () => {
+    const { attachment } = await mount();
+    await act(async () => {
+      attachment.lanes.onData(bytes("kept"));
+    });
+    const shed = services.renderers[0]!;
+    await act(async () => {
+      render({ visible: false });
+    });
+    expect(shed.destroyed).toBe(true);
+    expect(services.renderers, "nothing replaces it while hidden").toHaveLength(1);
+    await act(async () => {
+      shed.opts.onLost?.("GPU device lost: reset");
+      attachment.lanes.onData(bytes(" on"));
+    });
+    await settle();
+    expect(services.renderers, "a loss while hidden builds nothing").toHaveLength(1);
+    await act(async () => {
+      render({ visible: true });
+    });
+    await settle();
+    expect(services.renderers).toHaveLength(2);
+    const fresh = services.renderers[1]!;
+    expect(fresh.destroyed).toBe(false);
+    expect(fresh.resizes).toEqual([[80, 24]]);
+    expect(fresh.applied[0]?.dirty).toBe("full");
+    const firstRow = fresh.applied[0]?.rows.find((r) => r.y === 0);
+    expect(firstRow?.cells.map((c) => c.text).join("").trimEnd()).toBe("kept on");
+    expect(services.link.opens, "the session never went anywhere").toHaveLength(1);
+    expect(status()).toEqual({ kind: "up" });
+  });
+
+  test("hidden while a lost renderer is being rebuilt, the pane stays dormant and rebuilds once shown", async () => {
+    await mount();
+    const release = services.holdRenderers();
+    await act(async () => {
+      services.renderers[0]!.opts.onLost?.("GPU device lost: reset");
+    });
+    await act(async () => {
+      render({ visible: false });
+    });
+    await act(async () => {
+      release();
+    });
+    await settle();
+    expect(services.renderers).toHaveLength(2);
+    expect(services.renderers[1]!.destroyed, "built for a pane that hid meanwhile").toBe(true);
+    await act(async () => {
+      render({ visible: true });
+    });
+    await settle();
+    expect(services.renderers).toHaveLength(3);
+    expect(services.renderers[2]!.destroyed).toBe(false);
+    expect(services.renderers[2]!.applied[0]?.dirty).toBe("full");
+    expect(status()).toEqual({ kind: "up" });
+  });
+
+  test("a pane mounted hidden attaches with no renderer to keep", async () => {
+    await mount({ visible: false });
+    expect(services.renderers).toHaveLength(1);
+    expect(services.renderers[0]!.destroyed).toBe(true);
+  });
+
   test("a rebuild that fails parks on the failed card whose Retry rebuilds again, not re-dials", async () => {
     const { attachment } = await mount();
     services.rendererFailure = "no GPU adapter";
@@ -596,6 +665,29 @@ describe("SessionTerminalPane at the channel edge", () => {
       act(() => root.unmount());
       root = createRoot(container);
     }
+  });
+
+  test("a rebuild that settles after the session ended leaves the draw loop suspended", async () => {
+    const { attachment } = await mount();
+    const release = services.holdRenderers();
+    const lost = services.renderers[0]!;
+    await act(async () => {
+      lost.opts.onLost?.("GPU device lost: reset");
+    });
+    expect(lost.destroyed).toBe(true);
+    const drawn = lost.draws;
+    await act(async () => {
+      attachment.lanes.onData(bytes("last words"));
+      attachment.lanes.onExit({ class: "ended", reason: "exited(0)" });
+    });
+    await act(async () => release());
+    await settle();
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(lost.draws, "nothing draws through the renderer the rebuild destroyed").toBe(drawn);
+    expect(status()).toMatchObject({ kind: "ended", reason: "exited(0)" });
   });
 
   test("a lane fault after the ending keeps the ended card", async () => {

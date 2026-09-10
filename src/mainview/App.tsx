@@ -18,6 +18,7 @@ import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
 import type { DeckServices, RoomTerminalRequest } from "./terminal/roomDeck";
 import { clipboardPolicy } from "./terminal/clipboardPolicy";
+import { scrollbackBudget } from "./terminal/scrollbackBudget";
 import { connectSessions, sessionStore } from "./terminal/sessionStore";
 import type { ThemeController } from "./theme";
 import type { Updater } from "./updater";
@@ -190,6 +191,7 @@ export function App({
   // owner each, seeded by a listing, accelerated (never carried) by events.
   useEffect(() => {
     clipboardPolicy.connect(window.localStorage);
+    scrollbackBudget.connect(window.localStorage);
   }, []);
 
   useEffect(() => {

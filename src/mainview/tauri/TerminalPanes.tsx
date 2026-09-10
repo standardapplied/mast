@@ -86,7 +86,8 @@ import { SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane"
  *
  * Mounting is lazy: a sub-tab's panes first mount when it is first shown, so a restored multi-tab
  * layout doesn't attach (or geometry-thrash) sessions nobody is looking at. Once visited, panes
- * stay mounted — hidden ones keep their attach but stop drawing (the pane gates its own frames).
+ * stay mounted — hidden ones keep their attach and their terminal but shed their renderer (the
+ * pane rebuilds it on reveal), so a stack of hidden shells holds no GPU.
  *
  * Closing a pane *kills* its host session — that is the one destructive act here, so it confirms
  * first; quitting the app merely detaches and every shell survives.

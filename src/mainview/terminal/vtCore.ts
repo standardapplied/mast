@@ -155,6 +155,8 @@ export interface VtCoreOptions {
   /** The XTVERSION reply (CSI > q), e.g. "mast 0.1.80". */
   readonly identity?: string;
   readonly scheme?: ColorScheme;
+  /** Scrollback budget in bytes; defaults to {@link SCROLLBACK_MAX_BYTES}. */
+  readonly scrollbackMaxBytes?: number;
 }
 
 /**
@@ -209,7 +211,6 @@ const MOUSE_BUF_LEN = 32;
 const FOCUS_GAINED = 0;
 const FOCUS_LOST = 1;
 /** GhosttyTerminalModeConfig: u16 mode + bool value, padded (frozen layout). */
-const MODE_CONFIG_SIZE = 4;
 const MODE_CONFIG_VALUE_OFFSET = 2;
 /** `ESC[200~` + `ESC[201~` around a bracketed paste. */
 const PASTE_FRAME_OVERHEAD = 12;
@@ -370,10 +371,12 @@ const FORMAT_OPTIONS_SIZE = 16;
 const FORMAT_PLAIN = 0;
 const NO_VALUE = -4;
 /**
- * Scrollback budget per terminal. libghostty-vt's own default is 10 KB (a few hundred lines);
- * native Ghostty configures 50 MB. Memory is allocated only as output accumulates.
+ * Default scrollback budget per terminal. libghostty-vt's own default is 10 KB (a few hundred
+ * lines); native Ghostty configures 50 MB. Memory is allocated only as output accumulates.
  */
 export const SCROLLBACK_MAX_BYTES = 20 * 1024 * 1024;
+/** Codepoints the grapheme scratch holds before it has to grow (a cluster is rarely over 4). */
+const GRAPHEME_SCRATCH_CODEPOINTS = 32;
 /** Effect callbacks: the value passed to ghostty_terminal_set is the function-table index. */
 const OPT_WRITE_PTY = 1;
 const OPT_BELL = 2;
@@ -564,16 +567,6 @@ class Abi {
     }
   }
 
-  /**
-   * A scratch slot holding {@code handle} — the `&handle` a bind call (`render_state_get` with a
-   * row iterator, `render_state_row_get` with cells) requires. The caller frees it.
-   */
-  handleSlot(handle: number): number {
-    const ptr = this.alloc(4);
-    this.view().setUint32(ptr, handle, true);
-    return ptr;
-  }
-
   writeInto(bytes: Uint8Array): number {
     const ptr = this.alloc(bytes.length);
     this.u8().set(bytes, ptr);
@@ -653,6 +646,17 @@ export class VtCore {
   private readonly identityPtr: number;
   private readonly identityLen: number;
   private cellPx = { w: 0, h: 0 };
+  /**
+   * Fixed scratch for the read path, so a frame allocates nothing in wasm memory: one 8-byte slot
+   * every scalar read shares (each copies its value out before the next), the style struct, the
+   * palette (read once per {@link refresh}, on first use), and the grapheme codepoints.
+   */
+  private readonly scalarPtr: number;
+  private readonly stylePtr: number;
+  private readonly palettePtr: number;
+  private paletteFresh = false;
+  private graphemePtr: number;
+  private graphemeCap = GRAPHEME_SCRATCH_CODEPOINTS;
 
   /** Side effects of the stream; the embedder wires them (see {@link VtCoreHooks}). */
   readonly hooks: VtCoreHooks = {};
@@ -673,8 +677,12 @@ export class VtCore {
     const identity = UTF8.encode(options.identity ?? "mast");
     this.identityPtr = this.abi.writeInto(identity);
     this.identityLen = identity.length;
+    this.scalarPtr = this.abi.alloc(8);
+    this.stylePtr = this.abi.alloc(STYLE_SIZE);
+    this.palettePtr = this.abi.alloc(PALETTE_BYTES);
+    this.graphemePtr = this.abi.alloc(this.graphemeCap * 4);
     this.term = this.abi.construct((slot) => e.ghostty_terminal_new(0, slot, cols, rows));
-    this.configure(theme);
+    this.configure(theme, options.scrollbackMaxBytes ?? SCROLLBACK_MAX_BYTES);
     this.state = this.abi.construct((slot) => e.ghostty_render_state_new(0, slot));
     this.rowIter = this.abi.construct((slot) => e.ghostty_render_state_row_iterator_new(0, slot));
     this.cells = this.abi.construct((slot) => e.ghostty_render_state_row_cells_new(0, slot));
@@ -745,10 +753,13 @@ export class VtCore {
    * base entries are the embedder's ANSI colors (the rest left at ghostty's defaults). Indexed SGR
    * colors then resolve to the embedder's design; true-color and default cells are unaffected.
    */
-  private configure(theme: Theme): void {
+  private configure(theme: Theme, scrollbackMaxBytes: number): void {
+    if (!Number.isInteger(scrollbackMaxBytes) || scrollbackMaxBytes < 0) {
+      throw new Error(`VtCore: scrollback budget must be a whole number of bytes (got ${scrollbackMaxBytes})`);
+    }
     this.applyTheme(theme);
     this.setBool(OPT_DEFAULT_CURSOR_BLINK, true);
-    this.setSize(OPT_SCROLLBACK_MAX_BYTES, SCROLLBACK_MAX_BYTES);
+    this.setSize(OPT_SCROLLBACK_MAX_BYTES, scrollbackMaxBytes);
   }
 
   /**
@@ -813,30 +824,21 @@ export class VtCore {
 
   /** A one-byte terminal datum (a bool or a small bitmask). */
   private terminalU8(data: number): number {
-    this.requireOpen();
-    const ptr = this.abi.alloc(1);
-    try {
-      const rc = this.e.ghostty_terminal_get(this.term, data, ptr);
-      if (rc !== SUCCESS) {
-        throw new Error(`VtCore: reading terminal datum ${data} failed (rc=${rc})`);
-      }
-      return this.abi.readU8(ptr);
-    } finally {
-      this.abi.free(ptr, 1);
-    }
+    this.terminalRead(data);
+    return this.abi.readU8(this.scalarPtr);
   }
 
   private terminalU16(data: number): number {
+    this.terminalRead(data);
+    return this.abi.readU16(this.scalarPtr);
+  }
+
+  /** A scalar terminal datum into the scalar scratch. */
+  private terminalRead(data: number): void {
     this.requireOpen();
-    const ptr = this.abi.alloc(2);
-    try {
-      const rc = this.e.ghostty_terminal_get(this.term, data, ptr);
-      if (rc !== SUCCESS) {
-        throw new Error(`VtCore: reading terminal datum ${data} failed (rc=${rc})`);
-      }
-      return this.abi.readU16(ptr);
-    } finally {
-      this.abi.free(ptr, 2);
+    const rc = this.e.ghostty_terminal_get(this.term, data, this.scalarPtr);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: reading terminal datum ${data} failed (rc=${rc})`);
     }
   }
 
@@ -875,17 +877,8 @@ export class VtCore {
 
   /** The scrollback budget in bytes the terminal is running with. */
   scrollbackMaxBytes(): number {
-    this.requireOpen();
-    const ptr = this.abi.alloc(4);
-    try {
-      const rc = this.e.ghostty_terminal_get(this.term, DATA_SCROLLBACK_MAX_BYTES, ptr);
-      if (rc !== SUCCESS) {
-        throw new Error(`VtCore: reading the scrollback limit failed (rc=${rc})`);
-      }
-      return this.abi.readU32(ptr);
-    } finally {
-      this.abi.free(ptr, 4);
-    }
+    this.terminalRead(DATA_SCROLLBACK_MAX_BYTES);
+    return this.abi.readU32(this.scalarPtr);
   }
 
   /** The cursor blinks unless the application says otherwise — Ghostty's default, and Mast's. */
@@ -1341,17 +1334,13 @@ export class VtCore {
   private modeEnabled(mode: number): boolean {
     this.requireOpen();
     // GhosttyTerminalModeConfig (frozen layout): u16 mode, then a bool the query fills in.
-    const ptr = this.abi.alloc(MODE_CONFIG_SIZE);
-    try {
-      this.abi.writeU16(ptr, mode);
-      const rc = this.e.ghostty_terminal_get(this.term, DATA_MODE, ptr);
-      if (rc !== SUCCESS) {
-        throw new Error(`VtCore: mode ${mode} query failed (rc=${rc})`);
-      }
-      return this.abi.readU8(ptr + MODE_CONFIG_VALUE_OFFSET) !== 0;
-    } finally {
-      this.abi.free(ptr, MODE_CONFIG_SIZE);
+    const ptr = this.scalarPtr;
+    this.abi.writeU16(ptr, mode);
+    const rc = this.e.ghostty_terminal_get(this.term, DATA_MODE, ptr);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: mode ${mode} query failed (rc=${rc})`);
     }
+    return this.abi.readU8(ptr + MODE_CONFIG_VALUE_OFFSET) !== 0;
   }
 
   /** Whether the application enabled bracketed paste (mode 2004) — vim, zsh, claude-code do. */
@@ -1620,16 +1609,8 @@ export class VtCore {
     if (!this.getBool(RS_DATA_COLOR_CURSOR_HAS_VALUE)) {
       return null;
     }
-    const ptr = this.abi.alloc(3);
-    try {
-      const rc = this.e.ghostty_render_state_get(this.state, RS_DATA_COLOR_CURSOR, ptr);
-      if (rc !== SUCCESS) {
-        throw new Error(`VtCore: reading the cursor color failed (rc=${rc})`);
-      }
-      return this.abi.readRgb(ptr);
-    } finally {
-      this.abi.free(ptr, 3);
-    }
+    this.stateRead(RS_DATA_COLOR_CURSOR);
+    return this.abi.readRgb(this.scalarPtr);
   }
 
   /**
@@ -1672,6 +1653,10 @@ export class VtCore {
     this.freed = true;
     this.abi.free(this.identityPtr, this.identityLen);
     this.abi.free(this.optAsAltPtr, 4);
+    this.abi.free(this.scalarPtr, 8);
+    this.abi.free(this.stylePtr, STYLE_SIZE);
+    this.abi.free(this.palettePtr, PALETTE_BYTES);
+    this.abi.free(this.graphemePtr, this.graphemeCap * 4);
     this.e.ghostty_selection_gesture_event_free(this.releaseEvent);
     this.e.ghostty_selection_gesture_event_free(this.dragEvent);
     this.e.ghostty_selection_gesture_event_free(this.pressEvent);
@@ -1691,6 +1676,7 @@ export class VtCore {
     if (rc !== SUCCESS) {
       throw new Error(`VtCore: render_state_update failed (rc=${rc})`);
     }
+    this.paletteFresh = false;
   }
 
   private dirtyKind(): Dirty {
@@ -1704,14 +1690,10 @@ export class VtCore {
   private readDirtyRows(): Row[] {
     const rows: Row[] = [];
     this.bindRowIterator();
-    const yPtr = this.abi.alloc(2);
-    try {
-      while (this.e.ghostty_render_state_row_iterator_next_dirty(this.rowIter, yPtr)) {
-        const y = this.abi.readU16(yPtr);
-        rows.push({ y, cells: this.readRowCells() });
-      }
-    } finally {
-      this.abi.free(yPtr, 2);
+    const yPtr = this.scalarPtr;
+    while (this.e.ghostty_render_state_row_iterator_next_dirty(this.rowIter, yPtr)) {
+      const y = this.abi.readU16(yPtr);
+      rows.push({ y, cells: this.readRowCells() });
     }
     return rows;
   }
@@ -1730,21 +1712,15 @@ export class VtCore {
   private readRowCells(): Cell[] {
     this.bindCells();
     const cells: Cell[] = [];
-    const lenPtr = this.abi.alloc(4);
-    const fgPtr = this.abi.alloc(4);
-    const bgPtr = this.abi.alloc(4);
-    const widthPtr = this.abi.alloc(1);
-    const stylePtr = this.abi.alloc(STYLE_SIZE);
-    const rawPtr = this.abi.alloc(8);
-    try {
-      while (this.e.ghostty_render_state_row_cells_next(this.cells)) {
-        const style = this.readStyle(fgPtr, stylePtr);
-        const fg = this.readColor(CELLS_DATA_FG_COLOR, fgPtr);
-        const bg = this.readColor(CELLS_DATA_BG_COLOR, bgPtr);
-        const { text, width } = this.readGrapheme(lenPtr, widthPtr);
-        const selected = this.readFlag(CELLS_DATA_SELECTED, widthPtr);
-        const link = this.readLinkFlag(rawPtr);
-        cells.push({
+    const scratch = this.scalarPtr;
+    while (this.e.ghostty_render_state_row_cells_next(this.cells)) {
+      const style = this.readStyle(scratch, this.stylePtr);
+      const fg = this.readColor(CELLS_DATA_FG_COLOR, scratch);
+      const bg = this.readColor(CELLS_DATA_BG_COLOR, scratch);
+      const { text, width } = this.readGrapheme(scratch, scratch + 4);
+      const selected = this.readFlag(CELLS_DATA_SELECTED, scratch);
+      const link = this.readLinkFlag(scratch);
+      cells.push({
           text,
           width,
           selected,
@@ -1759,15 +1735,7 @@ export class VtCore {
           overline: style.overline,
           faint: style.faint,
           invisible: style.invisible,
-        });
-      }
-    } finally {
-      this.abi.free(lenPtr, 4);
-      this.abi.free(fgPtr, 4);
-      this.abi.free(bgPtr, 4);
-      this.abi.free(widthPtr, 1);
-      this.abi.free(stylePtr, STYLE_SIZE);
-      this.abi.free(rawPtr, 8);
+      });
     }
     return cells;
   }
@@ -1801,7 +1769,7 @@ export class VtCore {
         SUCCESS ||
       this.abi.readU8(scratch) === 0
     ) {
-      return { ...PLAIN };
+      return PLAIN;
     }
     const zero = this.abi.bytes();
     for (let i = 0; i < STYLE_SIZE; i++) zero[stylePtr + i] = 0;
@@ -1809,7 +1777,7 @@ export class VtCore {
     if (
       this.e.ghostty_render_state_row_cells_get(this.cells, CELLS_DATA_STYLE, stylePtr) !== SUCCESS
     ) {
-      return { ...PLAIN };
+      return PLAIN;
     }
     const m = this.abi.bytes();
     const dv = new DataView(this.e.memory.buffer);
@@ -1846,17 +1814,16 @@ export class VtCore {
     return null;
   }
 
+  /** The live palette entry; the palette is read once per {@link refresh}, the first time it is needed. */
   private paletteColor(index: number): Rgb {
-    const ptr = this.abi.alloc(PALETTE_BYTES);
-    try {
-      const rc = this.e.ghostty_render_state_get(this.state, RS_DATA_COLOR_PALETTE, ptr);
+    if (!this.paletteFresh) {
+      const rc = this.e.ghostty_render_state_get(this.state, RS_DATA_COLOR_PALETTE, this.palettePtr);
       if (rc !== SUCCESS) {
         throw new Error(`VtCore: reading the palette failed (rc=${rc})`);
       }
-      return this.abi.readRgb(ptr + index * 3);
-    } finally {
-      this.abi.free(ptr, PALETTE_BYTES);
+      this.paletteFresh = true;
     }
+    return this.abi.readRgb(this.palettePtr + index * 3);
   }
 
   /** The cell's grapheme text and its display width (2 for wide CJK/emoji, else 1). Blank cells are
@@ -1872,24 +1839,30 @@ export class VtCore {
     if (count === 0) {
       return { text: "", width: 1 };
     }
-    const buf = this.abi.alloc(count * 4);
-    try {
-      if (
-        this.e.ghostty_render_state_row_cells_get(this.cells, CELLS_DATA_GRAPHEMES_BUF, buf) !==
-        SUCCESS
-      ) {
-        return { text: "", width: 1 };
-      }
-      this.e.ghostty_unicode_grapheme_width(buf, count, widthPtr);
-      const width = this.abi.readU8(widthPtr) === 2 ? 2 : 1;
-      let text = "";
-      for (let i = 0; i < count; i++) {
-        text += String.fromCodePoint(this.abi.readU32(buf + i * 4));
-      }
-      return { text, width };
-    } finally {
-      this.abi.free(buf, count * 4);
+    const buf = this.graphemeScratch(count);
+    if (
+      this.e.ghostty_render_state_row_cells_get(this.cells, CELLS_DATA_GRAPHEMES_BUF, buf) !==
+      SUCCESS
+    ) {
+      return { text: "", width: 1 };
     }
+    this.e.ghostty_unicode_grapheme_width(buf, count, widthPtr);
+    const width = this.abi.readU8(widthPtr) === 2 ? 2 : 1;
+    let text = "";
+    for (let i = 0; i < count; i++) {
+      text += String.fromCodePoint(this.abi.readU32(buf + i * 4));
+    }
+    return { text, width };
+  }
+
+  /** The grapheme scratch, grown (rarely: a cluster of more than 32 codepoints) to hold {@code count}. */
+  private graphemeScratch(count: number): number {
+    if (count > this.graphemeCap) {
+      this.abi.free(this.graphemePtr, this.graphemeCap * 4);
+      this.graphemeCap = count * 2;
+      this.graphemePtr = this.abi.alloc(this.graphemeCap * 4);
+    }
+    return this.graphemePtr;
   }
 
   /**
@@ -1905,66 +1878,43 @@ export class VtCore {
     return this.abi.readRgb(ptr);
   }
 
+  /** A bind call (`render_state_get` with a row iterator, `row_get` with cells) takes `&handle`. */
   private bindRowIterator(): void {
-    const slot = this.abi.handleSlot(this.rowIter);
-    try {
-      const rc = this.e.ghostty_render_state_get(this.state, RS_DATA_ROW_ITERATOR, slot);
-      if (rc !== SUCCESS) {
-        throw new Error(`VtCore: binding the row iterator failed (rc=${rc})`);
-      }
-    } finally {
-      this.abi.free(slot, 4);
+    this.abi.writeU32(this.scalarPtr, this.rowIter);
+    const rc = this.e.ghostty_render_state_get(this.state, RS_DATA_ROW_ITERATOR, this.scalarPtr);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: binding the row iterator failed (rc=${rc})`);
     }
   }
 
   private bindCells(): void {
-    const slot = this.abi.handleSlot(this.cells);
-    try {
-      const rc = this.e.ghostty_render_state_row_get(this.rowIter, ROW_DATA_CELLS, slot);
-      if (rc !== SUCCESS) {
-        throw new Error(`VtCore: binding the row cells failed (rc=${rc})`);
-      }
-    } finally {
-      this.abi.free(slot, 4);
+    this.abi.writeU32(this.scalarPtr, this.cells);
+    const rc = this.e.ghostty_render_state_row_get(this.rowIter, ROW_DATA_CELLS, this.scalarPtr);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: binding the row cells failed (rc=${rc})`);
     }
   }
 
   private getU8(data: number): number {
-    const ptr = this.abi.alloc(1);
-    try {
-      const rc = this.e.ghostty_render_state_get(this.state, data, ptr);
-      if (rc !== SUCCESS) {
-        throw new Error(`VtCore: reading scalar ${data} failed (rc=${rc})`);
-      }
-      return this.abi.readU8(ptr);
-    } finally {
-      this.abi.free(ptr, 1);
-    }
+    this.stateRead(data);
+    return this.abi.readU8(this.scalarPtr);
   }
 
   private getU32(data: number): number {
-    const ptr = this.abi.alloc(4);
-    try {
-      const rc = this.e.ghostty_render_state_get(this.state, data, ptr);
-      if (rc !== SUCCESS) {
-        throw new Error(`VtCore: reading scalar ${data} failed (rc=${rc})`);
-      }
-      return this.abi.readU32(ptr);
-    } finally {
-      this.abi.free(ptr, 4);
-    }
+    this.stateRead(data);
+    return this.abi.readU32(this.scalarPtr);
   }
 
   private getU16(data: number): number {
-    const ptr = this.abi.alloc(2);
-    try {
-      const rc = this.e.ghostty_render_state_get(this.state, data, ptr);
-      if (rc !== SUCCESS) {
-        throw new Error(`VtCore: reading scalar ${data} failed (rc=${rc})`);
-      }
-      return this.abi.readU16(ptr);
-    } finally {
-      this.abi.free(ptr, 2);
+    this.stateRead(data);
+    return this.abi.readU16(this.scalarPtr);
+  }
+
+  /** A scalar render-state datum into the scalar scratch. */
+  private stateRead(data: number): void {
+    const rc = this.e.ghostty_render_state_get(this.state, data, this.scalarPtr);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: reading scalar ${data} failed (rc=${rc})`);
     }
   }
 

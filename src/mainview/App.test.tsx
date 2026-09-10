@@ -6,6 +6,7 @@ import { catalogStore } from "./board/catalogStore";
 import { createDemoGateway, type DemoGateway } from "./gateway";
 import { dispatchPush } from "./push";
 import { clipboardPolicy } from "./terminal/clipboardPolicy";
+import { scrollbackBudget } from "./terminal/scrollbackBudget";
 import { sessionStore } from "./terminal/sessionStore";
 import { browserThemeDeps, createThemeController } from "./theme";
 
@@ -783,5 +784,23 @@ describe("App cockpit", () => {
     expect(localStorage.getItem("mast.terminal.clipboard-write")).toBe("allow");
     localStorage.removeItem("mast.terminal.clipboard-write");
     clipboardPolicy.reset();
+  });
+
+  test("the user menu's scrollback toggle is the stored setting", async () => {
+    localStorage.setItem("mast.terminal.scrollback-mib", "50");
+    await render();
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="user-menu-trigger"]')?.click();
+    });
+    const section = container.querySelector('[data-testid="scrollback-budget"]');
+    const option = (label: string) =>
+      [...section!.querySelectorAll<HTMLButtonElement>(".toggle-option")].find((b) => b.textContent === label);
+    expect(option("50 MB")?.getAttribute("aria-checked"), "seeded from storage").toBe("true");
+    expect(scrollbackBudget.bytes()).toBe(50 * 1024 * 1024);
+    act(() => option("5 MB")?.click());
+    expect(option("5 MB")?.getAttribute("aria-checked")).toBe("true");
+    expect(localStorage.getItem("mast.terminal.scrollback-mib")).toBe("5");
+    localStorage.removeItem("mast.terminal.scrollback-mib");
+    scrollbackBudget.reset();
   });
 });

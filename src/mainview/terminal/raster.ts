@@ -12,6 +12,7 @@ export interface Raster {
   measureText(text: string): TextMetrics;
   fillText(text: string, x: number, y: number): void;
   fillRect(x: number, y: number, w: number, h: number): void;
+  clearRect(x: number, y: number, w: number, h: number): void;
   save(): void;
   restore(): void;
   translate(x: number, y: number): void;

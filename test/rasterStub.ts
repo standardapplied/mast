@@ -34,6 +34,8 @@ export class RasterStub implements Raster {
   lineWidth = 1;
   lineCap: CanvasLineCap = "butt";
   readonly ops: RasterOp[] = [];
+  /** Slots wiped ahead of a draw, in absolute coordinates; a wipe is not paint, so not an op. */
+  readonly clears: Rect[] = [];
   private tx = 0;
   private ty = 0;
   private clipRect: Rect | null = null;
@@ -89,6 +91,10 @@ export class RasterStub implements Raster {
       h,
       fillStyle: String(this.fillStyle),
     });
+  }
+
+  clearRect(x: number, y: number, w: number, h: number): void {
+    this.clears.push({ x: x + this.tx, y: y + this.ty, w, h });
   }
 
   save(): void {
