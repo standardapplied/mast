@@ -844,6 +844,16 @@ describe("paste", () => {
     expect(core.linkAt({ x: 0, y: 0 })).toBeNull();
   });
 
+  test("a plain-text URL ends where the cursor jumped: a tab or a move leaves untouched cells, not text", async () => {
+    const core = await track(40, 3);
+    core.write(bytes("https://a.b/c\tfoo\r\nhttps://a.b/c\x1b[21Gbar"));
+    const run = { uri: "https://a.b/c", y: 0, start: 0, end: 13 };
+    expect(core.linkAt({ x: 3, y: 0 })).toEqual(run);
+    expect(core.linkAt({ x: 16, y: 0 })).toBeNull();
+    expect(core.linkAt({ x: 3, y: 1 })).toEqual({ ...run, y: 1 });
+    expect(core.linkAt({ x: 21, y: 1 })).toBeNull();
+  });
+
   test("BEL reaches onBell and never the screen", async () => {
     const core = await track(20, 2);
     let bells = 0;

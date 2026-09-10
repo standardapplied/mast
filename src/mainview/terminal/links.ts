@@ -3,8 +3,11 @@ import type { Cell, LinkRun } from "./vtCore";
 /**
  * Plain-text URL detection on one row, the way Ghostty's `link-url` default reads it: an
  * `http(s)://` run up to whitespace, with the punctuation a sentence hangs on the end trimmed off.
- * A row is one cell per column — a wide glyph is followed by its own blank spacer cell — so the
- * column mapping is provable under `bun test`; the core calls it with the row it read.
+ * A row is one cell per column, so the column mapping is provable under `bun test`; the core calls
+ * it with the row it read. A cell nothing was written to (a tab or cursor move skipped it, or it
+ * was erased) reads as empty text and counts as a space: it ends a URL, never joins two columns
+ * into one. A wide glyph's spacer cell is the exception — it is skipped so its glyph owns both
+ * columns.
  */
 
 const URL = /https?:\/\/[^\s<>"'`]+/g;
@@ -14,9 +17,14 @@ const TRAILING = /[.,;:!?'"]+$/;
 export function urlRunAt(row: readonly Cell[], x: number, y: number): LinkRun | null {
   let text = "";
   const columnOf: number[] = [];
+  let spacer = false;
   row.forEach((cell, column) => {
-    for (let i = 0; i < cell.text.length; i++) columnOf.push(column);
-    text += cell.text;
+    const skip = spacer;
+    spacer = cell.width === 2;
+    if (skip) return;
+    const chars = cell.text || " ";
+    for (let i = 0; i < chars.length; i++) columnOf.push(column);
+    text += chars;
   });
   for (const match of text.matchAll(URL)) {
     const uri = trimUrl(match[0]);
