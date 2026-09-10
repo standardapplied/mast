@@ -715,7 +715,11 @@ export const SessionTerminalPane = forwardRef<
           apply(fit(), false);
         });
       const adopt = (c: number, r: number) => contained(() => apply({ cols: c, rows: r }, true));
-      /** A rebuilt renderer draws another cell (the font size changed): the grid refits to it. */
+      /**
+       * A rebuilt renderer draws another cell (the font size changed): the grid refits to it —
+       * unless another writer's size binds this pane, whose grid stays the pty's until the token
+       * frees it; the new cell just redraws that grid at its size.
+       */
       const adoptCell = ({ w, h }: { w: number; h: number }) => {
         if (w === cellW && h === cellH) return;
         cellW = w;
@@ -723,7 +727,7 @@ export const SessionTerminalPane = forwardRef<
         core.setCellPixels(w, h);
         paint(cols, rows);
         setGeom();
-        refit();
+        if (!sessionStore.lane(session).ptySize) refit();
       };
       geometryRef.current = { adopt, refit };
       applyThemeRef.current = (colors) =>
@@ -814,6 +818,8 @@ export const SessionTerminalPane = forwardRef<
       });
       if (!visibleRef.current) hide();
       cleanups.push(terminalFontSize.subscribe(() => rebuildRenderer("font size changed")));
+      // ⌘+ in another pane while this one's renderer, wasm and core were still loading: catch up.
+      if (rendererOptions.fontPx !== terminalFontSize.px()) rebuildRenderer("font size changed while loading");
 
       // A program replacing the clipboard is allowed (as in Ghostty) but never silent; under the
       // deny setting it is refused and told so.

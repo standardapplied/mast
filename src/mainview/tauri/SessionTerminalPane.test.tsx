@@ -1000,6 +1000,53 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(status()).toEqual({ kind: "up" });
   });
 
+  test("⌘= under another writer's size redraws the writer's grid at the new cell; the fit stays theirs and the pty hears nothing", async () => {
+    const { attachment } = await mount();
+    await settleAttach(attachment);
+    await act(async () => {
+      attachment.lanes.onMeta({ kind: "resized", cols: 132, rows: 40 });
+      attachment.lanes.onMeta({ kind: "writer_changed", fde: "mady" });
+    });
+    expect(sessionStore.lane("mast-app").ptySize).toEqual({ cols: 132, rows: 40 });
+    await act(async () => {
+      keyEvent("keydown", { key: "=", code: "Equal", metaKey: true });
+    });
+    await settle();
+    services.timers.advance(RESIZE_SETTLE_MS);
+    const zoomed = services.renderers.at(-1)!;
+    expect(services.renderers).toHaveLength(2);
+    expect(zoomed.opts.fontPx).toBe(16);
+    expect(zoomed.resizes.at(-1), "still the writer's geometry").toEqual([132, 40]);
+    expect(services.link.resizes, "the pane owns no size to announce").toHaveLength(1);
+    expect(status()).toEqual({ kind: "up" });
+
+    // The token coming here frees the fit, at the zoomed cell.
+    await act(async () => {
+      attachment.lanes.onMeta({ kind: "writer_changed", fde: "uday" });
+    });
+    services.timers.advance(RESIZE_SETTLE_MS);
+    expect(zoomed.resizes.at(-1), "800×480 at the 11×21 cell").toEqual([72, 22]);
+    expect(services.link.resizes.at(-1)).toEqual({ id: attachment.spec.id, cols: 72, rows: 22 });
+  });
+
+  test("⌘+ in another pane while this one is still loading lands here once it is up", async () => {
+    const release = services.holdRenderers();
+    await act(async () => {
+      render();
+    });
+    act(() => terminalFontSize.zoom("in"));
+    expect(services.renderers).toHaveLength(0);
+    await act(async () => release());
+    await act(async () => {
+      await services.link.opened();
+    });
+    await settle();
+    expect(status()).toEqual({ kind: "up" });
+    expect(services.renderers.map((r) => r.opts.fontPx)).toEqual([15, 16]);
+    expect(services.renderers[0]!.destroyed).toBe(true);
+    expect(services.renderers[1]!.destroyed).toBe(false);
+  });
+
   test("unmount closes the attachment and detaches the lanes", async () => {
     const { attachment } = await mount();
     act(() => root.unmount());
