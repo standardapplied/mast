@@ -718,6 +718,25 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(row?.cells.map((c) => c.text).join("").trimEnd(), "only the snapshot remains").toBe("fresh");
   });
 
+  test("the connecting card draws the loading mark, delayed, with the title as its label", async () => {
+    const release = services.link.holdOpens();
+    await act(async () => {
+      render();
+    });
+    await settle();
+    expect(status()).toMatchObject({ kind: "connecting" });
+    const overlay = container.querySelector(".term-overlay--delayed");
+    expect(overlay?.querySelector(".term-overlay__card .loading-mark")?.getAttribute("aria-label")).toBe(
+      "Connecting…",
+    );
+    expect(container.querySelector(".term-overlay__spinner")).toBeNull();
+
+    await act(async () => release());
+    await settle();
+    expect(status()).toEqual({ kind: "up" });
+    expect(container.querySelector(".term-overlay")).toBeNull();
+  });
+
   test("a runaway reason is capped on the card", async () => {
     const { attachment } = await mount();
     await act(async () => {

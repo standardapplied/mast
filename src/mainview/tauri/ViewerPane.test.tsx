@@ -110,6 +110,27 @@ describe("ViewerPane", () => {
     expect(container.querySelector(".viewer__name")?.textContent).toBe("a.ts");
   });
 
+  test("a file still being read shows the loading mark in the pane, not a text note", async () => {
+    let land!: (bytes: Uint8Array) => void;
+    const fs: ViewerFs = {
+      ...makeFs({ "/p/a.ts": { text: "x" } }),
+      read: () => new Promise((resolve) => (land = resolve)),
+    };
+    const store = new ViewerStore(fs, () => {});
+    const { factory, instances } = fakeEditorFactory();
+    render(store, factory);
+    act(() => void store.open(entry("a.ts")));
+    await flush();
+    expect(container.querySelector(".viewer__body .loading-mark")?.getAttribute("aria-label")).toBe("a.ts");
+    expect(container.querySelector(".viewer__note")).toBeNull();
+    expect(container.textContent).not.toContain("Loading…");
+
+    await act(async () => land(new TextEncoder().encode("x")));
+    await flush();
+    expect(container.querySelector(".loading-mark")).toBeNull();
+    expect(instances).toHaveLength(1);
+  });
+
   test("dirty indicator follows the store; save clears it and toasts", async () => {
     const store = new ViewerStore(makeFs({ "/p/a.ts": { text: "old" } }), () => {});
     const { factory, instances } = fakeEditorFactory();

@@ -10,7 +10,6 @@ import {
   type UIEvent,
 } from "react";
 import type {
-  AgentLogRole,
   EngagementView,
   Finding,
   ReviewDetailResponse,
@@ -193,17 +192,7 @@ function eventDetail(event: SailEvent): string {
     .join(" · ");
 }
 
-function FindingRow({
-  finding,
-  dismissing,
-  canWrite,
-  onDismiss,
-}: {
-  finding: Finding;
-  dismissing: boolean;
-  canWrite: boolean;
-  onDismiss: () => void;
-}) {
+function FindingRow({ finding }: { finding: Finding }) {
   return (
     <div className="finding-row" data-testid={`finding-${finding.id}`}>
       <div className="finding-head">
@@ -221,13 +210,6 @@ function FindingRow({
       {finding.suggestion?.rationale && (
         <p className="finding-suggestion">{finding.suggestion.rationale}</p>
       )}
-      {finding.resolution === "OPEN" && (
-        <div className="finding-actions">
-          <Button variant="ghost" disabled={!canWrite || dismissing} onClick={onDismiss}>
-            {dismissing ? "Dismissing…" : "Dismiss"}
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
@@ -241,7 +223,6 @@ export function SpecRoom({
   canWrite,
   currentUser,
   engagement,
-  onOpenLog,
 }: {
   gateway: Gateway;
   specId: string;
@@ -253,7 +234,6 @@ export function SpecRoom({
   currentUser?: string;
   /** The room's standing agent, when one is engaged; drives the typing indicator. */
   engagement?: EngagementView;
-  onOpenLog: (role?: AgentLogRole) => void;
 }) {
   const [tail, setTail] = useState<BufferedTail<TimelineItem>>({
     visible: [],
@@ -265,7 +245,6 @@ export function SpecRoom({
   const [draft, setDraft] = useState("");
   const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
   const [snapshotsProject, setSnapshotsProject] = useState<string | null>(null);
-  const [acting, setActing] = useState<Set<string>>(new Set());
   const scroller = useRef<HTMLDivElement>(null);
   const sources = useRef<Sources>(EMPTY_SOURCES);
   const atLatest = useRef(true);
@@ -737,66 +716,20 @@ export function SpecRoom({
     send();
   };
 
-  const decide = async (reviewId: string, findingId?: string) => {
-    const actionKey = findingId ?? reviewId;
-    setActing((current) => new Set(current).add(actionKey));
-    const result = findingId
-      ? await gateway.dismissFinding(reviewId, findingId)
-      : await gateway.approveReview(reviewId);
-    setActing((current) => {
-      const next = new Set(current);
-      next.delete(actionKey);
-      return next;
-    });
-    if (!result.ok) return showToast("error", result.error.message);
-    const action = findingId ? "dismissed" : "approved";
-    const decision: TimelineDecision = {
-      id: `decision:${crypto.randomUUID()}`,
-      reviewId,
-      ...(findingId ? { findingId } : {}),
-      action,
-      actor: currentUser ?? "you",
-      createdAt: new Date().toISOString(),
-    };
-    atLatest.current = true;
-    applySources(
-      {
-        ...sources.current,
-        reviews: sources.current.reviews.map((detail) =>
-          detail.review.id !== reviewId
-            ? detail
-            : {
-                ...detail,
-                review: findingId
-                  ? detail.review
-                  : { ...detail.review, status: "approved", decided_by: decision.actor },
-                findings: detail.findings.map((finding) =>
-                  finding.id === findingId
-                    ? { ...finding, resolution: "DISMISSED" as const }
-                    : finding,
-                ),
-              },
-        ),
-        decisions: [...sources.current.decisions, decision],
-      },
-      "replace",
-    );
-  };
-
   const groups = groupTimeline(tail.visible);
 
   return (
     <div className="spec-room">
-      {hasEarlier && (
-        <Button
-          variant="ghost"
-          className="room-load-earlier"
-          disabled={loadingEarlier}
-          onClick={() => void loadEarlier()}
-        >
-          {loadingEarlier ? "Loading…" : "Load earlier"}
-        </Button>
-      )}
+      {hasEarlier &&
+        (loadingEarlier ? (
+          <div className="room-load-earlier">
+            <LoadingMark label="Loading earlier" size={24} />
+          </div>
+        ) : (
+          <Button variant="ghost" className="room-load-earlier" onClick={() => void loadEarlier()}>
+            Load earlier
+          </Button>
+        ))}
       <div
         className="room-timeline"
         ref={scroller}
@@ -903,15 +836,6 @@ export function SpecRoom({
                     {detail && <span>· {detail}</span>}
                     <span>·</span>
                     <time dateTime={item.occurredAt}>{dateTime(item.occurredAt)}</time>
-                    {item.run && (
-                      <button
-                        type="button"
-                        className="dep-chip"
-                        onClick={() => onOpenLog(logRoleOf(item.run))}
-                      >
-                        raw log
-                      </button>
-                    )}
                     {item.event.type.startsWith("snapshot_") && (
                       <button
                         type="button"
@@ -975,25 +899,8 @@ export function SpecRoom({
                         <p className="meta-value">No findings. A clean review.</p>
                       )}
                       {item.findings.map((finding) => (
-                        <FindingRow
-                          key={finding.id}
-                          finding={finding}
-                          dismissing={acting.has(finding.id)}
-                          canWrite={canWrite}
-                          onDismiss={() => void decide(item.review.id, finding.id)}
-                        />
+                        <FindingRow key={finding.id} finding={finding} />
                       ))}
-                      {item.review.status !== "approved" && (
-                        <div className="room-review-actions">
-                          <Button
-                            variant={specStatus === "review" ? "primary" : "ghost"}
-                            disabled={!canWrite || acting.has(item.review.id)}
-                            onClick={() => void decide(item.review.id)}
-                          >
-                            {acting.has(item.review.id) ? "Approving…" : "Approve review"}
-                          </Button>
-                        </div>
-                      )}
                     </div>
                   )}
                 </article>
@@ -1054,14 +961,6 @@ export function SpecRoom({
       )}
     </div>
   );
-}
-
-/** The log lane a lifecycle row's run belongs to; undefined keeps the caller's default. */
-function logRoleOf(run: RunView | undefined): AgentLogRole | undefined {
-  const role = run?.role;
-  return role === "build" || role === "review" || role === "room" || role === "room-full"
-    ? role
-    : undefined;
 }
 
 /**
