@@ -25,7 +25,6 @@ import {
 } from "../terminal/connection";
 import {
   TERMINAL_FONT_FAMILY as FONT_FAMILY,
-  TERMINAL_FONT_PX as FONT_PX,
   TERMINAL_PAD_X as PAD_X,
   TERMINAL_PAD_Y as PAD_Y,
 } from "../terminal/metrics";
@@ -34,6 +33,7 @@ import { scrollbackBudget } from "../terminal/scrollbackBudget";
 import type { RendererOptions, SurfaceRenderer } from "../terminal/renderer";
 import { clipboardPolicy } from "../terminal/clipboardPolicy";
 import { decodeDataFrame } from "../terminal/dataFrames";
+import { terminalFontSize, type ZoomStep } from "../terminal/fontSize";
 import { type KeyStroke, MODS } from "../terminal/input";
 import { sessionStore } from "../terminal/sessionStore";
 import { paletteFor, resolveThemeName, type TerminalColors } from "../terminal/terminalPalette";
@@ -99,11 +99,19 @@ const VIEWPORT_KEYS: Readonly<Record<string, ViewportAction>> = {
   End: "bottom",
 };
 
-type CmdAction = "copy" | "paste" | "clear" | "host" | "swallow";
+type CmdAction = "copy" | "paste" | "clear" | "zoom" | "host" | "swallow";
+/** ⌘+ / ⌘= step the terminal font up, ⌘− / ⌘_ down, ⌘0 back to the default — for every pane. */
+const ZOOM_KEYS: Readonly<Record<string, ZoomStep>> = {
+  "+": "in",
+  "=": "in",
+  "-": "out",
+  _: "out",
+  "0": "reset",
+};
 /**
  * The ⌘ chords the pane owns, keyed by the lowercased DOM key. "host" chords bubble to the pane
  * bar (⌘T new shell, ⌘D split) with the default kept; "swallow" ones are reserved — their WebKit
- * defaults (find, zoom, select-all, history navigation) would wreck the view over the app DOM.
+ * defaults (find, select-all, history navigation) would wreck the view over the app DOM.
  * Anything else stays with the app and the OS, unless the program asked for every key.
  */
 const CMD_SHORTCUTS: Readonly<Record<string, CmdAction>> = {
@@ -114,10 +122,7 @@ const CMD_SHORTCUTS: Readonly<Record<string, CmdAction>> = {
   d: "host",
   f: "swallow",
   a: "swallow",
-  "+": "swallow",
-  "=": "swallow",
-  "-": "swallow",
-  _: "swallow",
+  ...Object.fromEntries(Object.keys(ZOOM_KEYS).map((key) => [key, "zoom"] as const)),
   arrowup: "swallow",
   arrowdown: "swallow",
   arrowleft: "swallow",
@@ -627,7 +632,7 @@ export const SessionTerminalPane = forwardRef<
       const theme = paletteRef.current;
       const rendererOptions: RendererOptions = {
         fontFamily: FONT_FAMILY,
-        fontPx: FONT_PX,
+        fontPx: terminalFontSize.px(),
         dpr,
         ...theme,
         onError: (message) => {
@@ -643,7 +648,7 @@ export const SessionTerminalPane = forwardRef<
       if (disposed) return void renderer.destroy();
       cleanups.push(() => renderer.destroy());
 
-      const { w: cellW, h: cellH } = renderer.cellSize;
+      let { w: cellW, h: cellH } = renderer.cellSize;
       const fit = () =>
         gridFor(
           (host.clientWidth - 2 * PAD_X) * dpr,
@@ -679,11 +684,66 @@ export const SessionTerminalPane = forwardRef<
       controllerRef.current = controller;
       cleanups.push(() => controller.dispose());
 
+      const setGeom = () => {
+        geomRef.current = { cw: cellW / dpr, ch: cellH / dpr, cols, rows };
+        cellWidthDeviceRef.current = cellW;
+      };
+      setGeom();
+
+      const apply = (next: { cols: number; rows: number }, silent: boolean) => {
+        if (next.cols === cols && next.rows === rows) return;
+        cols = next.cols;
+        rows = next.rows;
+        paint(cols, rows);
+        controller.resize(cols, rows, { silent });
+        setGeom();
+      };
+      // A geometry change is part of the data lane: a size the core refuses, or a grid it cannot
+      // allocate, parks this pane on its card — it never escapes into React and unmounts the app.
+      const contained = (change: () => void) => {
+        if (disposed || halted) return;
+        try {
+          change();
+        } catch (e) {
+          fail(laneFault(e));
+        }
+      };
+      const refit = () =>
+        contained(() => {
+          if (!replayed) return;
+          if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden tab
+          apply(fit(), false);
+        });
+      const adopt = (c: number, r: number) => contained(() => apply({ cols: c, rows: r }, true));
+      /** A rebuilt renderer draws another cell (the font size changed): the grid refits to it. */
+      const adoptCell = ({ w, h }: { w: number; h: number }) => {
+        if (w === cellW && h === cellH) return;
+        cellW = w;
+        cellH = h;
+        core.setCellPixels(w, h);
+        paint(cols, rows);
+        setGeom();
+        refit();
+      };
+      geometryRef.current = { adopt, refit };
+      applyThemeRef.current = (colors) =>
+        contained(() => controller.setTheme(colors, schemeOf(resolveThemeName())));
+      cleanups.push(() => {
+        geometryRef.current = null;
+        applyThemeRef.current = null;
+      });
+      // The theme may have flipped while the renderer and the wasm were loading.
+      if (paletteRef.current !== theme) {
+        applyThemeRef.current(paletteRef.current);
+      }
+
       /**
        * The pixels went away, not the terminal: build a fresh renderer on the same canvas and
        * repaint it from the core. A rebuild that fails parks on the failed card, whose Retry is
        * this same verb — never a re-dial, the session is fine. A rebuild that settles after the
        * attach is over (a fault, or the session's ending) touches nothing: that card stands.
+       * A font-size change takes this same path: the fresh renderer draws at today's size, and
+       * the grid refits to its cell.
        */
       const over = () => disposed || halted || ended;
       let asleep = false;
@@ -694,7 +754,8 @@ export const SessionTerminalPane = forwardRef<
         // The theme may have flipped since the attach: a rebuilt renderer paints in today's colors —
         // and in the colors of a flip that lands while it is still being built.
         const theme = paletteRef.current;
-        void services.createRenderer(canvas, { ...rendererOptions, ...theme }).then(
+        const fontPx = terminalFontSize.px();
+        void services.createRenderer(canvas, { ...rendererOptions, fontPx, ...theme }).then(
           (next) => {
             // Built for an attach that is over: the loop stays suspended, or it would draw through
             // the renderer this rebuild already destroyed. Hid meanwhile: show() builds anew.
@@ -704,6 +765,7 @@ export const SessionTerminalPane = forwardRef<
             renderer = next;
             try {
               controller.replaceRenderer(next);
+              adoptCell(next.cellSize);
               if (paletteRef.current !== theme) applyThemeRef.current?.(paletteRef.current);
             } catch (e) {
               fail(laneFault(e));
@@ -714,6 +776,8 @@ export const SessionTerminalPane = forwardRef<
               rendererFailed = false;
               setStatus({ kind: "up" });
             }
+            // ⌘+ pressed again while this one was building: one more pass lands the size it left at.
+            if (fontPx !== terminalFontSize.px()) rebuildRenderer("font size changed");
           },
           (e) => {
             if (over()) return;
@@ -749,6 +813,7 @@ export const SessionTerminalPane = forwardRef<
         presenceRef.current = null;
       });
       if (!visibleRef.current) hide();
+      cleanups.push(terminalFontSize.subscribe(() => rebuildRenderer("font size changed")));
 
       // A program replacing the clipboard is allowed (as in Ghostty) but never silent; under the
       // deny setting it is refused and told so.
@@ -773,49 +838,6 @@ export const SessionTerminalPane = forwardRef<
         bellTimer.current = setTimeout(() => setRinging(false), BELL_FLASH_MS);
         onBellRef.current?.();
       };
-
-      const setGeom = () => {
-        geomRef.current = { cw: cellW / dpr, ch: cellH / dpr, cols, rows };
-        cellWidthDeviceRef.current = cellW;
-      };
-      setGeom();
-
-      const apply = (next: { cols: number; rows: number }, silent: boolean) => {
-        if (next.cols === cols && next.rows === rows) return;
-        cols = next.cols;
-        rows = next.rows;
-        paint(cols, rows);
-        controller.resize(cols, rows, { silent });
-        setGeom();
-      };
-      // A geometry change is part of the data lane: a size the core refuses, or a grid it cannot
-      // allocate, parks this pane on its card — it never escapes into React and unmounts the app.
-      const contained = (change: () => void) => {
-        if (disposed || halted) return;
-        try {
-          change();
-        } catch (e) {
-          fail(laneFault(e));
-        }
-      };
-      const refit = () =>
-        contained(() => {
-          if (!replayed) return;
-          if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden tab
-          apply(fit(), false);
-        });
-      const adopt = (c: number, r: number) => contained(() => apply({ cols: c, rows: r }, true));
-      geometryRef.current = { adopt, refit };
-      applyThemeRef.current = (colors) =>
-        contained(() => controller.setTheme(colors, schemeOf(resolveThemeName())));
-      cleanups.push(() => {
-        geometryRef.current = null;
-        applyThemeRef.current = null;
-      });
-      // The theme may have flipped while the renderer and the wasm were loading.
-      if (paletteRef.current !== theme) {
-        applyThemeRef.current(paletteRef.current);
-      }
 
       /** Facts about the session, not this pane: they land in the store and render from it. */
       const onMeta = (meta: SessionMeta) => {
@@ -1055,6 +1077,10 @@ export const SessionTerminalPane = forwardRef<
         return;
       case "clear":
         controller.clearScreen();
+        e.preventDefault();
+        return;
+      case "zoom":
+        terminalFontSize.zoom(ZOOM_KEYS[e.key]!);
         e.preventDefault();
         return;
       case "swallow":

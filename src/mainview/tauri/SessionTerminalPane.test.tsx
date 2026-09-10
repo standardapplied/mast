@@ -10,6 +10,7 @@ import {
 } from "../../../test/terminalFakes";
 import type { SessionStatus } from "../terminal/connection";
 import { clipboardPolicy } from "../terminal/clipboardPolicy";
+import { terminalFontSize } from "../terminal/fontSize";
 import { sessionStore } from "../terminal/sessionStore";
 import { RESIZE_SETTLE_MS } from "../terminal/terminalController";
 import { paletteFor } from "../terminal/terminalPalette";
@@ -44,6 +45,7 @@ afterEach(() => {
   container.remove();
   sessionStore.reset();
   clipboardPolicy.reset();
+  terminalFontSize.reset();
   restoreLayout();
   delete document.documentElement.dataset.theme;
 });
@@ -936,6 +938,66 @@ describe("SessionTerminalPane at the channel edge", () => {
       keyEvent("keydown", { key: "k", code: "KeyK", metaKey: true });
     });
     expect(services.link.writes.map((w) => Array.from(w.bytes))).toEqual([[0x0c]]);
+  });
+
+  /** Drives the attach answer through: the replay lands and the token comes here, so the fit binds. */
+  const settleAttach = async (attachment: FakeAttachment) => {
+    await act(async () => {
+      attachment.lanes.onMeta({ kind: "resized", cols: 126, rows: 40 });
+      attachment.lanes.onData(frame(1, 1));
+      attachment.lanes.onData(frame(2));
+      attachment.lanes.onMeta({ kind: "writer_changed", fde: "uday" });
+    });
+    services.timers.advance(RESIZE_SETTLE_MS);
+    expect(services.link.resizes).toEqual([{ id: attachment.spec.id, cols: 80, rows: 24 }]);
+  };
+
+  test("⌘= rebuilds the renderer at the next size; the grid refits to its cell and the pty hears one resize — no re-dial", async () => {
+    const { attachment } = await mount();
+    await settleAttach(attachment);
+    await act(async () => {
+      keyEvent("keydown", { key: "=", code: "Equal", metaKey: true });
+    });
+    await settle();
+    expect(services.renderers).toHaveLength(2);
+    expect(services.renderers[0]!.destroyed).toBe(true);
+    const zoomed = services.renderers[1]!;
+    expect(zoomed.opts.fontPx).toBe(16);
+    expect(zoomed.applied[0]?.dirty, "repainted whole from the core").toBe("full");
+    expect(zoomed.resizes.at(-1), "800×480 at the 11×21 cell").toEqual([72, 22]);
+    services.timers.advance(RESIZE_SETTLE_MS);
+    expect(services.link.resizes.slice(1)).toEqual([{ id: attachment.spec.id, cols: 72, rows: 22 }]);
+    expect(services.link.closed).toEqual([]);
+    expect(services.link.writes, "the chord is the pane's, never the program's").toHaveLength(0);
+    expect(status()).toEqual({ kind: "up" });
+
+    await act(async () => {
+      keyEvent("keydown", { key: "0", code: "Digit0", metaKey: true });
+    });
+    await settle();
+    services.timers.advance(RESIZE_SETTLE_MS);
+    expect(services.renderers.at(-1)!.opts.fontPx).toBe(15);
+    expect(services.link.resizes.at(-1)).toEqual({ id: attachment.spec.id, cols: 80, rows: 24 });
+  });
+
+  test("⌘+ thrice while a renderer is still building lands on the third size, with one resize to the pty", async () => {
+    const { attachment } = await mount();
+    await settleAttach(attachment);
+    const release = services.holdRenderers();
+    await act(async () => {
+      for (let i = 0; i < 3; i++) keyEvent("keydown", { key: "+", code: "Equal", metaKey: true, shiftKey: true });
+    });
+    expect(terminalFontSize.px()).toBe(18);
+    expect(services.renderers, "the build is held; the later presses wait on it").toHaveLength(1);
+    await act(async () => release());
+    await settle();
+    const settled = services.renderers.at(-1)!;
+    expect(settled.opts.fontPx).toBe(18);
+    expect(settled.destroyed).toBe(false);
+    expect(settled.resizes.at(-1), "800×480 at the 12×24 cell").toEqual([66, 20]);
+    services.timers.advance(RESIZE_SETTLE_MS);
+    expect(services.link.resizes.slice(1)).toEqual([{ id: attachment.spec.id, cols: 66, rows: 20 }]);
+    expect(status()).toEqual({ kind: "up" });
   });
 
   test("unmount closes the attachment and detaches the lanes", async () => {

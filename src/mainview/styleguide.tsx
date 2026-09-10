@@ -22,6 +22,8 @@ import { RoomList } from "./board/RoomList";
 import { DeckEndedCard, RoomDeckCards, RoomsInventory } from "./board/RoomDeck";
 import { CaretLeft } from "./components/icons";
 import type { RoomView } from "./board/rooms";
+import { DEFAULT_TERMINAL_FONT_PX, TERMINAL_FONT_SIZES_PX } from "./terminal/fontSize";
+import { TERMINAL_FONT_FAMILY } from "./terminal/metrics";
 import type { DeckSession } from "./terminal/roomDeck";
 import type { TimeValue } from "./lib/date-utils";
 import type { ThemeController, ThemeMode } from "./theme";
@@ -404,6 +406,21 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
               </p>
               <code style={{ fontSize: 13 }}>JetBrains Mono — technical labels, code, terminals</code>
               <Eyebrow>Eyebrow — uppercase mono, 0.20em tracking</Eyebrow>
+            </div>
+          </Card>
+          <Card>
+            <div style={{ display: "grid", gap: 8 }} data-testid="terminal-font-ladder">
+              <Eyebrow>Terminal font ladder — ⌘+ / ⌘− step it, ⌘0 returns to {DEFAULT_TERMINAL_FONT_PX}px</Eyebrow>
+              {TERMINAL_FONT_SIZES_PX.map((px) => (
+                <div key={px} style={{ display: "flex", gap: 16, alignItems: "baseline" }}>
+                  <code style={{ fontSize: 11, color: "var(--muted-foreground)", minWidth: 64 }}>
+                    {px}px{px === DEFAULT_TERMINAL_FONT_PX ? " ·" : ""}
+                  </code>
+                  <span style={{ fontFamily: TERMINAL_FONT_FAMILY, fontSize: px, lineHeight: 1.2 }}>
+                    $ sail spec board — 0O1lI|
+                  </span>
+                </div>
+              ))}
             </div>
           </Card>
         </Section>
