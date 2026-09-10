@@ -102,6 +102,7 @@ export class TerminalRenderer implements SurfaceRenderer {
     color: null,
   };
   private hover: LinkRun | null = null;
+  private destroyed = false;
   // Instance buffers reused across frames — sized on resize, never per frame.
   private bgInstances = new Float32Array(0);
   private fgInstances = new Float32Array(0);
@@ -191,8 +192,10 @@ export class TerminalRenderer implements SurfaceRenderer {
     });
   }
 
-  /** Ends this renderer: its GPU objects go, and its hold on the shared atlas with them. */
+  /** Ends this renderer: its GPU objects go, and its hold on the shared atlas with them. Idempotent. */
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     this.backend.destroy();
     glyphAtlasPool.release(this.atlas);
   }

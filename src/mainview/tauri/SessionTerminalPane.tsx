@@ -696,17 +696,17 @@ export const SessionTerminalPane = forwardRef<
         const theme = paletteRef.current;
         void services.createRenderer(canvas, { ...rendererOptions, ...theme }).then(
           (next) => {
+            rebuilding = false;
+            // Built for a pane that ended or hid meanwhile: nothing to draw on; show() builds anew.
             if (over() || asleep) return void next.destroy();
             renderer = next;
             try {
               controller.replaceRenderer(next);
               if (paletteRef.current !== theme) applyThemeRef.current?.(paletteRef.current);
             } catch (e) {
-              rebuilding = false;
               fail(laneFault(e));
               return;
             }
-            rebuilding = false;
             rebuildRef.current = null;
             if (rendererFailed) {
               rendererFailed = false;

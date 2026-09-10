@@ -402,6 +402,31 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(status()).toEqual({ kind: "up" });
   });
 
+  test("hidden while a lost renderer is being rebuilt, the pane stays dormant and rebuilds once shown", async () => {
+    await mount();
+    const release = services.holdRenderers();
+    await act(async () => {
+      services.renderers[0]!.opts.onLost?.("GPU device lost: reset");
+    });
+    await act(async () => {
+      render({ visible: false });
+    });
+    await act(async () => {
+      release();
+    });
+    await settle();
+    expect(services.renderers).toHaveLength(2);
+    expect(services.renderers[1]!.destroyed, "built for a pane that hid meanwhile").toBe(true);
+    await act(async () => {
+      render({ visible: true });
+    });
+    await settle();
+    expect(services.renderers).toHaveLength(3);
+    expect(services.renderers[2]!.destroyed).toBe(false);
+    expect(services.renderers[2]!.applied[0]?.dirty).toBe("full");
+    expect(status()).toEqual({ kind: "up" });
+  });
+
   test("a pane mounted hidden attaches with no renderer to keep", async () => {
     await mount({ visible: false });
     expect(services.renderers).toHaveLength(1);
