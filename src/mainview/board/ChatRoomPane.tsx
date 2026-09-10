@@ -31,13 +31,11 @@ export function ChatRoomPane({
   gateway,
   room,
   onOpenTerminal,
-  onOpenLog = () => {},
 }: {
   gateway: Gateway;
   room: ServerRoomView;
   /** Navigate to the room's full-screen terminal route. */
   onOpenTerminal: (request: RoomTerminalRequest) => void;
-  onOpenLog?: () => void;
 }) {
   const [drawerOpen, setDrawerOpen] = useState(() => localStorage.getItem(DRAWER_OPEN_KEY) === "true");
   const [drawerWidth, setDrawerWidth] = useState(storedWidth);
@@ -111,7 +109,6 @@ export function ChatRoomPane({
           specTitle={room.title}
           canWrite
           engagement={engagement}
-          onOpenLog={onOpenLog}
         />
       </main>
       {drawerOpen && (

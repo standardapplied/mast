@@ -1373,6 +1373,20 @@ html.is-dragging-active * {
   margin: auto;
 }
 
+/* Inside a card or a row the mark sits tight; only a whole surface gets the tall stance. The
+   terminal card also lends it the title's tone. */
+.term-overlay__card .loading-mark,
+.room-load-earlier .loading-mark {
+  padding: 0;
+}
+.snapshots-panel .loading-mark {
+  padding: 24px 0;
+}
+.term-overlay__card .loading-mark,
+.term-overlay__card .loading-mark .eyebrow {
+  color: inherit;
+}
+
 .loading-mark-m {
   stroke-dasharray: 100;
   animation: loading-draw 1.8s ease-in-out infinite;
@@ -3503,16 +3517,6 @@ button.room-section-head:hover {
   border-top: 1px solid var(--border);
 }
 
-.finding-actions,
-.room-review-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.room-review-actions {
-  padding-top: 12px;
-}
-
 .room-new-pill {
   appearance: none;
   position: absolute;
@@ -4178,20 +4182,6 @@ button.room-section-head:hover {
 .term-overlay__actions {
   display: flex;
   gap: 10px;
-}
-.term-overlay__spinner {
-  width: 12px;
-  height: 12px;
-  border: 1.5px solid var(--border-strong);
-  border-top-color: currentColor;
-  border-radius: 50%;
-  animation: term-spin 0.8s linear infinite;
-  flex-shrink: 0;
-}
-@keyframes term-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 .snapshots-panel .meta-value {
   flex: 1;

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Dialog } from "../components/Dialog";
 import { Cross } from "../components/icons";
+import { LoadingMark } from "../components/Loading";
 import { ToggleButton } from "../components/ToggleButton";
 import { Button } from "../components/ui";
 import { Markdown } from "../markdown";
@@ -169,7 +170,7 @@ export function ViewerPane({
       </header>
 
       <div className="viewer__body">
-        {state.phase === "loading" && <p className="viewer__note">Loading…</p>}
+        {state.phase === "loading" && <LoadingMark label={entry.name} />}
 
         {state.phase === "text" && (
           <>

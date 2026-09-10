@@ -10,6 +10,7 @@ import {
 } from "react";
 import type { ThemeName } from "../../shared/types";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
+import { LoadingMark } from "../components/Loading";
 import {
   absenceReason,
   capReason,
@@ -1346,8 +1347,7 @@ export const SessionTerminalPane = forwardRef<
         <div className={overlay.delayed ? "term-overlay term-overlay--delayed" : "term-overlay"}>
           <div className="term-overlay__card">
             <div className={`term-overlay__title term-overlay__title--${overlay.tone}`}>
-              {overlay.spin && <span className="term-overlay__spinner" aria-hidden />}
-              {overlay.title}
+              {overlay.spin ? <LoadingMark label={overlay.title} size={36} /> : overlay.title}
             </div>
             {overlay.reason && <div className="term-overlay__reason">{overlay.reason}</div>}
             {overlay.action && (
