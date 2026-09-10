@@ -10,7 +10,7 @@ import {
 import type { GlyphStyle } from "./glyphAtlas";
 import type { SpecialKind } from "./sprites/special";
 import { TerminalGrid } from "./terminalGrid";
-import type { Cell, Cursor, Rgb } from "./vtCore";
+import type { Cell, Cursor, LinkRun, Rgb } from "./vtCore";
 
 /** Hands out ids by name and remembers each, so a packed instance reads back as intent. */
 class StubAtlas implements AtlasLike {
@@ -64,6 +64,7 @@ function cell(text: string, extra: Partial<Cell> = {}): Cell {
     faint: false,
     invisible: false,
     selected: false,
+    link: false,
     width: 1,
     ...extra,
   };
@@ -89,7 +90,7 @@ const at = (x: number, style: Cursor["style"], visible = true): Cursor => ({
   color: null,
 });
 
-function pack(cells: Cell[], cursor = NO_CURSOR) {
+function pack(cells: Cell[], cursor = NO_CURSOR, hover: LinkRun | null = null) {
   const grid = new TerminalGrid({ fg: FG, bg: BG });
   grid.resize(cells.length, 1);
   grid.apply({ dirty: "full", rows: [{ y: 0, cells }] });
@@ -98,7 +99,7 @@ function pack(cells: Cell[], cursor = NO_CURSOR) {
     bg: new Float32Array(cells.length * BG_STRIDE),
     fg: new Float32Array((cells.length * FG_PER_CELL + 1) * FG_STRIDE),
   };
-  const count = packFrame(grid, cursor, atlas, COLORS, out);
+  const count = packFrame(grid, cursor, atlas, COLORS, out, hover);
   const instances = Array.from({ length: count }, (_, i) => {
     const o = i * FG_STRIDE;
     return {
@@ -117,6 +118,17 @@ function pack(cells: Cell[], cursor = NO_CURSOR) {
 }
 
 describe("packFrame", () => {
+  test("the hovered link's cells gain a single underline; a styled underline keeps its own", () => {
+    const cells = [cell("a"), cell("b", { underline: "curly" }), cell("c"), cell("d")];
+    const underlines = (hover: LinkRun | null) =>
+      pack(cells, NO_CURSOR, hover)
+        .instances.filter((i) => i.what?.startsWith("underline"))
+        .map((i) => `${i.x}:${i.what}`);
+    expect(underlines({ uri: "u", y: 0, start: 1, end: 3 })).toEqual(["1:underline_curly", "2:underline"]);
+    expect(underlines({ uri: "u", y: 1, start: 0, end: 4 }), "another row's link").toEqual(["1:underline_curly"]);
+    expect(underlines(null)).toEqual(["1:underline_curly"]);
+  });
+
   test("a plain cell is one glyph instance in its own color over its own background", () => {
     const { instances, bg } = pack([cell("a")]);
     expect(bg).toEqual([[10, 20, 30]]);

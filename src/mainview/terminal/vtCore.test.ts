@@ -769,7 +769,9 @@ describe("paste", () => {
   test("OSC 52 writes reach onClipboard decoded; queries and other OSCs do not", async () => {
     const core = await track(20, 2);
     const copied: string[] = [];
-    core.hooks.onClipboard = (t) => copied.push(t);
+    core.hooks.onClipboard = (t) => {
+      copied.push(t);
+    };
     core.write(bytes("\x1b]52;c;aGVsbG8=\x07")); // "hello"
     core.write(bytes("\x1b]52;c;5LiW55WMIPCfmIA=\x1b\\")); // "世界 😀"
     core.write(bytes("\x1b]52;c;?\x07")); // a read request, ignored
@@ -777,12 +779,79 @@ describe("paste", () => {
     expect(copied).toEqual(["hello", "世界 😀"]);
   });
 
+  test("an OSC 52 read is refused: nothing goes back to the pty, nothing reaches the hook", async () => {
+    const core = await track(20, 2);
+    const replies: Uint8Array[] = [];
+    let writes = 0;
+    core.hooks.onWritePty = (b) => replies.push(b);
+    core.hooks.onClipboard = () => {
+      writes++;
+    };
+    core.write(bytes("\x1b]52;c;?\x07"));
+    core.write(bytes("\x1b]52;p;?\x1b\\"));
+    expect(replies).toEqual([]);
+    expect(writes).toBe(0);
+  });
+
+  test("a refused OSC 52 write leaves the stream intact and the screen untouched", async () => {
+    const core = await track(20, 2);
+    const offered: string[] = [];
+    core.hooks.onClipboard = (t) => {
+      offered.push(t);
+      return false;
+    };
+    core.write(bytes("a\x1b]52;c;aGVsbG8=\x07b"));
+    expect(offered).toEqual(["hello"]);
+    expect(rowText(core, 0)).toBe("ab");
+  });
+
   test("an OSC 52 clear reaches onClipboard as the empty string", async () => {
     const core = await track(20, 2);
     const copied: string[] = [];
-    core.hooks.onClipboard = (t) => copied.push(t);
+    core.hooks.onClipboard = (t) => {
+      copied.push(t);
+    };
     core.write(bytes("\x1b]52;c;\x07"));
     expect(copied).toEqual([""]);
+  });
+
+  test("OSC 8 marks the cells of a hyperlink; linkAt resolves the URI and the run on the row", async () => {
+    const core = await track(40, 3);
+    core.write(bytes("ab \x1b]8;;https://example.com/x\x1b\\link\x1b]8;;\x1b\\ tail"));
+    const row = core.readAll().rows[0]!.cells;
+    expect(row.slice(0, 9).map((c) => (c.link ? 1 : 0))).toEqual([0, 0, 0, 1, 1, 1, 1, 0, 0]);
+    expect(core.linkAt({ x: 5, y: 0 })).toEqual({ uri: "https://example.com/x", y: 0, start: 3, end: 7 });
+    expect(core.linkAt({ x: 0, y: 0 })).toBeNull();
+    expect(core.linkAt({ x: 7, y: 0 })).toBeNull();
+  });
+
+  test("two hyperlinks that touch stay two runs, and a run never leaks across rows", async () => {
+    const core = await track(10, 3);
+    core.write(bytes("\x1b]8;id=1;https://a\x1b\\A\x1b]8;id=2;https://b\x1b\\B\x1b]8;;\x1b\\"));
+    core.write(bytes("\r\n\x1b]8;;https://a\x1b\\C\x1b]8;;\x1b\\"));
+    expect(core.linkAt({ x: 0, y: 0 })).toEqual({ uri: "https://a", y: 0, start: 0, end: 1 });
+    expect(core.linkAt({ x: 1, y: 0 })).toEqual({ uri: "https://b", y: 0, start: 1, end: 2 });
+    expect(core.linkAt({ x: 0, y: 1 })).toEqual({ uri: "https://a", y: 1, start: 0, end: 1 });
+  });
+
+  test("a plain-text URL on the row is a link too, wide glyphs and all", async () => {
+    const core = await track(40, 3);
+    core.write(bytes("世界 see https://foo.bar/baz. ok"));
+    const run = { uri: "https://foo.bar/baz", y: 0, start: 9, end: 28 };
+    expect(core.linkAt({ x: 9, y: 0 })).toEqual(run);
+    expect(core.linkAt({ x: 27, y: 0 })).toEqual(run);
+    expect(core.linkAt({ x: 28, y: 0 })).toBeNull();
+    expect(core.linkAt({ x: 0, y: 0 })).toBeNull();
+  });
+
+  test("a plain-text URL ends where the cursor jumped: a tab or a move leaves untouched cells, not text", async () => {
+    const core = await track(40, 3);
+    core.write(bytes("https://a.b/c\tfoo\r\nhttps://a.b/c\x1b[21Gbar"));
+    const run = { uri: "https://a.b/c", y: 0, start: 0, end: 13 };
+    expect(core.linkAt({ x: 3, y: 0 })).toEqual(run);
+    expect(core.linkAt({ x: 16, y: 0 })).toBeNull();
+    expect(core.linkAt({ x: 3, y: 1 })).toEqual({ ...run, y: 1 });
+    expect(core.linkAt({ x: 21, y: 1 })).toBeNull();
   });
 
   test("BEL reaches onBell and never the screen", async () => {

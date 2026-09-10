@@ -9,11 +9,12 @@ import {
   layOutElements,
 } from "../../../test/terminalFakes";
 import type { SessionStatus } from "../terminal/connection";
+import { clipboardPolicy } from "../terminal/clipboardPolicy";
 import { sessionStore } from "../terminal/sessionStore";
 import { RESIZE_SETTLE_MS } from "../terminal/terminalController";
 import { paletteFor } from "../terminal/terminalPalette";
 import { TerminalServicesProvider } from "../terminal/terminalServices";
-import { SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane";
+import { NOTICE_MS, SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane";
 
 /**
  * The pane at its edge: a real VtCore, a scripted channel, a recording renderer. What these guard
@@ -42,9 +43,21 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   sessionStore.reset();
+  clipboardPolicy.reset();
   restoreLayout();
   delete document.documentElement.dataset.theme;
 });
+
+/** A pointer event over cell (x, y): the fake renderer's 10×20 cell at the canvas's origin. */
+const pointer = (type: string, x: number, y: number, init: MouseEventInit = {}) => {
+  const Ctor = (globalThis as { PointerEvent?: typeof MouseEvent }).PointerEvent ?? MouseEvent;
+  const target = container.querySelector("canvas")!;
+  target.dispatchEvent(
+    new Ctor(type, { bubbles: true, cancelable: true, clientX: x * 10 + 5, clientY: y * 20 + 5, button: 0, ...init }),
+  );
+};
+const notice = () => container.querySelector('[data-testid="term-notice"]')?.textContent ?? null;
+const linkTip = () => container.querySelector('[data-testid="term-link-tip"]')?.textContent ?? null;
 
 const host = () => container.querySelector("[tabindex]") as HTMLElement;
 const keyEvent = (type: "keydown" | "keyup", init: KeyboardEventInit) =>
@@ -647,6 +660,93 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(services.renderers.at(-1)!.opts.bg, "a rebuilt renderer paints in today's colors").toEqual(
       paletteFor("dark").bg,
     );
+  });
+
+  test("hovering a link underlines its run and names the URI; leaving the pane clears both", async () => {
+    const { attachment } = await mount();
+    const renderer = services.renderers.at(-1)!;
+    await act(async () => {
+      attachment.lanes.onData(bytes("go \x1b]8;;https://a.b/c\x1b\\here\x1b]8;;\x1b\\ now"));
+    });
+    act(() => pointer("pointermove", 4, 0));
+    expect(linkTip()).toBe("https://a.b/c");
+    expect(renderer.hovers.at(-1)).toEqual({ uri: "https://a.b/c", y: 0, start: 3, end: 7 });
+    expect(host().style.cursor).toBe("pointer");
+    act(() => pointer("pointermove", 0, 0));
+    expect(linkTip()).toBeNull();
+    expect(renderer.hovers.at(-1)).toBeNull();
+    act(() => pointer("pointermove", 5, 0));
+    expect(linkTip()).toBe("https://a.b/c");
+    act(() => pointer("pointerout", 5, 0));
+    expect(linkTip()).toBeNull();
+    expect(host().style.cursor).toBe("");
+  });
+
+  test("a link hovered when the transport drops is gone from the chrome; the next attach starts unhovered", async () => {
+    const { handle, attachment } = await mount();
+    await act(async () => {
+      attachment.lanes.onData(bytes("go \x1b]8;;https://a.b/c\x1b\\here\x1b]8;;\x1b\\ now"));
+    });
+    act(() => pointer("pointermove", 4, 0));
+    expect(linkTip()).toBe("https://a.b/c");
+    await act(async () => {
+      attachment.lanes.onExit({ class: "transport", reason: "connection reset" });
+    });
+    await settle();
+    expect(linkTip(), "an ended card names no link").toBeNull();
+    expect(host().style.cursor).toBe("");
+
+    act(() => handle.current!.revive!());
+    let next: FakeAttachment | null = null;
+    await act(async () => {
+      next = await services.link.opened();
+    });
+    await settle();
+    await act(async () => {
+      next!.lanes.onData(bytes("fresh shell, no links"));
+    });
+    act(() => pointer("pointermove", 4, 0));
+    expect(linkTip(), "the pointer resting in the same cell is re-asked of the new core").toBeNull();
+    expect(services.renderers.at(-1)!.hovers.at(-1) ?? null).toBeNull();
+  });
+
+  test("⌘-click opens a link on the Mac; a refused scheme lands in the pane by name and nothing opens", async () => {
+    const { attachment } = await mount();
+    await act(async () => {
+      attachment.lanes.onData(bytes("\x1b]8;;https://a.b/c\x1b\\here\x1b]8;;\x1b\\ \x1b]8;;file:///etc/x\x1b\\etc\x1b]8;;\x1b\\"));
+    });
+    act(() => pointer("pointerdown", 1, 0, { metaKey: true }));
+    await settle();
+    expect(services.link.openedUrls).toEqual(["https://a.b/c"]);
+    expect(services.link.writes, "the click never reached the pty").toEqual([]);
+    expect(notice()).toBeNull();
+
+    services.link.openRefusal = "file: links are not opened by Mast";
+    act(() => pointer("pointerdown", 6, 0, { metaKey: true }));
+    await settle();
+    expect(services.link.openedUrls).toEqual(["https://a.b/c"]);
+    expect(notice()).toBe("file: links are not opened by Mast");
+    act(() => services.timers.advance(NOTICE_MS));
+    expect(notice()).toBeNull();
+
+    act(() => pointer("pointerdown", 1, 0));
+    expect(services.link.openedUrls, "a plain click is a selection press, not an open").toHaveLength(1);
+  });
+
+  test("a shell writing the clipboard is announced; under deny it is refused instead", async () => {
+    const { attachment } = await mount();
+    const write = () =>
+      act(async () => {
+        attachment.lanes.onData(bytes(`\x1b]52;c;${btoa("secret")}\x07`));
+      });
+    await write();
+    expect(notice()).toBe("shell wrote to the clipboard");
+    act(() => services.timers.advance(NOTICE_MS));
+    expect(notice()).toBeNull();
+
+    clipboardPolicy.set("deny");
+    await write();
+    expect(notice()).toBe("shell clipboard write refused");
   });
 
   test("a bell flashes the pane and reaches the host", async () => {

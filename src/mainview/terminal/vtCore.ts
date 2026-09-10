@@ -11,6 +11,7 @@
  */
 
 import type { KeyEventSpec } from "./input";
+import { urlRunAt } from "./links";
 import { installCallbacks } from "./wasmCallbacks";
 
 const UTF8 = new TextEncoder();
@@ -40,8 +41,18 @@ export interface Cell {
   readonly invisible: boolean;
   /** Inside the terminal's active selection. */
   readonly selected: boolean;
+  /** Part of an OSC 8 hyperlink; the URI resolves lazily through {@link VtCore.linkAt}. */
+  readonly link: boolean;
   /** Display columns the grapheme occupies: 2 for wide (CJK/emoji), else 1. */
   readonly width: number;
+}
+
+/** A hyperlink's cells on one viewport row: columns {@code start} up to (excluding) {@code end}. */
+export interface LinkRun {
+  readonly uri: string;
+  readonly y: number;
+  readonly start: number;
+  readonly end: number;
 }
 
 /** A cell position in the viewport. */
@@ -154,8 +165,11 @@ export interface VtCoreOptions {
 export interface VtCoreHooks {
   onWritePty?: (bytes: Uint8Array) => void;
   onTitle?: (title: string) => void;
-  /** OSC 52 (and kitty OSC 5522) writes; an empty string clears the clipboard. */
-  onClipboard?: (text: string) => void;
+  /**
+   * OSC 52 (and kitty OSC 5522) writes; an empty string clears the clipboard. Returning false
+   * refuses the write, and the program hears DENIED where the protocol carries a reply.
+   */
+  onClipboard?: (text: string) => boolean | void;
   onBell?: () => void;
 }
 
@@ -223,6 +237,7 @@ const RS_DATA_CURSOR_VIEWPORT_HAS_VALUE = 14;
 const RS_DATA_CURSOR_VIEWPORT_X = 15;
 const RS_DATA_CURSOR_VIEWPORT_Y = 16;
 const ROW_DATA_CELLS = 3;
+const CELLS_DATA_RAW = 1;
 const CELLS_DATA_STYLE = 2;
 const CELLS_DATA_GRAPHEMES_LEN = 3;
 const CELLS_DATA_GRAPHEMES_BUF = 4;
@@ -249,6 +264,13 @@ const STYLE_COLOR_RGB = 2;
 const PALETTE_BYTES = 256 * 3;
 const DIRTY_FALSE = 0;
 const DIRTY_PARTIAL = 1;
+// GhosttyCell is a packed u64; its `hyperlink` flag sits at bit 45 (byte 5, bit 5). The header
+// says bit positions are pinned only by the wasm's embedded manifest (`ghostty_type_json`), so the
+// real-wasm test guards this one.
+const CELL_HYPERLINK_BYTE = 5;
+const CELL_HYPERLINK_MASK = 1 << 5;
+/** Hyperlink URIs are short; one retry covers the out-of-space contract regardless. */
+const URI_BUF_LEN = 512;
 
 /**
  * The colors a {@link VtCore} runs with. `fg`/`bg`/`cursor` are the terminal's defaults; `palette`
@@ -375,6 +397,7 @@ const CLIP_CONTENT_DATA = 8;
 /** GhosttyClipboardWriteReply: {size_t size, result enum, bool remember}. */
 const CLIP_REPLY_SIZE = 12;
 const CLIP_RESULT_SUCCESS = 0;
+const CLIP_RESULT_DENIED = 1;
 const TEXT_PLAIN = "text/plain";
 // GhosttySizeReportSize: {u16 rows, u16 columns, u32 cell_width, u32 cell_height}.
 const SIZE_ROWS = 0;
@@ -472,6 +495,7 @@ interface GhosttyExports {
   ghostty_render_state_row_cells_free(cells: number): void;
   ghostty_unicode_grapheme_width(cps: number, len: number, outWidth: number): number;
   ghostty_terminal_grid_ref(term: number, pointPtr: number, outRef: number): number;
+  ghostty_grid_ref_hyperlink_uri(ref: number, buf: number, bufLen: number, outLen: number): number;
   ghostty_selection_gesture_new(alloc: number, out: number): number;
   ghostty_selection_gesture_free(gesture: number, term: number): void;
   ghostty_selection_gesture_reset(gesture: number, term: number): void;
@@ -1112,6 +1136,66 @@ export class VtCore {
     }
   }
 
+  /**
+   * The link under a viewport cell: an OSC 8 hyperlink widened to every adjacent cell on the row
+   * carrying the same URI, else a plain-text URL the row spells out, else null. Resolved per hover
+   * (a grid-ref lookup per cell of the run, or one row read), never in the render loop.
+   */
+  linkAt(cell: CellPos): LinkRun | null {
+    this.requireOpen();
+    const y = Math.min(Math.max(0, cell.y), this.rows - 1);
+    const x = Math.min(Math.max(0, cell.x), this.cols - 1);
+    const uri = this.hyperlinkAt({ x, y });
+    if (!uri) {
+      return urlRunAt(this.readRow(y), x, y);
+    }
+    let start = x;
+    while (start > 0 && this.hyperlinkAt({ x: start - 1, y }) === uri) start--;
+    let end = x + 1;
+    while (end < this.cols && this.hyperlinkAt({ x: end, y }) === uri) end++;
+    return { uri, y, start, end };
+  }
+
+  /** The OSC 8 URI on a viewport cell; empty when the cell carries none. */
+  private hyperlinkAt(cell: CellPos): string {
+    let uri = "";
+    this.withGridRef(cell, (ref) => {
+      uri = this.readUri(ref, URI_BUF_LEN);
+    });
+    return uri;
+  }
+
+  private readUri(ref: number, bufLen: number): string {
+    const buf = this.abi.alloc(bufLen);
+    const lenPtr = this.abi.alloc(4);
+    try {
+      const rc = this.e.ghostty_grid_ref_hyperlink_uri(ref, buf, bufLen, lenPtr);
+      const len = this.abi.readU32(lenPtr);
+      if (rc === OUT_OF_SPACE) {
+        return this.readUri(ref, len);
+      }
+      if (rc !== SUCCESS) {
+        throw new Error(`VtCore: reading the hyperlink failed (rc=${rc})`);
+      }
+      return UTF8_DECODER.decode(this.abi.bytes().subarray(buf, buf + len));
+    } finally {
+      this.abi.free(lenPtr, 4);
+      this.abi.free(buf, bufLen);
+    }
+  }
+
+  /** One viewport row's cells as the renderer would see them, whatever the damage state. */
+  private readRow(y: number): Cell[] {
+    this.refresh();
+    this.bindRowIterator();
+    for (let i = 0; i <= y; i++) {
+      if (!this.e.ghostty_render_state_row_iterator_next(this.rowIter)) {
+        throw new Error(`VtCore: no viewport row ${y}`);
+      }
+    }
+    return this.readRowCells();
+  }
+
   /** A grid reference for a viewport cell, valid for the duration of {@code body}. */
   private withGridRef(cell: CellPos, body: (ref: number) => void): void {
     const point = this.abi.alloc(POINT_SIZE);
@@ -1167,8 +1251,9 @@ export class VtCore {
 
   /**
    * An OSC 52 write: the program's representations of one value; text/plain when offered, else
-   * the first. Mast honors clipboard writes, so the reply is always success — the core sends the
-   * program its acknowledgement (OSC 5522) through the pty writer.
+   * the first. The hook decides whether the write lands; the reply (success, or DENIED under a
+   * deny policy) goes back to the core, which answers the program where the protocol has a reply
+   * (kitty OSC 5522) through the pty writer.
    */
   private clipboardWrite(write: number): void {
     const abi = this.abi;
@@ -1183,12 +1268,12 @@ export class VtCore {
       }
       if (mime === TEXT_PLAIN) break;
     }
-    this.hooks.onClipboard?.(text);
+    const accepted = this.hooks.onClipboard?.(text) !== false;
     const reply = abi.alloc(CLIP_REPLY_SIZE);
     try {
       abi.bytes().fill(0, reply, reply + CLIP_REPLY_SIZE);
       abi.writeU32(reply, CLIP_REPLY_SIZE);
-      abi.writeU32(reply + 4, CLIP_RESULT_SUCCESS);
+      abi.writeU32(reply + 4, accepted ? CLIP_RESULT_SUCCESS : CLIP_RESULT_DENIED);
       const replyFn = this.e.__indirect_function_table.get(abi.readU32(write + CLIP_REPLY_FN)) as
         | ((write: number, reply: number) => void)
         | null;
@@ -1650,6 +1735,7 @@ export class VtCore {
     const bgPtr = this.abi.alloc(4);
     const widthPtr = this.abi.alloc(1);
     const stylePtr = this.abi.alloc(STYLE_SIZE);
+    const rawPtr = this.abi.alloc(8);
     try {
       while (this.e.ghostty_render_state_row_cells_next(this.cells)) {
         const style = this.readStyle(fgPtr, stylePtr);
@@ -1657,10 +1743,12 @@ export class VtCore {
         const bg = this.readColor(CELLS_DATA_BG_COLOR, bgPtr);
         const { text, width } = this.readGrapheme(lenPtr, widthPtr);
         const selected = this.readFlag(CELLS_DATA_SELECTED, widthPtr);
+        const link = this.readLinkFlag(rawPtr);
         cells.push({
           text,
           width,
           selected,
+          link,
           fg: style.inverse ? bg : fg,
           bg: style.inverse ? fg : bg,
           bold: style.bold,
@@ -1679,8 +1767,18 @@ export class VtCore {
       this.abi.free(bgPtr, 4);
       this.abi.free(widthPtr, 1);
       this.abi.free(stylePtr, STYLE_SIZE);
+      this.abi.free(rawPtr, 8);
     }
     return cells;
+  }
+
+  /** The current cell's hyperlink flag, from the raw packed cell; {@code scratch} holds 8 bytes. */
+  private readLinkFlag(scratch: number): boolean {
+    const rc = this.e.ghostty_render_state_row_cells_get(this.cells, CELLS_DATA_RAW, scratch);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: reading the raw cell failed (rc=${rc})`);
+    }
+    return (this.abi.readU8(scratch + CELL_HYPERLINK_BYTE) & CELL_HYPERLINK_MASK) !== 0;
   }
 
   /** A per-cell bool of the current cell; {@code scratch} is a reusable 1-byte buffer. */

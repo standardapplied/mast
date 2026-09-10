@@ -19,6 +19,7 @@ import {
   type Cursor,
   type GridSnapshot,
   KITTY_KEY,
+  type LinkRun,
   type MouseEventSpec,
   type Rgb,
   type Scroll,
@@ -41,6 +42,8 @@ export interface Renderer {
   resize(cols: number, rows: number): void;
   apply(snapshot: GridSnapshot): void;
   setCursor(cursor: Cursor): void;
+  /** The link under the pointer, underlined whole; null when none. */
+  setHover(run: LinkRun | null): void;
   setColors(colors: RendererColors): void;
   draw(): void;
 }
@@ -84,6 +87,9 @@ export class TerminalController {
   /** Something visible changed that the grid does not carry (selection, geometry): draw. */
   private redraw = true;
   private lastCursor: Cursor | null = null;
+  /** Where the pointer rests, for the link under it; null once it left the surface. */
+  private hoverCell: CellPos | null = null;
+  private hoverRun: LinkRun | null = null;
   private lastMotionCell = -1;
   private unseenOutput = false;
   private syncSince: number | null = null;
@@ -94,9 +100,12 @@ export class TerminalController {
 
   /** Side-channel intents found in the stream; the host wires these to the platform. */
   readonly hooks: {
-    onClipboard?: (text: string) => void;
+    /** Returning false refuses the write; the program hears DENIED where the protocol replies. */
+    onClipboard?: (text: string) => boolean | void;
     onTitle?: (title: string) => void;
     onBell?: () => void;
+    /** The link under the resting pointer changed underneath it (output moved the screen). */
+    onHover?: (run: LinkRun | null) => void;
   } = {};
 
   constructor(
@@ -120,9 +129,7 @@ export class TerminalController {
     core.hooks.onWritePty = (reply) => {
       if (!this.replaying) this.sink.write(reply);
     };
-    core.hooks.onClipboard = (text) => {
-      if (!this.replaying) this.hooks.onClipboard?.(text);
-    };
+    core.hooks.onClipboard = (text) => (this.replaying ? false : this.hooks.onClipboard?.(text));
     core.hooks.onTitle = (title) => this.hooks.onTitle?.(title);
     core.hooks.onBell = () => {
       if (!this.replaying) this.hooks.onBell?.();
@@ -198,6 +205,9 @@ export class TerminalController {
       if (snapshot.dirty !== "none") {
         this.renderer.apply(snapshot);
         this.redraw = true;
+        if (this.hoverCell && this.resolveHover(this.hoverCell)) {
+          this.hooks.onHover?.(this.hoverRun);
+        }
       }
       this.core.clean();
       this.dirty = false;
@@ -450,6 +460,34 @@ export class TerminalController {
   }
 
   /**
+   * The pointer rests on {@code cell} (null: it left the surface): the link there, if any, is
+   * underlined whole until the pointer moves on. The run follows the screen — output that scrolls
+   * the link away, or under the pointer, re-resolves it on the next frame ({@link hooks.onHover}).
+   */
+  hover(cell: CellPos | null): LinkRun | null {
+    this.hoverCell = cell;
+    this.resolveHover(cell);
+    return this.hoverRun;
+  }
+
+  /** The link under a cell, with no side effects (the ⌘-click target). */
+  linkAt(cell: CellPos): LinkRun | null {
+    return this.core.linkAt(cell);
+  }
+
+  /** Re-reads the link under {@code cell} into the renderer; true when it changed. */
+  private resolveHover(cell: CellPos | null): boolean {
+    const next = cell ? this.core.linkAt(cell) : null;
+    if (sameRun(this.hoverRun, next)) {
+      return false;
+    }
+    this.hoverRun = next;
+    this.renderer.setHover(next);
+    this.redraw = true;
+    return true;
+  }
+
+  /**
    * Swaps in a fresh renderer (the GPU device or GL context was lost and rebuilt) and repaints it
    * whole from the core: the terminal state never left, only the pixels did.
    */
@@ -457,6 +495,7 @@ export class TerminalController {
     this.renderer = renderer;
     renderer.resize(this.cols, this.rows);
     renderer.apply(this.core.readAll());
+    renderer.setHover(this.hoverRun);
     this.lastCursor = null;
     this.redraw = true;
   }
@@ -469,6 +508,11 @@ export class TerminalController {
   get size(): { cols: number; rows: number } {
     return { cols: this.cols, rows: this.rows };
   }
+}
+
+function sameRun(a: LinkRun | null, b: LinkRun | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.uri === b.uri && a.y === b.y && a.start === b.start && a.end === b.end;
 }
 
 function sameCursor(a: Cursor, b: Cursor): boolean {

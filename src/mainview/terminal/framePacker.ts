@@ -3,7 +3,8 @@
  * sight. One background instance per cell, then foreground instances in draw order: decorations
  * (underline, strikethrough, overline) first so text layers over them, glyphs, and finally a
  * bar/underline/hollow cursor. A block cursor is a background swap, as in a native terminal. The
- * selection is the terminal's own: a cell arrives flagged, and paints in the selection colors.
+ * selection is the terminal's own: a cell arrives flagged, and paints in the selection colors. The
+ * hovered link's cells gain a single underline where they had none.
  *
  * Pure, so the layering rules are provable under `bun test` with a stub atlas; the renderer only
  * uploads what this packs.
@@ -12,7 +13,7 @@
 import type { GlyphStyle } from "./glyphAtlas";
 import type { SpecialKind } from "./sprites/special";
 import type { TerminalGrid } from "./terminalGrid";
-import type { Cell, Cursor, CursorStyle, Rgb, UnderlineStyle } from "./vtCore";
+import type { Cell, Cursor, CursorStyle, LinkRun, Rgb, UnderlineStyle } from "./vtCore";
 
 /** Floats per foreground instance: x, y, r, g, b, u, v, w, mode. */
 export const FG_STRIDE = 9;
@@ -68,6 +69,7 @@ export function packFrame(
   atlas: AtlasLike,
   colors: FrameColors,
   out: FrameBuffers,
+  hover: LinkRun | null = null,
 ): number {
   const cursorShown = cursor.present && cursor.visible;
   const blockCursor = cursorShown && cursor.style === "block";
@@ -111,9 +113,11 @@ export function packFrame(
       afterWide = wide;
 
       const text = onBlockCursor ? colors.bg : selected ? colors.selectionFg : textColor(cell);
-      if (cell.underline !== "none") {
+      const hovered = hover !== null && hover.y === y && x >= hover.start && x < hover.end;
+      const underline = cell.underline === "none" && hovered ? "single" : cell.underline;
+      if (underline !== "none") {
         const color = onBlockCursor || selected ? text : (cell.underlineColor ?? text);
-        put(x, y, atlas.special(UNDERLINE_SPRITE[cell.underline], wide), color, wide, MODE_TINT);
+        put(x, y, atlas.special(UNDERLINE_SPRITE[underline], wide), color, wide, MODE_TINT);
       }
       if (cell.strikethrough) {
         put(x, y, atlas.special("strikethrough", wide), text, wide, MODE_TINT);

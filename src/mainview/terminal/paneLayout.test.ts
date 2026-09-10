@@ -291,6 +291,18 @@ describe("pane identity (rename + color)", () => {
     expect(shortTitle("x".repeat(80)).length).toBeLessThanOrEqual(40);
   });
 
+  test("shortTitle drops the control and format characters a program could steer text with", () => {
+    expect(shortTitle("\u202eClose pane? \u2014 yes")).toBe("Close pane? \u2014 yes");
+    expect(shortTitle("dev@snout: ~/ws\u200b/\u200fmast\x1b[31m")).toBe("mast[31m");
+    expect(shortTitle("a\tb\u0000c\u200dd")).toBe("abcd");
+  });
+
+  test("the cap counts characters, never cutting one in half", () => {
+    expect(shortTitle("😀".repeat(25))).toBe("😀".repeat(25));
+    const capped = shortTitle("😀".repeat(45));
+    expect(capped).toBe(`${"😀".repeat(39)}…`);
+  });
+
   test("renaming to blank clears back to the ordinal; color survives independently", () => {
     let l = withPaneMeta(layout, "mast-a", { label: "agent", color: 3 });
     l = withPaneMeta(l, "mast-a", { label: "" });

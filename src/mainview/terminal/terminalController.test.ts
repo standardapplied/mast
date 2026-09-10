@@ -13,7 +13,7 @@ import {
 import { FakeTimers } from "../../../test/terminalFakes";
 import { MODS } from "./input";
 import { TerminalGrid } from "./terminalGrid";
-import type { Cursor, GridSnapshot } from "./vtCore";
+import type { Cursor, GridSnapshot, LinkRun } from "./vtCore";
 import { VtCore } from "./vtCore";
 
 const WASM = readFileSync(join(import.meta.dir, "ghostty-vt.wasm"));
@@ -36,6 +36,10 @@ class RecRenderer implements Renderer {
   }
   setCursor(cursor: Cursor): void {
     this.cursors.push(cursor);
+  }
+  hovers: (LinkRun | null)[] = [];
+  setHover(run: LinkRun | null): void {
+    this.hovers.push(run);
   }
   colors: RendererColors[] = [];
   setColors(colors: RendererColors): void {
@@ -154,6 +158,43 @@ describe("TerminalController", () => {
     expect(core.hasSelection()).toBe(false);
     expect(controller.selectedText()).toBe("");
     expect(renderer.grid.cell(0, 0).selected).toBe(false);
+  });
+
+  test("hovering a link underlines its run, follows the screen, and survives a renderer rebuild", async () => {
+    const { controller, renderer } = await harness(40, 4);
+    const seen: (LinkRun | null)[] = [];
+    controller.hooks.onHover = (run) => seen.push(run);
+    controller.feed(enc("go \x1b]8;;https://a.b/c\x1b\\here\x1b]8;;\x1b\\ now"));
+    controller.frame();
+    const draws = renderer.draws;
+    const run = { uri: "https://a.b/c", y: 0, start: 3, end: 7 };
+    expect(controller.hover({ x: 4, y: 0 })).toEqual(run);
+    controller.frame();
+    expect(renderer.hovers.at(-1)).toEqual(run);
+    expect(renderer.draws, "a hover alone repaints").toBe(draws + 1);
+    expect(controller.hover({ x: 5, y: 0 }), "the same run is not re-set").toEqual(run);
+    expect(renderer.hovers).toHaveLength(1);
+    expect(controller.hover({ x: 0, y: 0 })).toBeNull();
+    expect(renderer.hovers.at(-1)).toBeNull();
+    expect(seen, "the pane's own hover calls are not echoed back").toEqual([]);
+
+    controller.hover({ x: 4, y: 0 });
+    controller.feed(enc("\r\n".repeat(4)));
+    controller.frame();
+    expect(seen, "output that scrolled the link away re-resolved the resting pointer").toEqual([null]);
+    expect(renderer.hovers.at(-1)).toBeNull();
+
+    controller.hover({ x: 4, y: 0 });
+    controller.feed(enc("\x1b[1;1H\x1b]8;;https://x.y\x1b\\zzzzzzzz\x1b]8;;\x1b\\"));
+    controller.frame();
+    expect(seen.at(-1)).toEqual({ uri: "https://x.y", y: 0, start: 0, end: 8 });
+
+    const fresh = new RecRenderer();
+    controller.replaceRenderer(fresh);
+    expect(fresh.hovers).toEqual([{ uri: "https://x.y", y: 0, start: 0, end: 8 }]);
+    expect(controller.linkAt({ x: 7, y: 0 })?.uri).toBe("https://x.y");
+    controller.hover(null);
+    expect(fresh.hovers.at(-1)).toBeNull();
   });
 
   test("a selection change alone is enough to repaint", async () => {
@@ -394,7 +435,9 @@ describe("TerminalController", () => {
   test("an OSC 52 clipboard write in the stream reaches the clipboard hook, and still renders around it", async () => {
     const { controller, renderer } = await harness(40, 4);
     const copied: string[] = [];
-    controller.hooks.onClipboard = (text) => copied.push(text);
+    controller.hooks.onClipboard = (text) => {
+      copied.push(text);
+    };
     const payload = btoa("https://example.test/auth");
     controller.feed(enc(`before\x1b]52;c;${payload}\x07after`));
     controller.frame();
@@ -416,7 +459,9 @@ describe("TerminalController", () => {
   test("historical OSC 52 in a replay never touches the clipboard; live writes after it do", async () => {
     const { controller } = await harness(40, 4);
     const copied: string[] = [];
-    controller.hooks.onClipboard = (text) => copied.push(text);
+    controller.hooks.onClipboard = (text) => {
+      copied.push(text);
+    };
     controller.feed(enc("\x1b]52;c;INCOMPLE")); // the gap cut mid-sequence before the pause
     controller.resetForReplay();
     controller.feed(enc(`snapshot\x1b]52;c;${btoa("stale")}\x07more`));

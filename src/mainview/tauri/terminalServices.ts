@@ -74,6 +74,7 @@ const link: SessionLink = {
   takeWrite: (id) => invoke("session_take_write", { id }),
   close: (id) => invoke("session_close", { id }),
   readClipboard,
+  openUrl: (url) => invoke("open_url", { url }),
 };
 
 export const tauriTerminalServices: TerminalServices = {

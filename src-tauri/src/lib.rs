@@ -111,10 +111,35 @@ async fn logout(state: State<'_, AppState>) -> Result<(), String> {
     state.backend().await?.set_token(None).await.map_err(String::from)
 }
 
-/// Open a URL in the system browser (updater's "open the release page" fallback).
+/// Open a URL in the Mac's default browser: the updater's release page, a markdown link, or a
+/// link a program printed in a terminal. That last source is untrusted bytes, so only the schemes a
+/// browser is for get through; a `file:` path (which names the box, not the Mac), `javascript:`
+/// or a custom scheme is refused by name.
 #[tauri::command]
 async fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    admit_url(&url)?;
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+const OPENABLE_SCHEMES: [&str; 3] = ["http", "https", "mailto"];
+
+/// The scheme allowlist for `open_url`, by RFC 3986's scheme grammar (case-insensitive).
+fn admit_url(url: &str) -> Result<(), String> {
+    let scheme = url_scheme(url).ok_or_else(|| "links without a scheme are not opened".to_string())?;
+    if OPENABLE_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str()) {
+        Ok(())
+    } else {
+        Err(format!("{scheme}: links are not opened by Mast"))
+    }
+}
+
+fn url_scheme(url: &str) -> Option<&str> {
+    let (scheme, _) = url.split_once(':')?;
+    let mut chars = scheme.chars();
+    let first = chars.next()?;
+    let valid = first.is_ascii_alphabetic()
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    valid.then_some(scheme)
 }
 
 #[tauri::command]
@@ -611,6 +636,45 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Mast");
+}
+
+#[cfg(test)]
+mod open_url_tests {
+    use super::*;
+
+    #[test]
+    fn browser_schemes_are_admitted_whatever_their_case() {
+        for url in [
+            "https://github.com/standardapplied/mast/pull/1",
+            "http://localhost:8080/?q=1#f",
+            "HTTPS://Example.COM",
+            "mailto:uday@standardapplied.com",
+            "https://x.y/path?next=javascript:alert(1)",
+        ] {
+            assert_eq!(admit_url(url), Ok(()), "{url}");
+        }
+    }
+
+    #[test]
+    fn everything_else_is_refused_by_scheme_name() {
+        for (url, scheme) in [
+            ("file:///etc/passwd", "file"),
+            ("FILE:///Users/uday", "FILE"),
+            ("javascript:alert(1)", "javascript"),
+            ("ssh://box", "ssh"),
+            ("x-apple.systempreferences:com.apple.preference", "x-apple.systempreferences"),
+            ("data:text/html,<script>", "data"),
+        ] {
+            assert_eq!(admit_url(url), Err(format!("{scheme}: links are not opened by Mast")));
+        }
+    }
+
+    #[test]
+    fn a_missing_or_malformed_scheme_is_refused_without_naming_one() {
+        for url in ["//evil.example", "example.com", "", "1http://x", ":nothing", "ht tp://x", "http//x"] {
+            assert_eq!(admit_url(url), Err("links without a scheme are not opened".to_string()), "{url}");
+        }
+    }
 }
 
 #[cfg(test)]
