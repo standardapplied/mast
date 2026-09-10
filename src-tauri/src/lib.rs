@@ -295,9 +295,6 @@ async fn fs_open(
     Ok(())
 }
 
-/// Read the system clipboard as text. The webview cannot do this itself: WKWebView never fires DOM
-/// paste events on a non-editable surface, and its async clipboard *read* is gesture-gated — while
-/// `pbpaste` ships on every Mac. Empty clipboard reads as an empty string, not an error.
 /// A webview-side failure (an uncaught error, a rejected promise, a render crash) written to the
 /// process's stderr — the one channel a release build exposes, since its webview has no inspector.
 #[tauri::command]
@@ -305,21 +302,44 @@ fn log_error(message: String) {
     eprintln!("mast webview: {message}");
 }
 
+/// Read the system clipboard as text. The webview cannot do this itself: WKWebView never fires DOM
+/// paste events on a non-editable surface, and its async clipboard *read* is gesture-gated — while
+/// `pbpaste` ships on every Mac. Empty clipboard reads as an empty string, not an error.
 #[tauri::command]
 async fn clipboard_read_text() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
-        let out = tokio::task::spawn_blocking(|| std::process::Command::new("pbpaste").output())
+        let out = tokio::task::spawn_blocking(|| pbpaste_command().output())
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| format!("pbpaste: {e}"))?;
         if !out.status.success() {
             return Err(format!("pbpaste exited with {}", out.status));
         }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        clipboard_text(out.stdout).map_err(|e| {
+            eprintln!("mast clipboard: {e}");
+            e
+        })
     }
     #[cfg(not(target_os = "macos"))]
     Err("clipboard read is only supported on macOS".into())
+}
+
+/// `pbpaste` pinned to a UTF-8 locale. A Finder-launched app has no `LANG`, and in the C locale
+/// pbpaste writes the legacy 8-bit encoding (MacRoman), which turned every é and curly quote
+/// into one U+FFFD downstream. The app's own environment is never trusted for text encoding.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn pbpaste_command() -> std::process::Command {
+    let mut cmd = std::process::Command::new("pbpaste");
+    cmd.env("LC_ALL", "en_US.UTF-8").env("LANG", "en_US.UTF-8");
+    cmd
+}
+
+/// Strict decode: a byte sequence that is not UTF-8 is a failed paste, never a lossy one —
+/// silently corrupting what the user feeds an agent is worse than pasting nothing.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn clipboard_text(bytes: Vec<u8>) -> Result<String, String> {
+    String::from_utf8(bytes).map_err(|_| "clipboard text is not UTF-8".to_string())
 }
 
 /// Parameters for creating a fresh host-owned session before attaching to it.
@@ -591,4 +611,32 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Mast");
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn pbpaste_runs_in_a_utf8_locale() {
+        let cmd = pbpaste_command();
+        assert_eq!(cmd.get_program(), "pbpaste");
+        let env: Vec<_> = cmd.get_envs().collect();
+        assert!(env.contains(&(OsStr::new("LC_ALL"), Some(OsStr::new("en_US.UTF-8")))));
+        assert!(env.contains(&(OsStr::new("LANG"), Some(OsStr::new("en_US.UTF-8")))));
+    }
+
+    #[test]
+    fn utf8_clipboard_decodes_byte_exact() {
+        let text = "a’b “q” é\u{a0}x";
+        assert_eq!(clipboard_text(text.as_bytes().to_vec()).unwrap(), text);
+        assert_eq!(clipboard_text(Vec::new()).unwrap(), "");
+    }
+
+    #[test]
+    fn macroman_clipboard_is_an_error_not_a_lossy_read() {
+        let macroman = b"L\x8Eona \xD5 \xCA".to_vec();
+        assert_eq!(clipboard_text(macroman), Err("clipboard text is not UTF-8".to_string()));
+    }
 }
