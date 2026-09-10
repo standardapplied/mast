@@ -479,6 +479,20 @@ describe("VtCore", () => {
     expect(after.rows.length).toBeGreaterThan(0);
   });
 
+  test("erasing a wrapped wide char also dirties the row that held its spacer head", async () => {
+    const core = await track(6, 3);
+    core.write(bytes("abcde漢"));
+    expect(line(core, 0)).toBe("abcde");
+    expect(line(core, 1)).toBe("漢");
+    core.clean();
+
+    core.write(bytes("\x1b[2;1H\x1b[X"));
+    const snap = core.snapshot();
+    expect(snap.dirty).toBe("partial");
+    expect(snap.rows.map((r) => r.y)).toEqual([0, 1]);
+    expect(line(core, 1)).toBe("");
+  });
+
   test("reports the cursor advancing with the text", async () => {
     const core = await track();
     const start = core.cursor();
@@ -852,6 +866,18 @@ describe("paste", () => {
     expect(core.linkAt({ x: 16, y: 0 })).toBeNull();
     expect(core.linkAt({ x: 3, y: 1 })).toEqual({ ...run, y: 1 });
     expect(core.linkAt({ x: 21, y: 1 })).toBeNull();
+  });
+
+  test("a kitty graphics stream is swallowed whole: the grid stays intact and no reply goes to the pty", async () => {
+    const core = await track(10, 2);
+    const replies: Uint8Array[] = [];
+    core.hooks.onWritePty = (b) => replies.push(b);
+    const chunked = "\x1b_Gi=1,a=T,f=24,s=1,v=1,m=1;AA\x1b\\\x1b_Gm=0;AA\x1b\\";
+    const query = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\";
+    core.write(bytes(`ab${chunked}${query}cd`));
+    expect(line(core, 0)).toBe("abcd");
+    expect(core.cursor()).toMatchObject({ x: 4, y: 0 });
+    expect(replies).toEqual([]);
   });
 
   test("BEL reaches onBell and never the screen", async () => {

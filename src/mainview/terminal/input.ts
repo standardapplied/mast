@@ -155,6 +155,18 @@ function unshiftedOf(code: string | undefined, key: string, alt: boolean): numbe
   return charLength(key) === 1 ? key.toLowerCase().codePointAt(0)! : 0;
 }
 
+/**
+ * The text a key press carries. With Option held, macOS composes a symbol (Option+F is 'ƒ') that
+ * the encoder, which is not built for macOS and so never applies option-as-alt itself, would
+ * ESC-prefix verbatim. Withholding that text makes it fall back to the physical key's unshifted
+ * codepoint, so Option+F bytes as ESC f — the meta-sends-escape behavior this terminal has always
+ * had. Plain ASCII text stays: the encoder prefixes a single byte as is.
+ */
+function textOf(key: string, alt: boolean): string {
+  if (charLength(key) !== 1) return "";
+  return alt && key.codePointAt(0)! > 0x7f ? "" : key;
+}
+
 /** Translates one DOM key press into the event libghostty's encoder consumes. */
 export function keyEventFor(stroke: KeyStroke): KeyEventSpec {
   const { key, code, ctrl = false, alt = false, meta = false, shift = false, caps = false } = stroke;
@@ -166,7 +178,7 @@ export function keyEventFor(stroke: KeyStroke): KeyEventSpec {
     (caps ? MODS.CAPS : 0);
   // Every single-char key carries its text — the ENCODER decides what a chord suppresses or maps
   // (Ctrl+[ → ESC needs the '[' to reach it). Cmd chords are gated once, in the controller.
-  const utf8 = charLength(key) === 1 ? key : "";
+  const utf8 = textOf(key, alt);
   const unshifted = unshiftedOf(code, key, alt);
   const consumedMods =
     utf8 !== "" && shift && utf8.codePointAt(0) !== unshifted ? MODS.SHIFT : 0;
