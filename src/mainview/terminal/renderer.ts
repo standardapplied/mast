@@ -678,10 +678,26 @@ class WebGl2Backend implements Backend {
     gl.bindVertexArray(null);
   }
 
+  /**
+   * Frees this backend's GPU objects and leaves the context alive: a canvas hands out one WebGL
+   * context for its lifetime, so a deliberately lost context would stay lost for every renderer
+   * built on this canvas afterwards, and a hidden pane is rebuilt on the same canvas when shown.
+   */
   destroy(): void {
     this.unwatch();
-    if (this.gl.isContextLost()) return;
-    this.gl.getExtension("WEBGL_lose_context")?.loseContext();
+    const gl = this.gl;
+    if (gl.isContextLost()) return;
+    gl.useProgram(null);
+    gl.bindVertexArray(null);
+    gl.deleteVertexArray(this.bgVao);
+    gl.deleteVertexArray(this.fgVao);
+    gl.deleteBuffer(this.bgBuf);
+    gl.deleteBuffer(this.fgBuf);
+    gl.deleteTexture(this.tex);
+    for (const program of [this.bgProg, this.fgProg]) {
+      for (const shader of gl.getAttachedShaders(program) ?? []) gl.deleteShader(shader);
+      gl.deleteProgram(program);
+    }
   }
 }
 

@@ -326,6 +326,7 @@ export class TerminalController {
     this.core.setTheme(theme, scheme);
     this.renderer.setColors(theme);
     this.renderer.apply(this.core.readAll());
+    this.rawCursor = this.core.cursor();
     this.redraw = true;
     if (this.core.colorSchemeReporting()) {
       this.sink.write(this.core.encodeColorSchemeReport());

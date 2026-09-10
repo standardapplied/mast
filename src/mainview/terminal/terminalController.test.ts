@@ -450,6 +450,7 @@ describe("TerminalController", () => {
     expect(renderer.grid.cell(0, 0)).toMatchObject({ text: "h", fg: [1, 2, 3], bg: [4, 5, 6] });
     controller.frame();
     expect(renderer.draws).toBe(draws + 1);
+    expect(renderer.cursors.at(-1)?.color, "an idle frame still carries the new cursor color").toEqual([7, 8, 9]);
     expect(sink.writes, "the program did not ask").toEqual([]);
     core.write(enc("\x1b[?2031h"));
     controller.setTheme(theme, "dark");
