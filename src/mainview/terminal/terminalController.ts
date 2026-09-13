@@ -24,6 +24,7 @@ import {
   type MouseEventSpec,
   type Rgb,
   type Scroll,
+  type Scrollbar,
   type SurfacePos,
   type Theme,
   type VtCore,
@@ -94,6 +95,7 @@ export class TerminalController {
   private hoverCell: CellPos | null = null;
   private hoverRun: LinkRun | null = null;
   private lastMotionCell = -1;
+  private scrollbar: Scrollbar | null = null;
   private unseenOutput = false;
   private syncSince: number | null = null;
   private replaying = false;
@@ -109,6 +111,8 @@ export class TerminalController {
     onBell?: () => void;
     /** The link under the resting pointer changed underneath it (output moved the screen). */
     onHover?: (run: LinkRun | null) => void;
+    /** The viewport's place in scrollback changed (a scroll, output, a resize); once per change. */
+    onScrollbar?: (bar: Scrollbar) => void;
   } = {};
 
   constructor(
@@ -215,6 +219,7 @@ export class TerminalController {
       this.core.clean();
       this.rawCursor = this.core.cursor();
       this.dirty = false;
+      this.pollScrollbar();
     }
     const cursor = this.rawCursor!;
     const shown = cursor.visible && (!focused || !cursor.blinking || blinkOn);
@@ -226,6 +231,17 @@ export class TerminalController {
     this.redraw = false;
     this.renderer.setCursor(next);
     this.renderer.draw();
+  }
+
+  /** The core keeps no change notification for scroll position: read it per dirty frame and diff. */
+  private pollScrollbar(): void {
+    const next = this.core.scrollbar();
+    const last = this.scrollbar;
+    if (last && last.total === next.total && last.offset === next.offset && last.len === next.len) {
+      return;
+    }
+    this.scrollbar = next;
+    this.hooks.onScrollbar?.(next);
   }
 
   private holdForSynchronizedOutput(): boolean {

@@ -1075,3 +1075,41 @@ describe("SessionTerminalPane at the channel edge", () => {
     root = createRoot(container);
   });
 });
+
+describe("SessionTerminalPane scrollbar", () => {
+  const frames = () =>
+    act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+  const thumb = () => container.querySelector<HTMLElement>('[data-testid="term-scrollbar-thumb"]');
+  const pill = () => container.querySelector('[data-testid="term-new-output"]');
+  const drag = (target: Element, type: string, clientY: number) => {
+    const Ctor = (globalThis as { PointerEvent?: typeof MouseEvent }).PointerEvent ?? MouseEvent;
+    target.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, clientX: 815, clientY, button: 0 }));
+  };
+
+  test("history grows a bar; dragging its thumb scrolls the terminal, which then holds new output below", async () => {
+    const { attachment } = await mount();
+    await frames();
+    expect(thumb(), "a fresh screen has nothing to scroll").toBeNull();
+    let out = "";
+    for (let i = 0; i < 100; i++) out += `line ${i}\r\n`;
+    await act(async () => attachment.lanes.onData(bytes(out)));
+    await frames();
+    const before = thumb()!;
+    const top = parseFloat(before.style.top);
+    expect(top, "at the bottom the thumb sits at the end of the track").toBeGreaterThan(0);
+    await act(async () => {
+      drag(before, "pointerdown", top + 5);
+      drag(before, "pointermove", 5);
+      drag(before, "pointerup", 5);
+    });
+    await frames();
+    expect(thumb()!.style.top, "the thumb follows the viewport the drag moved").toBe("0px");
+    expect(pill()).toBeNull();
+    await act(async () => attachment.lanes.onData(bytes("late\r\n")));
+    await frames();
+    expect(pill(), "the viewport stayed where the drag put it: output landed below").not.toBeNull();
+  });
+});

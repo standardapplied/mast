@@ -13,7 +13,7 @@ import {
 import { FakeTimers } from "../../../test/terminalFakes";
 import { MODS } from "./input";
 import { TerminalGrid } from "./terminalGrid";
-import type { Cursor, GridSnapshot, LinkRun } from "./vtCore";
+import type { Cursor, GridSnapshot, LinkRun, Scrollbar } from "./vtCore";
 import { VtCore } from "./vtCore";
 
 const WASM = readFileSync(join(import.meta.dir, "ghostty-vt.wasm"));
@@ -257,6 +257,41 @@ describe("TerminalController", () => {
     expect(controller.hasUnseenOutput()).toBe(false);
     controller.feed(enc("live\r\n")); // output while live never flags
     expect(controller.hasUnseenOutput()).toBe(false);
+  });
+
+  test("the scrollbar reports where the viewport sits in history, once per change", async () => {
+    const { controller } = await harness();
+    const bars: Scrollbar[] = [];
+    controller.hooks.onScrollbar = (bar) => bars.push(bar);
+    controller.frame();
+    expect(bars, "a fresh terminal has nothing to scroll: total == len").toEqual([{ total: 24, offset: 0, len: 24 }]);
+    controller.frame();
+    expect(bars, "an idle frame reports nothing").toHaveLength(1);
+    let out = "";
+    for (let i = 0; i < 1000; i++) out += `line ${i}\r\n`;
+    controller.feed(enc(out));
+    controller.frame();
+    expect(bars.at(-1), "at the bottom: offset + len == total").toEqual({ total: 1001, offset: 977, len: 24 });
+    controller.scroll("top");
+    controller.frame();
+    expect(bars.at(-1)).toEqual({ total: 1001, offset: 0, len: 24 });
+    controller.scroll({ row: 300 });
+    controller.frame();
+    expect(bars.at(-1), "a drag to row N lands offset == N").toEqual({ total: 1001, offset: 300, len: 24 });
+    controller.scroll({ row: 5000 });
+    controller.frame();
+    expect(bars.at(-1), "past the end clamps to the bottom").toEqual({ total: 1001, offset: 977, len: 24 });
+    expect(() => controller.scroll({ row: -1 })).toThrow(/whole number of rows/);
+    controller.feed(enc("\x1b[?1049h"));
+    controller.frame();
+    expect(bars.at(-1), "the alternate screen has no history: total == len hides the bar").toEqual({
+      total: 24,
+      offset: 0,
+      len: 24,
+    });
+    controller.feed(enc("\x1b[?1049l"));
+    controller.frame();
+    expect(bars.at(-1)).toEqual({ total: 1001, offset: 977, len: 24 });
   });
 
   test("a keystroke snaps back to the live view, which clears the flag", async () => {

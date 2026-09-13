@@ -410,9 +410,29 @@ const SCROLL_STRUCT_SIZE = 24;
 const SCROLL_TOP = 0;
 const SCROLL_BOTTOM = 1;
 const SCROLL_DELTA = 2;
+const SCROLL_ROW = 3;
+/** GHOSTTY_TERMINAL_DATA_SCROLLBAR: GhosttyTerminalScrollbar {u64 total, u64 offset, u64 len}. */
+const DATA_SCROLLBAR = 9;
+const SCROLLBAR_STRUCT_SIZE = 24;
 
-/** How to move the viewport: to the top/bottom of scrollback, or by a signed line delta (up < 0). */
-export type Scroll = "top" | "bottom" | { readonly delta: number };
+/**
+ * How to move the viewport: to the top/bottom of scrollback, by a signed line delta (up < 0), or
+ * to an absolute row — the same row space as {@link Scrollbar#offset}, so a scrollbar position
+ * round-trips; the core clamps it to the scrollable range.
+ */
+export type Scroll = "top" | "bottom" | { readonly delta: number } | { readonly row: number };
+
+/**
+ * Where the viewport sits in the scrollable area, in rows: {@code offset} rows of history lie
+ * above it, {@code len} rows are visible, {@code total} is scrollback plus screen. At the bottom
+ * {@code offset + len === total}; with no scrollback (a fresh terminal, the alternate screen)
+ * {@code total === len}.
+ */
+export interface Scrollbar {
+  readonly total: number;
+  readonly offset: number;
+  readonly len: number;
+}
 
 /** The subset of libghostty-vt exports VtCore drives. */
 interface GhosttyExports {
@@ -648,6 +668,7 @@ export class VtCore {
    * palette (read once per {@link refresh}, on first use), and the grapheme codepoints.
    */
   private readonly scalarPtr: number;
+  private readonly scrollbarPtr: number;
   private readonly stylePtr: number;
   private readonly palettePtr: number;
   private paletteFresh = false;
@@ -674,6 +695,7 @@ export class VtCore {
     this.identityPtr = this.abi.writeInto(identity);
     this.identityLen = identity.length;
     this.scalarPtr = this.abi.alloc(8);
+    this.scrollbarPtr = this.abi.alloc(SCROLLBAR_STRUCT_SIZE);
     this.stylePtr = this.abi.alloc(STYLE_SIZE);
     this.palettePtr = this.abi.alloc(PALETTE_BYTES);
     this.graphemePtr = this.abi.alloc(this.graphemeCap * 4);
@@ -1611,6 +1633,12 @@ export class VtCore {
         dv.setUint32(ptr, SCROLL_TOP, true);
       } else if (behavior === "bottom") {
         dv.setUint32(ptr, SCROLL_BOTTOM, true);
+      } else if ("row" in behavior) {
+        if (!Number.isInteger(behavior.row) || behavior.row < 0) {
+          throw new Error(`VtCore: scroll row must be a whole number of rows (got ${behavior.row})`);
+        }
+        dv.setUint32(ptr, SCROLL_ROW, true);
+        dv.setUint32(ptr + 8, behavior.row, true);
       } else {
         dv.setUint32(ptr, SCROLL_DELTA, true);
         dv.setInt32(ptr + 8, behavior.delta, true);
@@ -1619,6 +1647,24 @@ export class VtCore {
     } finally {
       this.abi.free(ptr, SCROLL_STRUCT_SIZE);
     }
+  }
+
+  /**
+   * Where the viewport sits in scrollback. Amortized O(1) in the core, which keeps no change
+   * notification for it: poll once per frame and diff, as Ghostty's own renderer does.
+   */
+  scrollbar(): Scrollbar {
+    this.requireOpen();
+    const rc = this.e.ghostty_terminal_get(this.term, DATA_SCROLLBAR, this.scrollbarPtr);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: reading the scrollbar failed (rc=${rc})`);
+    }
+    const dv = new DataView(this.e.memory.buffer);
+    return {
+      total: Number(dv.getBigUint64(this.scrollbarPtr, true)),
+      offset: Number(dv.getBigUint64(this.scrollbarPtr + 8, true)),
+      len: Number(dv.getBigUint64(this.scrollbarPtr + 16, true)),
+    };
   }
 
   /** Clears damage so the next {@link snapshot} reports only what changes after this point. */
@@ -1635,6 +1681,7 @@ export class VtCore {
     this.freed = true;
     this.abi.free(this.identityPtr, this.identityLen);
     this.abi.free(this.scalarPtr, 8);
+    this.abi.free(this.scrollbarPtr, SCROLLBAR_STRUCT_SIZE);
     this.abi.free(this.stylePtr, STYLE_SIZE);
     this.abi.free(this.palettePtr, PALETTE_BYTES);
     this.abi.free(this.graphemePtr, this.graphemeCap * 4);
