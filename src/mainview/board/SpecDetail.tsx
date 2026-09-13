@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import type { AgentLogRole,
+import type {
   FdeView,
   RunView,
   SpecRevisionView,
@@ -128,7 +128,6 @@ export function SpecDetail({
   const [engageOpen, setEngageOpen] = useState(false);
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
-  const [logRole, setLogRole] = useState<AgentLogRole | null>(null);
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(() => storedDrawerOpen(embedded));
   const [drawerWidth, setDrawerWidth] = useState(storedDrawerWidth);
@@ -483,10 +482,6 @@ export function SpecDetail({
               spec.status !== "archived"
             }
             currentUser={role.fde}
-            onOpenLog={(role) => {
-              setLogRole(role ?? null);
-              setLogOpen(true);
-            }}
           />
         </main>
 
@@ -825,8 +820,8 @@ export function SpecDetail({
           gateway={gateway}
           project={spec.project}
           specId={spec.id}
-          initialRole={logRole ?? (spec.status === "review" ? "review" : "build")}
-          onClose={() => { setLogOpen(false); setLogRole(null); }}
+          initialRole={spec.status === "review" ? "review" : "build"}
+          onClose={() => setLogOpen(false)}
         />
       )}
     </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SnapshotView } from "../../shared/sail-models";
 import { Dialog } from "../components/Dialog";
+import { LoadingMark } from "../components/Loading";
 import { Badge, Button } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { relativeTime } from "./rooms";
@@ -110,7 +111,7 @@ export function SnapshotsPanel({
             {loadError}
           </p>
         )}
-        {rows === null && !loadError && <p>Loading…</p>}
+        {rows === null && !loadError && <LoadingMark label="Loading snapshots" />}
         {rows?.length === 0 && <p>No snapshots yet.</p>}
         {rows?.map((snapshot) => {
           const busy = pending?.name === snapshot.name;

@@ -84,6 +84,16 @@ afterEach(() => {
 });
 
 describe("SnapshotsPanel", () => {
+  test("draws the loading mark until the list lands", async () => {
+    const fake = makeGateway({ listSnapshots: () => new Promise(() => {}) });
+    mount(fake.gateway);
+    await settle();
+    expect(container.querySelector(".snapshots-panel .loading-mark")?.getAttribute("aria-label")).toBe(
+      "Loading snapshots",
+    );
+    expect(container.textContent).not.toContain("Loading…");
+  });
+
   test("renders the list newest-first with source badges and ages", async () => {
     const { gateway } = makeGateway();
     mount(gateway);

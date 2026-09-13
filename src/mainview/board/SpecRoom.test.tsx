@@ -68,8 +68,6 @@ function makeGateway({
   const statusListeners = new Set<(status: { stream: string }) => void>();
   const calls = {
     posts: [] as string[],
-    approved: [] as string[],
-    dismissed: [] as string[],
     specEvents: [] as { since?: number; limit?: number }[],
     eventLanes: [] as string[],
     messageOptions: [] as { before?: string; after?: string; limit?: number }[],
@@ -214,14 +212,6 @@ function makeGateway({
         },
       };
     },
-    approveReview: async (reviewId: string) => {
-      calls.approved.push(reviewId);
-      return { ok: true as const, value: { review_id: reviewId, approved: true } };
-    },
-    dismissFinding: async (reviewId: string, findingId: string) => {
-      calls.dismissed.push(`${reviewId}:${findingId}`);
-      return { ok: true as const, value: { finding_id: findingId, dismissed: true } };
-    },
     onEvent: (listener: (event: SailEvent) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -284,7 +274,6 @@ async function mount(gateway: Gateway, specStatus?: string, specTitle?: string, 
           specTitle={specTitle}
           canWrite
           currentUser="uday"
-          onOpenLog={() => {}}
         />
       </ToastProvider>,
     ),
@@ -433,60 +422,31 @@ describe("SpecRoom", () => {
     expect(container.textContent).toContain("Held at the tail");
   });
 
-  test("approves and dismisses inline, recording each decision in the timeline", async () => {
+  test("the review card narrates: verdict and findings, no approve or dismiss controls", async () => {
     const fake = makeGateway({ withReview: true });
-    await mount(fake.gateway);
+    await mount(fake.gateway, "review");
 
-    expect(container.querySelector(".spec-room > .card")).toBeNull();
     expect(container.querySelectorAll(".room-review-card").length).toBe(1);
     act(() =>
       container
         .querySelector<HTMLButtonElement>('[data-testid="review-row-review-1"]')!
         .click(),
     );
-    const dismiss = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Dismiss",
-    )!;
-    act(() => dismiss.click());
-    await settle();
-    const approve = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Approve review",
-    )!;
-    act(() => approve.click());
-    await settle();
-
-    expect(fake.calls.dismissed).toEqual(["review-1:finding-1"]);
-    expect(fake.calls.approved).toEqual(["review-1"]);
-    expect(container.textContent).toContain("uday dismissed finding finding-1");
-    expect(container.textContent).toContain("uday approved review review-1");
+    const body = container.querySelector(".room-review-body")!;
+    expect(body.textContent).toContain("Lost message");
+    expect(body.querySelectorAll("button").length).toBe(0);
+    expect(container.textContent).not.toContain("Approve review");
+    expect(container.textContent).not.toContain("Dismiss");
   });
 
-  test("approve review is a primary action only while the spec is in review", async () => {
-    const inReview = makeGateway({ withReview: true });
-    await mount(inReview.gateway, "review");
-    act(() =>
-      container
-        .querySelector<HTMLButtonElement>('[data-testid="review-row-review-1"]')!
-        .click(),
-    );
-    const primary = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Approve review",
-    )!;
-    expect(primary.className).toContain("btn-primary");
-    act(() => root.unmount());
-    container.remove();
+  test("a lifecycle row names its run but offers no raw-log door", async () => {
+    const fake = makeGateway({ specEvents: [lifecycleEvent(1, "spec_dispatched")] });
+    await mount(fake.gateway);
 
-    const merged = makeGateway({ withReview: true });
-    await mount(merged.gateway, "awaiting_merge");
-    act(() =>
-      container
-        .querySelector<HTMLButtonElement>('[data-testid="review-row-review-1"]')!
-        .click(),
-    );
-    const quiet = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Approve review",
-    )!;
-    expect(quiet.className).toContain("btn-ghost");
+    const rows = [...container.querySelectorAll(".room-system-row")];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.querySelector("button") === null)).toBe(true);
+    expect(container.textContent).not.toContain("raw log");
   });
 
   test("shows a failed review status even when the review has no findings", async () => {
@@ -511,7 +471,6 @@ describe("SpecRoom", () => {
             specId="s1"
             canWrite
             currentUser="uday"
-            onOpenLog={() => {}}
           />
         </ToastProvider>,
       ),
@@ -646,7 +605,6 @@ describe("SpecRoom", () => {
             specStatus="done"
             canWrite={false}
             currentUser="uday"
-            onOpenLog={() => {}}
           />
         </ToastProvider>,
       ),

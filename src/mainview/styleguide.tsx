@@ -5,6 +5,7 @@ import { DetailsDrawer } from "./components/DetailsDrawer";
 import { Dialog } from "./components/Dialog";
 import { Input } from "./components/Input";
 import { KanbanBoard, KanbanCard, KanbanColumn } from "./components/Kanban";
+import { LoadingMark } from "./components/Loading";
 import { Checkbox } from "./components/Checkbox";
 import { Avatar } from "./components/Avatar";
 import { Info } from "./components/icons";
@@ -549,6 +550,19 @@ function StyleguideBody({ theme }: { theme: ThemeController }) {
               </p>
             </TabsContent>
           </Tabs>
+        </Section>
+
+        <Section index="06b" title="Loading">
+          <Card>
+            <div style={{ display: "grid", gap: 12 }}>
+              <LoadingMark label="Loading specs" />
+              <p style={{ margin: 0, fontSize: 13, color: "var(--subtle-foreground)" }}>
+                A surface that loads draws the mark, labeled with what is coming: the board, a
+                room, a file, a terminal connecting. Only a row-level wait inside a live surface
+                keeps inline text.
+              </p>
+            </div>
+          </Card>
         </Section>
 
         <Section index="07" title="Toasts">
