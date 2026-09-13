@@ -132,6 +132,7 @@ class GridRenderer implements Renderer {
   }
   setCursor(): void {}
   setHover(): void {}
+  setSearchMatches(): void {}
   setColors(): void {}
   draw(): void {
     this.draws++;
@@ -200,6 +201,33 @@ const cjkSecondPane = time(20, () => packFrame(secondGrid, cursor, shared, color
 const cjkSecondUpload = patchBytes(mark);
 cjk.free();
 
+const searchCore = await VtCore.create(wasm, cols, rows);
+const searchLines = 5000;
+searchCore.write(
+  enc.encode(
+    Array.from({ length: searchLines }, (_, i) =>
+      i % 417 === 0 ? `line ${i} ErRoR` : `line ${i} ${"x".repeat(Math.max(0, cols - 20))}`,
+    ).join("\r\n"),
+  ),
+);
+searchCore.setSearchNeedle("error");
+let searchSteps = 0;
+let searchMaxTick = 0;
+const searchStart = performance.now();
+let searchStatus = searchCore.searchTick();
+while (searchStatus !== "complete") {
+  if (searchStatus === "feed-required") searchCore.searchFeed();
+  const tickStart = performance.now();
+  searchStatus = searchCore.searchTick();
+  searchMaxTick = Math.max(searchMaxTick, performance.now() - tickStart);
+  searchSteps++;
+}
+const searchWall = performance.now() - searchStart;
+const searchFound = searchCore.searchState().total;
+const searchIdleFeed = time(50, () => searchCore.searchFeed());
+const searchReadMatches = time(50, () => searchCore.searchViewportMatches());
+searchCore.free();
+
 const fmt = (ms: number) => `${ms.toFixed(3)} ms`;
 const mib = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 console.log(`${cols}×${rows} terminal, medians:`);
@@ -215,4 +243,9 @@ console.log(`  first frame: texture upload                                ${mib(
 console.log(`  steady frame: pack / upload                                ${fmt(cjkSteady)} / ${cjkSteadyUpload} B`);
 console.log(`  one new line of glyphs: pack / upload                      ${fmt(cjkNewLine)} / ${mib(cjkLineUpload)} (${cjkLineUpload / slotBytes} slots)`);
 console.log(`  second pane, same document, same atlas: pack / upload      ${fmt(cjkSecondPane)} / ${cjkSecondUpload} B`);
+console.log(`search "error" through ${searchLines} lines of scrollback (${searchFound} matches):`);
+console.log(`  whole search: steps / wall                                 ${searchSteps} / ${fmt(searchWall)}`);
+console.log(`  slowest single tick                                        ${fmt(searchMaxTick)}`);
+console.log(`  one feed with nothing new (per frame while the bar is open) ${fmt(searchIdleFeed)}`);
+console.log(`  viewport matches read back                                 ${fmt(searchReadMatches)}`);
 core.free();

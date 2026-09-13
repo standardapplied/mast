@@ -22,7 +22,7 @@ import { type AtlasPatch, type GlyphAtlas, glyphAtlasPool } from "./glyphAtlas";
 import type { Renderer } from "./terminalController";
 import type { RendererColors } from "./terminalController";
 import { TerminalGrid } from "./terminalGrid";
-import type { Cursor, GridSnapshot, LinkRun, Rgb } from "./vtCore";
+import type { Cursor, GridSnapshot, LinkRun, MatchSpan, Rgb } from "./vtCore";
 
 export type BackendName = "webgpu" | "webgl2";
 
@@ -102,6 +102,7 @@ export class TerminalRenderer implements SurfaceRenderer {
     color: null,
   };
   private hover: LinkRun | null = null;
+  private matches: readonly MatchSpan[] = [];
   private destroyed = false;
   // Instance buffers reused across frames — sized on resize, never per frame.
   private bgInstances = new Float32Array(0);
@@ -161,6 +162,10 @@ export class TerminalRenderer implements SurfaceRenderer {
     this.hover = run;
   }
 
+  setSearchMatches(spans: readonly MatchSpan[]): void {
+    this.matches = spans;
+  }
+
   /** A theme flip: the next frame clears and paints in the new colors. */
   setColors(colors: RendererColors): void {
     this.colors = colors;
@@ -172,7 +177,15 @@ export class TerminalRenderer implements SurfaceRenderer {
     const bg = this.bgInstances;
     const fg = this.fgInstances;
     this.atlas.nextFrame();
-    const fgCount = packFrame(this.grid, this.cursor, this.atlas, this.colors, { bg, fg }, this.hover);
+    const fgCount = packFrame(
+      this.grid,
+      this.cursor,
+      this.atlas,
+      this.colors,
+      { bg, fg },
+      this.hover,
+      this.matches,
+    );
 
     this.backend.frame({
       cols: this.cols,

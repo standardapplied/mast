@@ -40,6 +40,7 @@ import { sessionStore } from "../terminal/sessionStore";
 import { paletteFor, resolveThemeName, type TerminalColors } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController, type Timers } from "../terminal/terminalController";
 import { TerminalScrollbar } from "../terminal/TerminalScrollbar";
+import { TerminalSearchBar } from "../terminal/TerminalSearchBar";
 import {
   type SessionCreate,
   type SessionFrames,
@@ -51,6 +52,7 @@ import {
   type LinkRun,
   type MouseButton,
   type Scrollbar,
+  type SearchState,
   type SurfacePos,
   VtCore,
 } from "../terminal/vtCore";
@@ -102,7 +104,7 @@ const VIEWPORT_KEYS: Readonly<Record<string, ViewportAction>> = {
   End: "bottom",
 };
 
-type CmdAction = "copy" | "paste" | "clear" | "zoom" | "host" | "swallow";
+type CmdAction = "copy" | "paste" | "clear" | "zoom" | "find" | "host" | "swallow";
 /** ⌘+ / ⌘= step the terminal font up, ⌘− / ⌘_ down, ⌘0 back to the default — for every pane. */
 const ZOOM_KEYS: Readonly<Record<string, ZoomStep>> = {
   "+": "in",
@@ -114,8 +116,8 @@ const ZOOM_KEYS: Readonly<Record<string, ZoomStep>> = {
 /**
  * The ⌘ chords the pane owns, keyed by the lowercased DOM key. "host" chords bubble to the pane
  * bar (⌘T new shell, ⌘D split) with the default kept; "swallow" ones are reserved — their WebKit
- * defaults (find, select-all, history navigation) would wreck the view over the app DOM.
- * Anything else stays with the app and the OS, unless the program asked for every key.
+ * defaults (select-all, history navigation) would wreck the view over the app DOM. Anything else
+ * stays with the app and the OS, unless the program asked for every key.
  */
 const CMD_SHORTCUTS: Readonly<Record<string, CmdAction>> = {
   c: "copy",
@@ -123,7 +125,7 @@ const CMD_SHORTCUTS: Readonly<Record<string, CmdAction>> = {
   k: "clear",
   t: "host",
   d: "host",
-  f: "swallow",
+  f: "find",
   a: "swallow",
   ...Object.fromEntries(Object.keys(ZOOM_KEYS).map((key) => [key, "zoom"] as const)),
   arrowup: "swallow",
@@ -246,6 +248,7 @@ function dormantRenderer(w: number, h: number): SurfaceRenderer {
     apply: noop,
     setCursor: noop,
     setHover: noop,
+    setSearchMatches: noop,
     setColors: noop,
     draw: noop,
     destroy: noop,
@@ -310,6 +313,12 @@ export const SessionTerminalPane = forwardRef<
   const [unseenOutput, setUnseenOutput] = useState(false);
   const unseenRef = useRef(false);
   const [scrollbar, setScrollbar] = useState<Scrollbar | null>(null);
+  /** The find bar's needle; null while the bar is closed. The controller owns the results. */
+  const [find, setFind] = useState<string | null>(null);
+  const findRef = useRef(find);
+  findRef.current = find;
+  const [searchState, setSearchState] = useState<SearchState | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [ringing, setRinging] = useState(false);
   /** The host's last refusal on this attach (a keystroke without the write token), or null. */
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -843,6 +852,11 @@ export const SessionTerminalPane = forwardRef<
       controller.hooks.onScrollbar = (bar) => {
         if (!disposed) setScrollbar(bar);
       };
+      controller.hooks.onSearch = (state) => {
+        if (!disposed) setSearchState(state);
+      };
+      // A bar left open across a reattach searches the fresh terminal for the same needle.
+      if (findRef.current) controller.search(findRef.current);
       controller.hooks.onTitle = (title) => onTitleRef.current?.(title);
       controller.hooks.onBell = () => {
         if (disposed) return;
@@ -1055,6 +1069,22 @@ export const SessionTerminalPane = forwardRef<
     }
   };
 
+  /** ⌘F: opens the find bar, or brings an open one back to the input with its needle selected. */
+  const openFind = () => {
+    setFind((needle) => needle ?? "");
+    const input = searchInputRef.current;
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  };
+  const closeFind = () => {
+    setFind(null);
+    setSearchState(null);
+    controllerRef.current?.search("");
+    hostRef.current?.focus();
+  };
+
   /** Physical keys whose press the program heard; their release is its too. */
   const heldRef = useRef(new Set<string>());
   const physicalKeyOf = (e: React.KeyboardEvent) => e.code || e.key;
@@ -1094,6 +1124,10 @@ export const SessionTerminalPane = forwardRef<
         return;
       case "zoom":
         terminalFontSize.zoom(ZOOM_KEYS[e.key]!);
+        e.preventDefault();
+        return;
+      case "find":
+        openFind();
         e.preventDefault();
         return;
       case "swallow":
@@ -1303,6 +1337,19 @@ export const SessionTerminalPane = forwardRef<
         <div className="term-link-tip" data-testid="term-link-tip">
           {hoverLink.uri}
         </div>
+      )}
+      {find !== null && status.kind === "up" && (
+        <TerminalSearchBar
+          needle={find}
+          state={searchState}
+          inputRef={searchInputRef}
+          onNeedle={(needle) => {
+            setFind(needle);
+            controllerRef.current?.search(needle);
+          }}
+          onStep={(direction) => controllerRef.current?.searchStep(direction)}
+          onClose={closeFind}
+        />
       )}
       {(lane.ptySize || lane.paused || refusal || notice) && (
         <div className="term-chips">

@@ -21,10 +21,12 @@ import {
   type GridSnapshot,
   KITTY_KEY,
   type LinkRun,
+  type MatchSpan,
   type MouseEventSpec,
   type Rgb,
   type Scroll,
   type Scrollbar,
+  type SearchState,
   type SurfacePos,
   type Theme,
   type VtCore,
@@ -46,6 +48,8 @@ export interface Renderer {
   setCursor(cursor: Cursor): void;
   /** The link under the pointer, underlined whole; null when none. */
   setHover(run: LinkRun | null): void;
+  /** The search matches on screen other than the selected one, to tint; empty when not searching. */
+  setSearchMatches(spans: readonly MatchSpan[]): void;
   setColors(colors: RendererColors): void;
   draw(): void;
 }
@@ -81,6 +85,12 @@ export const RESIZE_SETTLE_MS = 60;
  */
 export const SYNCHRONIZED_OUTPUT_CAP_MS = 1000;
 
+/**
+ * How much of one frame the search may spend ticking through scrollback. The rest waits for the
+ * next frame, so an hour of output is searched across frames and never stalls one.
+ */
+export const SEARCH_TICK_BUDGET_MS = 4;
+
 export class TerminalController {
   private cols: number;
   private rows: number;
@@ -96,6 +106,15 @@ export class TerminalController {
   private hoverRun: LinkRun | null = null;
   private lastMotionCell = -1;
   private scrollbar: Scrollbar | null = null;
+  /** The needle being searched for; empty when the search is idle. */
+  private needle = "";
+  /** The terminal moved under the search (a selected match, a fresh needle): feed before reading. */
+  private searchStale = false;
+  /** The first results of a fresh needle select the newest match, once. */
+  private autoSelect = false;
+  private searchStatus: SearchState["status"] = "complete";
+  private lastSearch: SearchState | null = null;
+  private spans: readonly MatchSpan[] = [];
   private unseenOutput = false;
   private syncSince: number | null = null;
   private replaying = false;
@@ -113,6 +132,8 @@ export class TerminalController {
     onHover?: (run: LinkRun | null) => void;
     /** The viewport's place in scrollback changed (a scroll, output, a resize); once per change. */
     onScrollbar?: (bar: Scrollbar) => void;
+    /** The search's counts or status changed; null once the search is cleared. */
+    onSearch?: (state: SearchState | null) => void;
   } = {};
 
   constructor(
@@ -204,6 +225,7 @@ export class TerminalController {
    * hold is released regardless.
    */
   frame(blinkOn = true, focused = true): void {
+    this.pumpSearch();
     if (this.dirty) {
       if (this.holdForSynchronizedOutput()) {
         return;
@@ -231,6 +253,89 @@ export class TerminalController {
     this.redraw = false;
     this.renderer.setCursor(next);
     this.renderer.draw();
+  }
+
+  /**
+   * Searches the terminal — active area and scrollback — for {@code needle}; empty ends the search
+   * and drops its highlights. The search runs across frames (see {@link pumpSearch}) and reports
+   * on {@link hooks.onSearch}; the first results select the newest match. Resubmitting the same
+   * needle keeps the results, so a find bar can call this on every keystroke.
+   */
+  search(needle: string): void {
+    if (needle === this.needle) return;
+    this.needle = needle;
+    this.core.setSearchNeedle(needle);
+    this.clearSelection();
+    if (needle.length === 0) {
+      this.searchStatus = "complete";
+      this.setSpans([]);
+      this.reportSearch(null);
+      return;
+    }
+    this.searchStatus = "feed-required";
+    this.searchStale = true;
+    this.autoSelect = true;
+  }
+
+  /**
+   * Selects the next match (older, up into history, wrapping) or the previous one (newer) and
+   * paints it as the selection; the viewport scrolls to it when it is off-screen. False when there
+   * is no match to move to.
+   */
+  searchStep(direction: "next" | "prev"): boolean {
+    if (this.needle.length === 0 || !this.core.searchSelect(direction)) return false;
+    this.autoSelect = false;
+    this.searchStale = true;
+    this.dirty = true;
+    return true;
+  }
+
+  /**
+   * Drives the search one bounded step per frame: a feed whenever the terminal changed since the
+   * last one (bytes, a scroll, a resize, a selected match) or the search is still working, then
+   * ticks until it is caught up or the frame's budget is spent. The viewport's matches are read
+   * back after every feed, never kept across writes, since a write invalidates every match.
+   */
+  private pumpSearch(): void {
+    if (this.needle.length === 0) return;
+    const changed = this.dirty || this.searchStale;
+    if (changed || this.searchStatus !== "complete") {
+      this.core.searchFeed();
+      this.searchStale = false;
+      this.searchStatus = this.core.searchState().status;
+      if (this.searchStatus !== "complete") {
+        const deadline = this.now() + SEARCH_TICK_BUDGET_MS;
+        do {
+          this.searchStatus = this.core.searchTick();
+          if (this.searchStatus === "feed-required") this.core.searchFeed();
+        } while (this.searchStatus !== "complete" && this.now() < deadline);
+        // The viewport's list is built by feeds: the matches the last ticks found need one more.
+        if (this.searchStatus === "complete") this.core.searchFeed();
+      }
+      this.setSpans(this.core.searchViewportMatches());
+    }
+    const state = this.core.searchState();
+    if (this.autoSelect && state.total > 0 && this.core.searchSelect("next")) {
+      this.autoSelect = false;
+      this.searchStale = true;
+      this.dirty = true;
+      this.reportSearch(this.core.searchState());
+      return;
+    }
+    this.reportSearch(state);
+  }
+
+  private setSpans(next: readonly MatchSpan[]): void {
+    if (sameSpans(this.spans, next)) return;
+    this.spans = next;
+    this.renderer.setSearchMatches(next);
+    this.redraw = true;
+  }
+
+  private reportSearch(state: SearchState | null): void {
+    if (sameSearch(this.lastSearch, state)) return;
+    this.lastSearch = state;
+    this.hooks.onSearch?.(state);
   }
 
   /** The core keeps no change notification for scroll position: read it per dirty frame and diff. */
@@ -517,6 +622,7 @@ export class TerminalController {
     renderer.resize(this.cols, this.rows);
     renderer.apply(this.core.readAll());
     renderer.setHover(this.hoverRun);
+    renderer.setSearchMatches(this.spans);
     this.lastCursor = null;
     this.redraw = true;
   }
@@ -534,6 +640,18 @@ export class TerminalController {
 function sameRun(a: LinkRun | null, b: LinkRun | null): boolean {
   if (a === null || b === null) return a === b;
   return a.uri === b.uri && a.y === b.y && a.start === b.start && a.end === b.end;
+}
+
+function sameSpans(a: readonly MatchSpan[], b: readonly MatchSpan[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((s, i) => s.y === b[i]!.y && s.start === b[i]!.start && s.end === b[i]!.end)
+  );
+}
+
+function sameSearch(a: SearchState | null, b: SearchState | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.status === b.status && a.total === b.total && a.selected === b.selected;
 }
 
 function sameCursor(a: Cursor, b: Cursor): boolean {

@@ -10,7 +10,7 @@ import type {
   SessionOpen,
   TerminalServices,
 } from "../src/mainview/terminal/terminalServices";
-import type { Cursor, GridSnapshot, LinkRun } from "../src/mainview/terminal/vtCore";
+import type { Cursor, GridSnapshot, LinkRun, MatchSpan } from "../src/mainview/terminal/vtCore";
 
 /**
  * The pane's platform seam, scripted: a link whose lanes the test drives by hand, a renderer that
@@ -157,6 +157,10 @@ export class FakeRenderer implements SurfaceRenderer {
   hovers: (LinkRun | null)[] = [];
   setHover(run: LinkRun | null): void {
     this.hovers.push(run);
+  }
+  matches: (readonly MatchSpan[])[] = [];
+  setSearchMatches(spans: readonly MatchSpan[]): void {
+    this.matches.push(spans);
   }
   colors: RendererColors[] = [];
   setColors(colors: RendererColors): void {

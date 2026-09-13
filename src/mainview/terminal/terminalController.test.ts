@@ -13,7 +13,7 @@ import {
 import { FakeTimers } from "../../../test/terminalFakes";
 import { MODS } from "./input";
 import { TerminalGrid } from "./terminalGrid";
-import type { Cursor, GridSnapshot, LinkRun, Scrollbar } from "./vtCore";
+import type { Cursor, GridSnapshot, LinkRun, MatchSpan, Scrollbar, SearchState } from "./vtCore";
 import { VtCore } from "./vtCore";
 
 const WASM = readFileSync(join(import.meta.dir, "ghostty-vt.wasm"));
@@ -40,6 +40,10 @@ class RecRenderer implements Renderer {
   hovers: (LinkRun | null)[] = [];
   setHover(run: LinkRun | null): void {
     this.hovers.push(run);
+  }
+  matches: readonly MatchSpan[] = [];
+  setSearchMatches(spans: readonly MatchSpan[]): void {
+    this.matches = spans;
   }
   colors: RendererColors[] = [];
   setColors(colors: RendererColors): void {
@@ -779,5 +783,134 @@ describe("gridFor", () => {
   test("never smaller than 1×1", () => {
     expect(gridFor(0, 0, 9, 19)).toEqual({ cols: 1, rows: 1 });
     expect(gridFor(4, 4, 9, 19)).toEqual({ cols: 1, rows: 1 });
+  });
+});
+
+describe("search", () => {
+  const corpus = (lines: number) =>
+    Array.from({ length: lines }, (_, i) => (i % 417 === 0 ? `line ${i} ErRoR` : `line ${i}`)).join("\r\n");
+  const selectedCells = (grid: TerminalGrid, y: number) => {
+    let s = "";
+    for (let x = 0; x < grid.cols; x++) s += grid.cell(x, y).selected ? "#" : ".";
+    return s.replace(/\.+$/, "");
+  };
+  const settle = (controller: TerminalController, states: (SearchState | null)[]) => {
+    let frames = 0;
+    do {
+      controller.frame();
+      if (++frames > 500) throw new Error("the search never completed");
+    } while (states.at(-1)?.status !== "complete");
+    return frames;
+  };
+
+  test("a big scrollback is searched across frames, each within the tick budget, and reports as it goes", async () => {
+    let clock = 0;
+    const { controller, renderer } = await harness(40, 24, () => (clock += 3));
+    // Some 17 pages of history: a page is one feed and one tick, so at two ticks a frame this
+    // takes many frames.
+    controller.feed(enc(`${corpus(20000)}\r\nlast error`));
+    controller.frame();
+    const states: (SearchState | null)[] = [];
+    controller.hooks.onSearch = (s) => states.push(s);
+    controller.search("error");
+    controller.frame();
+    expect(states.at(-1)!.status, "two ticks of 3 ms exhaust a 4 ms budget: the frame let go").not.toBe("complete");
+    const frames = settle(controller, states);
+    expect(frames).toBeGreaterThan(3);
+    expect(states.at(-1)).toEqual({ status: "complete", total: 49, selected: 0 });
+    expect(states.map((s) => s!.total), "the count climbed as pages were searched").toEqual(
+      [...states.map((s) => s!.total)].sort((a, b) => a - b),
+    );
+    controller.frame();
+    expect(selectedCells(renderer.grid, 23), "the newest match is selected and painted").toBe(".....#####");
+    expect(renderer.matches).toContainEqual({ y: 23, start: 5, end: 10 });
+    expect(controller.selectedText()).toBe("error");
+  });
+
+  test("next and prev walk the matches with the viewport following; clearing drops every highlight", async () => {
+    const { controller, renderer, core } = await harness(40, 24);
+    controller.feed(enc(`${corpus(5000)}\r\nlast error`));
+    const bars: Scrollbar[] = [];
+    controller.hooks.onScrollbar = (bar) => bars.push(bar);
+    const states: (SearchState | null)[] = [];
+    controller.hooks.onSearch = (s) => states.push(s);
+    controller.search("error");
+    settle(controller, states);
+    const atBottom = bars.at(-1)!.offset;
+    expect(controller.searchStep("next")).toBe(true);
+    controller.frame();
+    expect(states.at(-1)).toEqual({ status: "complete", total: 13, selected: 1 });
+    expect(bars.at(-1)!.offset, "the older match was off-screen: the viewport scrolled up to it").toBeLessThan(atBottom);
+    expect(renderer.grid.rows).toBe(24);
+    const y = [...Array(24).keys()].find((row) => selectedCells(renderer.grid, row) !== "")!;
+    expect(selectedCells(renderer.grid, y)).toMatch(/^\.+#####$/);
+    expect(renderer.matches, "the viewport's matches were re-read after the scroll").toContainEqual({
+      y,
+      start: y === undefined ? 0 : selectedCells(renderer.grid, y).indexOf("#"),
+      end: selectedCells(renderer.grid, y).length,
+    });
+    expect(controller.searchStep("prev")).toBe(true);
+    controller.frame();
+    expect(states.at(-1)!.selected).toBe(0);
+
+    controller.search("");
+    controller.frame();
+    expect(states.at(-1)).toBeNull();
+    expect(renderer.matches).toEqual([]);
+    expect(core.hasSelection()).toBe(false);
+    expect([...Array(24).keys()].every((row) => selectedCells(renderer.grid, row) === "")).toBe(true);
+    expect(controller.searchStep("next"), "no search, nothing to step").toBe(false);
+  });
+
+  test("no matches is reported as such; a match arriving later is found and selected", async () => {
+    const { controller, renderer } = await harness(40, 4);
+    controller.feed(enc("nothing here"));
+    const states: (SearchState | null)[] = [];
+    controller.hooks.onSearch = (s) => states.push(s);
+    controller.search("needle");
+    settle(controller, states);
+    expect(states.at(-1)).toEqual({ status: "complete", total: 0, selected: null });
+    expect(controller.searchStep("next")).toBe(false);
+    controller.feed(enc("\r\na NEEDLE arrives"));
+    controller.frame();
+    controller.frame();
+    expect(states.at(-1)).toEqual({ status: "complete", total: 1, selected: 0 });
+    expect(selectedCells(renderer.grid, 1)).toBe("..######");
+  });
+
+  test("resubmitting the needle keeps the selection; a new needle drops it until its results land", async () => {
+    const { controller, core } = await harness(40, 4);
+    controller.feed(enc("error one\r\nerror two"));
+    const states: (SearchState | null)[] = [];
+    controller.hooks.onSearch = (s) => states.push(s);
+    controller.search("error");
+    settle(controller, states);
+    controller.searchStep("next");
+    controller.frame();
+    expect(states.at(-1)!.selected).toBe(1);
+    controller.search("error");
+    controller.frame();
+    expect(states.at(-1)!.selected).toBe(1);
+    expect(controller.selectedText()).toBe("error");
+    controller.search("two");
+    expect(core.hasSelection(), "the old match is no longer what is searched for").toBe(false);
+    controller.frame();
+    controller.frame();
+    expect(states.at(-1)).toEqual({ status: "complete", total: 1, selected: 0 });
+    expect(controller.selectedText()).toBe("two");
+  });
+
+  test("a rebuilt renderer inherits the match tint", async () => {
+    const { controller, renderer } = await harness(40, 4);
+    controller.feed(enc("error one\r\nerror two"));
+    const states: (SearchState | null)[] = [];
+    controller.hooks.onSearch = (s) => states.push(s);
+    controller.search("error");
+    settle(controller, states);
+    controller.frame();
+    expect(renderer.matches).toHaveLength(2);
+    const fresh = new RecRenderer();
+    controller.replaceRenderer(fresh);
+    expect(fresh.matches).toEqual(renderer.matches);
   });
 });

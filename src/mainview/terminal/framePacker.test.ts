@@ -5,6 +5,7 @@ import {
   FG_PER_CELL,
   FG_STRIDE,
   type FrameColors,
+  matchBg,
   packFrame,
 } from "./framePacker";
 import type { GlyphStyle } from "./glyphAtlas";
@@ -248,5 +249,74 @@ describe("packFrame", () => {
       [0, 0, 255],
     ]);
     expect(instances[1]).toMatchObject({ what: "glyph:b", color: [255, 255, 255] });
+  });
+});
+
+describe("search matches", () => {
+  const packed = (cells: Cell[], matches: { y: number; start: number; end: number }[]) => {
+    const atlas = new StubAtlas();
+    const grid = new TerminalGrid();
+    grid.resize(cells.length, 1);
+    grid.apply({ dirty: "full", rows: [{ y: 0, cells }] });
+    const out = {
+      bg: new Float32Array(cells.length * BG_STRIDE),
+      fg: new Float32Array((cells.length * FG_PER_CELL + 1) * FG_STRIDE),
+    };
+    const fgCount = packFrame(grid, NO_CURSOR, atlas, COLORS, out, null, matches);
+    const bgAt = (x: number): Rgb => [
+      Math.round(out.bg[x * BG_STRIDE]! * 255),
+      Math.round(out.bg[x * BG_STRIDE + 1]! * 255),
+      Math.round(out.bg[x * BG_STRIDE + 2]! * 255),
+    ];
+    const fgAt = (x: number): Rgb => {
+      for (let i = 0; i < fgCount; i++) {
+        const o = i * FG_STRIDE;
+        if (out.fg[o] === x) {
+          return [Math.round(out.fg[o + 2]! * 255), Math.round(out.fg[o + 3]! * 255), Math.round(out.fg[o + 4]! * 255)];
+        }
+      }
+      throw new Error(`no glyph at ${x}`);
+    };
+    return { bgAt, fgAt };
+  };
+
+  test("a match tints the background only; the selected match paints as the selection; the rest is untouched", () => {
+    const cells = [cell("e", { selected: true }), cell("r"), cell("r"), cell("o"), cell("r"), cell("!")];
+    const { bgAt, fgAt } = packed(cells, [
+      { y: 0, start: 0, end: 5 },
+      { y: 0, start: 4, end: 5 },
+    ]);
+    expect(bgAt(0)).toEqual(COLORS.selectionBg);
+    expect(fgAt(0)).toEqual(COLORS.selectionFg);
+    expect(bgAt(1)).toEqual(matchBg(BG, COLORS.selectionBg));
+    expect(bgAt(4), "overlapping spans tint once").toEqual(matchBg(BG, COLORS.selectionBg));
+    expect(fgAt(1), "the text keeps its own color").toEqual(FG);
+    expect(bgAt(5)).toEqual(BG);
+  });
+
+  test("a highlight that ends on a wide glyph covers its spacer: the whole glyph paints", () => {
+    const cells = [cell("日", { width: 2 }), cell(""), cell("本", { width: 2, selected: true }), cell(""), cell("x")];
+    const { bgAt } = packed(cells, [{ y: 0, start: 0, end: 1 }]);
+    expect(bgAt(0)).toEqual(matchBg(BG, COLORS.selectionBg));
+    expect(bgAt(1), "the match stops at the head; its spacer is the glyph's right half").toEqual(
+      matchBg(BG, COLORS.selectionBg),
+    );
+    expect(bgAt(2)).toEqual(COLORS.selectionBg);
+    expect(bgAt(3), "the selection stops at the head too").toEqual(COLORS.selectionBg);
+    expect(bgAt(4)).toEqual(BG);
+  });
+
+  test("a span outside the grid tints nothing", () => {
+    const { bgAt } = packed([cell("a"), cell("b")], [
+      { y: 3, start: 0, end: 2 },
+      { y: 0, start: 5, end: 9 },
+    ]);
+    expect(bgAt(0)).toEqual(BG);
+    expect(bgAt(1)).toEqual(BG);
+  });
+
+  test("the tint moves the cell's background part of the way toward the selection's", () => {
+    expect(matchBg([0, 0, 0], [100, 200, 60])).toEqual([35, 70, 21]);
+    expect(matchBg([100, 200, 60], [100, 200, 60])).toEqual([100, 200, 60]);
   });
 });

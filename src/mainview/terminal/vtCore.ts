@@ -416,6 +416,36 @@ const DATA_SCROLLBAR = 9;
 const SCROLLBAR_STRUCT_SIZE = 24;
 
 /**
+ * GhosttySearchOption / GhosttySearchData / GhosttySearchStatus / GhosttySearchScroll (search.h,
+ * vendored). ghosttyHeaders.test.ts checks every entry against the header, so a re-pin that
+ * renumbers one fails there instead of mis-keying a search call.
+ */
+export const GHOSTTY_SEARCH = {
+  OPT: { NEEDLE: 0, SELECT_NEXT: 1, SELECT_PREV: 2, SELECT_SCROLL: 3 },
+  DATA: {
+    STATUS: 0,
+    NEEDLE: 1,
+    TOTAL_MATCHES: 2,
+    SELECTED_INDEX: 3,
+    SELECTED_MATCH: 4,
+    MATCHES: 5,
+    VIEWPORT_MATCHES: 6,
+    SELECT_SCROLL: 7,
+  },
+  STATUS: { RUNNING: 0, FEED_REQUIRED: 1, COMPLETE: 2 },
+  SCROLL: { IF_NEEDED: 0, NONE: 1 },
+} as const;
+/** GhosttySelection field offsets: the start and end GhosttyGridRef after the size_t. */
+const SELECTION_START = 4;
+const SELECTION_END = SELECTION_START + GRID_REF_SIZE;
+/** GhosttySelectionBuffer {GhosttySelection* ptr, size_t cap, size_t len} on wasm32. */
+const SELECTION_BUFFER_SIZE = 12;
+/** GhosttyPointCoordinate {u16 x @0, u32 y @4}. */
+const POINT_COORDINATE_SIZE = 8;
+/** Viewport matches the scratch holds before it has to grow (a screen rarely shows more). */
+const VIEWPORT_MATCH_SCRATCH = 64;
+
+/**
  * How to move the viewport: to the top/bottom of scrollback, by a signed line delta (up < 0), or
  * to an absolute row — the same row space as {@link Scrollbar#offset}, so a scrollbar position
  * round-trips; the core clamps it to the scrollable range.
@@ -432,6 +462,30 @@ export interface Scrollbar {
   readonly total: number;
   readonly offset: number;
   readonly len: number;
+}
+
+/**
+ * Where a search stands: ticking through data it already copied, blocked until the next feed, or
+ * caught up with the terminal as of the last feed (never "finished": later output needs a feed).
+ */
+export type SearchStatus = "running" | "feed-required" | "complete";
+
+/**
+ * A search's results on the active screen so far. {@code selected} indexes the matches newest to
+ * oldest (0 is the newest), so a find bar shows {@code selected + 1} of {@code total}; null when no
+ * match is selected.
+ */
+export interface SearchState {
+  readonly status: SearchStatus;
+  readonly total: number;
+  readonly selected: number | null;
+}
+
+/** One viewport row of a match: columns {@code start} up to (excluding) {@code end} on row {@code y}. */
+export interface MatchSpan {
+  readonly y: number;
+  readonly start: number;
+  readonly end: number;
 }
 
 /** The subset of libghostty-vt exports VtCore drives. */
@@ -536,6 +590,14 @@ interface GhosttyExports {
     outLen: number,
   ): number;
   ghostty_free(alloc: number, ptr: number, len: number): void;
+  ghostty_search_new(alloc: number, out: number, term: number): number;
+  ghostty_search_free(search: number): void;
+  ghostty_search_tick(search: number, outStatus: number): number;
+  ghostty_search_feed(search: number): number;
+  ghostty_search_run(search: number): number;
+  ghostty_search_set(search: number, option: number, valuePtr: number): number;
+  ghostty_search_get(search: number, data: number, valuePtr: number): number;
+  ghostty_terminal_point_from_grid_ref(term: number, ref: number, tag: number, out: number): number;
 }
 
 /**
@@ -674,6 +736,13 @@ export class VtCore {
   private paletteFresh = false;
   private graphemePtr: number;
   private graphemeCap = GRAPHEME_SCRATCH_CODEPOINTS;
+  /** The terminal's one search, created on first use; 0 until then. Its scratch lives with it. */
+  private search = 0;
+  private searchSelectionPtr = 0;
+  private searchBufferPtr = 0;
+  private searchCoordPtr = 0;
+  private matchesPtr = 0;
+  private matchesCap = 0;
 
   /** Side effects of the stream; the embedder wires them (see {@link VtCoreHooks}). */
   readonly hooks: VtCoreHooks = {};
@@ -1667,6 +1736,238 @@ export class VtCore {
     };
   }
 
+  /**
+   * Sets what the terminal is searched for; empty clears the needle and every result. The search
+   * is one per terminal, created on first use, and covers the active area and scrollback of both
+   * screens. ASCII letters match case-insensitively. Setting the same needle again keeps the
+   * results, so a find bar can resubmit freely. Results arrive through {@link searchFeed} and
+   * {@link searchTick}; read them with {@link searchState} and {@link searchViewportMatches}.
+   */
+  setSearchNeedle(needle: string): void {
+    this.requireOpen();
+    const bytes = UTF8.encode(needle);
+    if (bytes.length === 0) {
+      if (this.search !== 0) this.searchSet(GHOSTTY_SEARCH.OPT.NEEDLE, 0);
+      return;
+    }
+    this.ensureSearch();
+    const data = this.abi.writeInto(bytes);
+    const str = this.abi.alloc(STRING_SIZE);
+    try {
+      this.abi.writeU32(str, data);
+      this.abi.writeU32(str + 4, bytes.length);
+      this.searchSet(GHOSTTY_SEARCH.OPT.NEEDLE, str);
+    } finally {
+      this.abi.free(str, STRING_SIZE);
+      this.abi.free(data, bytes.length);
+    }
+  }
+
+  /**
+   * Copies terminal changes into the search: the only way it learns of new output, a resize, a
+   * reset, a screen switch, or pruned scrollback. Bounded work (one page of history at most), so
+   * call it after each batch of writes. Every match read before this is stale afterwards.
+   */
+  searchFeed(): void {
+    this.requireOpen();
+    if (this.search === 0) return;
+    const rc = this.e.ghostty_search_feed(this.search);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: feeding the search failed (rc=${rc})`);
+    }
+  }
+
+  /** A bounded step of search work over data already fed; it never touches the terminal. */
+  searchTick(): SearchStatus {
+    this.requireOpen();
+    if (this.search === 0) return "complete";
+    const rc = this.e.ghostty_search_tick(this.search, this.scalarPtr);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: ticking the search failed (rc=${rc})`);
+    }
+    return this.searchStatusOf(this.abi.readU32(this.scalarPtr));
+  }
+
+  /**
+   * Feeds and ticks until the search is caught up with the terminal. Blocking for as long as the
+   * scrollback takes, so a test convenience only: the pane drives {@link searchTick} per frame.
+   */
+  searchRun(): void {
+    this.requireOpen();
+    if (this.search === 0) return;
+    const rc = this.e.ghostty_search_run(this.search);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: running the search failed (rc=${rc})`);
+    }
+  }
+
+  /** The search's status and counts as of the last feed; idle with no needle. */
+  searchState(): SearchState {
+    this.requireOpen();
+    if (this.search === 0) return { status: "complete", total: 0, selected: null };
+    this.searchRead(GHOSTTY_SEARCH.DATA.STATUS);
+    const status = this.searchStatusOf(this.abi.readU32(this.scalarPtr));
+    this.searchRead(GHOSTTY_SEARCH.DATA.TOTAL_MATCHES);
+    const total = this.abi.readU32(this.scalarPtr);
+    const rc = this.e.ghostty_search_get(this.search, GHOSTTY_SEARCH.DATA.SELECTED_INDEX, this.scalarPtr);
+    if (rc !== SUCCESS && rc !== NO_VALUE) {
+      throw new Error(`VtCore: reading the selected match index failed (rc=${rc})`);
+    }
+    return { status, total, selected: rc === SUCCESS ? this.abi.readU32(this.scalarPtr) : null };
+  }
+
+  /**
+   * Selects the next match (older: up from the bottom of the screen into history, wrapping past
+   * the oldest) or the previous one (newer), and makes it the terminal's selection so it paints
+   * as selected. The viewport scrolls to it only when it is off-screen. False when there is no
+   * match to select. Catches up with the active area first; never runs the scrollback search.
+   */
+  searchSelect(direction: "next" | "prev"): boolean {
+    this.requireOpen();
+    if (this.search === 0) return false;
+    const option = direction === "next" ? GHOSTTY_SEARCH.OPT.SELECT_NEXT : GHOSTTY_SEARCH.OPT.SELECT_PREV;
+    const rc = this.e.ghostty_search_set(this.search, option, 0);
+    if (rc === NO_VALUE) return false;
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: selecting the ${direction} match failed (rc=${rc})`);
+    }
+    this.installSelectedMatch();
+    return true;
+  }
+
+  /**
+   * The matches on the pages the viewport shows, as row spans in viewport cells, clipped to the
+   * viewport — the other highlights a find bar draws. A match wrapped over rows yields one span
+   * per row. Computed by the last feed; read after each feed, never cached across writes.
+   */
+  searchViewportMatches(): MatchSpan[] {
+    this.requireOpen();
+    if (this.search === 0) return [];
+    const count = this.readViewportMatches();
+    const spans: MatchSpan[] = [];
+    for (let i = 0; i < count; i++) {
+      this.spansOf(this.matchesPtr + i * SELECTION_SIZE, spans);
+    }
+    return spans;
+  }
+
+  /** Fills the match scratch with the viewport matches, growing it when a screen holds more. */
+  private readViewportMatches(): number {
+    const buf = this.searchBufferPtr;
+    this.abi.writeU32(buf, this.matchesPtr);
+    this.abi.writeU32(buf + 4, this.matchesCap);
+    this.abi.writeU32(buf + 8, 0);
+    const rc = this.e.ghostty_search_get(this.search, GHOSTTY_SEARCH.DATA.VIEWPORT_MATCHES, buf);
+    if (rc === NO_VALUE) return 0;
+    if (rc === OUT_OF_SPACE) {
+      const need = this.abi.readU32(buf + 8);
+      if (need <= this.matchesCap) {
+        throw new Error("VtCore: the search rejected a match buffer of its own required size");
+      }
+      this.abi.free(this.matchesPtr, this.matchesCap * SELECTION_SIZE);
+      this.matchesCap = need * 2;
+      this.matchesPtr = this.abi.alloc(this.matchesCap * SELECTION_SIZE);
+      return this.readViewportMatches();
+    }
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: reading the viewport matches failed (rc=${rc})`);
+    }
+    return this.abi.readU32(buf + 8);
+  }
+
+  /**
+   * A match as viewport row spans. Matches are found a page at a time, so one can start above
+   * the viewport or end below it: an endpoint the viewport cannot express is clipped to its
+   * corner, and a match wholly outside contributes nothing.
+   */
+  private spansOf(selection: number, out: MatchSpan[]): void {
+    const start = this.viewportPoint(selection + SELECTION_START);
+    const end = this.viewportPoint(selection + SELECTION_END);
+    if (start === null && end === null) return;
+    const s = start ?? { x: 0, y: 0 };
+    const e = end ?? { x: this.cols - 1, y: this.rows - 1 };
+    for (let y = s.y; y <= e.y && y < this.rows; y++) {
+      out.push({ y, start: y === s.y ? s.x : 0, end: y === e.y ? e.x + 1 : this.cols });
+    }
+  }
+
+  /** A grid reference in viewport cells; null when it lies outside the viewport. */
+  private viewportPoint(ref: number): CellPos | null {
+    const out = this.searchCoordPtr;
+    const rc = this.e.ghostty_terminal_point_from_grid_ref(this.term, ref, POINT_TAG_VIEWPORT, out);
+    if (rc === NO_VALUE) return null;
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: converting a match to viewport cells failed (rc=${rc})`);
+    }
+    return { x: this.abi.readU16(out), y: this.abi.readU32(out + 4) };
+  }
+
+  /** The selected match becomes the terminal's selection (none: the selection clears). */
+  private installSelectedMatch(): void {
+    const sel = this.searchSelectionPtr;
+    this.abi.bytes().fill(0, sel, sel + SELECTION_SIZE);
+    this.abi.writeU32(sel, SELECTION_SIZE);
+    const rc = this.e.ghostty_search_get(this.search, GHOSTTY_SEARCH.DATA.SELECTED_MATCH, sel);
+    if (rc !== SUCCESS && rc !== NO_VALUE) {
+      throw new Error(`VtCore: reading the selected match failed (rc=${rc})`);
+    }
+    this.e.ghostty_selection_gesture_reset(this.gesture, this.term);
+    const set = this.e.ghostty_terminal_set(this.term, OPT_SELECTION, rc === SUCCESS ? sel : 0);
+    if (set !== SUCCESS) {
+      throw new Error(`VtCore: installing the match as the selection failed (rc=${set})`);
+    }
+  }
+
+  private ensureSearch(): void {
+    if (this.search !== 0) return;
+    this.search = this.abi.construct((slot) => this.e.ghostty_search_new(0, slot, this.term));
+    this.searchSelectionPtr = this.abi.alloc(SELECTION_SIZE);
+    this.searchBufferPtr = this.abi.alloc(SELECTION_BUFFER_SIZE);
+    this.searchCoordPtr = this.abi.alloc(POINT_COORDINATE_SIZE);
+    this.matchesCap = VIEWPORT_MATCH_SCRATCH;
+    this.matchesPtr = this.abi.alloc(this.matchesCap * SELECTION_SIZE);
+    // The default policy, made explicit: selecting a match scrolls only when it is off-screen.
+    this.abi.writeU32(this.scalarPtr, GHOSTTY_SEARCH.SCROLL.IF_NEEDED);
+    this.searchSet(GHOSTTY_SEARCH.OPT.SELECT_SCROLL, this.scalarPtr);
+  }
+
+  private freeSearch(): void {
+    if (this.search === 0) return;
+    this.e.ghostty_search_free(this.search);
+    this.abi.free(this.matchesPtr, this.matchesCap * SELECTION_SIZE);
+    this.abi.free(this.searchCoordPtr, POINT_COORDINATE_SIZE);
+    this.abi.free(this.searchBufferPtr, SELECTION_BUFFER_SIZE);
+    this.abi.free(this.searchSelectionPtr, SELECTION_SIZE);
+    this.search = 0;
+  }
+
+  private searchSet(option: number, valuePtr: number): void {
+    const rc = this.e.ghostty_search_set(this.search, option, valuePtr);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: search option ${option} rejected (rc=${rc})`);
+    }
+  }
+
+  /** A scalar search datum into the scalar scratch. */
+  private searchRead(data: number): void {
+    const rc = this.e.ghostty_search_get(this.search, data, this.scalarPtr);
+    if (rc !== SUCCESS) {
+      throw new Error(`VtCore: reading search datum ${data} failed (rc=${rc})`);
+    }
+  }
+
+  private searchStatusOf(value: number): SearchStatus {
+    switch (value) {
+      case GHOSTTY_SEARCH.STATUS.RUNNING:
+        return "running";
+      case GHOSTTY_SEARCH.STATUS.FEED_REQUIRED:
+        return "feed-required";
+      case GHOSTTY_SEARCH.STATUS.COMPLETE:
+        return "complete";
+    }
+    throw new Error(`VtCore: libghostty reported an unknown search status (${value})`);
+  }
+
   /** Clears damage so the next {@link snapshot} reports only what changes after this point. */
   clean(): void {
     this.requireOpen();
@@ -1685,6 +1986,7 @@ export class VtCore {
     this.abi.free(this.stylePtr, STYLE_SIZE);
     this.abi.free(this.palettePtr, PALETTE_BYTES);
     this.abi.free(this.graphemePtr, this.graphemeCap * 4);
+    this.freeSearch();
     this.e.ghostty_selection_gesture_event_free(this.releaseEvent);
     this.e.ghostty_selection_gesture_event_free(this.dragEvent);
     this.e.ghostty_selection_gesture_event_free(this.pressEvent);
