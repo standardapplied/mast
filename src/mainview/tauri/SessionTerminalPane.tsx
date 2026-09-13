@@ -39,6 +39,7 @@ import { type KeyStroke, MODS } from "../terminal/input";
 import { sessionStore } from "../terminal/sessionStore";
 import { paletteFor, resolveThemeName, type TerminalColors } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController, type Timers } from "../terminal/terminalController";
+import { TerminalScrollbar } from "../terminal/TerminalScrollbar";
 import {
   type SessionCreate,
   type SessionFrames,
@@ -49,6 +50,7 @@ import {
   type ColorScheme,
   type LinkRun,
   type MouseButton,
+  type Scrollbar,
   type SurfacePos,
   VtCore,
 } from "../terminal/vtCore";
@@ -307,6 +309,7 @@ export const SessionTerminalPane = forwardRef<
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const [unseenOutput, setUnseenOutput] = useState(false);
   const unseenRef = useRef(false);
+  const [scrollbar, setScrollbar] = useState<Scrollbar | null>(null);
   const [ringing, setRinging] = useState(false);
   /** The host's last refusal on this attach (a keystroke without the write token), or null. */
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -837,6 +840,9 @@ export const SessionTerminalPane = forwardRef<
       controller.hooks.onHover = (run) => {
         if (!disposed) setHoverLink(run);
       };
+      controller.hooks.onScrollbar = (bar) => {
+        if (!disposed) setScrollbar(bar);
+      };
       controller.hooks.onTitle = (title) => onTitleRef.current?.(title);
       controller.hooks.onBell = () => {
         if (disposed) return;
@@ -1329,6 +1335,13 @@ export const SessionTerminalPane = forwardRef<
             </span>
           )}
         </div>
+      )}
+      {scrollbar && status.kind === "up" && (
+        <TerminalScrollbar
+          bar={scrollbar}
+          timers={timers}
+          onScrollTo={(row) => controllerRef.current?.scroll({ row })}
+        />
       )}
       {unseenOutput && (
         <button
