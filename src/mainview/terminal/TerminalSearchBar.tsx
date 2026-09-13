@@ -31,6 +31,8 @@ const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 
 export function TerminalSearchBar({ needle, state, inputRef, onNeedle, onStep, onClose }: TerminalSearchBarProps) {
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Enter and Escape mid-composition confirm or cancel the IME's candidate, not the search.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter") {
       onStep(e.shiftKey ? "prev" : "next");
       e.preventDefault();

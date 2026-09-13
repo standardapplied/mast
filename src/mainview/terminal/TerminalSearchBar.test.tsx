@@ -103,6 +103,17 @@ describe("TerminalSearchBar", () => {
     expect(leaked).toEqual([]);
   });
 
+  test("Enter and Escape mid-composition belong to the IME: no step, no close, default kept", () => {
+    render("err", done(3, 0));
+    expect(key("keydown", "Enter", { isComposing: true }).defaultPrevented).toBe(false);
+    expect(key("keydown", "Escape", { isComposing: true }).defaultPrevented).toBe(false);
+    expect(key("keydown", "Enter", { keyCode: 229 } as KeyboardEventInit).defaultPrevented).toBe(false);
+    expect(steps).toEqual([]);
+    expect(closes).toBe(0);
+    key("keydown", "Enter");
+    expect(steps, "once the composition is over, Enter steps again").toEqual(["next"]);
+  });
+
   test("⌘F in the bar selects the needle for retyping instead of opening the browser's find", () => {
     render("error", done(3, 0));
     input().setSelectionRange(0, 0);

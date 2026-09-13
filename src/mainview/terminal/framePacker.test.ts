@@ -294,6 +294,18 @@ describe("search matches", () => {
     expect(bgAt(5)).toEqual(BG);
   });
 
+  test("a highlight that ends on a wide glyph covers its spacer: the whole glyph paints", () => {
+    const cells = [cell("日", { width: 2 }), cell(""), cell("本", { width: 2, selected: true }), cell(""), cell("x")];
+    const { bgAt } = packed(cells, [{ y: 0, start: 0, end: 1 }]);
+    expect(bgAt(0)).toEqual(matchBg(BG, COLORS.selectionBg));
+    expect(bgAt(1), "the match stops at the head; its spacer is the glyph's right half").toEqual(
+      matchBg(BG, COLORS.selectionBg),
+    );
+    expect(bgAt(2)).toEqual(COLORS.selectionBg);
+    expect(bgAt(3), "the selection stops at the head too").toEqual(COLORS.selectionBg);
+    expect(bgAt(4)).toEqual(BG);
+  });
+
   test("a span outside the grid tints nothing", () => {
     const { bgAt } = packed([cell("a"), cell("b")], [
       { y: 3, start: 0, end: 2 },

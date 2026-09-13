@@ -28,6 +28,8 @@ const MODE_TINT = 0;
 const MODE_COLOR = 1;
 /** How far a search match's background moves toward the selection color: visible, not selected. */
 export const MATCH_TINT = 0.35;
+/** What paints over a cell's own background: the selection, another search match, or nothing. */
+type Highlight = "selection" | "match" | null;
 
 /** What the packer needs from the atlas; {@link GlyphAtlas} implements it structurally. */
 export interface AtlasLike {
@@ -99,15 +101,21 @@ export function packFrame(
 
   for (let y = 0; y < grid.rows; y++) {
     let afterWide = false;
+    let highlight: Highlight = null;
     for (let x = 0; x < grid.cols; x++) {
       const cell = grid.cell(x, y);
       const onBlockCursor = blockCursor && cursor.x === x && cursor.y === y;
-      const selected = !onBlockCursor && cell.selected;
+      // A wide glyph's spacer is its right half: a selection or match that ends on the glyph
+      // stops at the head cell, so the spacer takes the head's highlight.
+      if (!afterWide) {
+        highlight = cell.selected ? "selection" : matched?.[y * grid.cols + x] ? "match" : null;
+      }
+      const selected = !onBlockCursor && highlight === "selection";
       const cellBg = onBlockCursor
         ? cursorColor
         : selected
           ? colors.selectionBg
-          : matched?.[y * grid.cols + x]
+          : highlight === "match"
             ? matchBg(cell.bg, colors.selectionBg)
             : cell.bg;
       const bi = (y * grid.cols + x) * BG_STRIDE;
