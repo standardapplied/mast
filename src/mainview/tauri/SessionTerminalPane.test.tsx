@@ -731,6 +731,9 @@ describe("SessionTerminalPane at the channel edge", () => {
     );
     expect(container.querySelector(".term-overlay__spinner")).toBeNull();
 
+    await act(async () => {
+      await services.link.opened();
+    });
     await act(async () => release());
     await settle();
     expect(status()).toEqual({ kind: "up" });
