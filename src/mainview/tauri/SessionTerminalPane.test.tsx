@@ -1116,3 +1116,71 @@ describe("SessionTerminalPane scrollbar", () => {
     expect(pill(), "the viewport stayed where the drag put it: output landed below").not.toBeNull();
   });
 });
+
+describe("SessionTerminalPane find", () => {
+  const frames = () =>
+    act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+  const bar = () => container.querySelector('[data-testid="term-search"]');
+  const input = () => container.querySelector<HTMLInputElement>('[data-testid="term-search-input"]')!;
+  const count = () => container.querySelector('[data-testid="term-search-count"]')?.textContent;
+  const type = (text: string) =>
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input(), text);
+      input().dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  const barKey = (key: string) =>
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    });
+
+  test("⌘F opens the bar; typing searches the terminal; Enter steps; Esc closes and hands focus back", async () => {
+    const { attachment } = await mount();
+    await act(async () => attachment.lanes.onData(bytes("error one\r\nerror two\r\n$ ")));
+    await frames();
+    act(() => {
+      host().focus();
+      keyEvent("keydown", { key: "f", code: "KeyF", metaKey: true });
+    });
+    expect(bar()).not.toBeNull();
+    expect(document.activeElement).toBe(input());
+    const writes = services.link.writes.length;
+    type("error");
+    barKey("r");
+    await frames();
+    expect(count(), "the newest match is selected first").toBe("1 of 2");
+    const renderer = services.renderers.at(-1)!;
+    expect(renderer.matches.at(-1)).toEqual([
+      { y: 0, start: 0, end: 5 },
+      { y: 1, start: 0, end: 5 },
+    ]);
+    const selectedOn = (y: number) =>
+      renderer.applied
+        .flatMap((s) => s.rows)
+        .filter((r) => r.y === y)
+        .at(-1)!
+        .cells.slice(0, 5)
+        .every((c) => c.selected);
+    expect(selectedOn(1)).toBe(true);
+    barKey("Enter");
+    await frames();
+    expect(count()).toBe("2 of 2");
+    expect(selectedOn(0)).toBe(true);
+    expect(services.link.writes.length, "nothing typed in the bar reached the pty").toBe(writes);
+
+    act(() => {
+      host().focus();
+      keyEvent("keydown", { key: "f", code: "KeyF", metaKey: true });
+    });
+    expect(document.activeElement, "⌘F with the bar open returns to it").toBe(input());
+    expect([input().selectionStart, input().selectionEnd], "with the needle selected for retyping").toEqual([0, 5]);
+
+    barKey("Escape");
+    await frames();
+    expect(bar()).toBeNull();
+    expect(document.activeElement).toBe(host());
+    expect(renderer.matches.at(-1), "closing drops the highlights").toEqual([]);
+  });
+});

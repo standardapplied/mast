@@ -569,6 +569,213 @@ describe("VtCore", () => {
   });
 });
 
+describe("search over the scrollback", () => {
+  const LINES = 5000;
+  /** Every 417th line carries the needle, spelled in mixed case to prove ASCII folding. */
+  const NEEDLE_EVERY = 417;
+  const corpus = (lines = LINES) =>
+    Array.from({ length: lines }, (_, i) =>
+      i % NEEDLE_EVERY === 0 ? `line ${i} had an ErRoR here` : `line ${i} was fine`,
+    ).join("\r\n");
+  const expectedTotal = Math.ceil(LINES / NEEDLE_EVERY);
+  const selectedRow = (core: VtCore, y: number) =>
+    core
+      .readAll()
+      .rows[y]!.cells.map((c) => (c.selected ? "#" : "."))
+      .join("")
+      .replace(/\.+$/, "");
+
+  test("finds every needle in 5000 lines, case-folded, and counts them", async () => {
+    const core = await track(40, 24);
+    core.write(bytes(corpus()));
+    expect(core.searchState()).toEqual({ status: "complete", total: 0, selected: null });
+    core.setSearchNeedle("error");
+    expect(core.searchState().status).toBe("feed-required");
+    core.searchRun();
+    expect(core.searchState()).toEqual({ status: "complete", total: expectedTotal, selected: null });
+    core.setSearchNeedle("");
+    expect(core.searchState()).toEqual({ status: "complete", total: 0, selected: null });
+  });
+
+  test("the search progresses in bounded steps: a tick never runs the whole scrollback", async () => {
+    const core = await track(40, 24);
+    core.write(bytes(corpus()));
+    core.setSearchNeedle("error");
+    let steps = 0;
+    let status = core.searchTick();
+    while (status !== "complete") {
+      if (status === "feed-required") core.searchFeed();
+      status = core.searchTick();
+      steps++;
+      if (steps > 100_000) throw new Error("the search never completed");
+    }
+    expect(steps, "a large scrollback takes many steps, so a frame can stop between them").toBeGreaterThan(3);
+    expect(core.searchState().total).toBe(expectedTotal);
+  });
+
+  test("next walks from the newest match into history, wrapping, and the viewport follows", async () => {
+    const core = await track(40, 24);
+    core.write(bytes(`${corpus()}\r\nlast line, an error too`));
+    core.setSearchNeedle("error");
+    core.searchRun();
+    const total = expectedTotal + 1;
+    expect(core.searchState().total).toBe(total);
+    expect(core.searchSelect("next")).toBe(true);
+    expect(core.searchState().selected).toBe(0);
+    expect(core.scrollbar().offset, "the newest match is on screen: no scroll").toBe(core.scrollbar().total - 24);
+    expect(selectedRow(core, 23)).toBe(`${".".repeat(14)}#####`);
+    expect(core.selectionText()).toBe("error");
+
+    core.searchSelect("next");
+    expect(core.searchState().selected).toBe(1);
+    expect(core.scrollbar().offset, "an older match is off-screen: the viewport scrolled to it").toBeLessThan(
+      core.scrollbar().total - 24,
+    );
+    expect(core.readAll().rows.some((r) => r.cells.some((c) => c.selected))).toBe(true);
+    expect(core.selectionText()).toBe("ErRoR");
+
+    for (let i = 2; i < total; i++) core.searchSelect("next");
+    expect(core.searchState().selected).toBe(total - 1);
+    expect(core.scrollbar().offset, "the oldest match sits at the top of history").toBe(0);
+    core.searchSelect("next");
+    expect(core.searchState().selected, "past the oldest it wraps to the newest").toBe(0);
+    core.searchSelect("prev");
+    expect(core.searchState().selected, "before the newest it wraps to the oldest").toBe(total - 1);
+  });
+
+  test("selecting installs the match as the terminal selection; a new gesture replaces it", async () => {
+    const core = await track(40, 4);
+    core.setCellPixels(10, 20);
+    core.write(bytes("alpha error beta\r\nplain"));
+    core.setSearchNeedle("error");
+    core.searchRun();
+    core.searchSelect("next");
+    expect(core.hasSelection()).toBe(true);
+    expect(selectedRow(core, 0)).toBe("......#####");
+    core.selectionPress({ x: 0, y: 1 }, { x: 2, y: 30 }, 1000);
+    core.selectionDrag({ x: 3, y: 1 }, { x: 38, y: 30 });
+    core.selectionRelease({ x: 3, y: 1 });
+    expect(core.selectionText()).toBe("plai");
+    expect(selectedRow(core, 0)).toBe("");
+  });
+
+  test("no match to select: nothing is installed and next says so", async () => {
+    const core = await track(40, 4);
+    core.write(bytes("nothing to see"));
+    core.setSearchNeedle("zzz");
+    core.searchRun();
+    expect(core.searchSelect("next")).toBe(false);
+    expect(core.hasSelection()).toBe(false);
+    expect(core.searchState()).toEqual({ status: "complete", total: 0, selected: null });
+  });
+
+  test("viewport matches come back as row spans, clipped to what the viewport shows", async () => {
+    const core = await track(20, 3);
+    core.write(bytes("an error and error\r\nno\r\nerror at start"));
+    core.setSearchNeedle("error");
+    core.searchRun();
+    const all = [
+      { y: 0, start: 3, end: 8 },
+      { y: 0, start: 13, end: 18 },
+      { y: 2, start: 0, end: 5 },
+    ];
+    expect(core.searchViewportMatches()).toEqual(all);
+    core.write(bytes("\r\nbelow"));
+    core.searchFeed();
+    expect(core.searchViewportMatches(), "the first row scrolled out of the viewport").toEqual([
+      { y: 1, start: 0, end: 5 },
+    ]);
+    core.scroll("top");
+    core.searchFeed();
+    expect(core.searchViewportMatches(), "scrolled back up, the viewport shows the first rows").toEqual(all);
+  });
+
+  test("a match wrapped across rows yields one span per row", async () => {
+    const core = await track(6, 2);
+    core.write(bytes("xxerrorxx"));
+    core.setSearchNeedle("error");
+    core.searchRun();
+    expect(core.searchViewportMatches()).toEqual([
+      { y: 0, start: 2, end: 6 },
+      { y: 1, start: 0, end: 1 },
+    ]);
+  });
+
+  test("more viewport matches than the scratch holds: the buffer grows", async () => {
+    const core = await track(80, 24);
+    core.write(bytes(Array.from({ length: 24 }, () => "e e e e e e e e e e e e").join("\r\n")));
+    core.setSearchNeedle("e");
+    core.searchRun();
+    expect(core.searchState().total).toBe(24 * 12);
+    expect(core.searchViewportMatches()).toHaveLength(24 * 12);
+  });
+
+  test("matches survive a resize and a reset, and prune with the scrollback", async () => {
+    const core = await VtCore.create(WASM, 40, 24, undefined, { scrollbackMaxBytes: 4 * 1024 * 1024 });
+    open.push(core);
+    core.write(bytes(corpus()));
+    core.setSearchNeedle("error");
+    core.searchRun();
+    expect(core.searchState().total).toBe(expectedTotal);
+    core.searchSelect("next");
+    core.searchSelect("next");
+    expect(core.searchState().selected).toBe(1);
+
+    core.resize(30, 20);
+    core.searchRun();
+    expect(core.searchState().total, "the reflowed lines still hold every needle").toBe(expectedTotal);
+    expect(core.searchState().selected, "the search restarts on a reflow: nothing is selected").toBeNull();
+    expect(core.selectionText(), "the terminal's own selection follows the reflowed match").toBe("ErRoR");
+    expect(core.searchSelect("next")).toBe(true);
+    expect(core.searchState().selected).toBe(0);
+
+    let written = LINES;
+    while (core.scrollbar().total === written) {
+      core.write(bytes(`\r\n${corpus()}`));
+      written += LINES;
+      if (written > LINES * 50) throw new Error("the scrollback budget never pruned");
+    }
+    core.searchRun();
+    expect(core.searchState().status).toBe("complete");
+    const total = core.searchState().total;
+    expect(total, "matches that fell off the budgeted scrollback are gone").toBeLessThan(
+      (written / LINES) * expectedTotal,
+    );
+    expect(total).toBeGreaterThan(0);
+    expect(core.searchSelect("next")).toBe(true);
+
+    core.reset();
+    core.searchRun();
+    expect(core.searchState()).toEqual({ status: "complete", total: 0, selected: null });
+    core.write(bytes("an error after the reset"));
+    core.searchRun();
+    expect(core.searchState().total).toBe(1);
+  });
+
+  test("the alternate screen searches its own contents, and the primary's results come back", async () => {
+    const core = await track(40, 4);
+    core.write(bytes("error one\r\nerror two"));
+    core.setSearchNeedle("error");
+    core.searchRun();
+    expect(core.searchState().total).toBe(2);
+    core.write(bytes("\x1b[?1049h\x1b[Hfullscreen app"));
+    core.searchRun();
+    expect(core.searchState().total).toBe(0);
+    core.write(bytes("\x1b[?1049l"));
+    core.searchRun();
+    expect(core.searchState().total).toBe(2);
+  });
+
+  test("freeing a terminal with a live search releases both", async () => {
+    const core = await vt(20, 3);
+    core.write(bytes("error"));
+    core.setSearchNeedle("error");
+    core.searchRun();
+    core.free();
+    expect(() => core.searchState()).toThrow("freed");
+  });
+});
+
 describe("key encoding", () => {
   const decode = (b: Uint8Array | null) => (b === null ? null : new TextDecoder().decode(b));
   const press = (core: VtCore, stroke: KeyStroke) => decode(core.encodeKey(keyEventFor(stroke)));

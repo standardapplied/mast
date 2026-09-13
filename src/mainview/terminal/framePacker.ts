@@ -4,7 +4,8 @@
  * (underline, strikethrough, overline) first so text layers over them, glyphs, and finally a
  * bar/underline/hollow cursor. A block cursor is a background swap, as in a native terminal. The
  * selection is the terminal's own: a cell arrives flagged, and paints in the selection colors. The
- * hovered link's cells gain a single underline where they had none.
+ * hovered link's cells gain a single underline where they had none. The other search matches on
+ * screen get a background tint only — the selected match is the selection — so text stays as is.
  *
  * Pure, so the layering rules are provable under `bun test` with a stub atlas; the renderer only
  * uploads what this packs.
@@ -13,7 +14,7 @@
 import type { GlyphStyle } from "./glyphAtlas";
 import type { SpecialKind } from "./sprites/special";
 import type { TerminalGrid } from "./terminalGrid";
-import type { Cell, Cursor, CursorStyle, LinkRun, Rgb, UnderlineStyle } from "./vtCore";
+import type { Cell, Cursor, CursorStyle, LinkRun, MatchSpan, Rgb, UnderlineStyle } from "./vtCore";
 
 /** Floats per foreground instance: x, y, r, g, b, u, v, w, mode. */
 export const FG_STRIDE = 9;
@@ -25,6 +26,8 @@ export const FG_PER_CELL = 4;
 /** Instance mode: tint the white mask with the cell color, or draw the entry's own colors. */
 const MODE_TINT = 0;
 const MODE_COLOR = 1;
+/** How far a search match's background moves toward the selection color: visible, not selected. */
+export const MATCH_TINT = 0.35;
 
 /** What the packer needs from the atlas; {@link GlyphAtlas} implements it structurally. */
 export interface AtlasLike {
@@ -71,8 +74,10 @@ export function packFrame(
   colors: FrameColors,
   out: FrameBuffers,
   hover: LinkRun | null = null,
+  matches: readonly MatchSpan[] = [],
 ): number {
   const cursorShown = cursor.present && cursor.visible;
+  const matched = matchFlags(matches, grid.cols, grid.rows);
   const blockCursor = cursorShown && cursor.style === "block";
   const cursorColor = cursor.color ?? colors.cursor;
   let fgCount = 0;
@@ -98,7 +103,13 @@ export function packFrame(
       const cell = grid.cell(x, y);
       const onBlockCursor = blockCursor && cursor.x === x && cursor.y === y;
       const selected = !onBlockCursor && cell.selected;
-      const cellBg = onBlockCursor ? cursorColor : selected ? colors.selectionBg : cell.bg;
+      const cellBg = onBlockCursor
+        ? cursorColor
+        : selected
+          ? colors.selectionBg
+          : matched?.[y * grid.cols + x]
+            ? matchBg(cell.bg, colors.selectionBg)
+            : cell.bg;
       const bi = (y * grid.cols + x) * BG_STRIDE;
       out.bg[bi] = cellBg[0] / 255;
       out.bg[bi + 1] = cellBg[1] / 255;
@@ -141,6 +152,25 @@ export function packFrame(
     put(cursor.x, cursor.y, atlas.special(sprite, wide), cursorColor, wide, MODE_TINT);
   }
   return fgCount;
+}
+
+/** One flag per cell inside a match span; null when there is nothing to tint. */
+function matchFlags(matches: readonly MatchSpan[], cols: number, rows: number): Uint8Array | null {
+  if (matches.length === 0) return null;
+  const flags = new Uint8Array(cols * rows);
+  for (const span of matches) {
+    if (span.y < 0 || span.y >= rows) continue;
+    const from = Math.max(0, span.start);
+    const to = Math.min(cols, span.end);
+    for (let x = from; x < to; x++) flags[span.y * cols + x] = 1;
+  }
+  return flags;
+}
+
+/** A match's background: the cell's own moved {@link MATCH_TINT} of the way toward the selection's. */
+export function matchBg(bg: Rgb, selectionBg: Rgb): Rgb {
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * MATCH_TINT);
+  return [mix(bg[0], selectionBg[0]), mix(bg[1], selectionBg[1]), mix(bg[2], selectionBg[2])];
 }
 
 /** The glyph color: faint dims the text halfway toward its own background. */

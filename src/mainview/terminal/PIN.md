@@ -27,8 +27,10 @@ PTY bytes and read the resulting cell grid to render ourselves (WebGPU).
 `key_event.h` and `key_encoder.h` (`include/ghostty/vt/key/{event,encoder}.h` from the
 pinned build's `libghostty-vt-source.tar.gz`, re-fetched 2026-09-10) are vendored because the
 `GhosttyKey` enum has IMPLICIT ordinals — the declaration order is the ABI — and `input.ts`
-mirrors it as `GHOSTTY_KEY`.
-`ghosttyHeaders.test.ts` parses the vendored headers and verifies the mirror entry-for-entry
+mirrors it as `GHOSTTY_KEY`. `search.h` (`include/ghostty/vt/search.h` at `44f2a44`, fetched
+2026-09-13) is vendored because `vtCore.ts` mirrors its four enums as `GHOSTTY_SEARCH` and keys
+every `ghostty_search_set`/`ghostty_search_get` call by them.
+`ghosttyHeaders.test.ts` parses the vendored headers and verifies the mirrors entry-for-entry
 plus the encoder option/action/mod constants, and the wasm-driven tests in `vtCore.test.ts`
-verify real encodings, so drift fails loudly at both seams. **Re-pin the headers together
-with the wasm**, then run `bun test` and fix whatever those two suites report.
+verify real encodings and real searches, so drift fails loudly at both seams. **Re-pin the
+headers together with the wasm**, then run `bun test` and fix whatever those two suites report.

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { GHOSTTY_KEY } from "./input";
+import { GHOSTTY_SEARCH } from "./vtCore";
 
 /**
  * Mechanical parity between the hand-written TS mirrors and the vendored C headers (see PIN.md).
@@ -52,5 +53,25 @@ describe("vendored header parity", () => {
     expect(h).toContain("GHOSTTY_MODS_SUPER (1 << 3)");
     expect(h).toContain("GHOSTTY_MODS_CAPS_LOCK (1 << 4)");
     expect(h).toContain("GHOSTTY_MODS_NUM_LOCK (1 << 5)");
+  });
+});
+
+describe("vendored search.h parity", () => {
+  /** The `NAME = value` entries of one enum, MAX_VALUE excluded — the values are explicit there. */
+  const enumValues = (typeName: string, prefix: string): Record<string, number> => {
+    const block = headers("search.h").match(new RegExp(`typedef enum GHOSTTY_ENUM_TYPED \\{([^{}]*)\\} ${typeName};`))![1]!;
+    const entries = [...block.matchAll(new RegExp(`${prefix}([A-Z_]+) = (\\d+)`, "g"))].map(
+      (m) => [m[1]!, Number(m[2])] as const,
+    );
+    expect(entries.length).toBeGreaterThan(0);
+    return Object.fromEntries(entries);
+  };
+
+  test("GHOSTTY_SEARCH mirrors the option, data, status and scroll enums entry for entry", () => {
+    const mirror: Record<string, Record<string, number>> = GHOSTTY_SEARCH;
+    expect(mirror.OPT).toEqual(enumValues("GhosttySearchOption", "GHOSTTY_SEARCH_OPT_"));
+    expect(mirror.DATA).toEqual(enumValues("GhosttySearchData", "GHOSTTY_SEARCH_DATA_"));
+    expect(mirror.STATUS).toEqual(enumValues("GhosttySearchStatus", "GHOSTTY_SEARCH_STATUS_"));
+    expect(mirror.SCROLL).toEqual(enumValues("GhosttySearchScroll", "GHOSTTY_SEARCH_SCROLL_"));
   });
 });
