@@ -146,10 +146,20 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const [chipMenu, setChipMenu] = useState<{ x: number; y: number; group: number } | null>(null);
     const [titles, setTitles] = useState<Record<string, string>>({});
     const unseenBells = useSyncExternalStore(attentionStore.subscribe, attentionStore.unseen);
-    // A pane nobody can focus any more owes no badge: leaving takes its bells with it.
+    // A pane nobody can focus any more owes no dot and no badge. Every way a pane leaves — a
+    // close, an exit, a listing that pruned it, this surface unmounting — lands in the layout, so
+    // the layout is the one place that forgets: no removal path can forget to.
     const paneNamesRef = useRef<readonly string[]>([]);
     paneNamesRef.current = layout?.groups.flatMap((g) => g.panes) ?? [];
-    useEffect(() => () => attentionStore.forget(paneNamesRef.current), []);
+    const paneKey = paneNamesRef.current.join("\n");
+    const knownPanesRef = useRef<readonly string[]>([]);
+    useEffect(() => {
+      const names = paneNamesRef.current;
+      const gone = knownPanesRef.current.filter((s) => !names.includes(s));
+      knownPanesRef.current = names;
+      if (gone.length > 0) attentionStore.forget(gone);
+    }, [paneKey]);
+    useEffect(() => () => attentionStore.forget(knownPanesRef.current), []);
     /** Sessions this client opened or revived, with their picked commands. */
     const [launched, setLaunched] = useState<ReadonlyMap<string, LaunchSpec>>(new Map());
     const [lastGlyph, setLastGlyph] = useState<DeckGlyph>(room?.launch ?? "shell");
