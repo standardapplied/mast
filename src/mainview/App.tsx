@@ -19,6 +19,7 @@ import type { Gateway } from "./gateway";
 import type { DeckServices, RoomTerminalRequest } from "./terminal/roomDeck";
 import { clipboardPolicy } from "./terminal/clipboardPolicy";
 import { terminalFontSize } from "./terminal/fontSize";
+import { latencyChip } from "./terminal/latency";
 import { scrollbackBudget } from "./terminal/scrollbackBudget";
 import { connectSessions, sessionStore } from "./terminal/sessionStore";
 import type { ThemeController } from "./theme";
@@ -194,6 +195,7 @@ export function App({
     clipboardPolicy.connect(window.localStorage);
     scrollbackBudget.connect(window.localStorage);
     terminalFontSize.connect(window.localStorage);
+    latencyChip.connect(window.localStorage);
   }, []);
 
   useEffect(() => {

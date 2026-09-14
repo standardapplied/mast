@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { latencyChip } from "./latency";
 import type { PaneLayout } from "./paneLayout";
 import { chipMenuItems, PANE_COLORS, paneMenuItems, type PaneMenuActions } from "./paneMenu";
 
@@ -25,20 +26,38 @@ const labelsOf = (items: ReturnType<typeof paneMenuItems>) =>
   items.map((i) => (i.kind === "separator" ? "—" : typeof i.label === "string" ? i.label : "<node>"));
 
 describe("paneMenuItems", () => {
+  afterEach(() => latencyChip.reset());
+
   test("identity first, Close pane last, addressed by the pane's shown name", () => {
     const { actions } = recorder();
     expect(labelsOf(paneMenuItems(layout, "mast-a", base, actions))).toEqual([
       "Rename shell…",
       "Color",
       "Mute bell",
+      "Show typing latency",
       "Close pane agent",
     ]);
     expect(labelsOf(paneMenuItems(layout, "mast-a.2", base, actions, { "mast-a.2": "mast" }))).toEqual([
       "Rename shell…",
       "Color",
       "Mute bell",
+      "Show typing latency",
       "Close pane mast",
     ]);
+  });
+
+  test("the latency item reads the app-wide setting and toggles it", () => {
+    const { actions } = recorder();
+    const item = () =>
+      paneMenuItems(layout, "mast-a", base, actions).find((i) => i.kind === "item" && /latency/.test(String(i.label))) as {
+        label: string;
+        onSelect: () => void;
+      };
+    item().onSelect();
+    expect(latencyChip.shown()).toBe(true);
+    expect(item().label).toBe("Hide typing latency");
+    item().onSelect();
+    expect(latencyChip.shown()).toBe(false);
   });
 
   test("the bell item reads the pane's mute and toggles it", () => {

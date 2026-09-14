@@ -11,6 +11,7 @@ import {
 import { attentionStore } from "../terminal/attention";
 import type { SessionStatus } from "../terminal/connection";
 import { clipboardPolicy } from "../terminal/clipboardPolicy";
+import { latencyChip } from "../terminal/latency";
 import { terminalFontSize } from "../terminal/fontSize";
 import { sessionStore } from "../terminal/sessionStore";
 import { RESIZE_SETTLE_MS } from "../terminal/terminalController";
@@ -51,6 +52,7 @@ afterEach(() => {
   attentionStore.reset();
   clipboardPolicy.reset();
   terminalFontSize.reset();
+  latencyChip.reset();
   restoreLayout();
   delete document.documentElement.dataset.theme;
 });
@@ -929,6 +931,27 @@ describe("SessionTerminalPane at the channel edge", () => {
       expect(services.link.attentions.at(-1)).toEqual({ sound: false, bounce: false, badge: null });
       expect(attentionStore.unseen().size).toBe(0);
     });
+  });
+
+  test("an echoed key shows its latency on a chip, only once the setting is on", async () => {
+    const { attachment } = await mount();
+    const frames = () =>
+      act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+    const chip = () => container.querySelector('[data-testid="term-latency"]')?.textContent ?? null;
+    await act(async () => keyEvent("keydown", { key: "a", code: "KeyA" }));
+    await act(async () => attachment.lanes.onData(bytes("a")));
+    await frames();
+    expect(chip(), "off by default").toBeNull();
+    await act(async () => latencyChip.set(true));
+    await act(async () => keyEvent("keydown", { key: "b", code: "KeyB" }));
+    await act(async () => attachment.lanes.onData(bytes("b")));
+    await frames();
+    expect(chip()).toMatch(/^lat \d+ \/ \d+ ms$/);
+    await act(async () => latencyChip.set(false));
+    expect(chip()).toBeNull();
   });
 
   test("key releases reach the pty once the program asks for them; ⌘ chords the pane owns never do", async () => {

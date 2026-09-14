@@ -36,6 +36,7 @@ import { attentionStore } from "../terminal/attention";
 import { clipboardPolicy } from "../terminal/clipboardPolicy";
 import { decodeDataFrame } from "../terminal/dataFrames";
 import { terminalFontSize, type ZoomStep } from "../terminal/fontSize";
+import { formatLatency, latencyChip, type LatencyStats } from "../terminal/latency";
 import { type KeyStroke, MODS } from "../terminal/input";
 import { sessionStore } from "../terminal/sessionStore";
 import { paletteFor, resolveThemeName, type TerminalColors } from "../terminal/terminalPalette";
@@ -314,6 +315,10 @@ export const SessionTerminalPane = forwardRef<
   const [unseenOutput, setUnseenOutput] = useState(false);
   const unseenRef = useRef(false);
   const [scrollbar, setScrollbar] = useState<Scrollbar | null>(null);
+  const latencyShown = useSyncExternalStore(latencyChip.subscribe, latencyChip.shown);
+  const latencyShownRef = useRef(latencyShown);
+  latencyShownRef.current = latencyShown;
+  const [latency, setLatency] = useState<LatencyStats | null>(null);
   /** The find bar's needle; null while the bar is closed. The controller owns the results. */
   const [find, setFind] = useState<string | null>(null);
   const findRef = useRef(find);
@@ -864,6 +869,10 @@ export const SessionTerminalPane = forwardRef<
       controller.hooks.onSearch = (state) => {
         if (!disposed) setSearchState(state);
       };
+      controller.hooks.onLatency = (stats) => {
+        console.debug(`${session} keystroke ${formatLatency(stats)} (n=${stats.count})`);
+        if (!disposed && latencyShownRef.current) setLatency(stats);
+      };
       // A bar left open across a reattach searches the fresh terminal for the same needle.
       if (findRef.current) controller.search(findRef.current);
       controller.hooks.onTitle = (title) => onTitleRef.current?.(title);
@@ -1149,7 +1158,7 @@ export const SessionTerminalPane = forwardRef<
       case "host":
         return;
     }
-    const consumed = controller.key(strokeOf(e));
+    const consumed = controller.key(strokeOf(e), e.timeStamp);
     if (consumed) {
       heldRef.current.add(physicalKeyOf(e));
       controller.clearSelection(); // typing clears the highlight...
@@ -1364,8 +1373,13 @@ export const SessionTerminalPane = forwardRef<
           onClose={closeFind}
         />
       )}
-      {(lane.ptySize || lane.paused || refusal || notice) && (
+      {(lane.ptySize || lane.paused || refusal || notice || (latencyShown && latency)) && (
         <div className="term-chips">
+          {latencyShown && latency && (
+            <span className="term-chip" data-testid="term-latency">
+              {formatLatency(latency)}
+            </span>
+          )}
           {notice && (
             <span
               className={`term-chip ${notice.tone === "warn" ? "term-chip--refused" : "term-chip--notice"}`}

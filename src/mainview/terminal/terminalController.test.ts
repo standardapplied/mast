@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   gridFor,
+  KEY_ECHO_TIMEOUT_MS,
   type PtySink,
   type Renderer,
   type RendererColors,
@@ -12,6 +13,7 @@ import {
 } from "./terminalController";
 import { FakeTimers } from "../../../test/terminalFakes";
 import { MODS } from "./input";
+import type { LatencyStats } from "./latency";
 import { TerminalGrid } from "./terminalGrid";
 import type { Cursor, GridSnapshot, LinkRun, MatchSpan, Scrollbar, SearchState } from "./vtCore";
 import { VtCore } from "./vtCore";
@@ -912,5 +914,155 @@ describe("search", () => {
     const fresh = new RecRenderer();
     controller.replaceRenderer(fresh);
     expect(fresh.matches).toEqual(renderer.matches);
+  });
+});
+
+describe("keystroke latency", () => {
+  const FRAME_MS = 16;
+
+  /**
+   * A pty that echoes every key back {@code delay} ms after it was written, and a frame loop on a
+   * fake clock: {@code type} presses a key at the current time, {@code run} advances the clock a
+   * frame at a time, delivering echoes when they are due and painting after each tick.
+   */
+  async function echoing(delay: number) {
+    let clock = 0;
+    const h = await harness(40, 4, () => clock);
+    const due: { at: number; bytes: Uint8Array }[] = [];
+    const stats: LatencyStats[] = [];
+    h.controller.hooks.onLatency = (s) => stats.push(s);
+    h.sink.write = (bytes) => {
+      if (delay >= 0) due.push({ at: clock + delay, bytes });
+    };
+    const run = (ms: number) => {
+      for (const end = clock + ms; clock < end; ) {
+        clock = Math.min(end, clock + FRAME_MS);
+        for (const echo of due.filter((d) => d.at <= clock)) h.controller.feed(echo.bytes);
+        due.splice(0, due.length, ...due.filter((d) => d.at > clock));
+        h.controller.frame();
+      }
+    };
+    const type = (key: string) => h.controller.key({ key, code: `Key${key.toUpperCase()}` });
+    const tick = (ms: number) => {
+      clock += ms;
+    };
+    return { ...h, stats, run, type, tick, clock: () => clock };
+  }
+
+  test("a link that echoes N ms after each write reads as a p50 of N within one frame", async () => {
+    const { run, type, stats, controller } = await echoing(160);
+    for (const key of "hello world") {
+      type(key);
+      run(100);
+    }
+    run(500);
+    const latest = controller.keystrokeLatency()!;
+    expect(latest.count).toBe(11);
+    expect(latest.p50).toBeGreaterThanOrEqual(160);
+    expect(latest.p50).toBeLessThan(160 + FRAME_MS);
+    expect(latest.p95).toBeLessThan(160 + FRAME_MS);
+    expect(stats).toHaveLength(11);
+    expect(stats.at(-1)).toEqual(latest);
+  });
+
+  test("keys typed faster than the echo returns are each timed from their own keydown", async () => {
+    const { run, type, controller } = await echoing(300);
+    type("a");
+    run(100);
+    type("b");
+    run(100);
+    type("c");
+    run(1000);
+    const latest = controller.keystrokeLatency()!;
+    expect(latest.count).toBe(3);
+    expect(latest.p95).toBeLessThan(300 + FRAME_MS);
+  });
+
+  test("the keydown's own timestamp is the start, not the moment the handler ran", async () => {
+    const { run, controller } = await echoing(160);
+    controller.key({ key: "a", code: "KeyA" }, -40);
+    run(400);
+    expect(controller.keystrokeLatency()!.p50).toBeGreaterThanOrEqual(200);
+  });
+
+  test("a ⌘ chord the program never hears is not counted", async () => {
+    const { run, controller, stats } = await echoing(160);
+    expect(controller.key({ key: "k", code: "KeyK", meta: true })).toBe(false);
+    run(400);
+    controller.feed(enc("unrelated output"));
+    run(100);
+    expect(controller.keystrokeLatency()).toBeNull();
+    expect(stats).toEqual([]);
+  });
+
+  test("a key the program swallows is not counted, and the next output is not its echo", async () => {
+    const { run, type, controller, stats } = await echoing(-1);
+    type("q");
+    run(KEY_ECHO_TIMEOUT_MS + FRAME_MS);
+    controller.feed(enc("a clock tick, unrelated"));
+    run(FRAME_MS);
+    expect(controller.keystrokeLatency()).toBeNull();
+    expect(stats).toEqual([]);
+  });
+
+  test("a release the program asked for is sent but never timed", async () => {
+    const { run, controller, core } = await echoing(50);
+    core.write(enc("\x1b[>2u"));
+    expect(controller.key({ key: "a", code: "KeyA", release: true })).toBe(true);
+    run(200);
+    expect(controller.keystrokeLatency()).toBeNull();
+  });
+
+  test("bytes that paint nothing settle no key; the visible echo behind them does", async () => {
+    const { run, type, controller } = await echoing(-1);
+    type("a");
+    run(FRAME_MS);
+    controller.feed(enc("\x1b[?2004h"));
+    run(FRAME_MS);
+    expect(controller.keystrokeLatency()).toBeNull();
+    controller.feed(enc("a"));
+    run(FRAME_MS);
+    expect(controller.keystrokeLatency()!.count).toBe(1);
+  });
+
+  test("output that arrived before a key was pressed is never that key's echo", async () => {
+    const { run, type, controller } = await echoing(-1);
+    type("a");
+    run(FRAME_MS);
+    controller.feed(enc("a"));
+    controller.feed(enc("$ "));
+    type("b");
+    run(FRAME_MS);
+    expect(controller.keystrokeLatency()!.count, "only a is echoed; b's echo has not come").toBe(1);
+    run(FRAME_MS * 4);
+    expect(controller.keystrokeLatency()!.count).toBe(1);
+    controller.feed(enc("b"));
+    run(FRAME_MS);
+    expect(controller.keystrokeLatency()!.count).toBe(2);
+  });
+
+  test("the clock stops after the frame draws, so the draw is part of the number", async () => {
+    const DRAW_MS = 5;
+    const h = await echoing(-1);
+    const draw = h.renderer.draw.bind(h.renderer);
+    h.renderer.draw = () => {
+      h.tick(DRAW_MS);
+      draw();
+    };
+    h.type("a");
+    h.tick(160);
+    h.controller.feed(enc("a"));
+    h.controller.frame();
+    expect(h.controller.keystrokeLatency()!.p50).toBe(160 + DRAW_MS);
+  });
+
+  test("a replay does not echo the keys typed before it", async () => {
+    const { run, type, controller } = await echoing(-1);
+    type("a");
+    controller.resetForReplay();
+    controller.feed(enc("replayed screen"));
+    controller.endReplay();
+    run(FRAME_MS);
+    expect(controller.keystrokeLatency()).toBeNull();
   });
 });
