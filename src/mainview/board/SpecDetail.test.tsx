@@ -508,6 +508,31 @@ describe("SpecDetail assignee editing", () => {
     expect(assigneeTrigger()?.disabled).toBe(false);
   });
 
+  test("a roster call that throws, or a body without a roster, is a failure with Retry — never stuck loading", async () => {
+    let attempts = 0;
+    const fake = makeGateway("pending", "uday", {
+      listFdes: async () => {
+        attempts++;
+        if (attempts === 1) throw new Error("unexpected token < in JSON");
+        return { ok: true, value: {} as { fdes: never[] } };
+      },
+    });
+    await mount(fake.gateway);
+    await startEditing();
+
+    expect(assigneeTrigger()?.disabled).toBe(true);
+    expect(container.querySelector(".prop-assignee .field-error")?.textContent).toBe(
+      "Couldn’t load the FDE roster — unexpected token < in JSON",
+    );
+    act(() => rosterRetry()!.click());
+    await settle();
+    expect(attempts).toBe(2);
+    expect(container.querySelector(".prop-assignee .field-error")?.textContent).toContain(
+      "the roster is malformed",
+    );
+    expect(rosterRetry()).toBeDefined();
+  });
+
   test("an empty roster is a failure, not a blank select", async () => {
     const fake = makeGateway("pending", "uday", {
       listFdes: async () => ({ ok: true, value: { fdes: [] } }),

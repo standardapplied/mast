@@ -83,9 +83,15 @@ type Roster =
   | { state: "failed"; message: string };
 
 function rosterFrom(result: SailResult<FdeListResponse>): Roster {
-  if (!result.ok) return { state: "failed", message: result.error.message };
-  if (result.value.fdes.length === 0) return { state: "failed", message: "the roster is empty" };
-  return { state: "loaded", fdes: result.value.fdes };
+  if (!result.ok) return rosterFailed(result.error.message);
+  const fdes = result.value.fdes;
+  if (!Array.isArray(fdes)) return rosterFailed("the roster is malformed");
+  if (fdes.length === 0) return rosterFailed("the roster is empty");
+  return { state: "loaded", fdes };
+}
+
+function rosterFailed(message: string): Roster {
+  return { state: "failed", message };
 }
 
 const EDITOR_PANES = [
@@ -178,7 +184,10 @@ export function SpecDetail({
 
   const loadRoster = useCallback(() => {
     setRoster({ state: "loading" });
-    void gateway.listFdes().then((r) => setRoster(rosterFrom(r)));
+    void gateway
+      .listFdes()
+      .then(rosterFrom, (e: unknown) => rosterFailed(e instanceof Error ? e.message : String(e)))
+      .then(setRoster);
   }, [gateway]);
   useEffect(loadRoster, [loadRoster]);
 
