@@ -10,6 +10,7 @@ import {
 } from "../../../test/terminalFakes";
 import { ToastProvider } from "../components/Toast";
 import type { SessionStatus } from "../terminal/connection";
+import { attentionStore } from "../terminal/attention";
 import { sessionStore } from "../terminal/sessionStore";
 import { TerminalServicesProvider } from "../terminal/terminalServices";
 import type { TerminalHandle } from "./SessionTerminalPane";
@@ -36,12 +37,14 @@ beforeEach(() => {
   services = fakeTerminalServices();
   reports = [];
   sessionStore.connect(emptyBoxGateway(), "devbox");
+  attentionStore.connect(localStorage, (r) => services.link.attention(r));
 });
 
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
   sessionStore.reset();
+  attentionStore.reset();
   restoreLayout();
 });
 
@@ -138,6 +141,78 @@ describe("TerminalPanes over the channel", () => {
       (chips[0] as HTMLButtonElement).click();
     });
     expect(container.querySelector('[data-testid="term-bell-dot"]')).toBeNull();
+  });
+
+  test("a bell's dot and badge are the store's; leaving the surface forgets them", async () => {
+    const { attachment: first } = await mount();
+    const second = services.link.nextOpen();
+    await act(async () => {
+      (container.querySelector('[aria-label="New shell — ⌘T"]') as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      await second;
+    });
+    await settle();
+    await act(async () => first.lanes.onData(new Uint8Array([0, 0x07])));
+    expect([...attentionStore.unseen()]).toEqual(["mast-app"]);
+    expect(services.link.attentions.at(-1)).toEqual({ sound: true, bounce: true, badge: 1 });
+    act(() => root.unmount());
+    root = createRoot(container);
+    expect(attentionStore.unseen().size).toBe(0);
+    expect(services.link.attentions.at(-1)).toEqual({ sound: false, bounce: false, badge: null });
+  });
+
+  test("a pane the room's listing pruned takes its unseen bell and badge with it", async () => {
+    const gateway = {
+      ...emptyBoxGateway(),
+      killSession: async () => ({ ok: true, value: {} }),
+    } as unknown as Parameters<typeof sessionStore.connect>[0];
+    sessionStore.reset();
+    sessionStore.connect(gateway, "devbox");
+    services.link.listing = { hostBootId: "boot-1", sessions: [{ name: "room-r1", live: true }] };
+    const entry = {
+      name: "room-r1",
+      instanceId: "i1",
+      live: true,
+      attached: 0,
+      writerFde: "",
+      room: "r1",
+      command: ["bash"],
+    };
+    const renderRoom = (sessions: (typeof entry)[]) =>
+      root.render(
+        <ToastProvider>
+          <TerminalServicesProvider value={services}>
+            <TerminalPanes
+              room={{ roomId: "r1", project: "app", sessions, dispatchLive: {}, refresh: () => {} }}
+              active
+              onStatus={(s) => reports.push(s)}
+            />
+          </TerminalServicesProvider>
+        </ToastProvider>,
+      );
+    await act(async () => renderRoom([entry]));
+    let attachment: FakeAttachment | null = null;
+    await act(async () => {
+      attachment = await services.link.opened();
+    });
+    await settle();
+    expect(reports.at(-1)).toEqual({ kind: "up" });
+
+    await act(async () => window.dispatchEvent(new Event("blur")));
+    await act(async () => attachment!.lanes.onData(new Uint8Array([0, 0x07])));
+    expect([...attentionStore.unseen()]).toEqual(["room-r1"]);
+    expect(services.link.attentions.at(-1)?.badge).toBe(1);
+
+    // Closed from another Mast: the store records the closed death and the next listing lacks it.
+    await act(async () => {
+      await sessionStore.kill("room-r1", { resolvedRoom: "r1" });
+    });
+    await act(async () => renderRoom([]));
+    await settle();
+    expect(container.querySelector('[data-testid="term-panes-empty"]'), "the pane was pruned").not.toBeNull();
+    expect(attentionStore.unseen().size, "its bell went with it").toBe(0);
+    expect(services.link.attentions.at(-1)).toEqual({ sound: false, bounce: false, badge: null });
   });
 
   test("renderer loss in a pane is invisible to the tab: it rebuilds without a status change", async () => {

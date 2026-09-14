@@ -32,6 +32,7 @@ import {
 import { preAttachClass, skewCard, skewOf } from "../terminal/roomDeck";
 import { scrollbackBudget } from "../terminal/scrollbackBudget";
 import type { RendererOptions, SurfaceRenderer } from "../terminal/renderer";
+import { attentionStore } from "../terminal/attention";
 import { clipboardPolicy } from "../terminal/clipboardPolicy";
 import { decodeDataFrame } from "../terminal/dataFrames";
 import { terminalFontSize, type ZoomStep } from "../terminal/fontSize";
@@ -207,8 +208,8 @@ export interface SessionTerminalProps {
   readonly onTitle?: (title: string) => void;
   /** The write token moved (the host's WriterChanged broadcast); "" means released. */
   readonly onWriter?: (fde: string) => void;
-  /** The program rang the bell (BEL); the pane flashes itself, the host marks the tab. */
-  readonly onBell?: () => void;
+  /** The bell is muted for this pane: a BEL flashes and rings nothing (see attentionStore). */
+  readonly muted?: boolean;
 }
 
 const noop = () => {};
@@ -271,7 +272,7 @@ export const SessionTerminalPane = forwardRef<
     menuExtras,
     onTitle,
     onWriter,
-    onBell,
+    muted = false,
   },
   ref,
 ) {
@@ -297,8 +298,8 @@ export const SessionTerminalPane = forwardRef<
   onTitleRef.current = onTitle;
   const onWriterRef = useRef(onWriter);
   onWriterRef.current = onWriter;
-  const onBellRef = useRef(onBell);
-  onBellRef.current = onBell;
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
   const attachIdRef = useRef<string | null>(null);
   /** The host boot id this pane last saw the session listed under (see absenceReason). */
   const seenUnderRef = useRef<string | null>(null);
@@ -497,30 +498,38 @@ export const SessionTerminalPane = forwardRef<
   // host element holds focus and the window is frontmost. Anything else (a hidden view that kept
   // its "active" prop, a button in an overlay, a backgrounded window) reads as unfocused.
   const hasFocusRef = useRef(false);
+  const windowFocusedRef = useRef(document.hasFocus());
   const reportedFocusRef = useRef<boolean | null>(null);
+  const paneFocused = () => hostRef.current !== null && document.activeElement === hostRef.current;
   const syncFocus = useCallback(() => {
-    const host = hostRef.current;
-    const focused = host !== null && document.hasFocus() && document.activeElement === host;
+    const focused = windowFocusedRef.current && paneFocused();
     hasFocusRef.current = focused;
+    // A ring is seen the moment keystrokes would reach this pane.
+    if (focused) attentionStore.seen(session);
     // The initial state is never reported: an attach is assumed focused, and a replay end
     // corrects an unfocused far side of a split.
     if (reportedFocusRef.current !== null && reportedFocusRef.current !== focused) {
       controllerRef.current?.setFocus(focused);
     }
     reportedFocusRef.current = focused;
-  }, []);
+  }, [session]);
   useEffect(() => {
     // Releases never arrive for keys held across a focus loss; forget them rather than report them
     // to whatever the program is by the time focus returns.
     const blur = () => {
+      windowFocusedRef.current = false;
       heldRef.current.clear();
       syncFocus();
     };
+    const focus = () => {
+      windowFocusedRef.current = true;
+      syncFocus();
+    };
     window.addEventListener("blur", blur);
-    window.addEventListener("focus", syncFocus);
+    window.addEventListener("focus", focus);
     return () => {
       window.removeEventListener("blur", blur);
-      window.removeEventListener("focus", syncFocus);
+      window.removeEventListener("focus", focus);
     };
   }, [syncFocus]);
 
@@ -863,7 +872,11 @@ export const SessionTerminalPane = forwardRef<
         clearTimeout(bellTimer.current);
         setRinging(true);
         bellTimer.current = setTimeout(() => setRinging(false), BELL_FLASH_MS);
-        onBellRef.current?.();
+        attentionStore.ring(session, {
+          paneFocused: paneFocused(),
+          windowFocused: windowFocusedRef.current,
+          muted: mutedRef.current,
+        });
       };
 
       /** Facts about the session, not this pane: they land in the store and render from it. */

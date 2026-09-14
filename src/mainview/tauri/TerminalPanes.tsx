@@ -59,6 +59,7 @@ import {
   type SessionEntry,
   yieldedDispatch,
 } from "../terminal/roomDeck";
+import { attentionStore } from "../terminal/attention";
 import { sessionStore } from "../terminal/sessionStore";
 import { PromptDialog } from "./PromptDialog";
 import { RoomTerminal } from "./RoomTerminal";
@@ -133,13 +134,6 @@ function storageKey(base: string): string {
   return `mast.panes.${base}`;
 }
 
-function without(set: ReadonlySet<string>, drop: readonly string[]): ReadonlySet<string> {
-  if (!drop.some((s) => set.has(s))) return set;
-  const next = new Set(set);
-  for (const s of drop) next.delete(s);
-  return next;
-}
-
 export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
   function TerminalPanes({ target, room, active, onStatus }, ref) {
     const base = room ? roomSessionBase(room.roomId) : baseSessionFor(target);
@@ -151,8 +145,21 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const [renaming, setRenaming] = useState<string | null>(null);
     const [chipMenu, setChipMenu] = useState<{ x: number; y: number; group: number } | null>(null);
     const [titles, setTitles] = useState<Record<string, string>>({});
-    /** Panes that rang the bell while not the focused one; the dot stays until they are. */
-    const [rang, setRang] = useState<ReadonlySet<string>>(new Set());
+    const unseenBells = useSyncExternalStore(attentionStore.subscribe, attentionStore.unseen);
+    // A pane nobody can focus any more owes no dot and no badge. Every way a pane leaves — a
+    // close, an exit, a listing that pruned it, this surface unmounting — lands in the layout, so
+    // the layout is the one place that forgets: no removal path can forget to.
+    const paneNamesRef = useRef<readonly string[]>([]);
+    paneNamesRef.current = layout?.groups.flatMap((g) => g.panes) ?? [];
+    const paneKey = paneNamesRef.current.join("\n");
+    const knownPanesRef = useRef<readonly string[]>([]);
+    useEffect(() => {
+      const names = paneNamesRef.current;
+      const gone = knownPanesRef.current.filter((s) => !names.includes(s));
+      knownPanesRef.current = names;
+      if (gone.length > 0) attentionStore.forget(gone);
+    }, [paneKey]);
+    useEffect(() => () => attentionStore.forget(knownPanesRef.current), []);
     /** Sessions this client opened or revived, with their picked commands. */
     const [launched, setLaunched] = useState<ReadonlyMap<string, LaunchSpec>>(new Map());
     const [lastGlyph, setLastGlyph] = useState<DeckGlyph>(room?.launch ?? "shell");
@@ -168,6 +175,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const menuActions: PaneMenuActions = {
       rename: setRenaming,
       setColor: (session, color) => setLayout((l) => l && withPaneMeta(l, session, { color })),
+      setMuted: (session, muted) => setLayout((l) => l && withPaneMeta(l, session, { muted })),
       close: (sessions) => setClosing(sessions),
     };
 
@@ -377,13 +385,8 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         for (const session of sessions) delete next[session];
         return next;
       });
-      setRang((prev) => without(prev, sessions));
+      attentionStore.forget(sessions);
     };
-
-    const focusedPane = active && layout?.groups[layout.active]?.panes.includes(focused) ? focused : null;
-    useEffect(() => {
-      if (focusedPane !== null) setRang((prev) => without(prev, [focusedPane]));
-    }, [focusedPane]);
 
     /** Lands a layout with the focus on a survivor of its active group. */
     const applyKeepingFocus = (next: PaneLayout) => {
@@ -581,9 +584,6 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         const t = shortTitle(raw);
         setTitles((prev) => (prev[session] === t ? prev : { ...prev, [session]: t }));
       };
-      const onBell = () => {
-        if (session !== focusedPane) setRang((prev) => (prev.has(session) ? prev : new Set(prev).add(session)));
-      };
       const menuExtras = paneMenuItems(layout, session, base, menuActions, titles);
       if (room) {
         return (
@@ -600,7 +600,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
             writerFde={plan.writerFde}
             onStatus={onPaneReport}
             onTitle={onTitle}
-            onBell={onBell}
+            muted={layout.meta?.[session]?.muted}
             menuExtras={menuExtras}
           />
         );
@@ -618,7 +618,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
           visible={active && groupActive}
           onStatus={onPaneReport}
           onTitle={onTitle}
-          onBell={onBell}
+          muted={layout.meta?.[session]?.muted}
           menuExtras={menuExtras}
         />
       );
@@ -635,7 +635,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               const st = statuses[s];
               return st !== undefined && isUnwell(st);
             });
-            const belled = group.panes.some((s) => rang.has(s));
+            const belled = group.panes.some((s) => unseenBells.has(s));
             const plainLabel = group.panes.map((s) => titleOf(layout, s, base, titles)).join("·");
             return (
               <button

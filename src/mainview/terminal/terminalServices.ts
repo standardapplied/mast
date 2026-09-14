@@ -60,6 +60,17 @@ export interface SessionLink {
    * scheme.
    */
   openUrl(url: string): Promise<void>;
+  /**
+   * Asks the Mac for attention on the user's behalf: the alert sound, a Dock bounce, the Dock
+   * badge (null clears it). Only the asked-for parts act; the decision is the attention store's.
+   */
+  attention(request: AttentionRequest): Promise<void>;
+}
+
+export interface AttentionRequest {
+  readonly sound: boolean;
+  readonly bounce: boolean;
+  readonly badge: number | null;
 }
 
 export interface TerminalServices {

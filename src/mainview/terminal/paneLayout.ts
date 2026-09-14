@@ -19,10 +19,14 @@ export interface PaneGroup {
   readonly panes: readonly string[];
 }
 
-/** A pane's optional identity: a custom name and a swatch index (see the component's palette). */
+/**
+ * A pane's optional identity — a custom name, a swatch index (see the component's palette) — and
+ * whether its bell is muted (flash only). Arrangement, all of it.
+ */
 export interface PaneMeta {
   readonly label?: string;
   readonly color?: number;
+  readonly muted?: boolean;
 }
 
 /**
@@ -103,10 +107,11 @@ export function shortTitle(raw: string): string {
 
 /**
  * Sets a pane's identity, merging with what it had: a blank label clears the name, an undefined
- * color clears the swatch, and an identity emptied of both disappears entirely.
+ * color clears the swatch, an unmuted bell is the default, and an identity emptied of everything
+ * disappears entirely.
  */
 export function withPaneMeta(layout: PaneLayout, session: string, patch: PaneMeta): PaneLayout {
-  const merged: { label?: string; color?: number } = { ...layout.meta?.[session] };
+  const merged: { label?: string; color?: number; muted?: boolean } = { ...layout.meta?.[session] };
   if ("label" in patch) {
     if (patch.label) merged.label = patch.label;
     else delete merged.label;
@@ -115,8 +120,12 @@ export function withPaneMeta(layout: PaneLayout, session: string, patch: PaneMet
     if (patch.color !== undefined) merged.color = patch.color;
     else delete merged.color;
   }
+  if ("muted" in patch) {
+    if (patch.muted) merged.muted = true;
+    else delete merged.muted;
+  }
   const meta = { ...layout.meta };
-  if (merged.label === undefined && merged.color === undefined) {
+  if (Object.keys(merged).length === 0) {
     delete meta[session];
   } else {
     meta[session] = merged;
@@ -182,7 +191,8 @@ export function parseLayout(raw: string | null): PaneLayout | null {
           m !== null &&
           typeof m === "object" &&
           ((m as PaneMeta).label === undefined || typeof (m as PaneMeta).label === "string") &&
-          ((m as PaneMeta).color === undefined || typeof (m as PaneMeta).color === "number"),
+          ((m as PaneMeta).color === undefined || typeof (m as PaneMeta).color === "number") &&
+          ((m as PaneMeta).muted === undefined || typeof (m as PaneMeta).muted === "boolean"),
       );
     if (!metaSound) delete p.meta;
     const stampsSound =

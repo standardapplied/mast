@@ -312,6 +312,16 @@ describe("pane identity (rename + color)", () => {
     expect(l.meta?.["mast-a"]).toBeUndefined();
   });
 
+  test("a mute is arrangement beside the identity; unmuting is the default and leaves no trace", () => {
+    let l = withPaneMeta(layout, "mast-a", { muted: true });
+    expect(l.meta?.["mast-a"]).toEqual({ muted: true });
+    l = withPaneMeta(l, "mast-a", { color: 2 });
+    expect(l.meta?.["mast-a"]).toEqual({ muted: true, color: 2 });
+    l = withPaneMeta(l, "mast-a", { muted: false });
+    expect(l.meta?.["mast-a"]).toEqual({ color: 2 });
+    expect(withPaneMeta(layout, "mast-a", { muted: false }).meta).toBeUndefined();
+  });
+
   test("opening or splitting a shell never touches existing identities", () => {
     const named = withPaneMeta(layout, "mast-a", { label: "agent", color: 3 });
     expect(newGroup(named, "mast-a.3").meta).toEqual(named.meta);
@@ -337,9 +347,11 @@ describe("pane identity (rename + color)", () => {
   });
 
   test("identity round-trips through parseLayout; malformed meta heals to none", () => {
-    const named = withPaneMeta(layout, "mast-a", { label: "agent", color: 5 });
+    const named = withPaneMeta(layout, "mast-a", { label: "agent", color: 5, muted: true });
     expect(parseLayout(JSON.stringify(named))).toEqual(named);
-    const garbled = JSON.stringify({ ...layout, meta: { "mast-a": { label: 7, color: "red" } } });
-    expect(parseLayout(garbled)?.meta).toBeUndefined();
+    for (const meta of [{ label: 7, color: "red" }, { muted: "yes" }]) {
+      const garbled = JSON.stringify({ ...layout, meta: { "mast-a": meta } });
+      expect(parseLayout(garbled)?.meta).toBeUndefined();
+    }
   });
 });

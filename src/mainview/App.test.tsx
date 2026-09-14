@@ -5,6 +5,7 @@ import { App } from "./App";
 import { catalogStore } from "./board/catalogStore";
 import { createDemoGateway, type DemoGateway } from "./gateway";
 import { dispatchPush } from "./push";
+import { attentionStore } from "./terminal/attention";
 import { clipboardPolicy } from "./terminal/clipboardPolicy";
 import { scrollbackBudget } from "./terminal/scrollbackBudget";
 import { sessionStore } from "./terminal/sessionStore";
@@ -784,6 +785,25 @@ describe("App cockpit", () => {
     expect(localStorage.getItem("mast.terminal.clipboard-write")).toBe("allow");
     localStorage.removeItem("mast.terminal.clipboard-write");
     clipboardPolicy.reset();
+  });
+
+  test("the user menu's bell toggle is the stored setting", async () => {
+    localStorage.setItem("mast.terminal.bell", "bounce");
+    attentionStore.connect(localStorage, async () => {});
+    await render();
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="user-menu-trigger"]')?.click();
+    });
+    const section = container.querySelector('[data-testid="terminal-bell"]');
+    const option = (label: string) =>
+      [...section!.querySelectorAll<HTMLButtonElement>(".toggle-option")].find((b) => b.textContent === label);
+    expect(option("Bounce")?.getAttribute("aria-checked"), "seeded from storage").toBe("true");
+    act(() => option("Flash")?.click());
+    expect(option("Flash")?.getAttribute("aria-checked")).toBe("true");
+    expect(attentionStore.bell()).toBe("flash");
+    expect(localStorage.getItem("mast.terminal.bell")).toBe("flash");
+    localStorage.removeItem("mast.terminal.bell");
+    act(() => attentionStore.reset());
   });
 
   test("the user menu's scrollback toggle is the stored setting", async () => {

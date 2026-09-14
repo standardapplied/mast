@@ -367,6 +367,48 @@ fn clipboard_text(bytes: Vec<u8>) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|_| "clipboard text is not UTF-8".to_string())
 }
 
+/// A bell you can hear when you are not looking: the user's own alert sound at their alert volume
+/// (`NSBeep`, honouring mute), a Dock bounce, and the Dock badge (`None` clears it). The webview
+/// decides — focus, setting, mute, coalescing — and this only acts, so it runs on the main thread
+/// where AppKit expects to be spoken to.
+#[tauri::command]
+fn attention(window: tauri::WebviewWindow, sound: bool, bounce: bool, badge: Option<i64>) -> Result<(), String> {
+    let badge = badge_count(badge)?;
+    #[cfg(target_os = "macos")]
+    {
+        if sound {
+            // SAFETY: NSBeep takes no arguments and touches no memory of ours.
+            unsafe { NSBeep() };
+        }
+        if bounce {
+            window
+                .request_user_attention(Some(tauri::UserAttentionType::Informational))
+                .map_err(|e| e.to_string())?;
+        }
+        window.set_badge_count(badge).map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (window, sound, bounce, badge);
+        Err("attention is only supported on macOS".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "AppKit", kind = "framework")]
+extern "C" {
+    fn NSBeep();
+}
+
+/// The badge as the Dock wants it: the count of unseen bells, none at zero, never negative.
+fn badge_count(badge: Option<i64>) -> Result<Option<i64>, String> {
+    match badge {
+        Some(n) if n < 0 => Err(format!("badge count {n} is negative")),
+        Some(0) | None => Ok(None),
+        Some(n) => Ok(Some(n)),
+    }
+}
+
 /// Parameters for creating a fresh host-owned session before attaching to it.
 #[derive(serde::Deserialize)]
 struct SessionCreate {
@@ -622,6 +664,7 @@ pub fn run() {
             fs_delete,
             fs_open,
             clipboard_read_text,
+            attention,
             log_error,
             session_open,
             session_write,
@@ -673,6 +716,25 @@ mod open_url_tests {
     fn a_missing_or_malformed_scheme_is_refused_without_naming_one() {
         for url in ["//evil.example", "example.com", "", "1http://x", ":nothing", "ht tp://x", "http//x"] {
             assert_eq!(admit_url(url), Err("links without a scheme are not opened".to_string()), "{url}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod attention_tests {
+    use super::*;
+
+    #[test]
+    fn the_badge_is_the_count_none_at_zero() {
+        for (badge, expected) in [(None, None), (Some(0), None), (Some(1), Some(1)), (Some(12), Some(12))] {
+            assert_eq!(badge_count(badge), Ok(expected), "{badge:?}");
+        }
+    }
+
+    #[test]
+    fn a_negative_badge_is_refused_by_value() {
+        for n in [-1, -7] {
+            assert_eq!(badge_count(Some(n)), Err(format!("badge count {n} is negative")));
         }
     }
 }
