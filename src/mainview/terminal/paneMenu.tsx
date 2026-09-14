@@ -22,6 +22,7 @@ export const PANE_COLORS = [
 export interface PaneMenuActions {
   rename(session: string): void;
   setColor(session: string, color: number | undefined): void;
+  setMuted(session: string, muted: boolean): void;
   close(sessions: string[]): void;
 }
 
@@ -57,7 +58,10 @@ export function identityItems(session: string, actions: PaneMenuActions): MenuNo
   ];
 }
 
-/** The pane's context-menu extras: identity, then Close pane (closing the last one = a fresh shell). */
+/**
+ * The pane's context-menu extras: identity, the bell mute, then Close pane (closing the last one =
+ * a fresh shell).
+ */
 export function paneMenuItems(
   layout: PaneLayout,
   session: string,
@@ -65,8 +69,14 @@ export function paneMenuItems(
   actions: PaneMenuActions,
   titles?: Readonly<Record<string, string>>,
 ): MenuNode[] {
+  const muted = layout.meta?.[session]?.muted === true;
   return [
     ...identityItems(session, actions),
+    {
+      kind: "item" as const,
+      label: muted ? "Unmute bell" : "Mute bell",
+      onSelect: () => actions.setMuted(session, !muted),
+    },
     {
       kind: "item" as const,
       label: `Close pane ${titleOf(layout, session, base, titles)}`,

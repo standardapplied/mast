@@ -4,6 +4,7 @@ import { cx } from "./cx";
 import { Person } from "./icons";
 import { ToggleButton } from "./ToggleButton";
 import { Button } from "./ui";
+import { attentionStore, type BellSetting } from "../terminal/attention";
 import { type ClipboardWrite, clipboardPolicy } from "../terminal/clipboardPolicy";
 import { SCROLLBACK_CHOICES_MIB, type ScrollbackMib, scrollbackBudget } from "../terminal/scrollbackBudget";
 import type { ThemeController, ThemeMode } from "../theme";
@@ -18,6 +19,13 @@ const THEME_OPTIONS = [
 const CLIPBOARD_OPTIONS = [
   { value: "allow", label: "Allow" },
   { value: "deny", label: "Deny" },
+];
+
+const BELL_OPTIONS = [
+  { value: "sound+bounce", label: "Sound + bounce" },
+  { value: "sound", label: "Sound" },
+  { value: "bounce", label: "Bounce" },
+  { value: "flash", label: "Flash" },
 ];
 
 const SCROLLBACK_OPTIONS = SCROLLBACK_CHOICES_MIB.map((mib) => ({ value: String(mib), label: `${mib} MB` }));
@@ -48,6 +56,7 @@ export function UserMenu({
   const [mode, setMode] = useState<ThemeMode>(theme.mode());
   const clipboardWrite = useSyncExternalStore(clipboardPolicy.subscribe, clipboardPolicy.mode);
   const scrollbackMib = useSyncExternalStore(scrollbackBudget.subscribe, scrollbackBudget.mib);
+  const bell = useSyncExternalStore(attentionStore.subscribe, attentionStore.bell);
   const menuRef = useRef<HTMLDivElement>(null);
   const upd = useUpdater(updater);
   const hasUpdate = upd.phase === "available" || upd.phase === "ready";
@@ -114,6 +123,15 @@ export function UserMenu({
               options={CLIPBOARD_OPTIONS}
               value={clipboardWrite}
               onChange={(value) => clipboardPolicy.set(value as ClipboardWrite)}
+            />
+          </div>
+
+          <div className="user-menu-section" data-testid="terminal-bell">
+            <span className="eyebrow">Shell bell when not looking</span>
+            <ToggleButton
+              options={BELL_OPTIONS}
+              value={bell}
+              onChange={(value) => attentionStore.setBell(value as BellSetting)}
             />
           </div>
 

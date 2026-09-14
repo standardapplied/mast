@@ -8,6 +8,7 @@ import {
   fakeTerminalServices,
   layOutElements,
 } from "../../../test/terminalFakes";
+import { attentionStore } from "../terminal/attention";
 import type { SessionStatus } from "../terminal/connection";
 import { clipboardPolicy } from "../terminal/clipboardPolicy";
 import { terminalFontSize } from "../terminal/fontSize";
@@ -29,6 +30,7 @@ let root: Root;
 let services: FakeTerminalServices;
 let statuses: SessionStatus[];
 let restoreLayout: () => void;
+let clock: number;
 
 beforeEach(() => {
   restoreLayout = layOutElements();
@@ -37,13 +39,16 @@ beforeEach(() => {
   root = createRoot(container);
   services = fakeTerminalServices();
   statuses = [];
+  clock = 0;
   sessionStore.connect(emptyBoxGateway(), "devbox");
+  attentionStore.connect(localStorage, (r) => services.link.attention(r), () => clock);
 });
 
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
   sessionStore.reset();
+  attentionStore.reset();
   clipboardPolicy.reset();
   terminalFontSize.reset();
   restoreLayout();
@@ -81,7 +86,7 @@ type Over = {
   session?: string;
   visible?: boolean;
   onWriter?: (fde: string) => void;
-  onBell?: () => void;
+  muted?: boolean;
 };
 
 function render(over: Over = {}) {
@@ -97,7 +102,7 @@ function render(over: Over = {}) {
         visible={over.visible}
         onStatus={(s) => statuses.push(s)}
         onWriter={over.onWriter}
-        onBell={over.onBell}
+        muted={over.muted}
       />
     </TerminalServicesProvider>,
   );
@@ -865,14 +870,65 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(notice()).toBe("shell clipboard write refused");
   });
 
-  test("a bell flashes the pane and reaches the host", async () => {
-    let bells = 0;
-    const { attachment } = await mount({ onBell: () => bells++ });
-    await act(async () => {
-      attachment.lanes.onData(bytes("ding\x07"));
+  describe("the bell", () => {
+    const flash = () => container.querySelector('[data-testid="term-bell"]');
+    const ding = (a: FakeAttachment, times = 1) =>
+      act(async () => {
+        for (let i = 0; i < times; i++) a.lanes.onData(bytes("ding\x07"));
+      });
+    const windowEvent = (type: "blur" | "focus") => act(async () => void window.dispatchEvent(new Event(type)));
+
+    test("in the focused pane of a focused window it flashes and nothing more", async () => {
+      const { attachment } = await mount();
+      expect(document.activeElement).toBe(host());
+      await ding(attachment);
+      expect(flash()).not.toBeNull();
+      expect(services.link.attentions).toEqual([]);
+      expect(attentionStore.unseen().size).toBe(0);
     });
-    expect(container.querySelector('[data-testid="term-bell"]')).not.toBeNull();
-    expect(bells).toBe(1);
+
+    test("in an unfocused pane it rings once with sound, bounce and the badge; a loop rings once per 2 s", async () => {
+      const { attachment } = await mount();
+      act(() => host().blur());
+      await ding(attachment, 5);
+      expect(flash()).not.toBeNull();
+      expect(services.link.attentions).toEqual([{ sound: true, bounce: true, badge: 1 }]);
+      expect([...attentionStore.unseen()]).toEqual(["mast-app"]);
+      clock = 2000;
+      await ding(attachment);
+      expect(services.link.attentions).toHaveLength(2);
+    });
+
+    test("inside a replay it rings nothing", async () => {
+      const { attachment } = await mount();
+      act(() => host().blur());
+      await act(async () => {
+        attachment.lanes.onData(frame(1, 1));
+        attachment.lanes.onData(bytes("old\x07"));
+        attachment.lanes.onData(frame(2));
+      });
+      expect(services.link.attentions).toEqual([]);
+      expect(flash()).toBeNull();
+    });
+
+    test("a muted pane flashes only", async () => {
+      const { attachment } = await mount({ muted: true });
+      act(() => host().blur());
+      await ding(attachment);
+      expect(flash()).not.toBeNull();
+      expect(services.link.attentions).toEqual([]);
+      expect(attentionStore.unseen().size).toBe(0);
+    });
+
+    test("with the window behind another it rings from the focused pane; focus back clears the badge", async () => {
+      const { attachment } = await mount();
+      await windowEvent("blur");
+      await ding(attachment);
+      expect(services.link.attentions).toEqual([{ sound: true, bounce: true, badge: 1 }]);
+      await windowEvent("focus");
+      expect(services.link.attentions.at(-1)).toEqual({ sound: false, bounce: false, badge: null });
+      expect(attentionStore.unseen().size).toBe(0);
+    });
   });
 
   test("key releases reach the pty once the program asks for them; ⌘ chords the pane owns never do", async () => {

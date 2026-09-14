@@ -5,6 +5,7 @@ import type { Gateway } from "../src/mainview/gateway";
 import type { RendererOptions, SurfaceRenderer } from "../src/mainview/terminal/renderer";
 import type { RendererColors, Timers } from "../src/mainview/terminal/terminalController";
 import type {
+  AttentionRequest,
   SessionFrames,
   SessionLink,
   SessionOpen,
@@ -56,6 +57,7 @@ export class FakeLink implements SessionLink {
   readonly takes: string[] = [];
   clipboard = "";
   readonly openedUrls: string[] = [];
+  readonly attentions: AttentionRequest[] = [];
   /** Set to make every openUrl reject with this message (the Rust scheme refusal). */
   openRefusal: string | null = null;
   private waiters: Array<(attachment: FakeAttachment) => void> = [];
@@ -131,6 +133,10 @@ export class FakeLink implements SessionLink {
   async openUrl(url: string): Promise<void> {
     if (this.openRefusal) throw new Error(this.openRefusal);
     this.openedUrls.push(url);
+  }
+
+  async attention(request: AttentionRequest): Promise<void> {
+    this.attentions.push(request);
   }
 }
 

@@ -10,6 +10,7 @@ import {
 } from "../../../test/terminalFakes";
 import { ToastProvider } from "../components/Toast";
 import type { SessionStatus } from "../terminal/connection";
+import { attentionStore } from "../terminal/attention";
 import { sessionStore } from "../terminal/sessionStore";
 import { TerminalServicesProvider } from "../terminal/terminalServices";
 import type { TerminalHandle } from "./SessionTerminalPane";
@@ -36,12 +37,14 @@ beforeEach(() => {
   services = fakeTerminalServices();
   reports = [];
   sessionStore.connect(emptyBoxGateway(), "devbox");
+  attentionStore.connect(localStorage, (r) => services.link.attention(r));
 });
 
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
   sessionStore.reset();
+  attentionStore.reset();
   restoreLayout();
 });
 
@@ -138,6 +141,25 @@ describe("TerminalPanes over the channel", () => {
       (chips[0] as HTMLButtonElement).click();
     });
     expect(container.querySelector('[data-testid="term-bell-dot"]')).toBeNull();
+  });
+
+  test("a bell's dot and badge are the store's; leaving the surface forgets them", async () => {
+    const { attachment: first } = await mount();
+    const second = services.link.nextOpen();
+    await act(async () => {
+      (container.querySelector('[aria-label="New shell — ⌘T"]') as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      await second;
+    });
+    await settle();
+    await act(async () => first.lanes.onData(new Uint8Array([0, 0x07])));
+    expect([...attentionStore.unseen()]).toEqual(["mast-app"]);
+    expect(services.link.attentions.at(-1)).toEqual({ sound: true, bounce: true, badge: 1 });
+    act(() => root.unmount());
+    root = createRoot(container);
+    expect(attentionStore.unseen().size).toBe(0);
+    expect(services.link.attentions.at(-1)).toEqual({ sound: false, bounce: false, badge: null });
   });
 
   test("renderer loss in a pane is invisible to the tab: it rebuilds without a status change", async () => {

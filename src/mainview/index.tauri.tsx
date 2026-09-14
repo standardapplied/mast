@@ -11,6 +11,7 @@ import type { RosterSources } from "./tauri/projectRoster";
 import { tauriDeckServices } from "./tauri/RoomWorkbench";
 import { tauriTerminalServices } from "./tauri/terminalServices";
 import { TerminalWorkspace } from "./tauri/TerminalWorkspace";
+import { attentionStore } from "./terminal/attention";
 import { TerminalServicesProvider } from "./terminal/terminalServices";
 import { createTauriUpdater } from "./tauri/updater";
 import { browserThemeDeps, createThemeController } from "./theme";
@@ -51,6 +52,9 @@ syncFullscreen();
 void getCurrentWindow().onResized(syncFullscreen);
 
 const gateway = createTauriGateway();
+// The bell's transport is the Rust `attention` command; the store is connected where the
+// transport is wired, beside the pane services it belongs to.
+attentionStore.connect(window.localStorage, tauriTerminalServices.link.attention);
 const rosterSources: RosterSources = {
   listProjects: () => gateway.listProjects(),
   listTargets: () => invoke<string[]>("list_targets"),

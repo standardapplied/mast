@@ -15,6 +15,7 @@ function recorder() {
   const actions: PaneMenuActions = {
     rename: (s) => calls.push(["rename", s]),
     setColor: (s, c) => calls.push(["setColor", s, c]),
+    setMuted: (s, m) => calls.push(["setMuted", s, m]),
     close: (ss) => calls.push(["close", ss]),
   };
   return { calls, actions };
@@ -29,12 +30,29 @@ describe("paneMenuItems", () => {
     expect(labelsOf(paneMenuItems(layout, "mast-a", base, actions))).toEqual([
       "Rename shell…",
       "Color",
+      "Mute bell",
       "Close pane agent",
     ]);
     expect(labelsOf(paneMenuItems(layout, "mast-a.2", base, actions, { "mast-a.2": "mast" }))).toEqual([
       "Rename shell…",
       "Color",
+      "Mute bell",
       "Close pane mast",
+    ]);
+  });
+
+  test("the bell item reads the pane's mute and toggles it", () => {
+    const { calls, actions } = recorder();
+    const item = (l: PaneLayout, session: string) =>
+      paneMenuItems(l, session, base, actions).find((i) => i.kind === "item" && /bell/.test(String(i.label)));
+    (item(layout, "mast-a") as { onSelect: () => void }).onSelect();
+    const muted: PaneLayout = { ...layout, meta: { "mast-a": { muted: true } } };
+    const unmute = item(muted, "mast-a")!;
+    expect(unmute.kind === "item" && unmute.label).toBe("Unmute bell");
+    (unmute as { onSelect: () => void }).onSelect();
+    expect(calls).toEqual([
+      ["setMuted", "mast-a", true],
+      ["setMuted", "mast-a", false],
     ]);
   });
 
