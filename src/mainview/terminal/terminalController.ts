@@ -14,6 +14,7 @@
  */
 
 import { keyEventFor, type KeyStroke, MODS } from "./input";
+import { type LatencyStats, LatencyWindow } from "./latency";
 import {
   type CellPos,
   type ColorScheme,
@@ -91,6 +92,13 @@ export const SYNCHRONIZED_OUTPUT_CAP_MS = 1000;
  */
 export const SEARCH_TICK_BUDGET_MS = 4;
 
+/**
+ * How long a sent key waits for its echo before it stops counting. A program that swallows a key
+ * (a TUI in a non-echoing state) never answers it; the next unrelated output must not be read as
+ * a very slow echo of that key forever.
+ */
+export const KEY_ECHO_TIMEOUT_MS = 2000;
+
 export class TerminalController {
   private cols: number;
   private rows: number;
@@ -121,6 +129,11 @@ export class TerminalController {
   private readonly now: () => number;
   private readonly timers: Timers;
   private pendingResize: unknown = null;
+  /** Keydown times of sent presses still waiting for their echo, oldest first. */
+  private sentKeys: number[] = [];
+  /** Output chunks that arrived since the last dirty read while keys were waiting. */
+  private echoes = 0;
+  private readonly latency = new LatencyWindow();
 
   /** Side-channel intents found in the stream; the host wires these to the platform. */
   readonly hooks: {
@@ -134,6 +147,8 @@ export class TerminalController {
     onScrollbar?: (bar: Scrollbar) => void;
     /** The search's counts or status changed; null once the search is cleared. */
     onSearch?: (state: SearchState | null) => void;
+    /** A typed key's echo painted: the rolling keystroke latency over the last hundred keys. */
+    onLatency?: (stats: LatencyStats) => void;
   } = {};
 
   constructor(
@@ -172,10 +187,16 @@ export class TerminalController {
     if (bytes.length > 0) {
       this.core.write(bytes);
       this.dirty = true;
+      if (this.sentKeys.length > 0 && !this.replaying) this.echoes++;
       if (!this.core.viewportActive()) {
         this.unseenOutput = true;
       }
     }
+  }
+
+  /** The keystroke latency over the last hundred echoed keys; null before the first. */
+  keystrokeLatency(): LatencyStats | null {
+    return this.latency.stats();
   }
 
   /**
@@ -200,6 +221,8 @@ export class TerminalController {
     this.core.reset();
     this.replaying = true;
     this.dirty = true;
+    this.sentKeys = [];
+    this.echoes = 0;
   }
 
   /** The replay bracket closed: bytes are live again, side effects re-arm. */
@@ -238,6 +261,7 @@ export class TerminalController {
           this.hooks.onHover?.(this.hoverRun);
         }
       }
+      this.settleEchoes(snapshot.dirty !== "none");
       this.core.clean();
       this.rawCursor = this.core.cursor();
       this.dirty = false;
@@ -349,6 +373,27 @@ export class TerminalController {
     this.hooks.onScrollbar?.(next);
   }
 
+  /**
+   * Times the keys whose echo this frame paints. Output cannot be attributed to a key by content
+   * — a shell echoes one byte, a TUI redraws a screen — so each chunk that arrived while keys
+   * were waiting is taken as the echo of the oldest of them, and only a chunk that changed pixels
+   * counts. Keys older than {@link KEY_ECHO_TIMEOUT_MS} were swallowed and drop uncounted.
+   */
+  private settleEchoes(painted: boolean): void {
+    const now = this.now();
+    while (this.sentKeys.length > 0 && now - this.sentKeys[0]! > KEY_ECHO_TIMEOUT_MS) {
+      this.sentKeys.shift();
+    }
+    const settled = painted ? Math.min(this.echoes, this.sentKeys.length) : 0;
+    this.echoes = 0;
+    if (settled === 0) return;
+    let stats: LatencyStats | null = null;
+    for (const at of this.sentKeys.splice(0, settled)) {
+      stats = this.latency.push(now - at);
+    }
+    this.hooks.onLatency?.(stats!);
+  }
+
   private holdForSynchronizedOutput(): boolean {
     if (!this.core.synchronizedOutput()) {
       this.syncSince = null;
@@ -368,9 +413,11 @@ export class TerminalController {
    * for every key (kitty report-all), which is how a TUI hears ⌘ chords at all. Releases reach
    * the pty only when the program asked for release events; legacy programs never hear them. The
    * ⌘ gate is for presses: the pane reports a release only for a press the program heard, and a
-   * ⌘ that went down during the hold is a modifier on that release, not a chord.
+   * ⌘ that went down during the hold is a modifier on that release, not a chord. {@code at} is
+   * the keydown's own timestamp, on the {@link ControllerOptions#now} clock, so the latency the
+   * pane shows starts at the key and not at the handler.
    */
-  key(stroke: KeyStroke): boolean {
+  key(stroke: KeyStroke, at = this.now()): boolean {
     const flags = this.core.kittyKeyboardFlags();
     if (stroke.release) {
       if ((flags & KITTY_KEY.REPORT_EVENTS) === 0) return false;
@@ -382,6 +429,7 @@ export class TerminalController {
       return false;
     }
     this.sink.write(bytes);
+    if (!stroke.release) this.sentKeys.push(at);
     return true;
   }
 

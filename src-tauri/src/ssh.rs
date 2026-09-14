@@ -563,7 +563,10 @@ impl Backend {
     ) -> Result<Handle<Client>, Error> {
         let mut handle = match carried {
             Some(stream) => client::connect_stream(ssh_cfg, stream, Client).await?,
-            None => client::connect(ssh_cfg, (host.hostname.as_str(), host.port), Client).await?,
+            None => {
+                let socket = dial_tcp(host.hostname.as_str(), host.port).await?;
+                client::connect_stream(ssh_cfg, socket, Client).await?
+            }
         };
         let user = host
             .user
@@ -2432,6 +2435,16 @@ fn default_port(scheme: &str) -> u16 {
     }
 }
 
+/// Opens the outer TCP socket of a session with Nagle off. russh's own `connect` leaves
+/// `TCP_NODELAY` unset, so a keystroke typed while the previous one is unacknowledged waits a
+/// full round trip before it leaves the machine; OpenSSH sets nodelay on both ends and sshd
+/// already does its half. Jump hops ride a channel stream over this socket and need nothing.
+async fn dial_tcp(hostname: &str, port: u16) -> std::io::Result<tokio::net::TcpStream> {
+    let socket = tokio::net::TcpStream::connect((hostname, port)).await?;
+    socket.set_nodelay(true)?;
+    Ok(socket)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2450,6 +2463,14 @@ mod tests {
             pty_failure(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad frame")).to_string(),
             "pty session: bad frame"
         );
+    }
+
+    #[tokio::test]
+    async fn the_first_hop_is_dialed_with_nagle_off() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let socket = dial_tcp("127.0.0.1", port).await.unwrap();
+        assert!(socket.nodelay().unwrap(), "keystrokes must leave without waiting for an ACK");
     }
 
     #[test]

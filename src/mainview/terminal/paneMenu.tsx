@@ -1,4 +1,5 @@
 import type { MenuNode } from "../components/ContextMenu";
+import { latencyChip } from "./latency";
 import { type PaneGroup, type PaneLayout, titleOf } from "./paneLayout";
 
 /**
@@ -76,6 +77,11 @@ export function paneMenuItems(
       kind: "item" as const,
       label: muted ? "Unmute bell" : "Mute bell",
       onSelect: () => actions.setMuted(session, !muted),
+    },
+    {
+      kind: "item" as const,
+      label: latencyChip.shown() ? "Hide typing latency" : "Show typing latency",
+      onSelect: () => latencyChip.set(!latencyChip.shown()),
     },
     {
       kind: "item" as const,
