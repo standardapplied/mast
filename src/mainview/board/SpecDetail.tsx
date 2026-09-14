@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type {
+  FdeListResponse,
   FdeView,
   RunView,
   SpecRevisionView,
   SpecStatus,
   SpecUpdateRequest,
 } from "../../shared/sail-models";
-import type { SailWireError } from "../../shared/types";
+import type { SailResult, SailWireError } from "../../shared/types";
 import { Dialog } from "../components/Dialog";
 import { DetailsDrawer } from "../components/DetailsDrawer";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
@@ -69,6 +70,22 @@ function assigneeOptions(fdes: FdeView[], current: string | undefined): SelectOp
     options.unshift({ value: current, label: current, description: "not in the FDE roster" });
   }
   return [{ value: "", label: "Unassigned" }, ...options];
+}
+
+/**
+ * The roster arrives asynchronously, so the assignee field is read-only until
+ * it lands. A failed or empty roster is an error the editor sees and can
+ * retry — never a silent downgrade to free text.
+ */
+type Roster =
+  | { state: "loading" }
+  | { state: "loaded"; fdes: FdeView[] }
+  | { state: "failed"; message: string };
+
+function rosterFrom(result: SailResult<FdeListResponse>): Roster {
+  if (!result.ok) return { state: "failed", message: result.error.message };
+  if (result.value.fdes.length === 0) return { state: "failed", message: "the roster is empty" };
+  return { state: "loaded", fdes: result.value.fdes };
 }
 
 const EDITOR_PANES = [
@@ -141,9 +158,7 @@ export function SpecDetail({
     canWrite: false,
     known: false,
   });
-  // The FDE roster backs the assignee select; null (endpoint missing, older
-  // server, error) falls back to the free-form input so editing never blocks.
-  const [fdes, setFdes] = useState<FdeView[] | null>(null);
+  const [roster, setRoster] = useState<Roster>({ state: "loading" });
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -159,10 +174,13 @@ export function SpecDetail({
           : { canDispatch: true, canWrite: true, known: false },
       );
     });
-    void gateway.listFdes().then((r) => {
-      if (r.ok && Array.isArray(r.value.fdes) && r.value.fdes.length > 0) setFdes(r.value.fdes);
-    });
   }, [gateway]);
+
+  const loadRoster = useCallback(() => {
+    setRoster({ state: "loading" });
+    void gateway.listFdes().then((r) => setRoster(rosterFrom(r)));
+  }, [gateway]);
+  useEffect(loadRoster, [loadRoster]);
 
   useEffect(() => connectCatalog(gateway), [gateway]);
   // Subscribed for re-render: the catalog row and dependency graph are read
@@ -523,20 +541,28 @@ export function SpecDetail({
                 <div className="prop prop-assignee">
                   <span className="prop-label">Assignee</span>
                   {editing ? (
-                    fdes ? (
+                    <>
                       <Select
                         className="prop-status-select"
                         value={draft.assignee ?? spec.assignee ?? ""}
-                        options={assigneeOptions(fdes, spec.assignee)}
+                        options={assigneeOptions(
+                          roster.state === "loaded" ? roster.fdes : [],
+                          spec.assignee,
+                        )}
+                        disabled={roster.state !== "loaded"}
+                        error={
+                          roster.state === "failed"
+                            ? `Couldn’t load the FDE roster — ${roster.message}`
+                            : undefined
+                        }
                         onChange={(assignee) => setDraft((d) => ({ ...d, assignee }))}
                       />
-                    ) : (
-                      <Input
-                        className="prop-input"
-                        defaultValue={spec.assignee ?? ""}
-                        onChange={(e) => setDraft((d) => ({ ...d, assignee: e.target.value }))}
-                      />
-                    )
+                      {roster.state === "failed" && (
+                        <Button variant="ghost" onClick={loadRoster}>
+                          Retry
+                        </Button>
+                      )}
+                    </>
                   ) : (
                     <span className="prop-value">{spec.assignee || "—"}</span>
                   )}

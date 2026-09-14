@@ -36,10 +36,20 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
+const rosterLoaded: Gateway["listFdes"] = async () => ({
+  ok: true,
+  value: {
+    fdes: [
+      { handle: "sumesh", display_name: "Sumesh P", role: "member" },
+      { handle: "uday", display_name: "Uday K", role: "admin" },
+    ],
+  },
+});
+
 function makeGateway(
   status: GlobalSpecView["status"] = "pending",
   assignee?: string,
-  opts: { noFdeRoster?: boolean; capabilities?: string[] } = {},
+  opts: { listFdes?: Gateway["listFdes"]; capabilities?: string[] } = {},
 ) {
   const main = spec({ id: "s1", depends_on: ["dep-a"], status, assignee });
   const dep = spec({ id: "dep-a", status: "done" });
@@ -66,21 +76,7 @@ function makeGateway(
         capabilities: opts.capabilities ?? ["read", "write", "admin"],
       },
     }),
-    listFdes: async () =>
-      opts.noFdeRoster
-        ? {
-            ok: false as const,
-            error: { status: 404, code: "not_found", message: "no such endpoint" },
-          }
-        : {
-            ok: true as const,
-            value: {
-              fdes: [
-                { handle: "sumesh", display_name: "Sumesh P", role: "member" },
-                { handle: "uday", display_name: "Uday K", role: "admin" },
-              ],
-            },
-          },
+    listFdes: opts.listFdes ?? rosterLoaded,
     updateSpec: async (_id: string, request: unknown) => {
       updates.push(request);
       return { ok: true as const, value: { spec: main }, etag: '"e2"' };
@@ -411,6 +407,10 @@ describe("SpecDetail assignee editing", () => {
     [...container.querySelectorAll("button")].find((b) => b.textContent === label)!;
   const assigneeTrigger = () =>
     container.querySelector<HTMLButtonElement>(".prop-assignee .select-trigger");
+  const rosterRetry = () =>
+    [...container.querySelectorAll<HTMLButtonElement>(".prop-assignee button")].find(
+      (b) => b.textContent === "Retry",
+    );
 
   const startEditing = async () => {
     await openActions();
@@ -462,15 +462,63 @@ describe("SpecDetail assignee editing", () => {
     expect(fake.updates).toEqual([{ assignee: "" }]);
   });
 
-  test("no roster endpoint: assignee falls back to the free-form input", async () => {
-    const fake = makeGateway("pending", "uday", { noFdeRoster: true });
+  test("the assignee is read-only until the roster lands, then offers the roster", async () => {
+    const roster = deferred<Awaited<ReturnType<Gateway["listFdes"]>>>();
+    const fake = makeGateway("pending", "uday", { listFdes: () => roster.promise });
     await mount(fake.gateway);
     await startEditing();
 
-    expect(assigneeTrigger()).toBeNull();
-    const input = container.querySelector<HTMLInputElement>(".prop-assignee input");
-    expect(input).not.toBeNull();
-    expect(input!.value).toBe("uday");
+    expect(assigneeTrigger()?.disabled).toBe(true);
+    expect(assigneeTrigger()?.textContent).toContain("uday");
+    expect(container.querySelector(".prop-assignee input")).toBeNull();
+
+    await act(async () => roster.resolve(await rosterLoaded()));
+    await settle();
+    expect(assigneeTrigger()?.disabled).toBe(false);
+    act(() => assigneeTrigger()!.click());
+    await settle();
+    expect(document.querySelector('[data-testid="option-sumesh"]')).not.toBeNull();
+  });
+
+  test("a roster failure shows the error, keeps the field read-only, and retries", async () => {
+    let attempts = 0;
+    const fake = makeGateway("pending", "uday", {
+      listFdes: async () =>
+        ++attempts === 1
+          ? {
+              ok: false,
+              error: { status: 502, code: "bad_gateway", message: "upstream down" },
+            }
+          : rosterLoaded(),
+    });
+    await mount(fake.gateway);
+    await startEditing();
+
+    expect(assigneeTrigger()?.disabled).toBe(true);
+    expect(container.querySelector(".prop-assignee input")).toBeNull();
+    expect(container.querySelector(".prop-assignee .field-error")?.textContent).toBe(
+      "Couldn’t load the FDE roster — upstream down",
+    );
+
+    act(() => rosterRetry()!.click());
+    await settle();
+    expect(attempts).toBe(2);
+    expect(container.querySelector(".prop-assignee .field-error")).toBeNull();
+    expect(rosterRetry()).toBeUndefined();
+    expect(assigneeTrigger()?.disabled).toBe(false);
+  });
+
+  test("an empty roster is a failure, not a blank select", async () => {
+    const fake = makeGateway("pending", "uday", {
+      listFdes: async () => ({ ok: true, value: { fdes: [] } }),
+    });
+    await mount(fake.gateway);
+    await startEditing();
+
+    expect(assigneeTrigger()?.disabled).toBe(true);
+    expect(container.querySelector(".prop-assignee .field-error")?.textContent).toContain(
+      "the roster is empty",
+    );
   });
 });
 
