@@ -943,7 +943,10 @@ describe("keystroke latency", () => {
       }
     };
     const type = (key: string) => h.controller.key({ key, code: `Key${key.toUpperCase()}` });
-    return { ...h, stats, run, type, clock: () => clock };
+    const tick = (ms: number) => {
+      clock += ms;
+    };
+    return { ...h, stats, run, type, tick, clock: () => clock };
   }
 
   test("a link that echoes N ms after each write reads as a p50 of N within one frame", async () => {
@@ -1020,6 +1023,37 @@ describe("keystroke latency", () => {
     controller.feed(enc("a"));
     run(FRAME_MS);
     expect(controller.keystrokeLatency()!.count).toBe(1);
+  });
+
+  test("output that arrived before a key was pressed is never that key's echo", async () => {
+    const { run, type, controller } = await echoing(-1);
+    type("a");
+    run(FRAME_MS);
+    controller.feed(enc("a"));
+    controller.feed(enc("$ "));
+    type("b");
+    run(FRAME_MS);
+    expect(controller.keystrokeLatency()!.count, "only a is echoed; b's echo has not come").toBe(1);
+    run(FRAME_MS * 4);
+    expect(controller.keystrokeLatency()!.count).toBe(1);
+    controller.feed(enc("b"));
+    run(FRAME_MS);
+    expect(controller.keystrokeLatency()!.count).toBe(2);
+  });
+
+  test("the clock stops after the frame draws, so the draw is part of the number", async () => {
+    const DRAW_MS = 5;
+    const h = await echoing(-1);
+    const draw = h.renderer.draw.bind(h.renderer);
+    h.renderer.draw = () => {
+      h.tick(DRAW_MS);
+      draw();
+    };
+    h.type("a");
+    h.tick(160);
+    h.controller.feed(enc("a"));
+    h.controller.frame();
+    expect(h.controller.keystrokeLatency()!.p50).toBe(160 + DRAW_MS);
   });
 
   test("a replay does not echo the keys typed before it", async () => {

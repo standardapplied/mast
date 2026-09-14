@@ -129,10 +129,14 @@ export class TerminalController {
   private readonly now: () => number;
   private readonly timers: Timers;
   private pendingResize: unknown = null;
-  /** Keydown times of sent presses still waiting for their echo, oldest first. */
-  private sentKeys: number[] = [];
-  /** Output chunks that arrived since the last dirty read while keys were waiting. */
-  private echoes = 0;
+  /** Sent presses still waiting for their echo, oldest first: keydown time and arrival order. */
+  private sentKeys: { at: number; order: number }[] = [];
+  /** Arrival order of output chunks that came while keys were waiting, since the last paint. */
+  private echoes: number[] = [];
+  /** One sequence over keys and chunks: an echo can only follow the key it answers. */
+  private order = 0;
+  /** The frame in progress painted something; the echoes settle once it has drawn. */
+  private painted = false;
   private readonly latency = new LatencyWindow();
 
   /** Side-channel intents found in the stream; the host wires these to the platform. */
@@ -187,7 +191,7 @@ export class TerminalController {
     if (bytes.length > 0) {
       this.core.write(bytes);
       this.dirty = true;
-      if (this.sentKeys.length > 0 && !this.replaying) this.echoes++;
+      if (!this.replaying && this.echoes.length < this.sentKeys.length) this.echoes.push(++this.order);
       if (!this.core.viewportActive()) {
         this.unseenOutput = true;
       }
@@ -222,7 +226,7 @@ export class TerminalController {
     this.replaying = true;
     this.dirty = true;
     this.sentKeys = [];
-    this.echoes = 0;
+    this.echoes = [];
   }
 
   /** The replay bracket closed: bytes are live again, side effects re-arm. */
@@ -261,7 +265,8 @@ export class TerminalController {
           this.hooks.onHover?.(this.hoverRun);
         }
       }
-      this.settleEchoes(snapshot.dirty !== "none");
+      this.painted = snapshot.dirty !== "none";
+      if (!this.painted) this.echoes = [];
       this.core.clean();
       this.rawCursor = this.core.cursor();
       this.dirty = false;
@@ -277,6 +282,10 @@ export class TerminalController {
     this.redraw = false;
     this.renderer.setCursor(next);
     this.renderer.draw();
+    if (this.painted) {
+      this.painted = false;
+      this.settleEchoes();
+    }
   }
 
   /**
@@ -374,24 +383,28 @@ export class TerminalController {
   }
 
   /**
-   * Times the keys whose echo this frame paints. Output cannot be attributed to a key by content
+   * Times the keys whose echo the frame just drew. Output cannot be attributed to a key by content
    * — a shell echoes one byte, a TUI redraws a screen — so each chunk that arrived while keys
-   * were waiting is taken as the echo of the oldest of them, and only a chunk that changed pixels
-   * counts. Keys older than {@link KEY_ECHO_TIMEOUT_MS} were swallowed and drop uncounted.
+   * were waiting is taken as the echo of the oldest key pressed before it; a chunk that predates
+   * a key can never be that key's echo. Only chunks that changed pixels reach here, and the clock
+   * is read after the draw, so the number is keydown to pixels. Keys older than
+   * {@link KEY_ECHO_TIMEOUT_MS} were swallowed and drop uncounted.
    */
-  private settleEchoes(painted: boolean): void {
+  private settleEchoes(): void {
     const now = this.now();
-    while (this.sentKeys.length > 0 && now - this.sentKeys[0]! > KEY_ECHO_TIMEOUT_MS) {
+    while (this.sentKeys.length > 0 && now - this.sentKeys[0]!.at > KEY_ECHO_TIMEOUT_MS) {
       this.sentKeys.shift();
     }
-    const settled = painted ? Math.min(this.echoes, this.sentKeys.length) : 0;
-    this.echoes = 0;
-    if (settled === 0) return;
     let stats: LatencyStats | null = null;
-    for (const at of this.sentKeys.splice(0, settled)) {
-      stats = this.latency.push(now - at);
+    for (const arrived of this.echoes) {
+      const key = this.sentKeys[0];
+      if (key === undefined) break;
+      if (arrived < key.order) continue;
+      this.sentKeys.shift();
+      stats = this.latency.push(now - key.at);
     }
-    this.hooks.onLatency?.(stats!);
+    this.echoes = [];
+    if (stats !== null) this.hooks.onLatency?.(stats);
   }
 
   private holdForSynchronizedOutput(): boolean {
@@ -429,7 +442,7 @@ export class TerminalController {
       return false;
     }
     this.sink.write(bytes);
-    if (!stroke.release) this.sentKeys.push(at);
+    if (!stroke.release) this.sentKeys.push({ at, order: ++this.order });
     return true;
   }
 
