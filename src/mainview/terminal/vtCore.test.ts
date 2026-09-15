@@ -259,6 +259,21 @@ describe("VtCore", () => {
       expect(core.selectionText()).toBe("alpha beta-gamma delta");
     });
 
+    test("a plain click drops the selection a double-click made", async () => {
+      const core = await sized(30, 3);
+      core.write(bytes("alpha beta-gamma delta"));
+      core.selectionPress({ x: 7, y: 0 }, pressPx(7, 0), 1000);
+      core.selectionRelease({ x: 7, y: 0 });
+      core.selectionPress({ x: 7, y: 0 }, pressPx(7, 0), 1200);
+      core.selectionRelease({ x: 7, y: 0 });
+      expect(core.selectionText()).toBe("beta-gamma");
+      core.selectionPress({ x: 1, y: 0 }, pressPx(1, 0), 5000);
+      expect(core.hasSelection(), "the press alone deselects, before any release").toBe(false);
+      core.selectionRelease({ x: 1, y: 0 });
+      expect(core.hasSelection()).toBe(false);
+      expect(selectedRow(core, 0)).toBe("");
+    });
+
     test("a click long after the last one starts over", async () => {
       const core = await sized(30, 3);
       core.write(bytes("alpha beta"));
