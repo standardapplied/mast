@@ -124,8 +124,8 @@ describe("packFrame", () => {
       pack(cells, NO_CURSOR, hover)
         .instances.filter((i) => i.what?.startsWith("underline"))
         .map((i) => `${i.x}:${i.what}`);
-    expect(underlines({ uri: "u", y: 0, start: 1, end: 3 })).toEqual(["1:underline_curly", "2:underline"]);
-    expect(underlines({ uri: "u", y: 1, start: 0, end: 4 }), "another row's link").toEqual(["1:underline_curly"]);
+    expect(underlines({ uri: "u", spans: [{ y: 0, start: 1, end: 3 }] })).toEqual(["1:underline_curly", "2:underline"]);
+    expect(underlines({ uri: "u", spans: [{ y: 1, start: 0, end: 4 }] }), "another row's link").toEqual(["1:underline_curly"]);
     expect(underlines(null)).toEqual(["1:underline_curly"]);
   });
 

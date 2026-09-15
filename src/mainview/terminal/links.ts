@@ -32,7 +32,7 @@ export function urlRunAt(row: readonly Cell[], x: number, y: number): LinkRun | 
     const last = columnOf[match.index + uri.length - 1]!;
     const end = last + (row[last]!.width === 2 ? 2 : 1);
     if (x >= start && x < end) {
-      return { uri, y, start, end };
+      return { uri, spans: [{ y, start, end }] };
     }
   }
   return null;

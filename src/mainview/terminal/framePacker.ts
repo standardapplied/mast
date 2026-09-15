@@ -133,7 +133,7 @@ export function packFrame(
       afterWide = wide;
 
       const text = onBlockCursor ? colors.bg : selected ? colors.selectionFg : textColor(cell);
-      const hovered = hover !== null && hover.y === y && x >= hover.start && x < hover.end;
+      const hovered = hover !== null && hover.spans.some((s) => s.y === y && x >= s.start && x < s.end);
       const underline = cell.underline === "none" && hovered ? "single" : cell.underline;
       if (underline !== "none") {
         const color = onBlockCursor || selected ? text : (cell.underlineColor ?? text);
