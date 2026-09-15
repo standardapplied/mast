@@ -420,6 +420,44 @@ describe("the keyboard runs the shell", () => {
     expect(document.activeElement?.getAttribute("tabindex"), "the keyboard went back to the pane").toBe("0");
   });
 
+  test("the shell is inert under the close confirm: neither a pane nor a chip can take the keyboard", async () => {
+    await mount();
+    await press({ key: "w", code: "KeyW", metaKey: true });
+    expect(confirmTitle()).toBe("Close shell 1?");
+    const host = container.querySelector<HTMLElement>('.term-panes__body [tabindex="0"]')!;
+    act(() => host.focus());
+    expect(document.activeElement?.textContent, "the pane refused the keyboard").toBe("Cancel");
+    act(() => (chips()[0] as HTMLElement).focus());
+    expect(document.activeElement?.textContent, "the chip refused it too").toBe("Cancel");
+    await press({ key: "Enter", code: "Enter" });
+    expect(services.link.writes, "Enter never reached the shell").toHaveLength(0);
+    await press({ key: "Escape", code: "Escape" });
+    expect(confirmTitle()).toBeNull();
+    act(() => host.focus());
+    expect(document.activeElement, "dismissed, the pane takes the keyboard again").toBe(host);
+  });
+
+  test("a reconnect under an inline rename leaves the keyboard in the edit", async () => {
+    const { handle, attachment } = await mount();
+    services.link.listing = { hostBootId: "boot-1", sessions: [{ name: "mast-app", live: true }] };
+    await dblclick(0);
+    await type("agent");
+    await act(async () => attachment.lanes.onExit({ class: "transport", reason: "connection reset" }));
+    await settle();
+    const next = services.link.nextOpen();
+    act(() => handle.current!.revive!());
+    await act(async () => {
+      await next;
+    });
+    await settle();
+    expect(edit()?.value, "the draft outlives the reconnect").toBe("agent");
+    expect(document.activeElement, "the edit still holds the keyboard").toBe(edit());
+    await press({ key: "Enter", code: "Enter" });
+    expect(services.link.writes, "Enter named the pane, it did not run a command").toHaveLength(0);
+    expect(chipTitle(0)).toBe("agent");
+    expect(document.activeElement?.getAttribute("tabindex"), "the keyboard went back to the pane").toBe("0");
+  });
+
   test("a program that asked for every key still yields ⌘W to the app", async () => {
     const { attachment } = await mount();
     await act(async () => attachment.lanes.onData(bytes("\x1b[>8u")));

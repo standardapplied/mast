@@ -549,11 +549,10 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       if (closing === null) runChord(chord);
     };
 
-    /** The chip edit closed: the keyboard goes back to the pane it came from. */
+    /** The chip edit closed; the focused pane turns active again, which hands it the keyboard. */
     const endEdit = (session: string, label?: string) => {
       if (label !== undefined) setLayout((l) => l && withPaneMeta(l, session, { label }));
       setEditing(null);
-      paneRefs.current.get(focused)?.focus?.();
     };
 
     // With no pane to hold the keyboard, the empty state does, so ⌘T still opens a shell.
@@ -582,7 +581,8 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
 
     /** A pane's content: the terminal, or the ended card with the provable reason and Restart. */
     const cell = (session: string, groupActive: boolean) => {
-      const paneActive = active && groupActive && session === focused && closing === null;
+      const paneActive =
+        active && groupActive && session === focused && closing === null && editing === null;
       const deaths = sessionStore.deaths();
       const listed = room ? room.sessions : (sessionStore.sessions() ?? []);
       const plan = panePlan(session, listed, launched, deaths);
@@ -695,11 +695,14 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     };
 
     const activeGroup = layout.groups[layout.active];
+    // Under the close confirm the shell is inert: nothing in it can take the keyboard, whether by
+    // Tab, pointer, or a reconnect, so the answer always goes to the dialog.
+    const inert = closing !== null;
 
     return (
       // `terminal-pane` is the drop-target marker classifyDrop keys on (see dropTarget.ts).
       <div className="term-panes terminal-pane" onKeyDown={onKeyDown}>
-        <div className="term-panes__bar">
+        <div className="term-panes__bar" inert={inert}>
           {layout.groups.map((group, i) => {
             const unwell = group.panes.some((s) => {
               const st = statuses[s];
@@ -796,7 +799,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
             <SplitColumns size={15} />
           </IconButton>
         </div>
-        <div className="term-panes__body">
+        <div className="term-panes__body" inert={inert}>
           {empty && (
             <div className="term-panes__empty" data-testid="term-panes-empty" tabIndex={-1} ref={emptyRef}>
               <div className="room-deck-card">
