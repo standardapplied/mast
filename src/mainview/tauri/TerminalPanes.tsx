@@ -134,6 +134,8 @@ export interface TerminalPanesProps {
   readonly active: boolean;
   /** Aggregated lifecycle of every pane (the worst one wins) for the tab bar; null = no panes. */
   readonly onStatus?: (status: SessionStatus | null) => void;
+  /** The panes this host holds, reported on every layout change and emptied on unmount. */
+  readonly onPanes?: (sessions: readonly string[]) => void;
 }
 
 function storageKey(base: string): string {
@@ -141,7 +143,7 @@ function storageKey(base: string): string {
 }
 
 export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
-  function TerminalPanes({ target, room, active, onStatus }, ref) {
+  function TerminalPanes({ target, room, active, onStatus, onPanes }, ref) {
     const base = room ? roomSessionBase(room.roomId) : baseSessionFor(target);
     const [layout, setLayout] = useState<PaneLayout | null>(null);
     const [focused, setFocused] = useState<string>(base);
@@ -160,13 +162,22 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     paneNamesRef.current = layout?.groups.flatMap((g) => g.panes) ?? [];
     const paneKey = paneNamesRef.current.join("\n");
     const knownPanesRef = useRef<readonly string[]>([]);
+    const onPanesRef = useRef(onPanes);
+    onPanesRef.current = onPanes;
     useEffect(() => {
       const names = paneNamesRef.current;
       const gone = knownPanesRef.current.filter((s) => !names.includes(s));
       knownPanesRef.current = names;
       if (gone.length > 0) attentionStore.forget(gone);
+      onPanesRef.current?.(names);
     }, [paneKey]);
-    useEffect(() => () => attentionStore.forget(knownPanesRef.current), []);
+    useEffect(
+      () => () => {
+        attentionStore.forget(knownPanesRef.current);
+        onPanesRef.current?.([]);
+      },
+      [],
+    );
     /** Sessions this client opened or revived, with their picked commands. */
     const [launched, setLaunched] = useState<ReadonlyMap<string, LaunchSpec>>(new Map());
     const [lastGlyph, setLastGlyph] = useState<DeckGlyph>(room?.launch ?? "shell");
