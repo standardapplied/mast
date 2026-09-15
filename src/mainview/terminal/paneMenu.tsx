@@ -1,6 +1,6 @@
 import type { MenuNode } from "../components/ContextMenu";
 import { latencyChip } from "./latency";
-import { type PaneGroup, type PaneLayout, titleOf } from "./paneLayout";
+import { type PaneGroup, type PaneLayout, shownPane, titleOf } from "./paneLayout";
 
 /**
  * The shell context menus — one tested builder for both the pane's right-click extras and the
@@ -32,7 +32,7 @@ export function identityItems(session: string, actions: PaneMenuActions): MenuNo
   return [
     {
       kind: "item",
-      label: "Rename shell…",
+      label: "Rename",
       onSelect: () => actions.rename(session),
     },
     {
@@ -93,8 +93,8 @@ export function paneMenuItems(
 }
 
 /**
- * The chip's menu: identity for the group's focused pane (first when focus is elsewhere), then
- * Close shell for the whole group.
+ * The chip's menu: identity for the pane the chip names (see {@link shownPane}), then Close shell
+ * for the whole group, addressed by that same name.
  */
 export function chipMenuItems(
   layout: PaneLayout,
@@ -104,14 +104,13 @@ export function chipMenuItems(
   actions: PaneMenuActions,
   titles?: Readonly<Record<string, string>>,
 ): MenuNode[] {
-  const target = group.panes.includes(focused) ? focused : group.panes[0]!;
-  const label = group.panes.map((s) => titleOf(layout, s, base, titles)).join("·");
+  const target = shownPane(group, focused);
   return [
     ...identityItems(target, actions),
     { kind: "separator" } as MenuNode,
     {
       kind: "item" as const,
-      label: `Close shell ${label}`,
+      label: `Close shell ${titleOf(layout, target, base, titles)}`,
       danger: true,
       onSelect: () => actions.close([...group.panes]),
     },
