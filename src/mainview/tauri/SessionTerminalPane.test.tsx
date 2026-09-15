@@ -793,7 +793,7 @@ describe("SessionTerminalPane at the channel edge", () => {
     });
     act(() => pointer("pointermove", 4, 0));
     expect(linkTip()).toBe("https://a.b/c");
-    expect(renderer.hovers.at(-1)).toEqual({ uri: "https://a.b/c", y: 0, start: 3, end: 7 });
+    expect(renderer.hovers.at(-1)).toEqual({ uri: "https://a.b/c", spans: [{ y: 0, start: 3, end: 7 }] });
     expect(host().style.cursor).toBe("pointer");
     act(() => pointer("pointermove", 0, 0));
     expect(linkTip()).toBeNull();

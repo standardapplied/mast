@@ -50,6 +50,12 @@ export interface Cell {
 /** A hyperlink's cells on one viewport row: columns {@code start} up to (excluding) {@code end}. */
 export interface LinkRun {
   readonly uri: string;
+  /** The cells the link occupies, one span per viewport row, top to bottom. */
+  readonly spans: readonly RowSpan[];
+}
+
+/** Cells [start, end) on viewport row y. */
+export interface RowSpan {
   readonly y: number;
   readonly start: number;
   readonly end: number;
@@ -1209,9 +1215,11 @@ export class VtCore {
   }
 
   /**
-   * The link under a viewport cell: an OSC 8 hyperlink widened to every adjacent cell on the row
-   * carrying the same URI, else a plain-text URL the row spells out, else null. Resolved per hover
-   * (a grid-ref lookup per cell of the run, or one row read), never in the render loop.
+   * The link under a viewport cell: an OSC 8 hyperlink widened to every adjacent cell carrying the
+   * same URI — along the row, and onto the rows above and below while the link runs edge to edge
+   * (a link wrapped by the terminal is one link) — else a plain-text URL the row spells out, else
+   * null. Resolved per hover (a grid-ref lookup per cell of the run, or one row read), never in the
+   * render loop.
    */
   linkAt(cell: CellPos): LinkRun | null {
     this.requireOpen();
@@ -1221,11 +1229,26 @@ export class VtCore {
     if (!uri) {
       return urlRunAt(this.readRow(y), x, y);
     }
+    const spans = [this.hyperlinkSpan(uri, x, y)];
+    const last = this.cols - 1;
+    for (let above = y - 1; above >= 0 && spans[0]!.start === 0; above--) {
+      if (this.hyperlinkAt({ x: last, y: above }) !== uri) break;
+      spans.unshift(this.hyperlinkSpan(uri, last, above));
+    }
+    for (let below = y + 1; below < this.rows && spans.at(-1)!.end === this.cols; below++) {
+      if (this.hyperlinkAt({ x: 0, y: below }) !== uri) break;
+      spans.push(this.hyperlinkSpan(uri, 0, below));
+    }
+    return { uri, spans };
+  }
+
+  /** The cells around (x, y) on its row that carry {@code uri}. */
+  private hyperlinkSpan(uri: string, x: number, y: number): RowSpan {
     let start = x;
     while (start > 0 && this.hyperlinkAt({ x: start - 1, y }) === uri) start--;
     let end = x + 1;
     while (end < this.cols && this.hyperlinkAt({ x: end, y }) === uri) end++;
-    return { uri, y, start, end };
+    return { y, start, end };
   }
 
   /** The OSC 8 URI on a viewport cell; empty when the cell carries none. */

@@ -173,7 +173,7 @@ describe("TerminalController", () => {
     controller.feed(enc("go \x1b]8;;https://a.b/c\x1b\\here\x1b]8;;\x1b\\ now"));
     controller.frame();
     const draws = renderer.draws;
-    const run = { uri: "https://a.b/c", y: 0, start: 3, end: 7 };
+    const run = { uri: "https://a.b/c", spans: [{ y: 0, start: 3, end: 7 }] };
     expect(controller.hover({ x: 4, y: 0 })).toEqual(run);
     controller.frame();
     expect(renderer.hovers.at(-1)).toEqual(run);
@@ -193,11 +193,11 @@ describe("TerminalController", () => {
     controller.hover({ x: 4, y: 0 });
     controller.feed(enc("\x1b[1;1H\x1b]8;;https://x.y\x1b\\zzzzzzzz\x1b]8;;\x1b\\"));
     controller.frame();
-    expect(seen.at(-1)).toEqual({ uri: "https://x.y", y: 0, start: 0, end: 8 });
+    expect(seen.at(-1)).toEqual({ uri: "https://x.y", spans: [{ y: 0, start: 0, end: 8 }] });
 
     const fresh = new RecRenderer();
     controller.replaceRenderer(fresh);
-    expect(fresh.hovers).toEqual([{ uri: "https://x.y", y: 0, start: 0, end: 8 }]);
+    expect(fresh.hovers).toEqual([{ uri: "https://x.y", spans: [{ y: 0, start: 0, end: 8 }] }]);
     expect(controller.linkAt({ x: 7, y: 0 })?.uri).toBe("https://x.y");
     controller.hover(null);
     expect(fresh.hovers.at(-1)).toBeNull();

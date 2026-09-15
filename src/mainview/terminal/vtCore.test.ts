@@ -1056,7 +1056,7 @@ describe("paste", () => {
     core.write(bytes("ab \x1b]8;;https://example.com/x\x1b\\link\x1b]8;;\x1b\\ tail"));
     const row = core.readAll().rows[0]!.cells;
     expect(row.slice(0, 9).map((c) => (c.link ? 1 : 0))).toEqual([0, 0, 0, 1, 1, 1, 1, 0, 0]);
-    expect(core.linkAt({ x: 5, y: 0 })).toEqual({ uri: "https://example.com/x", y: 0, start: 3, end: 7 });
+    expect(core.linkAt({ x: 5, y: 0 })).toEqual({ uri: "https://example.com/x", spans: [{ y: 0, start: 3, end: 7 }] });
     expect(core.linkAt({ x: 0, y: 0 })).toBeNull();
     expect(core.linkAt({ x: 7, y: 0 })).toBeNull();
   });
@@ -1065,15 +1065,25 @@ describe("paste", () => {
     const core = await track(10, 3);
     core.write(bytes("\x1b]8;id=1;https://a\x1b\\A\x1b]8;id=2;https://b\x1b\\B\x1b]8;;\x1b\\"));
     core.write(bytes("\r\n\x1b]8;;https://a\x1b\\C\x1b]8;;\x1b\\"));
-    expect(core.linkAt({ x: 0, y: 0 })).toEqual({ uri: "https://a", y: 0, start: 0, end: 1 });
-    expect(core.linkAt({ x: 1, y: 0 })).toEqual({ uri: "https://b", y: 0, start: 1, end: 2 });
-    expect(core.linkAt({ x: 0, y: 1 })).toEqual({ uri: "https://a", y: 1, start: 0, end: 1 });
+    expect(core.linkAt({ x: 0, y: 0 })).toEqual({ uri: "https://a", spans: [{ y: 0, start: 0, end: 1 }] });
+    expect(core.linkAt({ x: 1, y: 0 })).toEqual({ uri: "https://b", spans: [{ y: 0, start: 1, end: 2 }] });
+    expect(core.linkAt({ x: 0, y: 1 })).toEqual({ uri: "https://a", spans: [{ y: 1, start: 0, end: 1 }] });
+  });
+
+  test("a hyperlink the terminal wrapped is one link over both rows", async () => {
+    const core = await track(10, 3);
+    core.write(bytes("ab\x1b]8;;https://w\x1b\\0123456789ABC\x1b]8;;\x1b\\ z"));
+    const run = { uri: "https://w", spans: [{ y: 0, start: 2, end: 10 }, { y: 1, start: 0, end: 5 }] };
+    expect(core.linkAt({ x: 5, y: 0 })).toEqual(run);
+    expect(core.linkAt({ x: 3, y: 1 })).toEqual(run);
+    expect(core.linkAt({ x: 5, y: 1 })).toBeNull();
+    expect(core.linkAt({ x: 1, y: 0 })).toBeNull();
   });
 
   test("a plain-text URL on the row is a link too, wide glyphs and all", async () => {
     const core = await track(40, 3);
     core.write(bytes("世界 see https://foo.bar/baz. ok"));
-    const run = { uri: "https://foo.bar/baz", y: 0, start: 9, end: 28 };
+    const run = { uri: "https://foo.bar/baz", spans: [{ y: 0, start: 9, end: 28 }] };
     expect(core.linkAt({ x: 9, y: 0 })).toEqual(run);
     expect(core.linkAt({ x: 27, y: 0 })).toEqual(run);
     expect(core.linkAt({ x: 28, y: 0 })).toBeNull();
@@ -1083,10 +1093,10 @@ describe("paste", () => {
   test("a plain-text URL ends where the cursor jumped: a tab or a move leaves untouched cells, not text", async () => {
     const core = await track(40, 3);
     core.write(bytes("https://a.b/c\tfoo\r\nhttps://a.b/c\x1b[21Gbar"));
-    const run = { uri: "https://a.b/c", y: 0, start: 0, end: 13 };
+    const run = { uri: "https://a.b/c", spans: [{ y: 0, start: 0, end: 13 }] };
     expect(core.linkAt({ x: 3, y: 0 })).toEqual(run);
     expect(core.linkAt({ x: 16, y: 0 })).toBeNull();
-    expect(core.linkAt({ x: 3, y: 1 })).toEqual({ ...run, y: 1 });
+    expect(core.linkAt({ x: 3, y: 1 })).toEqual({ uri: run.uri, spans: [{ y: 1, start: 0, end: 13 }] });
     expect(core.linkAt({ x: 21, y: 1 })).toBeNull();
   });
 

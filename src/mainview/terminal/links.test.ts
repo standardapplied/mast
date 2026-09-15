@@ -35,15 +35,15 @@ const untouched = (n: number): Cell[] => Array.from({ length: n }, () => cell(""
 describe("urlRunAt", () => {
   test("finds the URL covering the column and reports its cell span", () => {
     const cells = row("see https://a.b/c now");
-    expect(urlRunAt(cells, 4, 2)).toEqual({ uri: "https://a.b/c", y: 2, start: 4, end: 17 });
-    expect(urlRunAt(cells, 16, 2)).toEqual({ uri: "https://a.b/c", y: 2, start: 4, end: 17 });
+    expect(urlRunAt(cells, 4, 2)).toEqual({ uri: "https://a.b/c", spans: [{ y: 2, start: 4, end: 17 }] });
+    expect(urlRunAt(cells, 16, 2)).toEqual({ uri: "https://a.b/c", spans: [{ y: 2, start: 4, end: 17 }] });
     expect(urlRunAt(cells, 17, 2)).toBeNull();
     expect(urlRunAt(cells, 0, 2)).toBeNull();
   });
 
   test("sentence punctuation and an unbalanced paren are not part of the link", () => {
     expect(urlRunAt(row("(https://x.y/z)."), 3, 0)?.uri).toBe("https://x.y/z");
-    expect(urlRunAt(row("https://x.y/z),"), 3, 0)?.end).toBe(13);
+    expect(urlRunAt(row("https://x.y/z),"), 3, 0)?.spans[0]?.end).toBe(13);
     expect(urlRunAt(row("https://en.wikipedia.org/wiki/Foo_(bar)"), 3, 0)?.uri).toBe(
       "https://en.wikipedia.org/wiki/Foo_(bar)",
     );
@@ -53,7 +53,7 @@ describe("urlRunAt", () => {
   test("columns count wide glyphs twice, before and inside the link", () => {
     const cells = row("世界 https://a.b/世 x");
     const run = urlRunAt(cells, 6, 0);
-    expect(run).toEqual({ uri: "https://a.b/世", y: 0, start: 5, end: 19 });
+    expect(run).toEqual({ uri: "https://a.b/世", spans: [{ y: 0, start: 5, end: 19 }] });
     expect(urlRunAt(cells, 18, 0)).toEqual(run);
     expect(urlRunAt(cells, 19, 0)).toBeNull();
   });
@@ -66,10 +66,10 @@ describe("urlRunAt", () => {
 
   test("an untouched cell ends a URL the way whitespace does; it never joins the columns", () => {
     const cells = [...row("https://a.b/c"), ...untouched(3), ...row("foo https://d.e")];
-    expect(urlRunAt(cells, 3, 0)).toEqual({ uri: "https://a.b/c", y: 0, start: 0, end: 13 });
+    expect(urlRunAt(cells, 3, 0)).toEqual({ uri: "https://a.b/c", spans: [{ y: 0, start: 0, end: 13 }] });
     expect(urlRunAt(cells, 14, 0)).toBeNull();
     expect(urlRunAt(cells, 16, 0)).toBeNull();
-    expect(urlRunAt(cells, 20, 0)).toEqual({ uri: "https://d.e", y: 0, start: 20, end: 31 });
+    expect(urlRunAt(cells, 20, 0)).toEqual({ uri: "https://d.e", spans: [{ y: 0, start: 20, end: 31 }] });
   });
 
   test("the second URL on a row resolves independently of the first", () => {

@@ -22,6 +22,7 @@ import {
   type GridSnapshot,
   KITTY_KEY,
   type LinkRun,
+  type RowSpan,
   type MatchSpan,
   type MouseEventSpec,
   type Rgb,
@@ -700,10 +701,10 @@ export class TerminalController {
 
 function sameRun(a: LinkRun | null, b: LinkRun | null): boolean {
   if (a === null || b === null) return a === b;
-  return a.uri === b.uri && a.y === b.y && a.start === b.start && a.end === b.end;
+  return a.uri === b.uri && sameSpans(a.spans, b.spans);
 }
 
-function sameSpans(a: readonly MatchSpan[], b: readonly MatchSpan[]): boolean {
+function sameSpans(a: readonly RowSpan[], b: readonly RowSpan[]): boolean {
   return (
     a.length === b.length &&
     a.every((s, i) => s.y === b[i]!.y && s.start === b[i]!.start && s.end === b[i]!.end)
