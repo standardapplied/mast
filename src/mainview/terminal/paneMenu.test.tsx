@@ -28,17 +28,17 @@ const labelsOf = (items: ReturnType<typeof paneMenuItems>) =>
 describe("paneMenuItems", () => {
   afterEach(() => latencyChip.reset());
 
-  test("identity first, Close pane last, addressed by the pane's shown name", () => {
+  test("identity first (no ellipsis: the rename is in place), Close pane last, addressed by the pane's shown name", () => {
     const { actions } = recorder();
     expect(labelsOf(paneMenuItems(layout, "mast-a", base, actions))).toEqual([
-      "Rename shell…",
+      "Rename",
       "Color",
       "Mute bell",
       "Show typing latency",
       "Close pane agent",
     ]);
     expect(labelsOf(paneMenuItems(layout, "mast-a.2", base, actions, { "mast-a.2": "mast" }))).toEqual([
-      "Rename shell…",
+      "Rename",
       "Color",
       "Mute bell",
       "Show typing latency",
@@ -103,7 +103,7 @@ describe("chipMenuItems", () => {
     const { calls, actions } = recorder();
     const group = layout.groups[0]!;
     const items = chipMenuItems(layout, group, "mast-a.2", base, actions);
-    expect(labelsOf(items)).toEqual(["Rename shell…", "Color", "—", "Close shell agent·2"]);
+    expect(labelsOf(items)).toEqual(["Rename", "Color", "—", "Close shell 2"]);
     (items[0] as { onSelect: () => void }).onSelect();
     (items.at(-1) as { onSelect: () => void }).onSelect();
     expect(calls).toEqual([
@@ -116,7 +116,7 @@ describe("chipMenuItems", () => {
     const { calls, actions } = recorder();
     const group = layout.groups[0]!;
     const items = chipMenuItems(layout, group, "mast-b.9", base, actions);
-    expect(labelsOf(items)).toEqual(["Rename shell…", "Color", "—", "Close shell agent·2"]);
+    expect(labelsOf(items)).toEqual(["Rename", "Color", "—", "Close shell agent"]);
     (items[0] as { onSelect: () => void }).onSelect();
     expect(calls).toEqual([["rename", "mast-a"]]);
   });

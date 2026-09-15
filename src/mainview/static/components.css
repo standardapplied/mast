@@ -3947,11 +3947,6 @@ button.room-section-head:hover {
   cursor: pointer;
   white-space: nowrap;
 }
-.term-pane-chip__pane {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
 .term-pane-chip__title {
   display: inline-block;
   max-width: 140px;
@@ -3960,9 +3955,20 @@ button.room-section-head:hover {
   white-space: nowrap;
   unicode-bidi: isolate;
 }
-.term-pane-chip__sep {
-  color: var(--subtle-foreground);
-  margin-right: 5px;
+.term-pane-chip__count {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.term-pane-chip__edit {
+  width: 110px;
+  padding: 1px 5px;
+  border: 1px solid var(--ring);
+  border-radius: 3px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  letter-spacing: inherit;
+  outline: none;
 }
 .term-pane-dot {
   width: 8px;

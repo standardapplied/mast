@@ -36,10 +36,13 @@ import {
   removePanes,
   sessionsOf,
   shortTitle,
+  shownPane,
   splitGroup,
   titleOf,
   withPaneMeta,
 } from "../terminal/paneLayout";
+import { type PaneChord, paneChordOf } from "../terminal/paneChords";
+import { PaneChipEdit } from "../terminal/PaneChipEdit";
 import {
   chipMenuItems,
   PANE_COLORS,
@@ -61,7 +64,6 @@ import {
 } from "../terminal/roomDeck";
 import { attentionStore } from "../terminal/attention";
 import { sessionStore } from "../terminal/sessionStore";
-import { PromptDialog } from "./PromptDialog";
 import { RoomTerminal } from "./RoomTerminal";
 import { SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane";
 
@@ -92,6 +94,10 @@ import { SessionTerminalPane, type TerminalHandle } from "./SessionTerminalPane"
  *
  * Closing a pane *kills* its host session — that is the one destructive act here, so it confirms
  * first; quitting the app merely detaches and every shell survives.
+ *
+ * The keyboard runs the bar: the ⌘ chords in `terminal/paneChords` bubble up from whatever holds
+ * focus inside — the focused pane, or the empty state once the last shell is gone — and land on
+ * the same verbs the buttons and menus use.
  */
 
 /** The pty-host unix socket on the devbox; `~` expands against the remote home on the Rust side. */
@@ -142,7 +148,8 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     const [visited, setVisited] = useState<ReadonlySet<number>>(new Set());
     const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
     const [closing, setClosing] = useState<string[] | null>(null);
-    const [renaming, setRenaming] = useState<string | null>(null);
+    /** The pane whose chip title is an input right now. */
+    const [editing, setEditing] = useState<string | null>(null);
     const [chipMenu, setChipMenu] = useState<{ x: number; y: number; group: number } | null>(null);
     const [titles, setTitles] = useState<Record<string, string>>({});
     const unseenBells = useSyncExternalStore(attentionStore.subscribe, attentionStore.unseen);
@@ -173,7 +180,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
 
     /** Menu actions, injected into the tested builders in terminal/paneMenu. */
     const menuActions: PaneMenuActions = {
-      rename: setRenaming,
+      rename: setEditing,
       setColor: (session, color) => setLayout((l) => l && withPaneMeta(l, session, { color })),
       setMuted: (session, muted) => setLayout((l) => l && withPaneMeta(l, session, { muted })),
       close: (sessions) => setClosing(sessions),
@@ -475,24 +482,80 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
       (room?.refresh ?? sessionStore.refresh)();
     };
 
+    // Each group remembers which of its splits last held the keyboard, so coming back to it
+    // (a chip, ⌘n) lands where the user left it — Ghostty's tabs do the same.
+    const lastFocusedRef = useRef(new Map<number, string>());
+    useEffect(() => {
+      const group = layout?.groups.find((g) => g.panes.includes(focused));
+      if (group) lastFocusedRef.current.set(group.id, focused);
+    }, [layout, focused]);
+
     const activateGroup = (index: number) => {
-      if (!layout) return;
-      const panes = layout.groups[index]?.panes ?? [];
-      apply({ ...layout, active: index }, panes.includes(focused) ? focused : panes[0]);
+      const group = layout?.groups[index];
+      if (!layout || !group) return;
+      const remembered = lastFocusedRef.current.get(group.id);
+      const landing = [focused, remembered].find((s) => s !== undefined && group.panes.includes(s));
+      apply({ ...layout, active: index }, landing ?? group.panes[0]);
     };
 
-    // Cmd+T (new shell) / Cmd+D (split) bubble up from the focused pane — meta chords are never
-    // consumed as pty bytes, so catching them here costs the terminal nothing.
-    const onKeyDown = (e: React.KeyboardEvent) => {
-      if (!e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "t" || e.key === "T") {
-        addShell();
-        e.preventDefault();
-      } else if (e.key === "d" || e.key === "D") {
-        split();
-        e.preventDefault();
+    /** Moves the keyboard to the split `delta` cells over in the active group; the edge holds. */
+    const focusPane = (delta: 1 | -1) => {
+      const panes = layout?.groups[layout.active]?.panes ?? [];
+      const next = panes[panes.indexOf(focused) + delta];
+      if (next) setFocused(next);
+    };
+
+    const runChord = (chord: PaneChord) => {
+      if (!layout) return;
+      const count = layout.groups.length;
+      const activePanes = layout.groups[layout.active]?.panes ?? [];
+      switch (chord.kind) {
+        case "new":
+          return addShell();
+        case "split":
+          return split();
+        case "group":
+          if (chord.index < count) activateGroup(chord.index);
+          return;
+        case "lastGroup":
+          if (count > 0) activateGroup(count - 1);
+          return;
+        case "cycleGroup":
+          if (count > 0) activateGroup((layout.active + chord.delta + count) % count);
+          return;
+        case "focusPane":
+          return focusPane(chord.delta);
+        case "closePane":
+          if (activePanes.includes(focused)) confirmClose([focused]);
+          return;
+        case "closeGroup":
+          if (activePanes.length > 0) confirmClose([...activePanes]);
+          return;
       }
     };
+
+    // The chords bubble up from the focused pane (which yields them unencoded, whatever kitty
+    // mode its program pushed) or from the empty state. The close confirm answers its own keys.
+    const onKeyDown = (e: React.KeyboardEvent) => {
+      const chord = paneChordOf(e);
+      if (!chord) return;
+      e.preventDefault();
+      if (closing === null) runChord(chord);
+    };
+
+    /** The chip edit closed: the keyboard goes back to the pane it came from. */
+    const endEdit = (session: string, label?: string) => {
+      if (label !== undefined) setLayout((l) => l && withPaneMeta(l, session, { label }));
+      setEditing(null);
+      paneRefs.current.get(focused)?.focus?.();
+    };
+
+    // With no pane to hold the keyboard, the empty state does, so ⌘T still opens a shell.
+    const empty = layout !== null && layout.groups.length === 0;
+    const emptyRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+      if (active && empty) emptyRef.current?.focus();
+    }, [active, empty]);
 
     useImperativeHandle(
       ref,
@@ -636,21 +699,12 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               return st !== undefined && isUnwell(st);
             });
             const belled = group.panes.some((s) => unseenBells.has(s));
-            const plainLabel = group.panes.map((s) => titleOf(layout, s, base, titles)).join("·");
-            return (
-              <button
-                key={group.id}
-                type="button"
-                className={cx("term-pane-chip", i === layout.active && "is-active")}
-                onClick={() => activateGroup(i)}
-                onDoubleClick={() =>
-                  setRenaming(group.panes.includes(focused) ? focused : group.panes[0]!)
-                }
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setChipMenu({ x: e.clientX, y: e.clientY, group: i });
-                }}
-              >
+            const fullLabel = group.panes.map((s) => titleOf(layout, s, base, titles)).join(" · ");
+            // The chip names the pane you are in; while a name is being edited, that one.
+            const shown = editing && group.panes.includes(editing) ? editing : shownPane(group, focused);
+            const color = layout.meta?.[shown]?.color;
+            const body = (
+              <>
                 {unwell && <span className="term-status__dot term-status__dot--warn" aria-hidden />}
                 {!unwell && belled && (
                   <span
@@ -659,25 +713,52 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                     aria-hidden
                   />
                 )}
-                {group.panes.map((s, p) => {
-                  const color = layout.meta?.[s]?.color;
-                  return (
-                    <span key={s} className="term-pane-chip__pane">
-                      {p > 0 && <span className="term-pane-chip__sep">·</span>}
-                      {color !== undefined && PANE_COLORS[color] && (
-                        <span
-                          className="term-pane-dot"
-                          style={{ background: PANE_COLORS[color] }}
-                          aria-hidden
-                        />
-                      )}
-                      <span className="term-pane-chip__title">{titleOf(layout, s, base, titles)}</span>
-                    </span>
-                  );
-                })}
+                {color !== undefined && PANE_COLORS[color] && (
+                  <span className="term-pane-dot" style={{ background: PANE_COLORS[color] }} aria-hidden />
+                )}
+                {editing === shown ? (
+                  <PaneChipEdit
+                    initial={layout.meta?.[shown]?.label ?? ""}
+                    placeholder={titleOf({ ...layout, meta: undefined }, shown, base, titles)}
+                    onCommit={(label) => endEdit(shown, label)}
+                    onCancel={() => endEdit(shown)}
+                  />
+                ) : (
+                  <span className="term-pane-chip__title">{titleOf(layout, shown, base, titles)}</span>
+                )}
+                {group.panes.length > 1 && (
+                  <span className="term-pane-chip__count" data-testid="term-pane-chip-count">
+                    {group.panes.length}
+                  </span>
+                )}
+              </>
+            );
+            const className = cx("term-pane-chip", i === layout.active && "is-active");
+            // An input cannot live inside a button; the chip under edit is a plain box.
+            if (editing === shown) {
+              return (
+                <div key={group.id} className={className} title={fullLabel}>
+                  {body}
+                </div>
+              );
+            }
+            return (
+              <button
+                key={group.id}
+                type="button"
+                className={className}
+                title={fullLabel}
+                onClick={() => activateGroup(i)}
+                onDoubleClick={() => setEditing(shown)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setChipMenu({ x: e.clientX, y: e.clientY, group: i });
+                }}
+              >
+                {body}
                 <span
                   role="button"
-                  aria-label={`Close shell ${plainLabel}`}
+                  aria-label={`Close shell ${fullLabel}`}
                   className="term-pane-chip__close"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -709,8 +790,8 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
           </IconButton>
         </div>
         <div className="term-panes__body">
-          {layout.groups.length === 0 && (
-            <div className="term-panes__empty" data-testid="term-panes-empty">
+          {empty && (
+            <div className="term-panes__empty" data-testid="term-panes-empty" tabIndex={-1} ref={emptyRef}>
               <div className="room-deck-card">
                 <div className="room-deck-card__title">No terminals</div>
                 <div className="room-deck-card__reason">
@@ -808,20 +889,6 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
               menuActions,
               titles,
             )}
-          />
-        )}
-        {renaming && layout && (
-          <PromptDialog
-            title={`Rename shell ${titleOf(layout, renaming, base, titles)}`}
-            label="Name"
-            initial={layout.meta?.[renaming]?.label ?? ""}
-            confirmLabel="Rename"
-            allowEmpty
-            onConfirm={(value) => {
-              setLayout((l) => l && withPaneMeta(l, renaming, { label: value }));
-              setRenaming(null);
-            }}
-            onClose={() => setRenaming(null)}
           />
         )}
       </div>

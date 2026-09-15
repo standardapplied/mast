@@ -38,6 +38,7 @@ import { decodeDataFrame } from "../terminal/dataFrames";
 import { terminalFontSize, type ZoomStep } from "../terminal/fontSize";
 import { formatLatency, latencyChip, type LatencyStats } from "../terminal/latency";
 import { type KeyStroke, MODS } from "../terminal/input";
+import { paneChordOf } from "../terminal/paneChords";
 import { sessionStore } from "../terminal/sessionStore";
 import { paletteFor, resolveThemeName, type TerminalColors } from "../terminal/terminalPalette";
 import { gridFor, type PtySink, TerminalController, type Timers } from "../terminal/terminalController";
@@ -61,9 +62,11 @@ import {
 
 export type { SessionCreate } from "../terminal/terminalServices";
 
-/** What a mounted terminal offers its host: paste routing and connection recovery. */
+/** What a mounted terminal offers its host: paste routing, the keyboard, connection recovery. */
 export type TerminalHandle = {
   paste: (text: string) => void;
+  /** Take the keyboard back (the host's chip edit gave it up). */
+  focus?: () => void;
   /** Recover now: rebuild a lost renderer, or reattach a dead link skipping any scheduled backoff. */
   revive?: () => void;
   /** Claim the write token; the grant arrives as the host's WriterChanged broadcast. */
@@ -116,17 +119,15 @@ const ZOOM_KEYS: Readonly<Record<string, ZoomStep>> = {
   "0": "reset",
 };
 /**
- * The ⌘ chords the pane owns, keyed by the lowercased DOM key. "host" chords bubble to the pane
- * bar (⌘T new shell, ⌘D split) with the default kept; "swallow" ones are reserved — their WebKit
- * defaults (select-all, history navigation) would wreck the view over the app DOM. Anything else
- * stays with the app and the OS, unless the program asked for every key.
+ * The ⌘ chords the pane owns, keyed by the lowercased DOM key. "host" chords — the pane bar's
+ * {@link paneChordOf} table — bubble up with the default kept; "swallow" ones are reserved —
+ * their WebKit defaults (select-all, history navigation) would wreck the view over the app DOM.
+ * Anything else stays with the app and the OS, unless the program asked for every key.
  */
 const CMD_SHORTCUTS: Readonly<Record<string, CmdAction>> = {
   c: "copy",
   v: "paste",
   k: "clear",
-  t: "host",
-  d: "host",
   f: "find",
   a: "swallow",
   ...Object.fromEntries(Object.keys(ZOOM_KEYS).map((key) => [key, "zoom"] as const)),
@@ -143,6 +144,7 @@ function viewportActionOf(e: React.KeyboardEvent): ViewportAction | undefined {
 }
 
 function cmdActionOf(e: React.KeyboardEvent): CmdAction | undefined {
+  if (paneChordOf(e)) return "host";
   if (!e.metaKey || e.ctrlKey || e.altKey) return undefined;
   return CMD_SHORTCUTS[e.key.toLowerCase()];
 }
@@ -443,6 +445,7 @@ export const SessionTerminalPane = forwardRef<
     ref,
     () => ({
       paste: (text: string) => controllerRef.current?.paste(text, { force: true }),
+      focus: () => hostRef.current?.focus(),
       revive,
       takeWrite: () => {
         const id = attachIdRef.current;

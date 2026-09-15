@@ -77,6 +77,11 @@ export function labelFor(session: string, base: string): string {
   return ordinal === null ? session : String(ordinal);
 }
 
+/** The pane a group's chip names: its focused pane, or its first while focus is in another group. */
+export function shownPane(group: PaneGroup, focused: string): string {
+  return group.panes.includes(focused) ? focused : group.panes[0]!;
+}
+
 /** What a pane is called: custom label first, then its live shell title, then the ordinal. */
 export function titleOf(
   layout: PaneLayout,
