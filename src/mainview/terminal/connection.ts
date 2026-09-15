@@ -11,7 +11,10 @@
 /** How long a connection must hold before a new drop restarts the backoff ladder from the bottom. */
 export const STABLE_MS = 10_000;
 
-const BACKOFF_MS = [500, 1000, 2000, 4000, 8000, 15000] as const;
+/** One automatic reattach per rung; after the last the pane parks and the retry is the user's. */
+const BACKOFF_MS = [500, 1000, 2000, 4000, 8000] as const;
+
+export const MAX_AUTO_RETRIES = BACKOFF_MS.length;
 
 /**
  * Why an attach is over: `transport` — the link died, the host session lives, auto-reattach;
@@ -152,8 +155,10 @@ export function worstStatus(statuses: readonly SessionStatus[]): SessionStatus |
 
 /**
  * Paces reconnect attempts. Call {@link opened} when an attach succeeds, {@link lost} when the
- * transport drops (it returns how long to wait before the next attempt), and {@link reset} on a
- * manual reconnect so the user's click is never delayed by earlier failures.
+ * transport drops (it returns how long to wait before the next attempt, or null once
+ * {@link MAX_AUTO_RETRIES} have failed in a row — the same answer five times is not going to
+ * change on the sixth, and the card carries a button), and {@link reset} on a manual reconnect
+ * so the user's click is never delayed by earlier failures and gets a fresh run of attempts.
  */
 export class Reconnector {
   private attempt = 0;
@@ -165,13 +170,14 @@ export class Reconnector {
     this.connectedAt = this.now();
   }
 
-  /** The transport dropped; returns the delay in ms before the next automatic attempt. */
-  lost(): number {
+  /** The transport dropped; the delay in ms before the next automatic attempt, or null to stop. */
+  lost(): number | null {
     if (this.connectedAt !== null && this.now() - this.connectedAt >= STABLE_MS) {
       this.attempt = 0;
     }
     this.connectedAt = null;
-    const delay = BACKOFF_MS[Math.min(this.attempt, BACKOFF_MS.length - 1)]!;
+    const delay = BACKOFF_MS[this.attempt];
+    if (delay === undefined) return null;
     this.attempt++;
     return delay;
   }
