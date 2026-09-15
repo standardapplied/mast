@@ -163,6 +163,29 @@ describe("TerminalPanes over the channel", () => {
     expect(services.renderers[0]!.resizes.at(-1)).toEqual([100, 30]);
   });
 
+  test("the host reports its panes on every layout change and none on unmount", async () => {
+    const seen: (readonly string[])[] = [];
+    await act(async () => {
+      root.render(
+        <ToastProvider>
+          <TerminalServicesProvider value={services}>
+            <TerminalPanes target="app" active onPanes={(p) => seen.push(p)} />
+          </TerminalServicesProvider>
+        </ToastProvider>,
+      );
+    });
+    await act(async () => {
+      await services.link.opened();
+    });
+    await settle();
+    expect(seen.at(-1)).toEqual(["mast-app"]);
+    await splitRight();
+    expect(seen.at(-1)).toEqual(["mast-app", "mast-app.2"]);
+    act(() => root.unmount());
+    root = createRoot(container);
+    expect(seen.at(-1)).toEqual([]);
+  });
+
   test("a bell in an unfocused pane dots its chip until that pane is focused again", async () => {
     const { attachment: first } = await mount();
     const bell = (a: FakeAttachment) => act(async () => a.lanes.onData(new Uint8Array([0, 0x07])));

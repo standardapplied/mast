@@ -23,6 +23,7 @@ import type { RosterSources } from "./projectRoster";
 import type { TerminalHandle } from "./SessionTerminalPane";
 import { addTab, nextActive, tabKey, type Tab } from "./terminalTabs";
 import { TerminalPanes } from "./TerminalPanes";
+import { TerminalTabStrip } from "./TerminalTabStrip";
 import { TerminalSplit } from "./TerminalSplit";
 
 /** One callback ref fanning out to several consumers (the split's drop-paste + our status cluster). */
@@ -93,6 +94,8 @@ export function TerminalWorkspace({
 }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  /** Each tab's panes, so a bell ringing in a tab you are not looking at can dot that tab. */
+  const [panes, setPanes] = useState<Record<string, readonly string[]>>({});
   const [adding, setAdding] = useState(false);
   const [snapshotsFor, setSnapshotsFor] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
@@ -165,6 +168,7 @@ export function TerminalWorkspace({
       })}
       target={target}
       active={active}
+      onPanes={(sessions) => setPanes((prev) => ({ ...prev, [key]: sessions }))}
       onStatus={(s) =>
         setStatuses((prev) => {
           const known = prev[key];
@@ -188,6 +192,7 @@ export function TerminalWorkspace({
     setActiveKey((a) => nextActive(tabs, key, a));
     setTabs((prev) => prev.filter((t) => t.key !== key));
     setStatuses(({ [key]: _closed, ...rest }) => rest);
+    setPanes(({ [key]: _closed, ...rest }) => rest);
   };
 
   const showPicker = tabs.length === 0 || adding;
@@ -204,46 +209,19 @@ export function TerminalWorkspace({
           </>
         ) : (
         <div className="term-tabs">
-          <div className="term-tabs__scroll" role="tablist">
-          {tabs.map((t) => {
-            const s = statuses[t.key];
-            const unwell = s !== undefined && isUnwell(s);
-            return (
-              <div
-                key={t.key}
-                role="tab"
-                aria-selected={t.key === activeKey && !adding}
-                className={cx("term-tab", t.key === activeKey && !adding && "is-active")}
-                onClick={() => {
-                  setActiveKey(t.key);
-                  setAdding(false);
-                }}
-              >
-                {unwell && <span className="term-status__dot term-status__dot--warn" aria-hidden />}
-                <span className="term-tab__label">{t.label}</span>
-                <button
-                  type="button"
-                  className="term-tab__close"
-                  aria-label={`Close ${t.label}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    close(t.key);
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            );
-          })}
-          <button
-            type="button"
-            className={cx("term-tab__add", adding && "is-active")}
-            aria-label="Open another project"
-            onClick={() => setAdding(true)}
-          >
-            ＋
-          </button>
-          </div>
+          <TerminalTabStrip
+            tabs={tabs}
+            activeKey={activeKey}
+            adding={adding}
+            statuses={statuses}
+            panes={panes}
+            onActivate={(key) => {
+              setActiveKey(key);
+              setAdding(false);
+            }}
+            onClose={close}
+            onAdd={() => setAdding(true)}
+          />
           <span className="term-tab__tools">
             {inventory}
             {activeStatus && (

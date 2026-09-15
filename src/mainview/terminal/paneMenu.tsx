@@ -8,9 +8,13 @@ import { type PaneGroup, type PaneLayout, shownPane, titleOf } from "./paneLayou
  * is pinned by tests instead of living in JSX. Transport-free: callers inject the actions.
  */
 
-/** The swatches a shell can wear (ghostty-style tab dots) — index is what the layout stores. */
+/**
+ * The swatches a shell can wear (ghostty-style tab dots) — index is what the layout stores, so a
+ * swatch is replaced in place, never removed. None is the app's accent: that hue is the bell and
+ * unread dot, and a pane wearing it would read as ringing.
+ */
 export const PANE_COLORS = [
-  "#fc4926",
+  "#8e98a5",
   "#e0a24d",
   "#e8d44d",
   "#86b89a",
