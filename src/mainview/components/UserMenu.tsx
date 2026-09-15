@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { WhoAmI } from "../../shared/sail-models";
 import { cx } from "./cx";
 import { Person } from "./icons";
+import { clickedInside } from "./outsideClick";
+import { Select } from "./Select";
 import { ToggleButton } from "./ToggleButton";
 import { Button } from "./ui";
 import { attentionStore, type BellSetting } from "../terminal/attention";
@@ -64,9 +66,7 @@ export function UserMenu({
   useEffect(() => {
     if (!isOpen) return;
     const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
+      if (!clickedInside(menuRef, event.target)) setIsOpen(false);
     };
     document.addEventListener("mousedown", handleClickOutside, true);
     return () => document.removeEventListener("mousedown", handleClickOutside, true);
@@ -127,8 +127,8 @@ export function UserMenu({
           </div>
 
           <div className="user-menu-section" data-testid="terminal-bell">
-            <span className="eyebrow">Shell bell when not looking</span>
-            <ToggleButton
+            <span className="eyebrow">Shell bell</span>
+            <Select
               options={BELL_OPTIONS}
               value={bell}
               onChange={(value) => attentionStore.setBell(value as BellSetting)}

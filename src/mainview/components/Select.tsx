@@ -4,6 +4,7 @@ import { Checkbox } from "./Checkbox";
 import { cx } from "./cx";
 import { DropdownPanel } from "./DropdownPanel";
 import { CaretDown, Spinner } from "./icons";
+import { clickedInside } from "./outsideClick";
 
 export type SelectOption = {
   value: string;
@@ -122,13 +123,7 @@ export function Select({
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      // The option list portals to document.body, so a click on an option is
-      // outside containerRef; closing on that mousedown would swallow the click
-      // before it selects. Treat any click inside the floating panel as inside.
-      if (containerRef.current?.contains(target)) return;
-      if (target.closest?.(".dropdown-panel")) return;
-      setIsOpen(false);
+      if (!clickedInside(containerRef, event.target)) setIsOpen(false);
     };
     document.addEventListener("mousedown", handleClickOutside, true);
     return () => {

@@ -5,6 +5,7 @@ import { ContextMenu, type MenuNode } from "../components/ContextMenu";
 import { DropdownPanel } from "../components/DropdownPanel";
 import { Input } from "../components/Input";
 import { LoadingMark } from "../components/Loading";
+import { clickedInside } from "../components/outsideClick";
 import { DispatchDialog } from "./DispatchDialog";
 import { PresenceChip } from "./PresenceChip";
 import { Funnel, Magnifier } from "../components/icons";
@@ -53,13 +54,7 @@ function FilterMenu({
   useEffect(() => {
     if (!isOpen) return;
     const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      // The panel and the Selects inside it portal to document.body, so a click
-      // there is outside containerRef but must not close the filter. Any click
-      // within a floating dropdown (this one or a nested Select) keeps it open.
-      if (containerRef.current?.contains(target)) return;
-      if (target.closest?.(".dropdown-panel")) return;
-      setIsOpen(false);
+      if (!clickedInside(containerRef, event.target)) setIsOpen(false);
     };
     document.addEventListener("mousedown", handleClickOutside, true);
     return () => document.removeEventListener("mousedown", handleClickOutside, true);
