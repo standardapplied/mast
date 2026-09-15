@@ -398,6 +398,28 @@ describe("the keyboard runs the shell", () => {
     expect(services.link.closed).toHaveLength(0);
   });
 
+  test("a reconnect under the close confirm does not hand the keyboard back to the shell", async () => {
+    const { handle, attachment } = await mount();
+    services.link.listing = { hostBootId: "boot-1", sessions: [{ name: "mast-app", live: true }] };
+    await press({ key: "w", code: "KeyW", metaKey: true });
+    expect(confirmTitle()).toBe("Close shell 1?");
+    await act(async () => attachment.lanes.onExit({ class: "transport", reason: "connection reset" }));
+    await settle();
+    const next = services.link.nextOpen();
+    act(() => handle.current!.revive!());
+    await act(async () => {
+      await next;
+    });
+    await settle();
+    expect(confirmTitle(), "the dialog outlives the reconnect").toBe("Close shell 1?");
+    expect(document.activeElement?.textContent, "Cancel still holds the keyboard").toBe("Cancel");
+    await press({ key: "Enter", code: "Enter" });
+    expect(services.link.writes, "Enter never reached the fresh shell").toHaveLength(0);
+    await press({ key: "Escape", code: "Escape" });
+    expect(confirmTitle()).toBeNull();
+    expect(document.activeElement?.getAttribute("tabindex"), "the keyboard went back to the pane").toBe("0");
+  });
+
   test("a program that asked for every key still yields ⌘W to the app", async () => {
     const { attachment } = await mount();
     await act(async () => attachment.lanes.onData(bytes("\x1b[>8u")));

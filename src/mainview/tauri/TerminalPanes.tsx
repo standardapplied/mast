@@ -428,10 +428,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
 
     const confirmClose = (sessions: string[]) => setClosing(sessions);
     /** The confirm was dismissed: the keyboard goes back to the pane it was taken from. */
-    const cancelClose = () => {
-      setClosing(null);
-      paneRefs.current.get(focused)?.focus?.();
-    };
+    const cancelClose = () => setClosing(null);
 
     const doClose = (sessions: string[]) => {
       setClosing(null);
@@ -541,7 +538,10 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
 
     // The chords bubble up from the focused pane (which yields them unencoded, whatever kitty
     // mode its program pushed) or from the empty state. The close confirm holds the keyboard
-    // itself (Cancel takes focus on mount), so Enter and Escape answer it and never reach a shell.
+    // itself (Cancel takes focus on mount) and no pane is active while it is up — a pane takes
+    // focus whenever it turns active or reconnects, and a reconnect under the confirm must not
+    // hand Enter to the fresh shell. Dismissing the confirm turns the pane active again, which
+    // is what gives the keyboard back.
     const onKeyDown = (e: React.KeyboardEvent) => {
       const chord = paneChordOf(e);
       if (!chord) return;
@@ -582,6 +582,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
 
     /** A pane's content: the terminal, or the ended card with the provable reason and Restart. */
     const cell = (session: string, groupActive: boolean) => {
+      const paneActive = active && groupActive && session === focused && closing === null;
       const deaths = sessionStore.deaths();
       const listed = room ? room.sessions : (sessionStore.sessions() ?? []);
       const plan = panePlan(session, listed, launched, deaths);
@@ -663,7 +664,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
             room={room.roomId}
             command={creating ? plan.command : undefined}
             refusal={refusal}
-            active={active && groupActive && session === focused}
+            active={paneActive}
             visible={active && groupActive}
             me={room.me}
             writerFde={plan.writerFde}
@@ -683,7 +684,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
           create={
             creating ? { ...BASE_CREATE, command: plan.command, project: projectFor(target) } : undefined
           }
-          active={active && groupActive && session === focused}
+          active={paneActive}
           visible={active && groupActive}
           onStatus={onPaneReport}
           onTitle={onTitle}
