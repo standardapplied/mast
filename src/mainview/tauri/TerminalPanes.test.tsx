@@ -379,6 +379,25 @@ describe("the keyboard runs the shell", () => {
     expect(third.detached).toBe(false);
   });
 
+  test("the close confirm holds the keyboard: Enter and Escape never reach the shell", async () => {
+    await mount();
+    await press({ key: "w", code: "KeyW", metaKey: true });
+    expect(confirmTitle()).toBe("Close shell 1?");
+    expect(document.activeElement?.textContent, "Cancel took the keyboard").toBe("Cancel");
+    await press({ key: "Enter", code: "Enter" });
+    expect(services.link.writes, "Enter answered the dialog, not the prompt").toHaveLength(0);
+    await press({ key: "Escape", code: "Escape" });
+    expect(services.link.writes, "Escape answered the dialog, not the prompt").toHaveLength(0);
+    expect(confirmTitle()).toBeNull();
+    expect(document.activeElement?.getAttribute("tabindex"), "the keyboard went back to the pane").toBe("0");
+    await press({ key: "W", code: "KeyW", metaKey: true, shiftKey: true });
+    expect(confirmTitle(), "the pane hears chords again").toBe("Close shell 1?");
+    await act(async () => (container.querySelector(".dialog-layer .btn-ghost") as HTMLButtonElement).click());
+    expect(confirmTitle()).toBeNull();
+    expect(document.activeElement?.getAttribute("tabindex"), "Cancel by click restores the pane too").toBe("0");
+    expect(services.link.closed).toHaveLength(0);
+  });
+
   test("a program that asked for every key still yields ⌘W to the app", async () => {
     const { attachment } = await mount();
     await act(async () => attachment.lanes.onData(bytes("\x1b[>8u")));

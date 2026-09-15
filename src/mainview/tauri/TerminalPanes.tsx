@@ -427,6 +427,11 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     };
 
     const confirmClose = (sessions: string[]) => setClosing(sessions);
+    /** The confirm was dismissed: the keyboard goes back to the pane it was taken from. */
+    const cancelClose = () => {
+      setClosing(null);
+      paneRefs.current.get(focused)?.focus?.();
+    };
 
     const doClose = (sessions: string[]) => {
       setClosing(null);
@@ -535,7 +540,8 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
     };
 
     // The chords bubble up from the focused pane (which yields them unencoded, whatever kitty
-    // mode its program pushed) or from the empty state. The close confirm answers its own keys.
+    // mode its program pushed) or from the empty state. The close confirm holds the keyboard
+    // itself (Cancel takes focus on mount), so Enter and Escape answer it and never reach a shell.
     const onKeyDown = (e: React.KeyboardEvent) => {
       const chord = paneChordOf(e);
       if (!chord) return;
@@ -851,7 +857,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
         {closing && (
           <Dialog
             isOpen
-            onClose={() => setClosing(null)}
+            onClose={cancelClose}
             title={
               closing.length === 1
                 ? `Close shell ${titleOf(layout, closing[0]!, base, titles)}?`
@@ -860,7 +866,7 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
             size="sm"
             footer={
               <>
-                <Button variant="ghost" onClick={() => setClosing(null)}>
+                <Button autoFocus variant="ghost" onClick={cancelClose}>
                   Cancel
                 </Button>
                 <Button className="btn-danger" onClick={() => doClose(closing)}>
