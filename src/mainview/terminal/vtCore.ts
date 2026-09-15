@@ -1070,7 +1070,8 @@ export class VtCore {
   /**
    * The pointer went down on {@code cell} at {@code px}: starts a selection gesture. A repeat click
    * within libghostty's repeat window widens the unit — a second click selects the word, a third
-   * the line — and installs that selection at once. {@code timeMs} is the event's monotonic time.
+   * the line — and installs that selection at once; a plain click selects nothing, which drops
+   * whatever was selected. {@code timeMs} is the event's monotonic time.
    */
   selectionPress(cell: CellPos, px: SurfacePos, timeMs: number): void {
     this.requireOpen();
@@ -1084,7 +1085,7 @@ export class VtCore {
       } finally {
         this.abi.free(time, 8);
       }
-      this.applyGesture(this.pressEvent);
+      if (!this.applyGesture(this.pressEvent)) this.installSelection(0);
     });
   }
 
@@ -1126,9 +1127,14 @@ export class VtCore {
   clearSelection(): void {
     this.requireOpen();
     this.e.ghostty_selection_gesture_reset(this.gesture, this.term);
-    const rc = this.e.ghostty_terminal_set(this.term, OPT_SELECTION, 0);
+    this.installSelection(0);
+  }
+
+  /** Installs {@code selection} as the terminal's, or none when 0. */
+  private installSelection(selection: number): void {
+    const rc = this.e.ghostty_terminal_set(this.term, OPT_SELECTION, selection);
     if (rc !== SUCCESS) {
-      throw new Error(`VtCore: clearing the selection failed (rc=${rc})`);
+      throw new Error(`VtCore: installing the selection failed (rc=${rc})`);
     }
   }
 
@@ -1182,22 +1188,21 @@ export class VtCore {
   }
 
   /** Runs a gesture event; a produced selection snapshot becomes the terminal's selection. */
-  private applyGesture(event: number): void {
+  /** Feeds {@code event} to the gesture and installs the selection it yields; false when none. */
+  private applyGesture(event: number): boolean {
     const selection = this.abi.alloc(SELECTION_SIZE);
     try {
       this.abi.bytes().fill(0, selection, selection + SELECTION_SIZE);
       this.abi.writeU32(selection, SELECTION_SIZE);
       const rc = this.e.ghostty_selection_gesture_event(this.gesture, this.term, event, selection);
       if (rc === NO_VALUE) {
-        return;
+        return false;
       }
       if (rc !== SUCCESS) {
         throw new Error(`VtCore: selection gesture failed (rc=${rc})`);
       }
-      const set = this.e.ghostty_terminal_set(this.term, OPT_SELECTION, selection);
-      if (set !== SUCCESS) {
-        throw new Error(`VtCore: installing the selection failed (rc=${set})`);
-      }
+      this.installSelection(selection);
+      return true;
     } finally {
       this.abi.free(selection, SELECTION_SIZE);
     }
