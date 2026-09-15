@@ -736,11 +736,6 @@ export const TerminalPanes = forwardRef<TerminalHandle, TerminalPanesProps>(
                 ) : (
                   <span className="term-pane-chip__title">{titleOf(layout, shown, base, titles)}</span>
                 )}
-                {group.panes.length > 1 && (
-                  <span className="term-pane-chip__count" data-testid="term-pane-chip-count">
-                    {group.panes.length}
-                  </span>
-                )}
               </>
             );
             const className = cx("term-pane-chip", i === layout.active && "is-active");

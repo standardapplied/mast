@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Dialog } from "./Dialog";
+import { Select } from "./Select";
 
 let root: Root;
 let container: HTMLElement;
@@ -55,6 +56,22 @@ describe("Dialog", () => {
     });
     await flush();
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("a pick in a Select inside the dialog is not an outside click", async () => {
+    const onClose = mock(() => {});
+    render(
+      <Dialog isOpen onClose={onClose}>
+        <Select value="" onChange={() => {}} options={[{ value: "codex", label: "codex" }]} />
+      </Dialog>,
+    );
+    act(() => document.querySelector<HTMLButtonElement>(".select-trigger")!.click());
+    const option = document.querySelector<HTMLButtonElement>('[data-testid="option-codex"]')!;
+    act(() => {
+      option.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+    await flush();
+    expect(onClose, "the option list lives outside the panel's subtree, yet it is the dialog's").not.toHaveBeenCalled();
   });
 
   test("outside click closes; inside click does not", async () => {

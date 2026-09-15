@@ -56,8 +56,6 @@ const settle = async () => {
 const bytes = (text: string) => new Uint8Array([0, ...new TextEncoder().encode(text)]);
 const chips = () => [...container.querySelectorAll(".term-pane-chip")];
 const chipTitle = (i: number) => chips()[i]?.querySelector(".term-pane-chip__title")?.textContent ?? null;
-const chipCount = (i: number) =>
-  chips()[i]?.querySelector('[data-testid="term-pane-chip-count"]')?.textContent ?? null;
 const activeChip = () => chips().findIndex((c) => c.classList.contains("is-active"));
 const confirmTitle = () => container.querySelector(".dialog-title")?.textContent ?? null;
 const edit = () => container.querySelector<HTMLInputElement>('[data-testid="term-pane-chip-edit"]');
@@ -277,15 +275,13 @@ describe("TerminalPanes over the channel", () => {
 });
 
 describe("the chip names the pane you are in", () => {
-  test("a split group's chip shows the focused pane's title and the split count; focus moves it", async () => {
+  test("a split group's chip shows the focused pane's title; focus moves it", async () => {
     const { attachment: api } = await mount();
     await title(api, "api");
     expect(chipTitle(0)).toBe("api");
-    expect(chipCount(0)).toBeNull();
     const web = await splitRight();
     await title(web, "web");
     expect(chipTitle(0), "the new split took focus").toBe("web");
-    expect(chipCount(0)).toBe("2");
     expect(chips()[0]!.getAttribute("title")).toBe("api · web");
     expect(button("Close shell api · web")).not.toBeNull();
     await pointerDownIn(0);

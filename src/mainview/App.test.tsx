@@ -787,19 +787,18 @@ describe("App cockpit", () => {
     clipboardPolicy.reset();
   });
 
-  test("the user menu's bell toggle is the stored setting", async () => {
+  test("the user menu's bell select is the stored setting", async () => {
     localStorage.setItem("mast.terminal.bell", "bounce");
     attentionStore.connect(localStorage, async () => {});
     await render();
     act(() => {
       container.querySelector<HTMLButtonElement>('[data-testid="user-menu-trigger"]')?.click();
     });
-    const section = container.querySelector('[data-testid="terminal-bell"]');
-    const option = (label: string) =>
-      [...section!.querySelectorAll<HTMLButtonElement>(".toggle-option")].find((b) => b.textContent === label);
-    expect(option("Bounce")?.getAttribute("aria-checked"), "seeded from storage").toBe("true");
-    act(() => option("Flash")?.click());
-    expect(option("Flash")?.getAttribute("aria-checked")).toBe("true");
+    const trigger = container.querySelector<HTMLButtonElement>('[data-testid="terminal-bell"] .select-trigger')!;
+    expect(trigger.textContent, "seeded from storage").toContain("Bounce");
+    act(() => trigger.click());
+    act(() => document.querySelector<HTMLButtonElement>('[data-testid="option-flash"]')?.click());
+    expect(trigger.textContent).toContain("Flash");
     expect(attentionStore.bell()).toBe("flash");
     expect(localStorage.getItem("mast.terminal.bell")).toBe("flash");
     localStorage.removeItem("mast.terminal.bell");

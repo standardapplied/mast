@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { cx } from "./cx";
 import { Cross } from "./icons";
+import { clickedInside } from "./outsideClick";
 
 export type DialogSize = "sm" | "md" | "lg" | "xl" | "full";
 
@@ -67,9 +68,7 @@ export function Dialog({
   useEffect(() => {
     if (!isOpen) return;
     const handleClickOutside = (event: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
-        void handleClose();
-      }
+      if (!clickedInside(panelRef, event.target)) void handleClose();
     };
     document.addEventListener("mousedown", handleClickOutside, true);
     return () => document.removeEventListener("mousedown", handleClickOutside, true);
