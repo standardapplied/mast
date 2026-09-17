@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Gateway } from "../gateway";
+import type { SyncStatus } from "../../shared/sail-models";
+import { SyncHealthChip } from "./SyncHealth";
 import { Dialog } from "./Dialog";
 import { Button } from "./ui";
 
@@ -8,7 +10,9 @@ import { Button } from "./ui";
  * HTTP log tail from the Bun main. Secrets are redacted server-side before the
  * report crosses the RPC boundary.
  */
-export function Diagnostics({ gateway, onClose }: { gateway: Gateway; onClose: () => void }) {
+export function Diagnostics({ gateway, onClose, syncStatus, node }: {
+  gateway: Gateway; onClose: () => void; syncStatus?: SyncStatus | null; node?: string;
+}) {
   const [report, setReport] = useState("Collecting…");
   const [logPath, setLogPath] = useState("");
   const [copied, setCopied] = useState(false);
@@ -51,6 +55,7 @@ export function Diagnostics({ gateway, onClose }: { gateway: Gateway; onClose: (
         </>
       }
     >
+      {node && <div className="sync-node-row"><span>{node}</span><SyncHealthChip status={syncStatus ?? null} /></div>}
       <pre className="diag-report" data-testid="diagnostics-report">
         {report}
       </pre>

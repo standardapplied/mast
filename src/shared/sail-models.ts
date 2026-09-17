@@ -615,3 +615,16 @@ export type ApiErrorBody = {
     field_errors?: Array<{ field: string; message: string }>;
   };
 };
+
+export type SyncStatus = {
+  role?: string | null;
+  main?: string | null;
+  state?: "in_sync" | "syncing" | "stale" | null;
+  last_attempt_at?: string | null;
+  last_success_at?: string | null;
+  consecutive_failures: number;
+  last_error_kind?: "unreachable" | "refused" | "protocol" | "store" | null;
+  last_error?: string | null;
+  stale_since?: string | null;
+  last_report?: { pulled: number; pushed: number; merged: number; conflicts: number } | null;
+};

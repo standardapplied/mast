@@ -6,6 +6,7 @@ import type {
   AgentLogResponse,
   AgentLogRole,
   ConnectionStatus,
+  SyncStatus,
   DispatchRequest,
   DispatchResponse,
   FdeListResponse,
@@ -67,6 +68,7 @@ export type AgentLogHandle = {
  * drivable without a native shell or a live server.
  */
 export type Gateway = {
+  syncStatus(): Promise<SailResult<SyncStatus>>;
   listSpecs(filter?: SpecFilter): Promise<SailResult<GlobalSpecsListResponse>>;
   /** Every room (optionally a project's), decorated with activity (GET /v1/rooms). */
   listRooms(project?: string): Promise<SailResult<RoomsListResponse>>;
@@ -801,6 +803,15 @@ export function createDemoGateway(): DemoGateway {
       return ok({ ...(agent ? { agent } : {}), disengaged: agent !== undefined });
     },
 
+    async syncStatus() {
+      return ok({
+        role: "node", main: "demo-main", state: "in_sync",
+        last_attempt_at: new Date().toISOString(),
+        last_success_at: new Date().toISOString(),
+        consecutive_failures: 0, last_error_kind: null, last_error: null, stale_since: null,
+        last_report: { pulled: 0, pushed: 0, merged: 0, conflicts: 0 },
+      });
+    },
     async whoami() {
       return {
         ok: true,

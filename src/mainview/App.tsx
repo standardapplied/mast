@@ -7,6 +7,7 @@ import { connectPresence, presenceStore } from "./board/presenceStore";
 import { RoomsScreen } from "./board/RoomsScreen";
 import { RoomTerminalRoute } from "./board/RoomTerminalRoute";
 import { SpecDetail } from "./board/SpecDetail";
+import { SyncHealthChip, useSyncStatus } from "./components/SyncHealth";
 import { Diagnostics } from "./components/Diagnostics";
 import { cx } from "./components/cx";
 import { Board, Logo, Rooms, Terminal } from "./components/icons";
@@ -181,6 +182,7 @@ export function App({
   // moment it isn't (logout → unauthenticated), so the menu never shows a stale
   // name. Refetched automatically when a login flips the phase back to ready.
   const ready = status?.phase === "ready";
+  const syncStatus = useSyncStatus(gateway, ready);
   useEffect(() => {
     if (!ready) return void setIdentity(null);
     void gateway.whoami().then((r) => setIdentity(r.ok ? r.value : null));
@@ -350,6 +352,7 @@ export function App({
                 : "Mast"}
             </div>
           )}
+          <SyncHealthChip status={syncStatus} />
         </header>
         <div className="cockpit-body">
         <nav className="rail" aria-label="Sections" data-tauri-drag-region="deep">
@@ -453,7 +456,7 @@ export function App({
             {status?.detail ? ` — ${status.detail}` : ""}
           </div>
         )}
-        {showDiagnostics && <Diagnostics gateway={gateway} onClose={() => setShowDiagnostics(false)} />}
+        {showDiagnostics && <Diagnostics gateway={gateway} syncStatus={syncStatus} node={status?.server} onClose={() => setShowDiagnostics(false)} />}
       </div>
     </ToastProvider>
   );
