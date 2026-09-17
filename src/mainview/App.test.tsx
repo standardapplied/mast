@@ -61,6 +61,28 @@ afterEach(() => {
 });
 
 describe("App cockpit", () => {
+  test("the topbar and connected node row show the same stored sync health", async () => {
+    await render();
+    gateway.syncStatus = async () => ({ ok: true, value: {
+      role: "node", main: "main", state: "stale", consecutive_failures: 5,
+      last_attempt_at: new Date().toISOString(), last_error_kind: "protocol",
+      last_error: "message: page exceeded 4 MiB",
+      stale_since: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+    } });
+    await act(async () => gateway.emit({
+      v: 1, ts: new Date().toISOString(), project: "sail", type: "sync_degraded",
+      agent: "sail", host: "node",
+    }));
+    expect(container.querySelector(".topbar [data-sync-state]")?.textContent)
+      .toBe("stale since 3 d — message: page exceeded 4 MiB");
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="user-menu-trigger"]')?.click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Diagnostics")?.click());
+    expect(document.querySelector(".sync-node-row")?.textContent).toContain("demo fixtures");
+    expect(document.querySelector(".sync-node-row [data-sync-state]")?.textContent)
+      .toBe("stale since 3 d — message: page exceeded 4 MiB");
+  });
+
   test("lands on rooms and keeps the board one view away", async () => {
     await render(undefined, "rooms");
     expect(container.querySelector(".rail-brand")).not.toBeNull();

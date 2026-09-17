@@ -5869,3 +5869,25 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   display: flex;
   gap: 8px;
 }
+
+.sync-health {
+  max-width: min(40vw, 32rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+  text-transform: none;
+}
+
+.topbar > .sync-health {
+  align-self: center;
+  margin: 0 12px 0 auto;
+}
+
+.sync-node-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
