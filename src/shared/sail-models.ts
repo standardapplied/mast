@@ -619,7 +619,7 @@ export type ApiErrorBody = {
 export type SyncStatus = {
   role?: string | null;
   main?: string | null;
-  state: "in_sync" | "syncing" | "stale";
+  state?: "in_sync" | "syncing" | "stale" | null;
   last_attempt_at?: string | null;
   last_success_at?: string | null;
   consecutive_failures: number;
