@@ -48,8 +48,8 @@ export function fileMenuItems(entries: FileEntry[], a: FileActions, isRoot = fal
   }
   const entry = entries[0]!;
   const create: MenuNode[] = [
-    { kind: "item", label: "New file…", onSelect: () => a.newFile(entry.path) },
-    { kind: "item", label: "New folder…", onSelect: () => a.newFolder(entry.path) },
+    { kind: "item", label: "New file", onSelect: () => a.newFile(entry.path) },
+    { kind: "item", label: "New folder", onSelect: () => a.newFolder(entry.path) },
   ];
   const copy: MenuNode = { kind: "item", label: "Copy path", onSelect: () => a.copyPaths([entry.path]) };
   if (isRoot) {
@@ -65,7 +65,7 @@ export function fileMenuItems(entries: FileEntry[], a: FileActions, isRoot = fal
     copy,
     { kind: "item", label: entry.isDir ? "Download folder" : "Download", hint: "→ ~/Downloads", onSelect: () => a.download([entry]) },
     { kind: "separator" },
-    { kind: "item", label: "Rename…", onSelect: () => a.rename(entry) },
+    { kind: "item", label: "Rename", onSelect: () => a.rename(entry) },
     { kind: "item", label: "Delete", danger: true, onSelect: () => a.remove([entry]) },
   ];
   if (entry.isDir) {

@@ -249,7 +249,7 @@ export function RoomList({
                 data-testid="prune-archived"
                 onClick={() => onPruneArchived(archivedSpecs(grouped))}
               >
-                Prune archived…
+                Prune archived
               </button>
             )}
           </div>

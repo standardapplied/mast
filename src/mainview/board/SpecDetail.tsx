@@ -399,14 +399,14 @@ export function SpecDetail({
       ? []
       : [{
           kind: "item" as const,
-          label: restart ? "Re-dispatch…" : "Dispatch…",
+          label: restart ? "Re-dispatch" : "Dispatch",
           onSelect: () => setDispatchOpen(true),
         }]),
     ...(spec.engagement || archived
       ? []
       : [{
           kind: "item" as const,
-          label: "Add an agent…",
+          label: "Add an agent",
           onSelect: () => setEngageOpen(true),
         }]),
     openTerminalMenu((glyph) => openTerminal({ launch: glyph })),
@@ -417,7 +417,7 @@ export function SpecDetail({
       : [{ kind: "item" as const, label: "Archive", onSelect: () => void archive() }]),
     {
       kind: "item",
-      label: "Prune…",
+      label: "Prune",
       danger: prunable,
       disabled: !prunable,
       hint: prunable ? undefined : "Archive first",

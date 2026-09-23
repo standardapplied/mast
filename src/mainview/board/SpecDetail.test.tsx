@@ -773,16 +773,16 @@ describe("prune", () => {
   const pruneGo = () => container.querySelector<HTMLButtonElement>('[data-testid="prune-go"]');
   const openPrune = async () => {
     await openActions();
-    act(() => menuItem("Prune…")!.click());
+    act(() => menuItem("Prune")!.click());
     await settle();
   };
 
-  test("a live spec offers Archive, and Prune… waits below the rule until it is archived", async () => {
+  test("a live spec offers Archive, and Prune waits below the rule until it is archived", async () => {
     const fake = makeGateway("done", "uday");
     await mount(fake.gateway);
     await openActions();
 
-    const prune = menuItem("Prune…")!;
+    const prune = menuItem("Prune")!;
     expect(prune.disabled).toBe(true);
     expect(prune.textContent).toContain("Archive first");
     expect(document.querySelector(".context-menu-sep")).not.toBeNull();
@@ -793,7 +793,7 @@ describe("prune", () => {
     expect(fake.updates).toContainEqual({ status: "archived" });
   });
 
-  test("an archived spec's read-only room offers no dispatch or agent, only Prune…", async () => {
+  test("an archived spec's read-only room offers no dispatch or agent, only Prune", async () => {
     await mount(makeGateway("archived", "uday").gateway);
     await openActions();
 
@@ -801,7 +801,7 @@ describe("prune", () => {
     expect(menuItem("Re-dispatch")).toBeUndefined();
     expect(menuItem("Add an agent")).toBeUndefined();
     expect(menuItem("Archive")).toBeUndefined();
-    expect(menuItem("Prune…")!.disabled).toBe(false);
+    expect(menuItem("Prune")!.disabled).toBe(false);
   });
 
   test("the report comes first, and confirming erases exactly once and leaves the spec", async () => {

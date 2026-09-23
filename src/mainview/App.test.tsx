@@ -476,7 +476,7 @@ describe("App cockpit", () => {
     };
     const dispatchItem = () =>
       [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find(
-        (b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch…",
+        (b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch",
       );
 
     // Pending + assigned + no unmet deps → dispatchable.
@@ -545,16 +545,16 @@ describe("App cockpit", () => {
       [...container.querySelectorAll(".context-menu-label")].map((n) => n.textContent);
 
     act(() => rightClick("chorus-rate-limits")); // review
-    expect(labels()).toContain("Re-dispatch…");
+    expect(labels()).toContain("Re-dispatch");
 
     act(() => rightClick("chorus-onboarding")); // done
-    expect(labels()).toContain("Re-dispatch…");
+    expect(labels()).toContain("Re-dispatch");
 
     act(() => rightClick("chorus-billing-export")); // pending
-    expect(labels()).not.toContain("Re-dispatch…");
+    expect(labels()).not.toContain("Re-dispatch");
 
     act(() => rightClick("chorus-invoice-ui")); // in_progress
-    expect(labels()).not.toContain("Re-dispatch…");
+    expect(labels()).not.toContain("Re-dispatch");
   });
 
   test("re-dispatch relaunches a review spec into in progress", async () => {
@@ -567,7 +567,7 @@ describe("App cockpit", () => {
     });
     act(() => {
       [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")]
-        .find((b) => b.querySelector(".context-menu-label")?.textContent === "Re-dispatch…")
+        .find((b) => b.querySelector(".context-menu-label")?.textContent === "Re-dispatch")
         ?.click();
     });
     await flush();
@@ -616,7 +616,7 @@ describe("App cockpit", () => {
     });
     act(() => {
       [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")]
-        .find((b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch…")
+        .find((b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch")
         ?.click();
     });
     await flush();
@@ -643,7 +643,7 @@ describe("App cockpit", () => {
       );
     });
     const menuDispatch = [...container.querySelectorAll<HTMLButtonElement>(".context-menu-item")].find(
-      (b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch…",
+      (b) => b.querySelector(".context-menu-label")?.textContent === "Dispatch",
     );
     act(() => menuDispatch?.click());
     await flush();

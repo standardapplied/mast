@@ -32,7 +32,7 @@ describe("fileMenuItems", () => {
       "Open in default app",
       "Copy path",
       "Download",
-      "Rename…",
+      "Rename",
       "Delete",
     ]);
   });
@@ -40,17 +40,17 @@ describe("fileMenuItems", () => {
   test("dir menu offers re-root and creation, no viewer open", () => {
     expect(labels([dir])).toEqual([
       "Open as root",
-      "New file…",
-      "New folder…",
+      "New file",
+      "New folder",
       "Copy path",
       "Download folder",
-      "Rename…",
+      "Rename",
       "Delete",
     ]);
   });
 
   test("the root row creates and downloads but never renames or deletes itself", () => {
-    expect(labels([root], true)).toEqual(["New file…", "New folder…", "Copy path", "Download folder"]);
+    expect(labels([root], true)).toEqual(["New file", "New folder", "Copy path", "Download folder"]);
   });
 
   test("a multi-selection acts in bulk with counts", () => {

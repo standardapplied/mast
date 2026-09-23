@@ -492,7 +492,7 @@ export function BoardScreen({
       { kind: "separator" },
       {
         kind: "item",
-        label: "Dispatch…",
+        label: "Dispatch",
         disabled: !dispatchable,
         hint,
         onSelect: () => setDispatchTarget({ spec, restart: false }),
@@ -501,7 +501,7 @@ export function BoardScreen({
         ? [
             {
               kind: "item" as const,
-              label: "Re-dispatch…",
+              label: "Re-dispatch",
               disabled: unmet.length > 0,
               hint: unmet.length > 0 ? "Blocked" : undefined,
               onSelect: () => setDispatchTarget({ spec, restart: true }),
