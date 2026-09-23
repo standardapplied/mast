@@ -229,10 +229,15 @@ describe("RoomsScreen", () => {
     await act(async () => {});
 
     const choice = (id: string) =>
-      container.querySelector<HTMLInputElement>(`[data-testid="prune-choice-${id}"]`)!;
+      container.querySelector<HTMLButtonElement>(
+        `[data-testid="prune-choice-${id}"] [role="checkbox"]`,
+      )!;
     expect(container.textContent).toContain("Prune archived specs?");
-    expect(choice("chorus-onboarding").checked).toBe(true);
-    expect(choice("chorus-ledger-sync").checked).toBe(false);
+    expect(choice("chorus-onboarding").getAttribute("aria-checked")).toBe("true");
+    expect(choice("chorus-ledger-sync").getAttribute("aria-checked")).toBe("false");
+    expect(container.querySelector('[data-testid="prune-report"]')?.textContent).toStartWith(
+      "Erases chorus-onboarding and its room from every box",
+    );
     expect(calls).toEqual([{ ids: ["chorus-onboarding"], dry_run: true }]);
     expect(container.querySelector('[data-testid="prune-report"]')).not.toBeNull();
 

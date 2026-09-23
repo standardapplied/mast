@@ -29,6 +29,7 @@ import { DispatchDialog } from "./DispatchDialog";
 import { openTerminalMenu, RoomDeckStrip } from "./RoomDeck";
 import { EngageDialog } from "./EngageDialog";
 import { PruneDialog } from "./PruneDialog";
+import { refusalDetail } from "./snapshots";
 import { RosterChip } from "./RosterChip";
 import { PresenceChip } from "./PresenceChip";
 import { LiveLog } from "./LiveLog";
@@ -388,33 +389,50 @@ export function SpecDetail({
     onOpenTerminal({ roomId, project: spec.project, title: spec.title, ...request });
 
   // Live log and Stop stay inline while an agent runs; the lifecycle actions —
-  // dispatch, add member, open terminal, edit — collapse into this one Actions menu.
+  // dispatch, add member, open terminal, edit — collapse into this one Actions menu,
+  // and the ladder that removes work (archive, then prune) closes it below a rule.
+  // An archived spec's room is read-only, so it offers no dispatch and no agent.
+  const archived = spec.status === "archived";
+  const prunable = archived || spec.status === "cancelled";
   const actionItems: MenuNode[] = [
-    ...(spec.status === "draft"
+    ...(spec.status === "draft" || archived
       ? []
       : [{
           kind: "item" as const,
-          label: restart ? "Re-dispatch" : "Dispatch",
+          label: restart ? "Re-dispatch…" : "Dispatch…",
           onSelect: () => setDispatchOpen(true),
         }]),
-    ...(spec.engagement
+    ...(spec.engagement || archived
       ? []
       : [{
           kind: "item" as const,
-          label: "Add an agent",
+          label: "Add an agent…",
           onSelect: () => setEngageOpen(true),
         }]),
     openTerminalMenu((glyph) => openTerminal({ launch: glyph })),
     { kind: "item", label: "Edit", onSelect: startEdit },
-    ...(spec.status === "archived"
-      ? [{
-          kind: "item" as const,
-          label: "Prune…",
-          danger: true,
-          onSelect: () => setPruneOpen(true),
-        }]
-      : []),
+    { kind: "separator" },
+    ...(archived
+      ? []
+      : [{ kind: "item" as const, label: "Archive", onSelect: () => void archive() }]),
+    {
+      kind: "item",
+      label: "Prune…",
+      danger: prunable,
+      disabled: !prunable,
+      hint: prunable ? undefined : "Archive first",
+      onSelect: () => setPruneOpen(true),
+    },
   ];
+
+  const archive = async () => {
+    const { outcome, error } = await catalogStore.moveSpec(spec.id, "archived");
+    if (outcome === "conflict") {
+      showToast("error", `${spec.id} was changed by someone else — reloaded, not archived.`);
+    } else if (outcome === "error") {
+      showToast("error", error ? `Couldn’t archive ${spec.id}: ${refusalDetail(error)}` : `Couldn’t archive ${spec.id}.`);
+    }
+  };
 
   const removeMember = async () => {
     setDismissConfirm(false);

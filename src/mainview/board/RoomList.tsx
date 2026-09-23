@@ -214,16 +214,6 @@ export function RoomList({
                 {SECTION_LABELS[section]}
               </div>
             )}
-            {section === "archive" && showArchive && onPruneArchived && archivedSpecs(grouped).length > 0 && (
-              <Button
-                variant="ghost"
-                className="btn-ghost-danger room-section-prune"
-                data-testid="prune-archived"
-                onClick={() => onPruneArchived(archivedSpecs(grouped))}
-              >
-                Prune archived…
-              </Button>
-            )}
             {(section !== "archive" || showArchive) &&
               grouped.map((room) => (
                 <button
@@ -252,6 +242,16 @@ export function RoomList({
                   <time className="room-row-time">{relativeTime(room.activityAt, now)}</time>
                 </button>
               ))}
+            {section === "archive" && showArchive && onPruneArchived && archivedSpecs(grouped).length > 0 && (
+              <button
+                type="button"
+                className="room-section-action"
+                data-testid="prune-archived"
+                onClick={() => onPruneArchived(archivedSpecs(grouped))}
+              >
+                Prune archived…
+              </button>
+            )}
           </div>
         ))}
       </div>
