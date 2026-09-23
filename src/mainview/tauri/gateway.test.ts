@@ -199,3 +199,38 @@ describe("Tauri gateway room wire", () => {
     ]);
   });
 });
+
+describe("Tauri gateway prune wire", () => {
+  test("pruneSpecs POSTs /v1/specs:prune with the selection and the dry-run flag", async () => {
+    const report = {
+      dry_run: true,
+      requested: false,
+      specs: 1,
+      rooms: 1,
+      messages: 0,
+      runs: 0,
+      reviews: 0,
+      files: 0,
+      projects: 0,
+      events: 0,
+      blob_bytes: 12,
+      entries: [{ type: "spec", id: "old" }],
+    };
+    const calls = stubInvoke({ status: 200, body: JSON.stringify(report) });
+
+    const result = await createTauriGateway().pruneSpecs({ ids: ["old"], dry_run: true });
+
+    expect(calls).toEqual([
+      {
+        cmd: "sail_request",
+        args: {
+          method: "POST",
+          path: "/v1/specs:prune",
+          body: JSON.stringify({ ids: ["old"], dry_run: true }),
+          ifMatch: null,
+        },
+      },
+    ]);
+    expect(result).toEqual({ ok: true, value: report, etag: undefined });
+  });
+});

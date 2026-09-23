@@ -21,6 +21,8 @@ import type {
   RoomsListResponse,
   ServerRoomView,
   ProjectListResponse,
+  PruneReport,
+  PruneRequest,
   RecentEventsResponse,
   ReviewDetailResponse,
   ReviewListResponse,
@@ -141,6 +143,8 @@ export type Gateway = {
   listRuns(specId?: string): Promise<SailResult<RunListResponse>>;
   /** Clean-stop a running run (POST /v1/runs/{id}/stop) — sail ≥ v0.13.172. */
   stopRun(runId: string): Promise<SailResult<StopRunResponse>>;
+  /** Erase specs everywhere, or report what would go (POST /v1/specs:prune) — sail ≥ 0.46. */
+  pruneSpecs(request: PruneRequest): Promise<SailResult<PruneReport>>;
   /** The project's container snapshots with prefix-derived sources — sail ≥ 0.24. */
   listSnapshots(project: string): Promise<SailResult<SnapshotListResponse>>;
   /** Accept an async restore; completion arrives as the snapshot_restored event. */
@@ -891,6 +895,47 @@ export function createDemoGateway(): DemoGateway {
         data: { from: previous, to: "cancelled" },
       });
       return ok({ run_id: runId, stopped: true, spec_cancelled: true });
+    },
+
+    async pruneSpecs(request) {
+      const doomed = request.ids.map((id) => find(id));
+      const missing = request.ids.find((_, index) => !doomed[index]);
+      if (missing) return notFound(missing);
+      const pruned = doomed.filter((spec): spec is DemoSpec => !!spec);
+      const report: PruneReport = {
+        dry_run: request.dry_run,
+        requested: false,
+        specs: pruned.length,
+        rooms: pruned.length,
+        messages: pruned.reduce((sum, spec) => sum + (messages.get(spec.id)?.length ?? 0), 0),
+        runs: 0,
+        reviews: 0,
+        files: 0,
+        projects: 0,
+        events: 0,
+        blob_bytes: pruned.length * 4096,
+        entries: pruned.flatMap((spec) => [
+          { type: "spec", id: spec.id },
+          { type: "room", id: spec.id },
+        ]),
+      };
+      if (request.dry_run) return ok(report);
+      for (const spec of pruned) {
+        specs.splice(specs.indexOf(spec), 1);
+        messages.delete(spec.id);
+        emit({
+          v: 1,
+          id: ++eventId,
+          ts: new Date().toISOString(),
+          project: spec.project,
+          spec: spec.id,
+          type: "board_updated",
+          agent: "mast",
+          host: "demo",
+          data: {},
+        });
+      }
+      return ok(report);
     },
 
     async listSnapshots(project) {

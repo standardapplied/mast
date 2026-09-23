@@ -249,6 +249,34 @@ export type StopRunResponse = {
   spec_cancelled: boolean;
 };
 
+/** Body of POST /v1/specs:prune — what to erase everywhere, and whether only to report it. */
+export type PruneRequest = {
+  ids: string[];
+  dry_run: boolean;
+};
+
+/** One erased entity, by its sync type and id. */
+export type PruneEntry = { type: string; id: string };
+
+/**
+ * What a prune erased or, as a dry run, would erase. On a node an applied prune
+ * is `requested`: main erases it, and the node follows on its next sync.
+ */
+export type PruneReport = {
+  dry_run: boolean;
+  requested: boolean;
+  specs: number;
+  rooms: number;
+  messages: number;
+  runs: number;
+  reviews: number;
+  files: number;
+  projects: number;
+  events: number;
+  blob_bytes: number;
+  entries: PruneEntry[];
+};
+
 /** One container snapshot; `source` is derived server-side from the name's prefix. */
 export type SnapshotView = {
   name: string;

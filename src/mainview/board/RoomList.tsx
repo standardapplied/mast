@@ -1,4 +1,4 @@
-import type { AgentView } from "../../shared/sail-models";
+import type { AgentView, GlobalSpecView } from "../../shared/sail-models";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CaretDown, CaretRight, Plus } from "../components/icons";
 import { Dialog } from "../components/Dialog";
@@ -31,6 +31,7 @@ export function RoomList({
   onSelect,
   onShowArchive,
   onCreate,
+  onPruneArchived,
 }: {
   gateway: Pick<Gateway, "listAgents">;
   rooms: readonly RoomView[];
@@ -48,6 +49,8 @@ export function RoomList({
   onSelect: (room: RoomView) => void;
   onShowArchive: (show: boolean) => void;
   onCreate: (title: string, project: string, agent?: string) => Promise<boolean>;
+  /** Offered on the open Archive section when it lists archived specs. */
+  onPruneArchived?: (specs: GlobalSpecView[]) => void;
 }) {
   const [newRoom, setNewRoom] = useState(false);
   const [title, setTitle] = useState("");
@@ -211,6 +214,16 @@ export function RoomList({
                 {SECTION_LABELS[section]}
               </div>
             )}
+            {section === "archive" && showArchive && onPruneArchived && archivedSpecs(grouped).length > 0 && (
+              <Button
+                variant="ghost"
+                className="btn-ghost-danger room-section-prune"
+                data-testid="prune-archived"
+                onClick={() => onPruneArchived(archivedSpecs(grouped))}
+              >
+                Prune archived…
+              </Button>
+            )}
             {(section !== "archive" || showArchive) &&
               grouped.map((room) => (
                 <button
@@ -244,4 +257,8 @@ export function RoomList({
       </div>
     </aside>
   );
+}
+
+function archivedSpecs(rooms: readonly RoomView[]): GlobalSpecView[] {
+  return rooms.flatMap((room) => (room.spec?.status === "archived" ? [room.spec] : []));
 }

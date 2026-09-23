@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import type { PruneRequest } from "../../shared/sail-models";
 import { ToastProvider } from "../components/Toast";
 import { createDemoGateway, type DemoGateway } from "../gateway";
 import { RoomsScreen } from "./RoomsScreen";
@@ -202,5 +203,57 @@ describe("RoomsScreen", () => {
       container.querySelector('[data-testid="room-chorus-billing-export"]')?.classList
         .contains("is-selected"),
     ).toBe(true);
+  });
+
+  test("the open archive prunes the archived specs chosen, the caller's own checked, and the rows leave on the ack", async () => {
+    const gateway = createDemoGateway();
+    await gateway.updateSpec("chorus-onboarding", { status: "archived" });
+    await gateway.updateSpec("chorus-ledger-sync", { status: "archived" });
+    gateway.onEvent = () => () => {};
+    const calls: PruneRequest[] = [];
+    const prune = gateway.pruneSpecs.bind(gateway);
+    gateway.pruneSpecs = (request) => {
+      calls.push(request);
+      return prune(request);
+    };
+    await render(gateway);
+    expect(container.querySelector('[data-testid="prune-archived"]')).toBeNull();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="archive-section"]')?.click();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="prune-archived"]')?.click();
+    });
+    await act(async () => {});
+    await act(async () => {});
+
+    const choice = (id: string) =>
+      container.querySelector<HTMLInputElement>(`[data-testid="prune-choice-${id}"]`)!;
+    expect(container.textContent).toContain("Prune archived specs?");
+    expect(choice("chorus-onboarding").checked).toBe(true);
+    expect(choice("chorus-ledger-sync").checked).toBe(false);
+    expect(calls).toEqual([{ ids: ["chorus-onboarding"], dry_run: true }]);
+    expect(container.querySelector('[data-testid="prune-report"]')).not.toBeNull();
+
+    await act(async () => choice("chorus-ledger-sync").click());
+    await act(async () => {});
+    expect(calls.at(-1)).toEqual({
+      ids: expect.arrayContaining(["chorus-onboarding", "chorus-ledger-sync"]),
+      dry_run: true,
+    });
+    await act(async () => choice("chorus-ledger-sync").click());
+    await act(async () => {});
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="prune-go"]')?.click();
+    });
+    await act(async () => {});
+    await act(async () => {});
+
+    expect(calls.at(-1)).toEqual({ ids: ["chorus-onboarding"], dry_run: false });
+    expect(container.textContent).toContain("Pruned chorus-onboarding everywhere.");
+    expect(container.querySelector('[data-testid="room-chorus-onboarding"]')).toBeNull();
+    expect(container.querySelector('[data-testid="room-chorus-ledger-sync"]')).not.toBeNull();
   });
 });

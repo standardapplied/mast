@@ -2213,6 +2213,36 @@ button.room-section-head:hover {
   font-weight: 400;
 }
 
+.room-section-prune {
+  justify-self: start;
+  margin: 0 12px 6px;
+  font-size: 11px;
+}
+
+.prune-choices {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.prune-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.prune-choice-id {
+  font-family: var(--font-mono);
+}
+
+.prune-choice-owner {
+  margin-left: auto;
+  color: var(--muted-foreground);
+}
+
 .room-working-dot {
   width: 6px;
   height: 6px;

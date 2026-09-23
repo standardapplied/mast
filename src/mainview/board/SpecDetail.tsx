@@ -28,6 +28,7 @@ import { catalogStore, connectCatalog } from "./catalogStore";
 import { DispatchDialog } from "./DispatchDialog";
 import { openTerminalMenu, RoomDeckStrip } from "./RoomDeck";
 import { EngageDialog } from "./EngageDialog";
+import { PruneDialog } from "./PruneDialog";
 import { RosterChip } from "./RosterChip";
 import { PresenceChip } from "./PresenceChip";
 import { LiveLog } from "./LiveLog";
@@ -149,6 +150,7 @@ export function SpecDetail({
   const [stopTarget, setStopTarget] = useState<RunView | null>(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [engageOpen, setEngageOpen] = useState(false);
+  const [pruneOpen, setPruneOpen] = useState(false);
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number } | null>(null);
@@ -404,6 +406,14 @@ export function SpecDetail({
         }]),
     openTerminalMenu((glyph) => openTerminal({ launch: glyph })),
     { kind: "item", label: "Edit", onSelect: startEdit },
+    ...(spec.status === "archived"
+      ? [{
+          kind: "item" as const,
+          label: "Prune…",
+          danger: true,
+          onSelect: () => setPruneOpen(true),
+        }]
+      : []),
   ];
 
   const removeMember = async () => {
@@ -806,6 +816,19 @@ export function SpecDetail({
           onResult={(message, ok) => {
             showToast(ok ? "success" : "error", message);
             if (ok) void load();
+          }}
+        />
+      )}
+
+      {pruneOpen && (
+        <PruneDialog
+          gateway={gateway}
+          candidates={[spec]}
+          selected={[spec.id]}
+          onClose={() => setPruneOpen(false)}
+          onPruned={(message, requested) => {
+            showToast("success", message);
+            if (!requested) onBack();
           }}
         />
       )}
