@@ -203,4 +203,37 @@ describe("RoomsScreen", () => {
         .contains("is-selected"),
     ).toBe(true);
   });
+
+  test("the open archive offers to prune its archived specs, report first", async () => {
+    const gateway = await render();
+    await act(async () => {
+      await gateway.updateSpec("chorus-onboarding", { status: "archived" });
+    });
+    await act(async () => {});
+    expect(container.querySelector('[data-testid="prune-archived"]')).toBeNull();
+
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-testid="archive-section"]')?.click();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="prune-archived"]')?.click();
+    });
+    await act(async () => {});
+    await act(async () => {});
+
+    expect(container.textContent).toContain("Prune chorus-onboarding?");
+    expect(container.querySelector('[data-testid="prune-report"]')?.textContent).toContain(
+      "Specs1",
+    );
+    expect(container.querySelector('[data-testid="room-chorus-onboarding"]')).not.toBeNull();
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="prune-go"]')?.click();
+    });
+    await act(async () => {});
+    await act(async () => {});
+
+    expect(container.textContent).toContain("Pruned chorus-onboarding everywhere.");
+    expect((await gateway.getSpec("chorus-onboarding")).ok).toBe(false);
+  });
 });

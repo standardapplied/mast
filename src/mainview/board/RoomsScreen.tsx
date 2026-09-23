@@ -7,6 +7,7 @@ import type { Gateway } from "../gateway";
 import type { RoomTerminalRequest } from "../terminal/roomDeck";
 import { RoomList } from "./RoomList";
 import { ChatRoomPane } from "./ChatRoomPane";
+import { PruneDialog } from "./PruneDialog";
 import { SpecDetail } from "./SpecDetail";
 import {
   selectedRoom,
@@ -42,6 +43,7 @@ export function RoomsScreen({
   const [selectedId, setSelectedId] = useState<string>();
   const [showArchive, setShowArchive] = useState(() => storage.getItem(ARCHIVE_KEY) === "true");
   const [creating, setCreating] = useState(false);
+  const [pruning, setPruning] = useState<string[] | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => storedWidth(storage));
   const { showToast } = useToast();
 
@@ -130,8 +132,17 @@ export function RoomsScreen({
             storage.setItem(ARCHIVE_KEY, String(open));
           }}
           onCreate={createRoom}
+          onPruneArchived={setPruning}
         />
       </div>
+      {pruning && (
+        <PruneDialog
+          gateway={gateway}
+          ids={pruning}
+          onClose={() => setPruning(null)}
+          onResult={(message, ok) => showToast(ok ? "success" : "error", message)}
+        />
+      )}
       <Splitter
         value={sidebarWidth}
         min={240}

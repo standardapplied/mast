@@ -2213,6 +2213,12 @@ button.room-section-head:hover {
   font-weight: 400;
 }
 
+.room-section-prune {
+  justify-self: start;
+  margin: 0 12px 6px;
+  font-size: 11px;
+}
+
 .room-working-dot {
   width: 6px;
   height: 6px;
