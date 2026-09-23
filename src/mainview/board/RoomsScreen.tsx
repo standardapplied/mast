@@ -3,11 +3,12 @@ import { LoadingMark } from "../components/Loading";
 import { Splitter } from "../components/Splitter";
 import { useToast } from "../components/Toast";
 import { Button, Eyebrow } from "../components/ui";
+import type { GlobalSpecView } from "../../shared/sail-models";
 import type { Gateway } from "../gateway";
 import type { RoomTerminalRequest } from "../terminal/roomDeck";
 import { RoomList } from "./RoomList";
 import { ChatRoomPane } from "./ChatRoomPane";
-import { PruneDialog } from "./PruneDialog";
+import { ownedBy, PruneDialog } from "./PruneDialog";
 import { SpecDetail } from "./SpecDetail";
 import {
   selectedRoom,
@@ -43,7 +44,7 @@ export function RoomsScreen({
   const [selectedId, setSelectedId] = useState<string>();
   const [showArchive, setShowArchive] = useState(() => storage.getItem(ARCHIVE_KEY) === "true");
   const [creating, setCreating] = useState(false);
-  const [pruning, setPruning] = useState<string[] | null>(null);
+  const [pruning, setPruning] = useState<GlobalSpecView[] | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => storedWidth(storage));
   const { showToast } = useToast();
 
@@ -138,9 +139,10 @@ export function RoomsScreen({
       {pruning && (
         <PruneDialog
           gateway={gateway}
-          ids={pruning}
+          candidates={pruning}
+          selected={pruning.filter((spec) => ownedBy(spec, data.me)).map((spec) => spec.id)}
           onClose={() => setPruning(null)}
-          onResult={(message, ok) => showToast(ok ? "success" : "error", message)}
+          onPruned={(message) => showToast("success", message)}
         />
       )}
       <Splitter

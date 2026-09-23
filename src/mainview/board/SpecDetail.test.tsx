@@ -72,7 +72,9 @@ function makeGateway(
     value: { run_id: "run-b1", stopped: true, spec_cancelled: true },
   };
   const pruneCalls: PruneRequest[] = [];
-  let pruneResult: ((request: PruneRequest) => SailResult<PruneReport>) | null = null;
+  let pruneResult:
+    | ((request: PruneRequest) => SailResult<PruneReport> | Promise<SailResult<PruneReport>>)
+    | null = null;
 
   const gateway = {
     ...catalogLaneStubs(),
@@ -218,8 +220,9 @@ function makeGateway(
     updates,
     stopCalls,
     pruneCalls,
-    setPruneResult: (result: (request: PruneRequest) => SailResult<PruneReport>) =>
-      (pruneResult = result),
+    setPruneResult: (
+      result: (request: PruneRequest) => SailResult<PruneReport> | Promise<SailResult<PruneReport>>,
+    ) => (pruneResult = result),
     getSpecCalls,
     setRuns: (r: RunView[]) => (runs = r),
     setStopResult: (r: SailResult<StopRunResponse>) => (stopResult = r),
@@ -251,7 +254,7 @@ function pruneReport(dryRun: boolean, requested = false): PruneReport {
 
 const terminalRequests: unknown[] = [];
 
-async function mount(gateway: Gateway) {
+async function mount(gateway: Gateway, onBack: () => void = () => {}) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -264,7 +267,7 @@ async function mount(gateway: Gateway) {
           gateway={gateway}
           specId="s1"
           onOpenSpec={() => {}}
-          onBack={() => {}}
+          onBack={onBack}
           onOpenTerminal={(request) => terminalRequests.push(request)}
           eventDebounceMs={0}
         />
@@ -780,9 +783,10 @@ describe("prune", () => {
     expect(menuItem("Prune…")).toBeUndefined();
   });
 
-  test("the report comes first, and confirming erases exactly once", async () => {
+  test("the report comes first, and confirming erases exactly once and leaves the spec", async () => {
     const fake = makeGateway("archived", "uday");
-    await mount(fake.gateway);
+    let backs = 0;
+    await mount(fake.gateway, () => backs++);
 
     await openPrune();
 
@@ -793,8 +797,12 @@ describe("prune", () => {
     expect(report).toContain("Runs2");
     expect(report).toContain("Content freed2.0 KB");
     expect(text()).toContain("This cannot be undone.");
+    expect(container.querySelector('[data-testid="prune-choices"]')).toBeNull();
 
-    act(() => pruneGo()!.click());
+    act(() => {
+      pruneGo()!.click();
+      pruneGo()!.click();
+    });
     await settle();
 
     expect(fake.pruneCalls).toEqual([
@@ -802,6 +810,35 @@ describe("prune", () => {
       { ids: ["s1"], dry_run: false },
     ]);
     expect(text()).toContain("Pruned s1 everywhere.");
+    expect(pruneGo()).toBeNull();
+    expect(backs).toBe(1);
+  });
+
+  test("while the erase is in flight nothing closes the dialog", async () => {
+    const fake = makeGateway("archived", "uday");
+    let answer!: (result: SailResult<PruneReport>) => void;
+    fake.setPruneResult((request) =>
+      request.dry_run
+        ? { ok: true, value: pruneReport(true) }
+        : new Promise((resolve) => (answer = resolve)),
+    );
+    await mount(fake.gateway);
+    await openPrune();
+
+    act(() => pruneGo()!.click());
+    await settle();
+
+    const cancel = [...container.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!;
+    expect(cancel.disabled).toBe(true);
+    expect(pruneGo()!.textContent).toBe("Pruning…");
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await settle();
+    expect(pruneGo()).not.toBeNull();
+
+    await act(async () => answer({ ok: true, value: pruneReport(false) }));
+    await settle();
     expect(pruneGo()).toBeNull();
   });
 
@@ -839,29 +876,36 @@ describe("prune", () => {
     expect(fake.pruneCalls.length).toBe(1);
   });
 
-  test("a node's prune says main erases it on the next sync", async () => {
+  test("a node's prune says main erases it on the next sync and keeps the spec open", async () => {
     const fake = makeGateway("archived", "uday");
     fake.setPruneResult((request) => ({
       ok: true,
       value: pruneReport(request.dry_run, !request.dry_run),
     }));
-    await mount(fake.gateway);
+    let backs = 0;
+    await mount(fake.gateway, () => backs++);
     await openPrune();
 
     act(() => pruneGo()!.click());
     await settle();
 
     expect(text()).toContain("Asked main to prune s1; it goes on this box's next sync.");
+    expect(backs).toBe(0);
   });
 
-  test("a refused prune is reported where it was asked", async () => {
+  test("a refused erase is shown in the dialog, which stays open to retry", async () => {
     const fake = makeGateway("archived", "uday");
     fake.setPruneResult((request) =>
       request.dry_run
         ? { ok: true, value: pruneReport(true) }
         : {
             ok: false,
-            error: { status: 409, code: "conflict", message: "Main moved on." },
+            error: {
+              status: 409,
+              code: "spec_not_prunable",
+              message: "Spec 's1' is draft.",
+              action: "Archive it first.",
+            },
           },
     );
     await mount(fake.gateway);
@@ -870,6 +914,27 @@ describe("prune", () => {
     act(() => pruneGo()!.click());
     await settle();
 
-    expect(text()).toContain("Prune refused: Main moved on.");
+    expect(container.querySelector('[data-testid="prune-failed"]')!.textContent).toBe(
+      "Prune refused: Spec 's1' is draft. — Archive it first.",
+    );
+    expect(pruneGo()!.disabled).toBe(false);
+  });
+
+  test("an erase whose answer never came back says its outcome is unknown", async () => {
+    const fake = makeGateway("archived", "uday");
+    fake.setPruneResult((request) =>
+      request.dry_run
+        ? { ok: true, value: pruneReport(true) }
+        : { ok: false, error: { status: 0, code: "bridge", message: "timed out" } },
+    );
+    await mount(fake.gateway);
+    await openPrune();
+
+    act(() => pruneGo()!.click());
+    await settle();
+
+    expect(container.querySelector('[data-testid="prune-failed"]')!.textContent).toBe(
+      "The prune's outcome is unknown (timed out); the board rechecks these specs.",
+    );
   });
 });

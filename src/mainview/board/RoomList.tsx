@@ -1,4 +1,4 @@
-import type { AgentView } from "../../shared/sail-models";
+import type { AgentView, GlobalSpecView } from "../../shared/sail-models";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CaretDown, CaretRight, Plus } from "../components/icons";
 import { Dialog } from "../components/Dialog";
@@ -50,7 +50,7 @@ export function RoomList({
   onShowArchive: (show: boolean) => void;
   onCreate: (title: string, project: string, agent?: string) => Promise<boolean>;
   /** Offered on the open Archive section when it lists archived specs. */
-  onPruneArchived?: (specIds: string[]) => void;
+  onPruneArchived?: (specs: GlobalSpecView[]) => void;
 }) {
   const [newRoom, setNewRoom] = useState(false);
   const [title, setTitle] = useState("");
@@ -259,6 +259,6 @@ export function RoomList({
   );
 }
 
-function archivedSpecs(rooms: readonly RoomView[]): string[] {
-  return rooms.flatMap((room) => (room.spec?.status === "archived" ? [room.spec.id] : []));
+function archivedSpecs(rooms: readonly RoomView[]): GlobalSpecView[] {
+  return rooms.flatMap((room) => (room.spec?.status === "archived" ? [room.spec] : []));
 }

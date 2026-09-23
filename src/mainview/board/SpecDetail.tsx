@@ -823,11 +823,12 @@ export function SpecDetail({
       {pruneOpen && (
         <PruneDialog
           gateway={gateway}
-          ids={[spec.id]}
+          candidates={[spec]}
+          selected={[spec.id]}
           onClose={() => setPruneOpen(false)}
-          onResult={(message, ok, requested) => {
-            showToast(ok ? "success" : "error", message);
-            if (ok && !requested) onBack();
+          onPruned={(message, requested) => {
+            showToast("success", message);
+            if (!requested) onBack();
           }}
         />
       )}

@@ -381,7 +381,14 @@ export class CatalogStore {
     if (!gateway || this.roomsById === null) return;
     const epoch = this.epoch;
     const result = await gateway.getRoom(id);
-    if (this.epoch !== epoch || this.roomsById === null || !result.ok) return;
+    if (this.epoch !== epoch || this.roomsById === null) return;
+    if (!result.ok) {
+      if (result.error.status === 404) {
+        this.recordRevision++;
+        if (this.roomsById.delete(id)) this.emit();
+      }
+      return;
+    }
     this.upsertRoom(result.value);
   }
 
@@ -692,9 +699,11 @@ export class CatalogStore {
   }
 
   /**
-   * Erase specs everywhere, or report what would go. A dry run changes nothing;
-   * an applied prune refetches every pruned spec and room so each row leaves on
-   * the ack (a node's asked-for prune leaves on the sync that erases it).
+   * Erase specs everywhere, or report what would go. A dry run changes nothing.
+   * An applied prune refetches every spec and room it erased, so each row
+   * leaves on the ack with the event lane dead; a node's asked-for prune leaves
+   * on the sync that erases it. An apply whose answer never came back (no
+   * bridge, a 5xx) may have erased anyway, so its specs and rooms are rechecked.
    */
   async pruneSpecs(request: PruneRequest): Promise<SailResult<PruneReport>> {
     const gateway = this.gateway;
@@ -702,12 +711,18 @@ export class CatalogStore {
       return { ok: false, error: { status: 0, code: "bridge", message: "no gateway connected" } };
     }
     const epoch = this.epoch;
+    const rooms = request.ids.map((id) => this.specsById.get(id)?.room_id ?? id);
     const result = await gateway.pruneSpecs(request);
-    if (result.ok && !result.value.dry_run && this.epoch === epoch) {
-      for (const id of request.ids) {
-        this.kickSpec(id);
-        this.kickRoom(id);
+    if (request.dry_run || this.epoch !== epoch) return result;
+    if (result.ok) {
+      if (result.value.requested) return result;
+      for (const entry of result.value.entries) {
+        if (entry.type === "spec") this.kickSpec(entry.id);
+        else if (entry.type === "room") this.kickRoom(entry.id);
       }
+    } else if (result.error.status === 0 || result.error.status >= 500) {
+      request.ids.forEach((id) => this.kickSpec(id));
+      rooms.forEach((id) => this.kickRoom(id));
     }
     return result;
   }
