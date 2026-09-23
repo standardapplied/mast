@@ -423,6 +423,7 @@ export function createTauriGateway(): Gateway {
     listRuns: (specId) =>
       specId ? listSpecRuns(specId) : read<RunListResponse>("GET", "/v1/runs"),
     stopRun: (runId) => read("POST", `/v1/runs/${encodeURIComponent(runId)}/stop`),
+    pruneSpecs: (request) => read("POST", "/v1/specs:prune", { body: request }),
     listSnapshots: (project) =>
       read("GET", `/v1/projects/${encodeURIComponent(project)}/snapshots`),
     restoreSnapshot: (project, name) =>

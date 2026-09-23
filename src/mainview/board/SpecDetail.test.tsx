@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { GlobalSpecView, RunView, SailEvent, StopRunResponse } from "../../shared/sail-models";
+import type {
+  GlobalSpecView,
+  PruneReport,
+  PruneRequest,
+  RunView,
+  SailEvent,
+  StopRunResponse,
+} from "../../shared/sail-models";
 import type { SailResult } from "../../shared/types";
 import { ToastProvider } from "../components/Toast";
 import type { Gateway } from "../gateway";
@@ -64,6 +71,8 @@ function makeGateway(
     ok: true,
     value: { run_id: "run-b1", stopped: true, spec_cancelled: true },
   };
+  const pruneCalls: PruneRequest[] = [];
+  let pruneResult: ((request: PruneRequest) => SailResult<PruneReport>) | null = null;
 
   const gateway = {
     ...catalogLaneStubs(),
@@ -89,6 +98,12 @@ function makeGateway(
     stopRun: async (runId: string) => {
       stopCalls.push(runId);
       return stopResult;
+    },
+    pruneSpecs: async (request: PruneRequest) => {
+      pruneCalls.push(request);
+      return pruneResult
+        ? pruneResult(request)
+        : { ok: true as const, value: pruneReport(request.dry_run) };
     },
     getSpecContent: async () => ({
       ok: true as const,
@@ -202,6 +217,9 @@ function makeGateway(
     gateway: gateway as unknown as Gateway,
     updates,
     stopCalls,
+    pruneCalls,
+    setPruneResult: (result: (request: PruneRequest) => SailResult<PruneReport>) =>
+      (pruneResult = result),
     getSpecCalls,
     setRuns: (r: RunView[]) => (runs = r),
     setStopResult: (r: SailResult<StopRunResponse>) => (stopResult = r),
@@ -211,6 +229,23 @@ function makeGateway(
       listeners.forEach((l) =>
         l({ v: 1, ts: "", project: "chorus", type: "spec_status_changed", agent: "a", host: "h", ...e } as SailEvent),
       ),
+  };
+}
+
+function pruneReport(dryRun: boolean, requested = false): PruneReport {
+  return {
+    dry_run: dryRun,
+    requested,
+    specs: 1,
+    rooms: 1,
+    messages: 4,
+    runs: 2,
+    reviews: 1,
+    files: 0,
+    projects: 0,
+    events: 3,
+    blob_bytes: 2048,
+    entries: [{ type: "spec", id: "s1" }],
   };
 }
 
@@ -728,5 +763,113 @@ describe("SpecDetail terminal entries", () => {
     expect(terminalRequests).toEqual([
       { roomId: "s1", project: "chorus", title: "s1", focus: "room-s1" },
     ]);
+  });
+});
+
+describe("prune", () => {
+  const pruneGo = () => container.querySelector<HTMLButtonElement>('[data-testid="prune-go"]');
+  const openPrune = async () => {
+    await openActions();
+    act(() => menuItem("Prune…")!.click());
+    await settle();
+  };
+
+  test("only an archived spec offers Prune…", async () => {
+    await mount(makeGateway("done", "uday").gateway);
+    await openActions();
+    expect(menuItem("Prune…")).toBeUndefined();
+  });
+
+  test("the report comes first, and confirming erases exactly once", async () => {
+    const fake = makeGateway("archived", "uday");
+    await mount(fake.gateway);
+
+    await openPrune();
+
+    expect(fake.pruneCalls).toEqual([{ ids: ["s1"], dry_run: true }]);
+    expect(text()).toContain("Prune s1?");
+    const report = container.querySelector('[data-testid="prune-report"]')!.textContent ?? "";
+    expect(report).toContain("Messages4");
+    expect(report).toContain("Runs2");
+    expect(report).toContain("Content freed2.0 KB");
+    expect(text()).toContain("This cannot be undone.");
+
+    act(() => pruneGo()!.click());
+    await settle();
+
+    expect(fake.pruneCalls).toEqual([
+      { ids: ["s1"], dry_run: true },
+      { ids: ["s1"], dry_run: false },
+    ]);
+    expect(text()).toContain("Pruned s1 everywhere.");
+    expect(pruneGo()).toBeNull();
+  });
+
+  test("cancelling after the report erases nothing", async () => {
+    const fake = makeGateway("archived", "uday");
+    await mount(fake.gateway);
+    await openPrune();
+
+    const cancel = [...container.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!;
+    act(() => cancel.click());
+    await settle();
+
+    expect(fake.pruneCalls).toEqual([{ ids: ["s1"], dry_run: true }]);
+  });
+
+  test("a refusal is shown verbatim and nothing can be pruned", async () => {
+    const fake = makeGateway("archived", "uday");
+    fake.setPruneResult(() => ({
+      ok: false,
+      error: {
+        status: 403,
+        code: "forbidden_not_assignee",
+        message: "Spec 's1' is assigned to 'mady'.",
+        action: "Ask mady or an admin.",
+      },
+    }));
+    await mount(fake.gateway);
+
+    await openPrune();
+
+    expect(container.querySelector('[data-testid="prune-refused"]')!.textContent).toBe(
+      "Spec 's1' is assigned to 'mady'. — Ask mady or an admin.",
+    );
+    expect(pruneGo()!.disabled).toBe(true);
+    expect(fake.pruneCalls.length).toBe(1);
+  });
+
+  test("a node's prune says main erases it on the next sync", async () => {
+    const fake = makeGateway("archived", "uday");
+    fake.setPruneResult((request) => ({
+      ok: true,
+      value: pruneReport(request.dry_run, !request.dry_run),
+    }));
+    await mount(fake.gateway);
+    await openPrune();
+
+    act(() => pruneGo()!.click());
+    await settle();
+
+    expect(text()).toContain("Asked main to prune s1; it goes on this box's next sync.");
+  });
+
+  test("a refused prune is reported where it was asked", async () => {
+    const fake = makeGateway("archived", "uday");
+    fake.setPruneResult((request) =>
+      request.dry_run
+        ? { ok: true, value: pruneReport(true) }
+        : {
+            ok: false,
+            error: { status: 409, code: "conflict", message: "Main moved on." },
+          },
+    );
+    await mount(fake.gateway);
+    await openPrune();
+
+    act(() => pruneGo()!.click());
+    await settle();
+
+    expect(text()).toContain("Prune refused: Main moved on.");
   });
 });

@@ -6,6 +6,8 @@ import type {
   EngageResponse,
   GlobalSpecDetailResponse,
   GlobalSpecView,
+  PruneReport,
+  PruneRequest,
   RunView,
   SailEvent,
   ServerRoomView,
@@ -685,6 +687,27 @@ export class CatalogStore {
     if (result.ok && this.epoch === epoch) {
       this.kickSpec(specId);
       this.kickHeldRuns(specId);
+    }
+    return result;
+  }
+
+  /**
+   * Erase specs everywhere, or report what would go. A dry run changes nothing;
+   * an applied prune refetches every pruned spec and room so each row leaves on
+   * the ack (a node's asked-for prune leaves on the sync that erases it).
+   */
+  async pruneSpecs(request: PruneRequest): Promise<SailResult<PruneReport>> {
+    const gateway = this.gateway;
+    if (!gateway) {
+      return { ok: false, error: { status: 0, code: "bridge", message: "no gateway connected" } };
+    }
+    const epoch = this.epoch;
+    const result = await gateway.pruneSpecs(request);
+    if (result.ok && !result.value.dry_run && this.epoch === epoch) {
+      for (const id of request.ids) {
+        this.kickSpec(id);
+        this.kickRoom(id);
+      }
     }
     return result;
   }
