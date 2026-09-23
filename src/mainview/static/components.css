@@ -2213,34 +2213,58 @@ button.room-section-head:hover {
   font-weight: 400;
 }
 
-.room-section-prune {
+.room-section-action {
+  appearance: none;
   justify-self: start;
-  margin: 0 12px 6px;
-  font-size: 11px;
+  border: none;
+  background: none;
+  padding: 8px 12px 2px 28px;
+  color: var(--subtle-foreground);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.room-section-action:hover,
+.room-section-action:focus-visible {
+  color: var(--foreground);
+}
+
+.prune-body {
+  display: grid;
+  gap: 16px;
 }
 
 .prune-choices {
   display: grid;
-  gap: 6px;
-  max-height: 220px;
+  max-height: 240px;
   overflow-y: auto;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 .prune-choice {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 13px;
-  cursor: pointer;
+  gap: 12px;
+  min-height: 34px;
+  padding: 4px 0;
+}
+
+.prune-choice + .prune-choice {
+  border-top: 1px solid var(--border);
 }
 
 .prune-choice-id {
   font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .prune-choice-owner {
   margin-left: auto;
-  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--subtle-foreground);
 }
 
 .room-working-dot {

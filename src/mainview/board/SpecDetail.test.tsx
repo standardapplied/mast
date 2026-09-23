@@ -773,14 +773,35 @@ describe("prune", () => {
   const pruneGo = () => container.querySelector<HTMLButtonElement>('[data-testid="prune-go"]');
   const openPrune = async () => {
     await openActions();
-    act(() => menuItem("Prune…")!.click());
+    act(() => menuItem("Prune")!.click());
     await settle();
   };
 
-  test("only an archived spec offers Prune…", async () => {
-    await mount(makeGateway("done", "uday").gateway);
+  test("a live spec offers Archive, and Prune waits below the rule until it is archived", async () => {
+    const fake = makeGateway("done", "uday");
+    await mount(fake.gateway);
     await openActions();
-    expect(menuItem("Prune…")).toBeUndefined();
+
+    const prune = menuItem("Prune")!;
+    expect(prune.disabled).toBe(true);
+    expect(prune.textContent).toContain("Archive first");
+    expect(document.querySelector(".context-menu-sep")).not.toBeNull();
+
+    act(() => menuItem("Archive")!.click());
+    await settle();
+
+    expect(fake.updates).toContainEqual({ status: "archived" });
+  });
+
+  test("an archived spec's read-only room offers no dispatch or agent, only Prune", async () => {
+    await mount(makeGateway("archived", "uday").gateway);
+    await openActions();
+
+    expect(menuItem("Dispatch")).toBeUndefined();
+    expect(menuItem("Re-dispatch")).toBeUndefined();
+    expect(menuItem("Add an agent")).toBeUndefined();
+    expect(menuItem("Archive")).toBeUndefined();
+    expect(menuItem("Prune")!.disabled).toBe(false);
   });
 
   test("the report comes first, and confirming erases exactly once and leaves the spec", async () => {
@@ -792,11 +813,9 @@ describe("prune", () => {
 
     expect(fake.pruneCalls).toEqual([{ ids: ["s1"], dry_run: true }]);
     expect(text()).toContain("Prune s1?");
-    const report = container.querySelector('[data-testid="prune-report"]')!.textContent ?? "";
-    expect(report).toContain("Messages4");
-    expect(report).toContain("Runs2");
-    expect(report).toContain("Content freed2.0 KB");
-    expect(text()).toContain("This cannot be undone.");
+    expect(container.querySelector('[data-testid="prune-report"]')!.textContent).toBe(
+      "Erases s1, its room, 4 messages, 2 runs and 1 review from every box, history included — 2.0 KB freed. This can’t be undone.",
+    );
     expect(container.querySelector('[data-testid="prune-choices"]')).toBeNull();
 
     act(() => {
@@ -889,7 +908,7 @@ describe("prune", () => {
     act(() => pruneGo()!.click());
     await settle();
 
-    expect(text()).toContain("Asked main to prune s1; it goes on this box's next sync.");
+    expect(text()).toContain("Asked main to prune s1; it goes on this box’s next sync.");
     expect(backs).toBe(0);
   });
 
@@ -934,7 +953,7 @@ describe("prune", () => {
     await settle();
 
     expect(container.querySelector('[data-testid="prune-failed"]')!.textContent).toBe(
-      "The prune's outcome is unknown (timed out); the board rechecks these specs.",
+      "The prune’s outcome is unknown (timed out); the board rechecks these specs.",
     );
   });
 });
