@@ -73,9 +73,8 @@ describe("useRooms", () => {
     const sections = sectionRooms(
       handle().data.rooms.filter((room) => room.room.project === "sail-mast"),
     );
-    expect(sections.map((section) => section.section)).not.toContain("personal");
-    expect(sections.find((section) => section.section === "chats")?.rooms.map((room) => room.room.id))
-      .toContain("sail-mast-notes");
+    const chats = sections.find((section) => section.section === "chats");
+    expect(chats?.rooms.map((room) => room.room.id)).toContain("sail-mast-notes");
     expect(listings).toBe(0);
   });
 

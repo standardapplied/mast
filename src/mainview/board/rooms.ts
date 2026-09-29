@@ -145,9 +145,9 @@ export function sectionOfRoom(room: RoomView): RoomSection {
 export type SectionedRooms = { section: RoomSection; rooms: RoomView[] };
 
 /**
- * Rooms grouped for the sidebar: lifecycle sections in fixed order, activity order preserved within each. Empty sections
- * vanish — except the archive, which always anchors the bottom as the collapsible
- * history of the project.
+ * Rooms grouped for the sidebar: lifecycle sections in fixed order, activity order
+ * preserved within each. Empty sections vanish — except the archive, which always
+ * anchors the bottom as the collapsible history of the project.
  */
 export function sectionRooms(rooms: readonly RoomView[]): SectionedRooms[] {
   const buckets = new Map<RoomSection, RoomView[]>(
