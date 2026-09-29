@@ -13,7 +13,7 @@ import {
 type RoomsData = {
   rooms: RoomView[];
   projects: string[];
-  /** The signed-in FDE handle once whoami lands — pins their personal room. */
+  /** The signed-in FDE handle once whoami lands. */
   me?: string;
   loading: boolean;
   error: SailWireError | null;

@@ -122,7 +122,6 @@ export function RoomsScreen({
           selectedId={selectedId}
           showArchive={showArchive}
           creating={creating}
-          me={data.me}
           onProject={(next) => {
             setProject(next);
             setSelectedId(undefined);
