@@ -61,7 +61,7 @@ afterEach(() => {
 });
 
 describe("useRooms", () => {
-  test("the personal room pins first from the one listing, with no refetch to show it", async () => {
+  test("a room made on purpose lists with the conversations, from the one listing", async () => {
     const { gateway, handle } = await render();
     let listings = 0;
     const listRooms = gateway.listRooms.bind(gateway);
@@ -70,15 +70,12 @@ describe("useRooms", () => {
       return listRooms(project);
     };
 
-    expect(handle().data.me).toBe("uday");
     const sections = sectionRooms(
       handle().data.rooms.filter((room) => room.room.project === "sail-mast"),
-      handle().data.me,
     );
-    expect(sections[0]?.section).toBe("personal");
-    expect(sections[0]?.rooms.map((room) => room.room.id)).toEqual([
-      "fde-uday-sail-mast-0123456789abcdef",
-    ]);
+    expect(sections.map((section) => section.section)).not.toContain("personal");
+    expect(sections.find((section) => section.section === "chats")?.rooms.map((room) => room.room.id))
+      .toContain("sail-mast-notes");
     expect(listings).toBe(0);
   });
 

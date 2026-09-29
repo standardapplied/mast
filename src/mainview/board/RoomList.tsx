@@ -8,7 +8,6 @@ import { Tooltip } from "../components/Tooltip";
 import { Button } from "../components/ui";
 import type { Gateway } from "../gateway";
 import {
-  isPersonalRoom,
   relativeTime,
   SECTION_LABELS,
   SECTION_TONES,
@@ -26,7 +25,6 @@ export function RoomList({
   gateway,
   now = Date.now(),
   workingIds = new Set(),
-  me,
   onProject,
   onSelect,
   onShowArchive,
@@ -42,8 +40,6 @@ export function RoomList({
   creating: boolean;
   /** Injected clock so rows render deterministic relative times in tests. */
   now?: number;
-  /** The signed-in FDE handle; pins their personal room first. */
-  me?: string;
   workingIds?: ReadonlySet<string>;
   onProject: (project: string) => void;
   onSelect: (room: RoomView) => void;
@@ -193,7 +189,7 @@ export function RoomList({
       </Dialog>
 
       <div className="room-list-scroll">
-        {sectionRooms(rooms, me).map(({ section, rooms: grouped }) => (
+        {sectionRooms(rooms).map(({ section, rooms: grouped }) => (
           <div key={section} className="room-section">
             {section === "archive" ? (
               <button
@@ -225,7 +221,7 @@ export function RoomList({
                   aria-current={selectedId === room.room.id ? "page" : undefined}
                 >
                   <span className={`room-row-id-label${room.unread ? " is-unread" : ""}`}>
-                    {isPersonalRoom(room.room, me) ? room.room.title : room.room.id}
+                    {room.room.id}
                   </span>
                   {room.needsReply && (
                     <span
