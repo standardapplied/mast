@@ -44,6 +44,18 @@ describe("roomRefreshFor", () => {
     expect(roomRefreshFor(event("review_stage_passed"))).toEqual({ kind: "reviews" });
   });
 
+  test("a failed fix iteration refreshes the review it names, else the spec's reviews", () => {
+    expect(
+      roomRefreshFor(
+        event("review_iteration_failed", { detail: "fix agent killed: time limit (45m)" }),
+      ),
+    ).toEqual({ kind: "reviews" });
+    expect(roomRefreshFor(event("review_iteration_failed", { review_id: "rev-9" }))).toEqual({
+      kind: "review-detail",
+      reviewId: "rev-9",
+    });
+  });
+
   test("list-shape boundaries refresh the review list", () => {
     expect(roomRefreshFor(event("review_iteration_started"))).toEqual({ kind: "reviews" });
     expect(roomRefreshFor(event("review_completed", { review_id: "rev-9" }))).toEqual({

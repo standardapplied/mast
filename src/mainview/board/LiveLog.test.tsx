@@ -57,6 +57,15 @@ describe("LiveLog", () => {
     expect(body()).toContain("── result ──");
   });
 
+  test("toggling to Fix follows the fix run's log like any other run's", async () => {
+    mount();
+    await settle();
+    await act(async () => button("Fix")?.click());
+    await settle();
+    expect(button("Fix")?.getAttribute("aria-checked")).toBe("true");
+    expect(body()).toContain("⚙ Bash(bun test)");
+  });
+
   test("the raw toggle shows the unprocessed stream", async () => {
     mount();
     await settle();

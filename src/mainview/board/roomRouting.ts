@@ -40,6 +40,7 @@ const REVIEW_DETAIL_TYPES = new Set([
   "review_stage_passed",
   "review_stage_failed",
   "review_errored",
+  "review_iteration_failed",
   "review_escalated",
   "review_pipeline_error",
 ]);

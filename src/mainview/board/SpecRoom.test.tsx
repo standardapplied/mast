@@ -492,6 +492,29 @@ describe("SpecRoom", () => {
     expect(rows.some((row) => row.includes("codex") && !row.includes("ada"))).toBe(true);
   });
 
+  test("a killed run and a failed fix iteration each say why on their row", async () => {
+    const killed: SailEvent = {
+      ...lifecycleEvent(1, "agent_session_stopped"),
+      data: { run_role: "room", source: "watcher", reason: "time limit (4h)" },
+    };
+    const fixFailed: SailEvent = {
+      ...lifecycleEvent(2, "review_iteration_failed"),
+      data: { detail: "fix agent killed: time limit (45m)" },
+    };
+    const fake = makeGateway({ specEvents: [killed, fixFailed] });
+    await mount(fake.gateway);
+
+    const rows = [...container.querySelectorAll(".room-system-row")].map(
+      (row) => row.textContent ?? "",
+    );
+    const stop = rows.find((row) => row.includes("agent stopped"));
+    expect(stop).toContain("time limit (4h)");
+    expect(stop).not.toContain("exit");
+    expect(rows.find((row) => row.includes("fix iteration failed"))).toContain(
+      "fix agent killed: time limit (45m)",
+    );
+  });
+
   test("shows a failed review status even when the review has no findings", async () => {
     const failed = makeGateway({ withReview: true, reviewStatus: "failed", withFindings: false });
     await mount(failed.gateway);
