@@ -5,7 +5,7 @@ import type {
   SailEvent,
   SpecMessage,
 } from "../../shared/sail-models";
-import { cleanChatStop } from "./notifyPolicy";
+import { quietStop } from "./notifyPolicy";
 
 export type MessageDelivery = "pending" | "failed";
 
@@ -128,12 +128,13 @@ function rowLabel(event: SailEvent, label: string): string {
 }
 
 /**
- * A chat turn's clean exit is turn plumbing, not conversation — the
- * agent's reply is already in the room, so "agent stopped · exit 0" after every
- * turn manufactures the "it left" feeling. Failures render, loud.
+ * A chat turn's, a reviewer's or a fix agent's clean exit is plumbing, not
+ * conversation — the agent's reply is already in the room and the review's own
+ * rows tell its story, so "agent stopped · exit 0" after every turn and every
+ * review stage manufactures noise. Failures render, loud.
  */
-function cleanChatTurnStop(event: SailEvent): boolean {
-  return event.type === "agent_session_stopped" && cleanChatStop(event);
+function cleanQuietLaneStop(event: SailEvent): boolean {
+  return event.type === "agent_session_stopped" && quietStop(event);
 }
 
 function eventId(event: SailEvent): string {
@@ -330,7 +331,7 @@ export function assembleTimeline({
       continue;
     }
     if (rule.mode !== "row") continue;
-    if (cleanChatTurnStop(event)) continue;
+    if (cleanQuietLaneStop(event)) continue;
     if (rule.kind === "decision") {
       const decision = eventDecision(event);
       items.push({

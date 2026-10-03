@@ -43,16 +43,17 @@ function agentAuthor(author: string): boolean {
   return author.includes("/");
 }
 
-const CHAT_LANES = new Set(["room", "room-full"]);
+const QUIET_LANES = new Set(["room", "room-full", "review", "fix"]);
 
-/** A chat turn that ended cleanly is plumbing, not news — the reply
- *  itself is the notification. Failures stay loud whatever the lane: a run
- *  the watcher killed carries its `reason` in place of an exit code, so a
- *  missing exit code alone never reads as clean. */
-export function cleanChatStop(event: SailEvent): boolean {
+/** A chat turn, a reviewer or a fix agent that ended cleanly is plumbing, not
+ *  news — the reply, or the review's own stage and verdict events, are the
+ *  notification. Failures stay loud whatever the lane: a run the watcher
+ *  killed carries its `reason` in place of an exit code, so a missing exit
+ *  code alone never reads as clean. */
+export function quietStop(event: SailEvent): boolean {
   if (event.type === "agent_failed") return false;
   const role = event.data?.run_role;
-  if (typeof role !== "string" || !CHAT_LANES.has(role)) return false;
+  if (typeof role !== "string" || !QUIET_LANES.has(role)) return false;
   if (typeof event.data?.reason === "string") return false;
   const exit = event.data?.exit_code;
   return exit === undefined || exit === null || exit === 0 || exit === "0";
@@ -85,7 +86,7 @@ export function notification(
     };
   }
   const label = RUN_END_LABELS[event.type];
-  if (!label || cleanChatStop(event)) return null;
+  if (!label || quietStop(event)) return null;
   return {
     kind: "run-ended",
     tone: event.type === "agent_failed" ? "error" : "info",

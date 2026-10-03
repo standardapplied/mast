@@ -468,6 +468,29 @@ describe("engagement rows", () => {
     expect(labels).toEqual(["Agent joined the room", "Agent left the room"]);
   });
 
+  test("a reviewer's and a fix agent's clean stop render no row; the review's own rows tell it", () => {
+    const stop = (id: number, role: string, data: Record<string, unknown>) => ({
+      ...base,
+      id,
+      ts: `2026-08-18T10:0${id}:00Z`,
+      type: "agent_session_stopped",
+      agent: "codex",
+      data: { run_role: role, ...data },
+    });
+    const items = assembleTimeline({
+      messages: [],
+      events: [
+        stop(1, "review", { exit_code: 0 }),
+        stop(2, "fix", { exit_code: 0 }),
+        stop(3, "review", { exit_code: 1 }),
+      ] as SailEvent[],
+      reviews: [],
+      runs: [],
+    });
+    const rows = items.filter((item) => item.kind === "lifecycle");
+    expect(rows.map((item) => item.label)).toEqual(["Agent stopped"]);
+  });
+
   test("a chat turn that died renders loud, and build stops are untouched", () => {
     const items = assembleTimeline({
       messages: [],
