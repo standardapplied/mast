@@ -833,7 +833,7 @@ export function SpecRoom({
                     <span className="room-system-mark" aria-hidden="true" />
                     <span>{item.label.toLowerCase()}</span>
                     <span>·</span>
-                    <span>{item.run?.agent ?? eventActor(item.event).split("/")[0]}</span>
+                    <span>{eventActor(item.event, item.run).split("/")[0]}</span>
                     {detail && <span>· {detail}</span>}
                     <span>·</span>
                     <time dateTime={item.occurredAt}>{dateTime(item.occurredAt)}</time>

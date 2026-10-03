@@ -122,6 +122,14 @@ describe("an event's actor", () => {
     expect(actorOf(emitted)).toBe("sail");
     expect(eventActor(machine)).toBe("sail");
   });
+
+  test("is the publisher even when the row knows the run, whose agent names only an unstamped event", () => {
+    const stamped = approval({ publisher: { handle: "ada", role: "member", lane: "api" } });
+    const emitted = approval({ agent: "sail" });
+
+    expect(eventActor(stamped, { agent: "codex" })).toBe("ada");
+    expect(eventActor(emitted, { agent: "codex" })).toBe("codex");
+  });
 });
 
 describe("message pagination", () => {

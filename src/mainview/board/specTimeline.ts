@@ -148,11 +148,13 @@ function eventId(event: SailEvent): string {
 
 /**
  * Who an event row names as its actor: the publisher the server authenticated, never the
- * `agent` label its sender chose. An event the server emitted itself, or one stored before
- * publishers were stamped, carries no publisher, and its `agent` is the server's own word.
+ * `agent` label its sender chose, nor the agent of the run it names. An event the server
+ * emitted itself, or one stored before publishers were stamped, carries no publisher: it is
+ * its run's agent's when the row knows the run, and otherwise its `agent` is the server's
+ * own word.
  */
-export function eventActor(event: SailEvent): string {
-  return event.publisher?.handle ?? event.agent;
+export function eventActor(event: SailEvent, run?: Pick<RunView, "agent">): string {
+  return event.publisher?.handle ?? run?.agent ?? event.agent;
 }
 
 function eventDecision(event: SailEvent): TimelineDecision {
