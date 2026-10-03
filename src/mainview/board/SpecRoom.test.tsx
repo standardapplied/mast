@@ -449,6 +449,49 @@ describe("SpecRoom", () => {
     expect(container.textContent).not.toContain("raw log");
   });
 
+  test("a lifecycle row names the publisher the server stamped, not the claimed agent", async () => {
+    const forged: SailEvent = {
+      ...lifecycleEvent(1, "spec_dispatched"),
+      agent: "root",
+      publisher: { handle: "ada", role: "member", lane: "api" },
+    };
+    const hook: SailEvent = {
+      ...lifecycleEvent(2, "agent_stop_nudged"),
+      agent: "root",
+      publisher: { handle: "claude/run-9", role: "member", lane: "agent" },
+    };
+    const fake = makeGateway({ specEvents: [forged, hook, lifecycleEvent(3, "spec_restarted")] });
+    await mount(fake.gateway);
+
+    const rows = [...container.querySelectorAll(".room-system-row")].map(
+      (row) => row.textContent ?? "",
+    );
+    expect(rows.some((row) => row.includes("ada"))).toBe(true);
+    expect(rows.some((row) => row.includes("claude") && !row.includes("claude/run-9"))).toBe(true);
+    expect(rows.some((row) => row.includes("sail"))).toBe(true);
+    expect(rows.some((row) => row.includes("root"))).toBe(false);
+  });
+
+  test("a lifecycle row of a known run names the publisher, and the run's agent only when unstamped", async () => {
+    const stamped: SailEvent = {
+      ...lifecycleEvent(1, "agent_session_stopped"),
+      data: { run_id: "run-1" },
+      publisher: { handle: "ada", role: "member", lane: "api" },
+    };
+    const unstamped: SailEvent = {
+      ...lifecycleEvent(2, "spec_restarted"),
+      data: { run_id: "run-1" },
+    };
+    const fake = makeGateway({ specEvents: [stamped, unstamped] });
+    await mount(fake.gateway);
+
+    const rows = [...container.querySelectorAll(".room-system-row")].map(
+      (row) => row.textContent ?? "",
+    );
+    expect(rows.some((row) => row.includes("ada") && !row.includes("codex"))).toBe(true);
+    expect(rows.some((row) => row.includes("codex") && !row.includes("ada"))).toBe(true);
+  });
+
   test("shows a failed review status even when the review has no findings", async () => {
     const failed = makeGateway({ withReview: true, reviewStatus: "failed", withFindings: false });
     await mount(failed.gateway);
