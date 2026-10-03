@@ -264,6 +264,7 @@ describe("review-loop events", () => {
       ["review_stage_passed", "Review stage passed"],
       ["review_stage_failed", "Review stage failed"],
       ["review_iteration_started", "Fix iteration started"],
+      ["review_iteration_failed", "Fix iteration failed"],
       ["guardrail_triggered", "Guardrail triggered"],
       ["agent_stop_nudged", "Agent nudged"],
       ["review_errored", "Review errored"],
@@ -283,6 +284,27 @@ describe("review-loop events", () => {
     expect(rows.map((row) => (row.kind === "lifecycle" ? row.label : ""))).toEqual(
       expectations.map(([, label]) => label),
     );
+  });
+
+  test("a reviewer or fix agent that did not finish renders a row saying why", () => {
+    const expectations: Array<[string, string, string]> = [
+      ["review_errored", "Review errored", "reviewer killed: time limit (45m)"],
+      ["review_iteration_failed", "Fix iteration failed", "fix agent killed: time limit (45m)"],
+    ];
+    const timeline = assembleTimeline({
+      messages: [],
+      events: expectations.map(([type, , detail], i) =>
+        event(i + 1, type, `2026-10-03T10:0${i}:00Z`, { detail })
+      ),
+      reviews: [],
+      runs: [],
+    });
+
+    expect(
+      timeline.map((item) =>
+        item.kind === "lifecycle" ? [item.event.type, item.label, eventNarration(item.event)] : [],
+      ),
+    ).toEqual(expectations);
   });
 
   test("review_failed is not a sail event and renders nothing", () => {
@@ -470,6 +492,26 @@ describe("engagement rows", () => {
       runs: [],
     });
     expect(items).toHaveLength(2);
+  });
+
+  test("a chat turn the watcher killed renders with its reason in place of an exit code", () => {
+    const items = assembleTimeline({
+      messages: [],
+      events: [
+        {
+          ...base,
+          id: 1,
+          type: "agent_session_stopped",
+          agent: "claude-code",
+          data: { run_role: "room", reason: "time limit (4h)", source: "watcher" },
+        },
+      ] as SailEvent[],
+      reviews: [],
+      runs: [],
+    });
+    expect(items).toHaveLength(1);
+    expect((items[0] as { label: string }).label).toBe("Agent stopped");
+    expect(eventNarration((items[0] as { event: SailEvent }).event)).toBe("time limit (4h)");
   });
 
   test("an engage failure renders with its narration", () => {

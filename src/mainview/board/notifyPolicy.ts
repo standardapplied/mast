@@ -46,11 +46,14 @@ function agentAuthor(author: string): boolean {
 const CHAT_LANES = new Set(["room", "room-full"]);
 
 /** A chat turn that ended cleanly is plumbing, not news — the reply
- *  itself is the notification. Failures stay loud whatever the lane. */
-function cleanChatStop(event: SailEvent): boolean {
+ *  itself is the notification. Failures stay loud whatever the lane: a run
+ *  the watcher killed carries its `reason` in place of an exit code, so a
+ *  missing exit code alone never reads as clean. */
+export function cleanChatStop(event: SailEvent): boolean {
   if (event.type === "agent_failed") return false;
   const role = event.data?.run_role;
   if (typeof role !== "string" || !CHAT_LANES.has(role)) return false;
+  if (typeof event.data?.reason === "string") return false;
   const exit = event.data?.exit_code;
   return exit === undefined || exit === null || exit === 0 || exit === "0";
 }

@@ -5,6 +5,7 @@ import type {
   SailEvent,
   SpecMessage,
 } from "../../shared/sail-models";
+import { cleanChatStop } from "./notifyPolicy";
 
 export type MessageDelivery = "pending" | "failed";
 
@@ -81,6 +82,7 @@ export const EVENT_REGISTRY: Readonly<Record<string, EventRule>> = {
   review_stage_passed: { mode: "row", kind: "lifecycle", label: "Review stage passed" },
   review_stage_failed: { mode: "row", kind: "lifecycle", label: "Review stage failed" },
   review_iteration_started: { mode: "row", kind: "lifecycle", label: "Fix iteration started" },
+  review_iteration_failed: { mode: "row", kind: "lifecycle", label: "Fix iteration failed" },
   guardrail_triggered: { mode: "row", kind: "lifecycle", label: "Guardrail triggered" },
   snapshot_created: { mode: "row", kind: "lifecycle", label: "Snapshot" },
   snapshot_restored: { mode: "row", kind: "lifecycle", label: "Snapshot restored" },
@@ -125,19 +127,13 @@ function rowLabel(event: SailEvent, label: string): string {
   return failure && dataString(event, "error") ? failure : label;
 }
 
-const CHAT_LANES = new Set(["room", "room-full"]);
-
 /**
  * A chat turn's clean exit is turn plumbing, not conversation — the
  * agent's reply is already in the room, so "agent stopped · exit 0" after every
  * turn manufactures the "it left" feeling. Failures render, loud.
  */
 function cleanChatTurnStop(event: SailEvent): boolean {
-  if (event.type !== "agent_session_stopped") return false;
-  const role = event.data?.run_role;
-  if (typeof role !== "string" || !CHAT_LANES.has(role)) return false;
-  const exit = event.data?.exit_code;
-  return exit === undefined || exit === null || exit === 0 || exit === "0";
+  return event.type === "agent_session_stopped" && cleanChatStop(event);
 }
 
 function eventId(event: SailEvent): string {

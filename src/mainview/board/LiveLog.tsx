@@ -21,6 +21,7 @@ function roleOptions(active: AgentLogRole) {
   const base = [
     { value: "build", label: "Build" },
     { value: "review", label: "Review" },
+    { value: "fix", label: "Fix" },
   ];
   return CHAT_ROLES.has(active) ? [...base, { value: active, label: "Chat" }] : base;
 }

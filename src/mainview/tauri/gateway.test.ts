@@ -200,6 +200,45 @@ describe("Tauri gateway room wire", () => {
   });
 });
 
+describe("Tauri gateway log wire", () => {
+  test("a fix run's log is read from the newest fix run through the run log route", async () => {
+    const run = (id: string, role: string, startedAt: string) => ({
+      id,
+      project: "mast",
+      spec_id: "spec 1",
+      node: "main",
+      role,
+      agent: "claude-code",
+      status: "completed",
+      started_at: startedAt,
+      ...(role === "build" ? {} : { review_id: "rev-1" }),
+    });
+    const paths: string[] = [];
+    (window as TauriWindow).__TAURI_INTERNALS__ = {
+      invoke: (_cmd: unknown, args: unknown) => {
+        const path = (args as { path: string }).path;
+        paths.push(path);
+        const body = path.startsWith("/v1/runs?")
+          ? {
+              runs: [
+                run("run-build", "build", "2026-10-03T10:00:00Z"),
+                run("run-fix-1", "fix", "2026-10-03T10:20:00Z"),
+                run("run-fix-2", "fix", "2026-10-03T10:40:00Z"),
+                run("run-review-2", "review", "2026-10-03T10:50:00Z"),
+              ],
+            }
+          : { run_id: "run-fix-2", lines: ["fixing"] };
+        return Promise.resolve({ status: 200, etag: null, body: JSON.stringify(body) });
+      },
+    };
+
+    const result = await createTauriGateway().agentLogSnapshot("spec 1", "fix", 200);
+
+    expect(paths).toEqual(["/v1/runs?spec=spec%201", "/v1/runs/run-fix-2/log?tail=200"]);
+    expect(result.ok && result.value.lines).toEqual(["fixing"]);
+  });
+});
+
 describe("Tauri gateway prune wire", () => {
   test("pruneSpecs POSTs /v1/specs:prune with the selection and the dry-run flag", async () => {
     const report = {
