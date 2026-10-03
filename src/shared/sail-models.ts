@@ -502,7 +502,17 @@ export type SpecMessagePostResponse = {
   message: SpecMessage;
 };
 
-/** Event wire shape (Event.toJsonLine): id present only when > 0. */
+/** Who published an event through one of Sail's doors, as the server authenticated them
+ *  (sail ≥ 0.46.4). `handle` is absent for a machine credential that names no FDE. */
+export type EventPublisher = {
+  handle?: string;
+  role: string;
+  lane: string;
+};
+
+/** Event wire shape (Event.toJsonLine): id present only when > 0. `agent` is a label its
+ *  sender chose; `publisher` is who published it, stamped by the server and absent on an
+ *  event the server emitted itself or stored before publishers were stamped. */
 export type SailEvent = {
   v: number;
   id?: number;
@@ -513,6 +523,7 @@ export type SailEvent = {
   agent: string;
   host: string;
   data?: Record<string, unknown>;
+  publisher?: EventPublisher;
 };
 
 export type RecentEventsResponse = {

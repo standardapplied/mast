@@ -146,6 +146,15 @@ function eventId(event: SailEvent): string {
     : `event:${event.id}`;
 }
 
+/**
+ * Who an event row names as its actor: the publisher the server authenticated, never the
+ * `agent` label its sender chose. An event the server emitted itself, or one stored before
+ * publishers were stamped, carries no publisher, and its `agent` is the server's own word.
+ */
+export function eventActor(event: SailEvent): string {
+  return event.publisher?.handle ?? event.agent;
+}
+
 function eventDecision(event: SailEvent): TimelineDecision {
   const reviewId = dataString(event, "review_id", "review") ?? "";
   const findingId = dataString(event, "finding_id", "finding");
@@ -154,7 +163,7 @@ function eventDecision(event: SailEvent): TimelineDecision {
     reviewId,
     ...(findingId ? { findingId } : {}),
     action: event.type === "finding_dismissed" ? "dismissed" : "approved",
-    actor: event.agent,
+    actor: eventActor(event),
     createdAt: event.ts,
   };
 }

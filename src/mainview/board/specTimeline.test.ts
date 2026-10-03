@@ -8,6 +8,7 @@ import type {
 import {
   assembleTimeline,
   bufferTail,
+  eventActor,
   eventNarration,
   groupTimeline,
   mergeMessages,
@@ -87,6 +88,40 @@ test("the event registry renders rows and applies review overlays", () => {
   expect(timeline[1]?.kind === "review" && timeline[1].review.completed_at).toBe(
     "2026-07-28T10:02:00Z",
   );
+});
+
+describe("an event's actor", () => {
+  const approval = (extra: Partial<SailEvent>): SailEvent => ({
+    ...event(3, "review_approved", "2026-07-28T10:03:00Z", { review_id: "r1" }),
+    ...extra,
+  });
+  const actorOf = (decision: SailEvent) => {
+    const row = assembleTimeline({
+      messages: [],
+      events: [decision],
+      reviews: [review()],
+      runs: [],
+    }).find((item) => item.kind === "decision");
+    return row?.kind === "decision" ? row.decision.actor : undefined;
+  };
+
+  test("is the publisher the server stamped, never the agent the sender claimed", () => {
+    const forged = approval({
+      agent: "root",
+      publisher: { handle: "ada", role: "member", lane: "api" },
+    });
+
+    expect(eventActor(forged)).toBe("ada");
+    expect(actorOf(forged)).toBe("ada");
+  });
+
+  test("falls back to the agent label when the server stamped no publisher", () => {
+    const emitted = approval({ agent: "sail" });
+    const machine = approval({ agent: "sail", publisher: { role: "admin", lane: "api" } });
+
+    expect(actorOf(emitted)).toBe("sail");
+    expect(eventActor(machine)).toBe("sail");
+  });
 });
 
 describe("message pagination", () => {
