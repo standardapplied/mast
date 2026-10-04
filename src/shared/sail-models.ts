@@ -186,8 +186,8 @@ export type GlobalSpecHistoryResponse = {
   total: number;
 };
 
-/** Which log an agent-follow session tails: the CLI's build/review lanes, or a chat turn's. */
-export type AgentLogRole = "build" | "review" | "room" | "room-full";
+/** Which log an agent-follow session tails: the build, review and fix lanes, or a chat turn's. */
+export type AgentLogRole = "build" | "review" | "fix" | "room" | "room-full";
 
 /** GET /v1/projects/{p}/agent — the live build session's snapshot status. */
 export type AgentStatusResponse = {
@@ -216,8 +216,10 @@ export type RunView = {
   project: string;
   spec_id?: string;
   node: string;
-  /** build | review | adhoc | room | room-full. Retired lanes (invite, invite-full) survive only on historical rows. */
+  /** build | review | fix | adhoc | room | room-full. Retired lanes (invite, invite-full) survive only on historical rows. */
   role: string;
+  /** The review a reviewer or fix run serves; absent on every other lane. */
+  review_id?: string;
   agent: string;
   branch?: string;
   pid?: number;

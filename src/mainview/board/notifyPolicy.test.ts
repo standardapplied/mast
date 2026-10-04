@@ -138,5 +138,39 @@ describe("engaged rooms", () => {
     expect(notification(stop("room", 137), null, engaged)?.kind).toBe("run-ended");
     expect(notification(stop("build", 0), null, engaged)?.kind).toBe("run-ended");
   });
+
+  test("a reviewer or fix agent that ended cleanly is silent; one that failed pages", () => {
+    const stop = (role: string, data: Record<string, unknown>) =>
+      ({
+        v: 1,
+        ts: "t",
+        project: "acme",
+        spec: "auth",
+        type: "agent_session_stopped",
+        agent: "codex",
+        host: "h",
+        data: { run_role: role, ...data },
+      }) as SailEvent;
+    expect(notification(stop("review", { exit_code: 0 }), null, engaged)).toBeNull();
+    expect(notification(stop("fix", { exit_code: 0 }), null, engaged)).toBeNull();
+    expect(notification(stop("review", { exit_code: 1 }), null, engaged)?.kind).toBe("run-ended");
+    expect(notification(stop("fix", { reason: "time limit (45m)" }), null, engaged)?.kind).toBe(
+      "run-ended",
+    );
+  });
+
+  test("a chat turn the watcher killed pages though it carries no exit code", () => {
+    const killed = {
+      v: 1,
+      ts: "t",
+      project: "acme",
+      spec: "chat-room",
+      type: "agent_session_stopped",
+      agent: "claude-code",
+      host: "h",
+      data: { run_role: "room", reason: "stall (20m)" },
+    } as SailEvent;
+    expect(notification(killed, null, engaged)?.kind).toBe("run-ended");
+  });
 });
 

@@ -268,6 +268,17 @@ describe("latestRun", () => {
     expect(latestRun(runs, "build")?.node).toBe("main");
   });
 
+  test("the fix role resolves the newest fix run, never a reviewer's or a build's", () => {
+    const runs = [
+      run("build", "build", "2026-10-03T10:00:00Z"),
+      run("older-fix", "fix", "2026-10-03T10:20:00Z"),
+      run("newest-fix", "fix", "2026-10-03T10:40:00Z"),
+      run("newest-review", "review", "2026-10-03T10:50:00Z"),
+    ];
+    expect(latestRun(runs, "fix")?.id).toBe("newest-fix");
+    expect(latestRun(runs.filter((r) => r.role !== "fix"), "fix")).toBeUndefined();
+  });
+
   test("returns undefined when no run of the role exists", () => {
     expect(latestRun([], "build")).toBeUndefined();
     expect(latestRun([run("r", "review", "2026-07-09T11:00:00Z")], "build")).toBeUndefined();
