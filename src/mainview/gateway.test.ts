@@ -99,12 +99,30 @@ describe("spec body edits go through the content resource", () => {
     const gateway = createDemoGateway();
     const room = await gateway.createRoom({ id: "pairing", title: "Pairing", project: "chorus" });
     expect(room.ok).toBe(true);
+    await gateway.engage("pairing", { agent: "claude-code", mode: "read_only", model: "claude-fable-5" });
+    const before = await gateway.getRoom("pairing");
+    const roster = before.ok ? before.value.members : [];
+    expect(roster.map((member) => member.agent)).toEqual(["claude-code"]);
 
     const born = await gateway.createSpec({ id: "pairing", title: "Pairing", project: "chorus" });
 
     expect(born.ok).toBe(true);
     const rooms = await gateway.listRooms("chorus");
-    expect(rooms.ok && rooms.value.rooms.filter((r) => r.id === "pairing").length).toBe(1);
+    const adopted = rooms.ok ? rooms.value.rooms.filter((r) => r.id === "pairing") : [];
+    expect(adopted.map((r) => r.members)).toEqual([roster]);
+    const after = await gateway.getRoom("pairing");
+    expect(after.ok && after.value.members).toEqual(roster);
+  });
+
+  test("a spec born over a room nobody is engaged in adopts it with an empty roster", async () => {
+    const gateway = createDemoGateway();
+    await gateway.createRoom({ id: "pairing", title: "Pairing", project: "chorus" });
+
+    const born = await gateway.createSpec({ id: "pairing", title: "Pairing", project: "chorus" });
+
+    expect(born.ok && born.value.spec.engagement).toBeUndefined();
+    const after = await gateway.getRoom("pairing");
+    expect(after.ok && after.value.members).toEqual([]);
   });
 
   test("a stale If-Match is a 412 conflict, not a silent overwrite", async () => {
