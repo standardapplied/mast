@@ -78,6 +78,35 @@ describe("spec body edits go through the content resource", () => {
     expect(after.ok && after.value.body).toBe("# Rewritten body");
   });
 
+  test("a spec id already taken is sail's 409 conflict, with its fix", async () => {
+    const result = await createDemoGateway().createSpec({
+      id: "chorus-billing-export",
+      title: "Again",
+      project: "chorus",
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        status: 409,
+        code: "conflict",
+        message: "Spec 'chorus-billing-export' already exists.",
+        action: "Pick another spec id, or edit it with: sail spec update chorus-billing-export",
+      },
+    });
+  });
+
+  test("a spec born over a room holding its id adopts that room and mints none", async () => {
+    const gateway = createDemoGateway();
+    const room = await gateway.createRoom({ id: "pairing", title: "Pairing", project: "chorus" });
+    expect(room.ok).toBe(true);
+
+    const born = await gateway.createSpec({ id: "pairing", title: "Pairing", project: "chorus" });
+
+    expect(born.ok).toBe(true);
+    const rooms = await gateway.listRooms("chorus");
+    expect(rooms.ok && rooms.value.rooms.filter((r) => r.id === "pairing").length).toBe(1);
+  });
+
   test("a stale If-Match is a 412 conflict, not a silent overwrite", async () => {
     const gateway = createDemoGateway();
     const result = await gateway.putSpecContent("chorus-billing-export", { body: "x" }, '"stale"');

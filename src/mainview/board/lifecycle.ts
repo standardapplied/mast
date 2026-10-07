@@ -62,10 +62,11 @@ export function statusGuidance(status: SpecStatus | string): string {
 }
 
 /**
- * The UI's dispatch gate mirrors sail's route tier, not its resource policy:
- * any write credential may attempt a dispatch (members launch their own specs
- * on their own box). The server's DispatchPolicy — assignee-or-admin, right
- * node — stays the authority, and its refusals are rendered verbatim. Only a
+ * The UI's dispatch gate mirrors the one refusal sail gives a credential
+ * whatever it asks (`read_only_credential`), not its resource policy: any
+ * write credential may attempt a dispatch (members launch their own specs on
+ * their own box). The server's DispatchPolicy — assignee-or-admin, right node
+ * — stays the authority, and its refusals are rendered verbatim. Only a
  * read-only credential is refused locally.
  */
 export function canLaunchAgents(capabilities: string[]): boolean {
