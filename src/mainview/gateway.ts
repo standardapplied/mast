@@ -555,16 +555,22 @@ export function createDemoGateway(): DemoGateway {
           ok: false,
           error: {
             status: 409,
-            code: "spec_exists",
+            code: "conflict",
             message: `Spec '${request.id}' already exists.`,
+            action: `Pick another spec id, or edit it with: sail spec update ${request.id}`,
           },
         };
       }
+      // A spec born over a room already holding its id adopts that room and mints none,
+      // as sail's spec rule lets the room's owner do. The room keeps its engaged agent.
+      const adopted = chatRooms.findIndex((room) => room.id === request.id);
+      const adoptedRoom = adopted >= 0 ? chatRooms.splice(adopted, 1)[0] : undefined;
       const now = new Date().toISOString();
       const spec = demoSpec({
         ...request,
         project: request.project ?? "",
         status: request.status ?? "draft",
+        engagement: adoptedRoom?.members[0],
         created_at: now,
         updated_at: now,
       });
