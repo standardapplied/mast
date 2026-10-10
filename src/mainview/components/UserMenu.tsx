@@ -44,6 +44,7 @@ export function UserMenu({
   updater,
   onLogin,
   onLogout,
+  onForget,
   onDiagnostics,
 }: {
   theme: ThemeController;
@@ -52,9 +53,13 @@ export function UserMenu({
   updater?: Updater;
   onLogin?: () => void;
   onLogout?: () => void;
+  /** Present when Mast is paired with a box: forgetting it is how a paired Mac leaves, and ends
+   *  the page. Resolves only to the reason it could not, which is shown here, where it was asked. */
+  onForget?: () => Promise<string>;
   onDiagnostics?: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [forgetError, setForgetError] = useState<string | null>(null);
   const [mode, setMode] = useState<ThemeMode>(theme.mode());
   const clipboardWrite = useSyncExternalStore(clipboardPolicy.subscribe, clipboardPolicy.mode);
   const scrollbackMib = useSyncExternalStore(scrollbackBudget.subscribe, scrollbackBudget.mib);
@@ -71,6 +76,10 @@ export function UserMenu({
     document.addEventListener("mousedown", handleClickOutside, true);
     return () => document.removeEventListener("mousedown", handleClickOutside, true);
   }, [isOpen]);
+
+  const forget = async () => {
+    setForgetError((await onForget?.()) ?? null);
+  };
 
   const setTheme = (value: string) => {
     theme.setMode(value as ThemeMode);
@@ -145,7 +154,23 @@ export function UserMenu({
           </div>
 
           <div className="user-menu-section">
-            {tokenKind === "none" ? (
+            {onForget ? (
+              <>
+                <Button
+                  variant="ghost"
+                  className="user-menu-signin"
+                  onClick={() => void forget()}
+                  data-testid="user-menu-forget"
+                >
+                  Forget this box
+                </Button>
+                {forgetError && (
+                  <span className="user-menu-detail" role="alert" data-testid="user-menu-forget-error">
+                    {forgetError}
+                  </span>
+                )}
+              </>
+            ) : tokenKind === "none" ? (
               <Button
                 variant="ghost"
                 className="user-menu-signin"

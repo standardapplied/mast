@@ -4,8 +4,9 @@ import type { SailResult } from "../../shared/types";
 /**
  * The terminal picker's project roster: the synced catalog (`GET /v1/projects`,
  * authoritative — every project regardless of running state or which box hosts
- * it) merged with the `~/.ssh/config` ProxyJump aliases (the routes a terminal
- * can actually dial). Either source may fail independently; the roster degrades
+ * it) merged with the routes the Rust core can open (`list_targets`): every
+ * project of a paired box, or, on the SSH-config fallback, the `~/.ssh/config`
+ * ProxyJump aliases. Either source may fail independently; the roster degrades
  * to the surviving one with a warning instead of going blank.
  */
 

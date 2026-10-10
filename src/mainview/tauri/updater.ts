@@ -1,8 +1,8 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
 import type { Updater } from "../updater";
+import { invoke } from "./core";
 
 const RELEASES_URL = "https://github.com/standardapplied/mast/releases";
 

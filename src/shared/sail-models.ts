@@ -552,6 +552,9 @@ export type ConnectionPhase =
   | "probing"
   | "ready"
   | "unauthenticated"
+  /** The first-run screen: Mast needs a connect code, either because this Mac has no settings
+   *  yet or because its paired box will only take a new one (see `paired`, `detail`). */
+  | "unpaired"
   | "tunnel-connecting"
   | "tunnel-degraded"
   | "no-host"
@@ -566,7 +569,27 @@ export type ConnectionStatus = {
   tokenKind: "session" | "api" | "none";
   stream: EventStreamState;
   detail?: string;
+  /** Mast holds a pairing with a box (`~/.sail/mast.yaml`), usable or not. */
+  paired?: boolean;
+  /** The box as the settings name it: the paired host, or the fallback's ssh alias. */
+  host?: string;
+  /** The SSH port a connect code named; one host can front two boxes on two ports. */
+  sshPort?: number;
+  /** This run of Mast forgot a box: its pairing is still on the box until the owner ends it. */
+  forgotten?: boolean;
 };
+
+/** What a pasted connect code names, shown under the field once it parses. */
+export type ConnectCodePreview = {
+  handle: string;
+  email?: string | null;
+  host: string;
+};
+
+/** A connect code checked locally: who and where, or the one sentence saying why not. */
+export type ConnectCodeCheck =
+  | { ok: true; value: ConnectCodePreview }
+  | { ok: false; detail: string };
 
 /**
  * GET /v1/fdes — the org's synced FDE roster (FdeStore), the assignee

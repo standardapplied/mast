@@ -24,8 +24,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::ipc::{Channel as IpcChannel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Mutex};
+
+use crate::pairing::{self, ContainerHop, Pairing};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -85,8 +87,20 @@ const PRUNED_DIRS: &[&str] = &[
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("no ~/.sail/config.yaml — run `sail host config` or log in first")]
-    NoConfig,
+    #[error("this Mac is not connected to a box yet — paste a connect code")]
+    Unpaired,
+    #[error("{0}")]
+    BadCode(String),
+    #[error("Mast's saved connection to its box cannot be used ({0}); forget this box and paste a new connect code.")]
+    BadPairing(String),
+    #[error("{0} did not answer; check that the box is running and this Mac is online.")]
+    BoxUnreachable(String),
+    #[error("The box at {0} answered with a different host key than the one in its connect code, so Mast refused it; pair again with a new code.")]
+    HostKeyChanged(String),
+    #[error("The box at {0} no longer accepts this Mac's key; ask for a new connect code.")]
+    KeyRefused(String),
+    #[error("{0}")]
+    Refused(String),
     #[error("config is missing `{0}`")]
     MissingField(&'static str),
     #[error("no SSH key available — nothing in the ssh-agent and no readable key file (~/.ssh/id_ed25519|ecdsa|rsa). Run `ssh-add`, or point IdentityFile at an unencrypted key.")]
@@ -101,6 +115,10 @@ pub enum Error {
     BadStreamPath,
     #[error("no session with id {0}")]
     NoSession(String),
+    #[error("Mast is no longer connected to the box this was for.")]
+    BoxChanged,
+    #[error("Mast is not connected to a box.")]
+    NoBox,
     #[error("pty session: {0}")]
     PtySession(String),
     #[error("{LINK_DROPPED}")]
@@ -125,41 +143,106 @@ impl From<Error> for String {
     }
 }
 
-/// Resolved connection facts, mirroring the `sail` CLI's `~/.sail/config.yaml`:
-/// the SSH hop to the devbox (`host` is an ssh alias, resolved through
-/// `~/.ssh/config`) and the loopback address the control plane listens on there.
-#[derive(Clone, Debug)]
-pub struct SailConfig {
-    pub ssh_host: String,
-    pub fallback_user: Option<String>,
+impl Error {
+    /// A paired box that turned this Mac away for good: only a new connect code gets back in.
+    pub fn needs_new_code(&self) -> bool {
+        matches!(self, Error::HostKeyChanged(_) | Error::KeyRefused(_))
+    }
+}
+
+/// Where Mast connects and as whom: one shape from both sources, `~/.sail/mast.yaml` (what a
+/// pasted connect code carried) and, only when that file is absent, the `sail` CLI's
+/// `~/.sail/config.yaml` routed through the Mac's `~/.ssh/config`.
+#[derive(Clone)]
+pub struct ConnectionSettings {
+    /// The Mac's home: the settings file a token is written back to lives under it.
+    pub home: PathBuf,
+    pub route: Route,
     pub server_host: String,
     pub server_port: u16,
     pub token: Option<String>,
-    pub key_path: Option<String>,
 }
 
-impl SailConfig {
-    pub fn load() -> Result<Self, Error> {
-        let home = dirs::home_dir().ok_or(Error::NoConfig)?;
-        let raw = std::fs::read_to_string(home.join(".sail/config.yaml")).map_err(|_| Error::NoConfig)?;
+#[derive(Clone)]
+pub enum Route {
+    /// The box a connect code named: its address, login, pinned host key and the pairing's key.
+    Paired(Pairing),
+    /// FALLBACK, to delete once every box has paired: `alias` is an ssh alias resolved through
+    /// the Mac's `~/.ssh/config` (every `ProxyJump` followed), keys come from ssh-agent and key
+    /// files, and the host key is accepted unchecked.
+    SshConfig {
+        alias: String,
+        fallback_user: Option<String>,
+        key_path: Option<String>,
+    },
+}
+
+impl ConnectionSettings {
+    pub fn load(home: &Path) -> Result<Self, Error> {
+        match pairing::load(home)? {
+            Some(paired) => Ok(paired),
+            None => Self::from_sail_config(home),
+        }
+    }
+
+    fn from_sail_config(home: &Path) -> Result<Self, Error> {
+        let raw = match std::fs::read_to_string(home.join(".sail/config.yaml")) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Error::Unpaired),
+            Err(e) => return Err(e.into()),
+        };
         let map = parse_yaml(&raw);
 
-        let ssh_host = map.get("host").cloned().ok_or(Error::MissingField("host"))?;
+        let alias = map.get("host").cloned().ok_or(Error::MissingField("host"))?;
         let server = map
             .get("server")
             .cloned()
             .unwrap_or_else(|| "http://127.0.0.1:7070".into());
         let (server_host, server_port) = parse_server(&server);
 
-        Ok(SailConfig {
-            ssh_host,
-            fallback_user: map.get("user").cloned(),
+        Ok(ConnectionSettings {
+            home: home.to_path_buf(),
+            route: Route::SshConfig {
+                alias,
+                fallback_user: map.get("user").cloned(),
+                key_path: map.get("key").cloned(),
+            },
             server_host,
             server_port,
             token: map.get("token").cloned().filter(|t| !t.trim().is_empty()),
-            key_path: map.get("key").cloned(),
         })
     }
+
+    /// The box as these settings name it: the paired host, or the fallback's ssh alias.
+    pub fn host(&self) -> &str {
+        match &self.route {
+            Route::Paired(pairing) => &pairing.host,
+            Route::SshConfig { alias, .. } => alias,
+        }
+    }
+
+    pub fn paired(&self) -> bool {
+        matches!(self.route, Route::Paired(_))
+    }
+
+    /// The SSH port a connect code named. The fallback's alias carries its own in `~/.ssh/config`.
+    pub fn ssh_port(&self) -> Option<u16> {
+        match &self.route {
+            Route::Paired(pairing) => Some(pairing.port),
+            Route::SshConfig { .. } => None,
+        }
+    }
+
+    /// The file the token lives in: Mast's own when paired, the `sail` CLI's otherwise.
+    fn file(&self) -> PathBuf {
+        self.home.join(if self.paired() { pairing::SETTINGS_FILE } else { ".sail/config.yaml" })
+    }
+}
+
+/// The Mac's home directory, under which every settings file lives.
+pub fn local_home() -> Result<PathBuf, Error> {
+    dirs::home_dir()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "this Mac has no home directory").into())
 }
 
 /// One resolved SSH hop from `~/.ssh/config` (the alias merged with any matching
@@ -183,26 +266,32 @@ struct Session {
     jumps: Vec<Handle<Client>>,
 }
 
-/// Accepts the devbox host key. Mast trusts the SSH hop the same way the `sail`
-/// CLI does — the tunnel target is pinned by the user's own config, and a
-/// known-hosts prompt has no UI on mobile. Host-key pinning is a follow-up.
-struct Client;
+/// Verifies the box when its host key is known: a paired box pins the key its connect code
+/// carried, and any other key is refused before authentication. With no pin (the SSH-config
+/// fallback, and a container reached through a channel of the already-verified box) the key is
+/// accepted as it always was.
+#[derive(Default)]
+struct Client {
+    pinned: Option<key::PublicKey>,
+}
 
 #[async_trait]
 impl Handler for Client {
     type Error = russh::Error;
-    async fn check_server_key(&mut self, _key: &key::PublicKey) -> Result<bool, Self::Error> {
-        Ok(true)
+    async fn check_server_key(&mut self, key: &key::PublicKey) -> Result<bool, Self::Error> {
+        Ok(self.pinned.as_ref().map_or(true, |pinned| pinned == key))
     }
 }
-
 
 /// One lazily-connected russh session, shared by the HTTP proxy and every
 /// terminal. Held in Tauri managed state.
 pub struct Backend {
-    config: SailConfig,
+    /// Which of this run's backends this is. The webview learns it from the status and names
+    /// it on every command, so a command is only ever served by the backend it was sent for.
+    generation: u64,
+    settings: ConnectionSettings,
     /// The API bearer token, mutable at runtime so login/logout take effect
-    /// without a restart. Mirrors `~/.sail/config.yaml`.
+    /// without a restart. Mirrors the settings file.
     token: Mutex<Option<String>>,
     session: Mutex<Option<Arc<Session>>>,
     /// One cached SSH session per project container (keyed by ssh alias), shared
@@ -221,9 +310,11 @@ pub struct Backend {
     /// Host-owned pty sessions attached over SSH direct-streamlocal, keyed by a
     /// client-chosen id. The sender carries keystrokes/resize/detach into the
     /// session driver; the session outlives the connection on the host side.
-    /// Shared with each driver task so it can evict its own id when the session
-    /// ends on its own, not only when the UI closes the tab.
-    sessions: Arc<Mutex<HashMap<String, Attachment>>>,
+    /// Each driver task can reach it to evict its own id when the session ends on its
+    /// own, not only when the UI closes the tab — weakly, since the map holds the sender
+    /// that driver waits on: a driver that kept the map alive would keep itself alive,
+    /// and a backend that is dropped must take its attachments with it.
+    sessions: Arc<Registry<Attachment>>,
     /// Launches still talking to the host, by session name; a kill of that name waits its turn.
     openings: Openings,
     /// The remote `$HOME` for the node SSH user, resolved once and cached — so a `~/`-relative
@@ -232,7 +323,42 @@ pub struct Backend {
     /// Live long-read streams (SSE tails: events + agent log), keyed by a
     /// client-chosen id. The sender signals the pump task to stop when the
     /// webview closes the stream.
-    streams: Mutex<HashMap<String, mpsc::Sender<()>>>,
+    streams: Registry<mpsc::Sender<()>>,
+}
+
+static GENERATIONS: AtomicU64 = AtomicU64::new(1);
+
+/// What a backend keeps running for the webview, by client-chosen id. A retired registry has
+/// dropped every entry and takes no more: an open that was still in flight when the app
+/// replaced its backend is refused, where it would have registered a terminal or a stream
+/// that nothing could reach again.
+struct Registry<T>(Mutex<Option<HashMap<String, T>>>);
+
+impl<T> Default for Registry<T> {
+    fn default() -> Self {
+        Registry(Mutex::new(Some(HashMap::new())))
+    }
+}
+
+impl<T> Registry<T> {
+    async fn insert(&self, id: String, entry: T) -> Result<(), Error> {
+        self.0.lock().await.as_mut().ok_or(Error::BoxChanged)?.insert(id, entry);
+        Ok(())
+    }
+
+    async fn remove(&self, id: &str) -> Option<T> {
+        self.0.lock().await.as_mut()?.remove(id)
+    }
+
+    async fn retire(&self) {
+        self.0.lock().await.take();
+    }
+}
+
+impl Registry<Attachment> {
+    async fn commands(&self, id: &str) -> Option<mpsc::Sender<crate::pty::SessionCmd>> {
+        Some(self.0.lock().await.as_ref()?.get(id)?.commands.clone())
+    }
 }
 
 /// One pane's attachment as the backend holds it: the lane its keystrokes, resizes, and detach
@@ -281,6 +407,18 @@ pub struct SailResponse {
     pub status: u16,
     pub etag: Option<String>,
     pub body: String,
+}
+
+impl SailResponse {
+    /// Whether the box turned the bearer token away. Read from the error code, not the status:
+    /// Sail answers 403 here, and a role's 403 must not read as a dead token.
+    fn refuses_token(&self) -> bool {
+        !(200..300).contains(&self.status)
+            && serde_json::from_str::<serde_json::Value>(&self.body)
+                .ok()
+                .and_then(|body| Some(body.pointer("/error/code")?.as_str()? == "invalid_bearer_token"))
+                .unwrap_or(false)
+    }
 }
 
 /// One entry in a container directory listing.
@@ -440,25 +578,29 @@ fn emit_transfer(app: &AppHandle, progress: &TransferProgress) {
 }
 
 impl Backend {
-    pub fn new() -> Result<Self, Error> {
-        let config = SailConfig::load()?;
-        let token = config.token.clone();
-        Ok(Backend {
-            config,
+    pub fn new(settings: ConnectionSettings) -> Self {
+        let token = settings.token.clone();
+        Backend {
+            generation: GENERATIONS.fetch_add(1, Ordering::Relaxed),
+            settings,
             token: Mutex::new(token),
             session: Mutex::new(None),
             containers: Mutex::new(HashMap::new()),
             sftp_pool: Mutex::new(HashMap::new()),
             sftp_opens: AtomicU64::new(0),
-            sessions: Arc::new(Mutex::new(HashMap::new())),
+            sessions: Arc::default(),
             openings: Openings::default(),
             home: Mutex::new(None),
-            streams: Mutex::new(HashMap::new()),
-        })
+            streams: Registry::default(),
+        }
     }
 
-    pub fn describe(&self) -> &SailConfig {
-        &self.config
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn describe(&self) -> &ConnectionSettings {
+        &self.settings
     }
 
     pub async fn has_token(&self) -> bool {
@@ -473,24 +615,42 @@ impl Backend {
         }
     }
 
-    /// Set (login) or clear (logout) the API token: persist to config, update the
-    /// in-memory value, and drop the control-plane session so the next request
+    /// Set (login) or clear (logout) the API token: persist it to the settings file it came
+    /// from, update the in-memory value, and drop the control-plane session so the next request
     /// re-authenticates.
     pub async fn set_token(&self, token: Option<String>) -> Result<(), Error> {
-        write_config_token(token.as_deref())?;
-        *self.token.lock().await = token;
-        *self.session.lock().await = None;
+        write_token(&self.settings.file(), token.as_deref())?;
+        self.drop_token(token).await;
         Ok(())
     }
 
-    /// The project containers reachable from `~/.ssh/config`: concrete `Host`
-    /// aliases that have a `ProxyJump` (the node hops to the container), which
-    /// distinguishes them from the node/bastion aliases. `sail connect <project>`
-    /// writes exactly these blocks (Host = project name). The iOS-portable path
-    /// (no local ssh config) will instead source this list from the control
-    /// plane once sail exposes a connect endpoint.
-    pub fn list_targets(&self) -> Vec<String> {
-        let cfg = read_ssh_config();
+    /// The box refused the token mid-session. On the fallback path that is a logout. A paired
+    /// Mac only stops presenting the token: `mast.yaml` is kept so the first-run screen can name
+    /// the box whose code was revoked, and nothing is written anywhere.
+    pub(crate) async fn token_refused(&self) -> Result<(), Error> {
+        if self.settings.paired() {
+            self.drop_token(None).await;
+            return Ok(());
+        }
+        self.set_token(None).await
+    }
+
+    async fn drop_token(&self, token: Option<String>) {
+        *self.token.lock().await = token;
+        *self.session.lock().await = None;
+    }
+
+    /// The projects a terminal or the file workbench can open. A paired box answers for itself:
+    /// every project its catalog holds, since nothing on the Mac stands between Mast and a
+    /// container. On the fallback path these are the concrete `Host` aliases in `~/.ssh/config`
+    /// that have a `ProxyJump` (the node hops to the container), which distinguishes them from
+    /// the node/bastion aliases; `sail connect <project>` writes exactly those blocks.
+    pub async fn list_targets(&self) -> Result<Vec<String>, Error> {
+        if self.settings.paired() {
+            let response = self.sail_request("GET", "/v1/projects", None, None).await?;
+            return pairing::project_names(&response);
+        }
+        let cfg = read_ssh_config(&self.settings.home);
         let mut seen = std::collections::BTreeSet::new();
         let mut out = Vec::new();
         for line in cfg.lines() {
@@ -507,7 +667,7 @@ impl Backend {
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// Actively establish the session (idempotent). The connection banner calls
@@ -517,18 +677,46 @@ impl Backend {
         self.ensure().await.map(|_| ())
     }
 
-    /// Dials the devbox, chaining through every `ProxyJump` hop resolved from
-    /// `~/.ssh/config`: connect hop 1 directly, forward a channel to hop 2 and
-    /// run SSH over it, and so on, until the target session rides the last hop.
+    /// Dials the box: straight to the paired address, or (fallback) chaining through every
+    /// `ProxyJump` hop resolved from `~/.ssh/config`.
     async fn dial(&self) -> Result<Session, Error> {
-        self.dial_alias(&self.config.ssh_host, self.config.fallback_user.clone())
-            .await
+        match &self.settings.route {
+            Route::Paired(pairing) => {
+                let handle = dial_box(pairing).await?;
+                Ok(Session { handle, jumps: Vec::new() })
+            }
+            Route::SshConfig { alias, fallback_user, .. } => self.dial_alias(alias, fallback_user.clone()).await,
+        }
     }
 
-    /// Dial any ssh alias (a project container as well as the node), resolving
+    /// Dials a project's container. Paired, the box says where it is (`/v1/projects/{p}/connect`)
+    /// and is itself the jump host, with the pairing's key at both ends. The container's own host
+    /// key is not pinned: the hop rides a channel of the verified box. On the fallback path the
+    /// project is an ssh alias like any other.
+    async fn dial_container(&self, project: &str) -> Result<Session, Error> {
+        let pairing = match &self.settings.route {
+            Route::Paired(pairing) => pairing,
+            Route::SshConfig { .. } => return self.dial_alias(project, None).await,
+        };
+        let path = pairing::connect_path(project)?;
+        let hop = ContainerHop::from_response(project, &self.sail_request("GET", &path, None, None).await?)?;
+        let jump = dial_box(pairing).await?;
+        let channel = jump
+            .channel_open_direct_tcpip(hop.ip.as_str(), pairing::CONTAINER_SSH_PORT as u32, "127.0.0.1", 0)
+            .await?;
+        let mut handle = client::connect_stream(client_config(), channel.into_stream(), Client::default()).await?;
+        if !handle.authenticate_publickey(&hop.user, pairing.key.clone()).await? {
+            return Err(Error::Refused(format!(
+                "{project}'s container did not accept this Mac's key; ask the box owner to re-apply the project."
+            )));
+        }
+        Ok(Session { handle, jumps: vec![jump] })
+    }
+
+    /// FALLBACK: dial any ssh alias (a project container as well as the node), resolving
     /// its `~/.ssh/config` entry + ProxyJump chain the same way.
     async fn dial_alias(&self, alias: &str, user_fallback: Option<String>) -> Result<Session, Error> {
-        let cfg_text = read_ssh_config();
+        let cfg_text = read_ssh_config(&self.settings.home);
         let mut target = resolve_host(alias, &cfg_text);
         if target.user.is_none() {
             target.user = user_fallback;
@@ -553,7 +741,7 @@ impl Backend {
         Ok(Session { handle, jumps })
     }
 
-    /// Establish + authenticate one SSH session, either over a carried stream
+    /// FALLBACK: establish + authenticate one SSH session, either over a carried stream
     /// (through a jump) or a fresh TCP connection (the first/only hop).
     async fn handshake(
         &self,
@@ -562,10 +750,10 @@ impl Backend {
         host: &SshHost,
     ) -> Result<Handle<Client>, Error> {
         let mut handle = match carried {
-            Some(stream) => client::connect_stream(ssh_cfg, stream, Client).await?,
+            Some(stream) => client::connect_stream(ssh_cfg, stream, Client::default()).await?,
             None => {
                 let socket = dial_tcp(host.hostname.as_str(), host.port).await?;
-                client::connect_stream(ssh_cfg, socket, Client).await?
+                client::connect_stream(ssh_cfg, socket, Client::default()).await?
             }
         };
         let user = host
@@ -573,6 +761,10 @@ impl Backend {
             .clone()
             .or_else(|| std::env::var("USER").ok())
             .unwrap_or_else(|| "root".into());
+        let explicit_key = match &self.settings.route {
+            Route::SshConfig { key_path, .. } => key_path.as_deref(),
+            Route::Paired(_) => None,
+        };
 
         // The ssh-agent first — on macOS the key usually lives in the keychain /
         // agent, not as a plaintext file russh can read. Then fall back to key
@@ -584,7 +776,7 @@ impl Backend {
                 return Ok(handle);
             }
         }
-        if let Ok(identity) = load_identity(&host.identity_files, self.config.key_path.as_deref()) {
+        if let Ok(identity) = load_identity(&host.identity_files, explicit_key) {
             attempted = true;
             if handle.authenticate_publickey(&user, Arc::new(identity)).await? {
                 return Ok(handle);
@@ -596,6 +788,16 @@ impl Backend {
         } else {
             Error::NoKey
         })
+    }
+
+    /// What a hop that never answered reads as. The fallback's sentence points at the Mac's
+    /// `~/.ssh/config`; a paired Mac has no such file to check.
+    fn timed_out(&self, what: &str) -> Error {
+        if self.settings.paired() {
+            Error::BoxUnreachable(what.to_string())
+        } else {
+            Error::Timeout(what.to_string())
+        }
     }
 
     /// Connects the session if it isn't already up, with a timeout so a bad
@@ -610,7 +812,7 @@ impl Backend {
         let session = Arc::new(
             tokio::time::timeout(CONNECT_TIMEOUT, self.dial())
                 .await
-                .map_err(|_| Error::Timeout(self.config.ssh_host.clone()))??,
+                .map_err(|_| self.timed_out(self.settings.host()))??,
         );
         *guard = Some(session.clone());
         Ok(session)
@@ -712,7 +914,7 @@ impl Backend {
                 }
                 Err(_) => {
                     self.evict(&session).await;
-                    last = Some(Error::Timeout("pty socket channel".into()));
+                    last = Some(self.timed_out("pty socket channel"));
                 }
             }
         }
@@ -736,10 +938,11 @@ impl Backend {
     ) -> Result<(), Error> {
         // The attachment is registered BEFORE the first remote await: a session_close that lands
         // while the prologue is still talking to the host abandons it (see `until_closed`)
-        // instead of leaving a ghost attachment — or a durable session — no one can reach.
+        // instead of leaving a ghost attachment — or a durable session — no one can reach. A
+        // retired backend refuses it here, before anything is asked of the host.
         let (tx, rx) = mpsc::channel::<crate::pty::SessionCmd>(256);
         let (close, closed) = oneshot::channel::<()>();
-        self.sessions.lock().await.insert(id.clone(), Attachment { commands: tx, close });
+        self.sessions.insert(id.clone(), Attachment { commands: tx, close }).await?;
         let prologue = async {
             // The launch holds its session's lane so a kill racing it (close during the prologue)
             // is ordered after the Create it must undo — see [`Openings`]. The guard lives in
@@ -756,13 +959,27 @@ impl Backend {
         let stream = match until_closed(prologue, closed).await {
             Ok(stream) => stream,
             Err(error) => {
-                self.sessions.lock().await.remove(&id);
+                self.sessions.remove(&id).await;
                 return Err(error);
             }
         };
+        self.drive_session(id, stream, rx, on_data);
+        Ok(())
+    }
 
-        let sessions = self.sessions.clone();
-        let cleanup_id = id;
+    /// Runs an attached session on its own task until it ends, is detached, or its transport
+    /// fails. Losing the command lane — the attachment left the map, or the map went with its
+    /// backend — is a detach.
+    fn drive_session<S>(
+        &self,
+        id: String,
+        stream: S,
+        commands: mpsc::Receiver<crate::pty::SessionCmd>,
+        on_data: IpcChannel<InvokeResponseBody>,
+    ) where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let sessions = Arc::downgrade(&self.sessions);
         let ending = on_data.clone();
         tokio::spawn(async move {
             // Everything rides ONE raw channel, in order: a Tauri event runs on its own lane and
@@ -774,7 +991,7 @@ impl Backend {
             let pump = tokio::spawn(crate::session_frames::pump(pending, move |frame| {
                 let _ = on_data.send(InvokeResponseBody::Raw(frame));
             }));
-            let outcome = crate::pty::run(stream, rx, move |event| {
+            let outcome = crate::pty::run(stream, commands, move |event| {
                 let _ = events.send(event);
             })
             .await;
@@ -787,19 +1004,16 @@ impl Backend {
             }
             // Evict the id whether the session ended on its own, detached, or the
             // transport failed — the map must not keep a sender to a dead driver.
-            sessions.lock().await.remove(&cleanup_id);
+            if let Some(sessions) = sessions.upgrade() {
+                sessions.remove(&id).await;
+            }
         });
-        Ok(())
     }
 
     async fn send_session(&self, id: &str, cmd: crate::pty::SessionCmd) -> Result<(), Error> {
-        // Clone the sender and drop the map lock before awaiting the send: a full
+        // The sender is cloned out and the map lock dropped before awaiting the send: a full
         // channel must never hold the lock and stall every other session's writes.
-        let tx = {
-            let sessions = self.sessions.lock().await;
-            let attachment = sessions.get(id).ok_or_else(|| Error::NoSession(id.into()))?;
-            attachment.commands.clone()
-        };
+        let tx = self.sessions.commands(id).await.ok_or_else(|| Error::NoSession(id.into()))?;
         tx.send(cmd).await.map_err(|_| Error::NoSession(id.into()))
     }
 
@@ -819,7 +1033,7 @@ impl Backend {
     /// attached, the driver writes Detach and returns. The host session survives either way —
     /// closing here never kills.
     pub async fn session_close(&self, id: &str) -> Result<(), Error> {
-        let Some(attachment) = self.sessions.lock().await.remove(id) else {
+        let Some(attachment) = self.sessions.remove(id).await else {
             return Ok(());
         };
         let _ = attachment.close.send(());
@@ -872,9 +1086,9 @@ impl Backend {
             return Ok(session);
         }
         let session = Arc::new(
-            tokio::time::timeout(CONNECT_TIMEOUT, self.dial_alias(target, None))
+            tokio::time::timeout(CONNECT_TIMEOUT, self.dial_container(target))
                 .await
-                .map_err(|_| Error::Timeout(target.to_string()))??,
+                .map_err(|_| self.timed_out(target))??,
         );
         self.containers
             .lock()
@@ -1397,7 +1611,7 @@ impl Backend {
     /// Run one command on a container's session to completion, returning its
     /// exit status and captured stderr. Used for `rm -rf`; keeps the channel
     /// bounded so a wedged remote can't hang the delete forever.
-    async fn exec_capture(&self, target: &str, command: &str) -> Result<(u32, String), Error> {
+    pub(crate) async fn exec_capture(&self, target: &str, command: &str) -> Result<(u32, String), Error> {
         self.exec_capture_with_input(target, command, &[]).await
     }
 
@@ -1451,14 +1665,14 @@ impl Backend {
         if_match: Option<String>,
     ) -> Result<SailResponse, Error> {
         let channel = self
-            .open_forward(&self.config.server_host, self.config.server_port)
+            .open_forward(&self.settings.server_host, self.settings.server_port)
             .await?;
         let mut stream = channel.into_stream();
 
         let mut req = format!(
             "{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/json\r\nConnection: close\r\n",
-            host = self.config.server_host,
-            port = self.config.server_port,
+            host = self.settings.server_host,
+            port = self.settings.server_port,
         );
         if let Some(token) = self.token.lock().await.as_deref() {
             req.push_str(&format!("Authorization: Bearer {token}\r\n"));
@@ -1482,9 +1696,26 @@ impl Backend {
             Ok::<_, Error>(raw)
         })
         .await
-        .map_err(|_| Error::Timeout(format!("{}:{}", self.config.server_host, self.config.server_port)))??;
+        .map_err(|_| self.timed_out(&format!("{}:{}", self.settings.server_host, self.settings.server_port)))??;
 
         parse_http(&raw)
+    }
+
+    /// A request the webview makes. The box's answer goes back as it came, and a refusal of
+    /// the token is acted on here first, by the backend that presented it: one that arrives
+    /// after its box was forgotten or replaced never reaches the backend that took its place.
+    pub async fn webview_request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+        if_match: Option<String>,
+    ) -> Result<SailResponse, Error> {
+        let response = self.sail_request(method, path, body, if_match).await?;
+        if response.refuses_token() {
+            self.token_refused().await?;
+        }
+        Ok(response)
     }
 
     /// Open a long-lived HTTP GET to the control plane and stream its body to the
@@ -1500,14 +1731,14 @@ impl Backend {
         // validate before it reaches the wire (and before we even dial).
         validate_stream_path(&path)?;
         let channel = self
-            .open_forward(&self.config.server_host, self.config.server_port)
+            .open_forward(&self.settings.server_host, self.settings.server_port)
             .await?;
         let mut stream = channel.into_stream();
 
         let mut req = format!(
             "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: text/event-stream\r\nCache-Control: no-cache\r\n",
-            host = self.config.server_host,
-            port = self.config.server_port,
+            host = self.settings.server_host,
+            port = self.settings.server_port,
         );
         if let Some(token) = self.token.lock().await.as_deref() {
             req.push_str(&format!("Authorization: Bearer {token}\r\n"));
@@ -1538,7 +1769,7 @@ impl Backend {
             }
         })
         .await
-        .map_err(|_| Error::Timeout(format!("{}:{}", self.config.server_host, self.config.server_port)))??;
+        .map_err(|_| self.timed_out(&format!("{}:{}", self.settings.server_host, self.settings.server_port)))??;
         let leftover = head.split_off(split + 4);
         let head_text = String::from_utf8_lossy(&head);
         let status = status_line_code(&head_text).ok_or(Error::BadResponse)?;
@@ -1547,7 +1778,7 @@ impl Backend {
         let _ = app.emit(&format!("stream://open/{id}"), json!({ "status": status }));
 
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
-        self.streams.lock().await.insert(id.clone(), cancel_tx);
+        self.streams.insert(id.clone(), cancel_tx).await?;
 
         let data_event = format!("stream://data/{id}");
         let end_event = format!("stream://end/{id}");
@@ -1579,10 +1810,20 @@ impl Backend {
 
     /// Stop a live stream: signal its pump to end. Idempotent.
     pub async fn stream_close(&self, id: &str) -> Result<(), Error> {
-        if let Some(tx) = self.streams.lock().await.remove(id) {
+        if let Some(tx) = self.streams.remove(id).await {
             let _ = tx.send(()).await;
         }
         Ok(())
+    }
+
+    /// Lets go of everything this backend keeps running, for a backend the app is replacing:
+    /// the page that held them is ending, and no later close will be served here. An
+    /// attachment dropped from the map is a closed pane to its prologue and a detach to its
+    /// driver, and a stream whose entry is dropped ends its pump. Host sessions survive, as
+    /// with any detach. An open still in flight on this backend registers nothing afterwards.
+    pub async fn retire(&self) {
+        self.sessions.retire().await;
+        self.streams.retire().await;
     }
 
 }
@@ -1628,10 +1869,91 @@ fn load_identity(host_files: &[PathBuf], explicit: Option<&str>) -> Result<key::
     Err(Error::NoKey)
 }
 
-fn read_ssh_config() -> String {
-    dirs::home_dir()
-        .map(|home| std::fs::read_to_string(home.join(".ssh/config")).unwrap_or_default())
-        .unwrap_or_default()
+/// The connection as the webview reads it. `loaded` is the backend the settings on disk
+/// produced, or why there is none. `unpaired` is the first-run screen: no settings at all, or a
+/// paired box that will only take a new connect code (its token revoked, its host key changed,
+/// this Mac's key removed), in which case `paired` and `sshHost` say which box that was.
+pub async fn connection_status(loaded: Result<Arc<Backend>, Error>) -> serde_json::Value {
+    let backend = match loaded {
+        Ok(backend) => backend,
+        Err(Error::Unpaired) => return status_without_backend("unpaired", false, None),
+        Err(e) => {
+            let paired = matches!(e, Error::BadPairing(_));
+            return status_without_backend("error", paired, Some(e.to_string()));
+        }
+    };
+
+    // `sess_` = passkey-login session; anything else is a long-lived API token.
+    // Read the *runtime* token, not the on-disk one, so a login/logout this
+    // session is reflected without a restart.
+    let has_token = backend.has_token().await;
+    let settings = backend.describe();
+    let mut status = json!({
+        "backend": backend.generation(),
+        "server": format!("{}:{}", settings.server_host, settings.server_port),
+        "sshHost": settings.host(),
+        "sshPort": settings.ssh_port(),
+        "paired": settings.paired(),
+        "tokenPresent": has_token,
+        "tokenKind": backend.token_kind().await,
+        "stream": "disconnected",
+    });
+    if !has_token {
+        if settings.paired() {
+            status["phase"] = json!("unpaired");
+            status["detail"] = json!(pairing::REVOKED);
+        } else {
+            status["phase"] = json!("unauthenticated");
+        }
+        return status;
+    }
+    match backend.connect().await {
+        Ok(()) => {
+            status["phase"] = json!("ready");
+            status["stream"] = json!("connected");
+        }
+        Err(e) => {
+            status["phase"] = json!(if e.needs_new_code() { "unpaired" } else { "error" });
+            status["detail"] = json!(e.to_string());
+        }
+    }
+    status
+}
+
+fn status_without_backend(phase: &str, paired: bool, detail: Option<String>) -> serde_json::Value {
+    json!({
+        "phase": phase,
+        "server": "",
+        "paired": paired,
+        "tokenPresent": false,
+        "tokenKind": "none",
+        "stream": "disconnected",
+        "detail": detail,
+    })
+}
+
+/// Dials a paired box and proves both ends: the box by the host key its connect code pinned
+/// (anything else is refused before authentication), this Mac by the pairing's key and no other
+/// identity. The ssh-agent is never asked.
+async fn dial_box(pairing: &Pairing) -> Result<Handle<Client>, Error> {
+    let unreachable = || Error::BoxUnreachable(pairing.host.clone());
+    let socket = dial_tcp(&pairing.host, pairing.port).await.map_err(|_| unreachable())?;
+    let client = Client { pinned: Some(pairing.host_key.clone()) };
+    let mut handle = client::connect_stream(client_config(), socket, client)
+        .await
+        .map_err(|e| match e {
+            russh::Error::UnknownKey => Error::HostKeyChanged(pairing.host.clone()),
+            _ => unreachable(),
+        })?;
+    match handle.authenticate_publickey(&pairing.user, pairing.key.clone()).await {
+        Ok(true) => Ok(handle),
+        Ok(false) => Err(Error::KeyRefused(pairing.host.clone())),
+        Err(_) => Err(unreachable()),
+    }
+}
+
+fn read_ssh_config(home: &Path) -> String {
+    std::fs::read_to_string(home.join(".ssh/config")).unwrap_or_default()
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
@@ -1945,7 +2267,7 @@ impl Dechunker {
 
 /// Parse both YAML flow (`{host: x, server: '...'}`) and block styles — the same
 /// two shapes SnakeYAML writes and `config.ts` reads.
-fn parse_yaml(content: &str) -> HashMap<String, String> {
+pub(crate) fn parse_yaml(content: &str) -> HashMap<String, String> {
     let trimmed = content.trim();
     let mut out = HashMap::new();
     let unquote = |v: &str| v.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
@@ -2350,22 +2672,43 @@ fn validate_stream_path(path: &str) -> Result<(), Error> {
     }
 }
 
-/// Set (or, with `None`, remove) the `token:` field in `~/.sail/config.yaml`,
-/// preserving the other keys and the file's flow-vs-block YAML style, written
-/// 0600. Mirrors the CLI's writeConfig so Mast and `sail` stay in sync.
-pub fn write_config_token(token: Option<&str>) -> Result<(), Error> {
-    let home = dirs::home_dir().ok_or(Error::NoConfig)?;
-    let path = home.join(".sail/config.yaml");
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let trimmed = existing.trim();
+/// A YAML scalar as the settings files hold it: single-quoted when a bare one would mis-split.
+pub(crate) fn yaml_scalar(value: &str) -> String {
+    if value.chars().any(|c| ":#,{}[]".contains(c)) {
+        format!("'{value}'")
+    } else {
+        value.to_string()
+    }
+}
 
-    let quote = |v: &str| {
-        if v.chars().any(|c| ":#,{}[]".contains(c)) {
-            format!("'{v}'")
-        } else {
-            v.to_string()
-        }
-    };
+/// Writes a file only its owner may read (a token, a private key), its directory created first.
+pub(crate) fn write_private(path: &Path, content: &str) -> Result<(), Error> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    std::io::Write::write_all(&mut options.open(path)?, content.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+/// Set (or, with `None`, remove) the `token:` field in a settings file (`~/.sail/mast.yaml`
+/// when paired, else the CLI's `~/.sail/config.yaml`), preserving the other keys and the file's
+/// flow-vs-block YAML style, written 0600. Mirrors the CLI's writeConfig so Mast and `sail`
+/// stay in sync.
+pub fn write_token(path: &Path, token: Option<&str>) -> Result<(), Error> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let trimmed = existing.trim();
 
     let content = if trimmed.starts_with('{') && trimmed.ends_with('}') {
         let mut pairs: Vec<(String, String)> = split_flow(&trimmed[1..trimmed.len() - 1])
@@ -2384,7 +2727,7 @@ pub fn write_config_token(token: Option<&str>) -> Result<(), Error> {
         if let Some(t) = token {
             pairs.push(("token".into(), t.to_string()));
         }
-        let body = pairs.iter().map(|(k, v)| format!("{k}: {}", quote(v))).collect::<Vec<_>>().join(", ");
+        let body = pairs.iter().map(|(k, v)| format!("{k}: {}", yaml_scalar(v))).collect::<Vec<_>>().join(", ");
         format!("{{{body}}}\n")
     } else {
         let mut lines: Vec<String> = existing
@@ -2396,24 +2739,15 @@ pub fn write_config_token(token: Option<&str>) -> Result<(), Error> {
             lines.pop();
         }
         if let Some(t) = token {
-            lines.push(format!("token: {}", quote(t)));
+            lines.push(format!("token: {}", yaml_scalar(t)));
         }
         format!("{}\n", lines.join("\n"))
     };
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, content)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
+    write_private(path, &content)
 }
 
-fn parse_server(server: &str) -> (String, u16) {
+pub(crate) fn parse_server(server: &str) -> (String, u16) {
     let (scheme, rest) = match server.split_once("://") {
         Some((s, r)) => (s, r),
         None => ("http", server),
@@ -2669,7 +3003,7 @@ Host bastion
     #[ignore]
     async fn agent_auth_against_localhost() {
         let user = std::env::var("USER").unwrap();
-        let mut handle = client::connect(Arc::new(Config::default()), ("127.0.0.1", 22), Client)
+        let mut handle = client::connect(Arc::new(Config::default()), ("127.0.0.1", 22), Client::default())
             .await
             .expect("connect");
         assert_eq!(agent_auth(&mut handle, &user).await, Some(true));
@@ -2682,7 +3016,7 @@ Host bastion
     #[ignore]
     async fn sftp_roundtrip_against_localhost() {
         let user = std::env::var("USER").unwrap();
-        let mut handle = client::connect(Arc::new(Config::default()), ("127.0.0.1", 22), Client)
+        let mut handle = client::connect(Arc::new(Config::default()), ("127.0.0.1", 22), Client::default())
             .await
             .expect("connect");
         assert_eq!(agent_auth(&mut handle, &user).await, Some(true));
@@ -2951,28 +3285,118 @@ Host bastion
             .expect("the abandoned launch released its lane for the kill");
     }
 
+    /// A backend holding one terminal attached over `host`'s other end, one still opening, and
+    /// one live stream, each registered as `session_open` and `stream_open` register them.
+    struct Held {
+        backend: Arc<Backend>,
+        host: tokio::io::DuplexStream,
+        opening: tokio::task::JoinHandle<Result<(), Error>>,
+        stream_cancel: mpsc::Receiver<()>,
+    }
+
+    async fn backend_holding_terminals_and_a_stream() -> Held {
+        let backend = Arc::new(test_backend());
+        let (client, host) = tokio::io::duplex(1024);
+        let (commands, driven) = mpsc::channel(8);
+        let (close, _closed) = oneshot::channel();
+        backend.sessions.insert("attached".into(), Attachment { commands, close }).await.unwrap();
+        backend.drive_session("attached".into(), client, driven, IpcChannel::new(|_| Ok(())));
+
+        let (commands, _unread) = mpsc::channel(8);
+        let (close, closed) = oneshot::channel();
+        backend.sessions.insert("opening".into(), Attachment { commands, close }).await.unwrap();
+        let opening = tokio::spawn(until_closed(std::future::pending::<Result<(), Error>>(), closed));
+
+        let (cancel, stream_cancel) = mpsc::channel(1);
+        backend.streams.insert("events".into(), cancel).await.unwrap();
+        Held { backend, host, opening, stream_cancel }
+    }
+
+    async fn settles<T>(what: impl std::future::Future<Output = T>) -> T {
+        tokio::time::timeout(std::time::Duration::from_secs(5), what)
+            .await
+            .expect("the backend let go of it")
+    }
+
+    /// Pairing or forgetting swaps the backend while the webview still has panes on the old one,
+    /// and the page that would have closed them is ending. So the swap itself detaches them,
+    /// even while a command in flight still holds the old backend.
+    #[tokio::test]
+    async fn a_replaced_backend_detaches_its_terminals_and_ends_its_streams() {
+        let Held { backend, mut host, opening, mut stream_cancel } = backend_holding_terminals_and_a_stream().await;
+        let state = crate::AppState::default();
+        state.replace(Some(backend.clone())).await;
+
+        state.replace(None).await;
+
+        assert_eq!(settles(crate::pty::read_frame(&mut host)).await.unwrap(), crate::pty::Frame::Detach);
+        let abandoned = settles(opening).await.unwrap().unwrap_err();
+        assert!(abandoned.to_string().contains("pane closed"), "{abandoned}");
+        assert_eq!(settles(stream_cancel.recv()).await, None);
+        assert!(backend.sessions.commands("attached").await.is_none());
+    }
+
+    /// A command can take its backend from the app a moment before that backend is replaced,
+    /// and open its terminal a moment after. The open is refused where it would have
+    /// registered, before anything is asked of the host: here its launch lane is held, so an
+    /// open that got as far as the host would wait forever.
+    #[tokio::test]
+    async fn a_terminal_opened_on_a_backend_already_replaced_is_refused_before_it_reaches_the_host() {
+        let state = crate::AppState::default();
+        state.replace(Some(Arc::new(test_backend()))).await;
+        let taken = state.backend().await.ok().unwrap();
+        let _held = taken.openings.hold("mast-node.2").await;
+        state.replace(None).await;
+
+        let request = crate::pty::AttachRequest {
+            token: String::new(),
+            session: "mast-node.2".into(),
+            write: true,
+            create: None,
+        };
+        let late = taken.session_open("late".into(), "~/.sail/pty.sock".into(), request, IpcChannel::new(|_| Ok(())));
+
+        assert!(matches!(settles(late).await, Err(Error::BoxChanged)));
+        assert!(taken.sessions.commands("late").await.is_none());
+    }
+
+    /// The same for a stream whose request was in flight: its pump is never registered.
+    #[tokio::test]
+    async fn a_retired_backend_takes_no_more_streams() {
+        let backend = test_backend();
+        backend.retire().await;
+
+        let (cancel, _pump) = mpsc::channel(1);
+        assert!(matches!(backend.streams.insert("events".into(), cancel).await, Err(Error::BoxChanged)));
+    }
+
+    /// A backend that goes without being retired takes its terminals with it, because a driver
+    /// does not keep alive the map that holds its own command lane.
+    #[tokio::test]
+    async fn a_dropped_backend_takes_its_terminals_with_it() {
+        let Held { backend, mut host, opening, mut stream_cancel } = backend_holding_terminals_and_a_stream().await;
+
+        drop(backend);
+
+        assert_eq!(settles(crate::pty::read_frame(&mut host)).await.unwrap(), crate::pty::Frame::Detach);
+        assert!(settles(opening).await.unwrap().is_err());
+        assert_eq!(settles(stream_cancel.recv()).await, None);
+    }
+
     /// A Backend aimed at 127.0.0.1 for the live tests below — no
     /// ~/.sail/config.yaml needed.
     fn test_backend() -> Backend {
-        Backend {
-            config: SailConfig {
-                ssh_host: "127.0.0.1".into(),
+        Backend::new(ConnectionSettings {
+            home: local_home().unwrap(),
+            route: Route::SshConfig {
+                alias: "127.0.0.1".into(),
                 fallback_user: None,
-                server_host: "127.0.0.1".into(),
-                server_port: 7070,
-                token: None,
                 key_path: None,
             },
-            token: Mutex::new(None),
-            session: Mutex::new(None),
-            containers: Mutex::new(HashMap::new()),
-            sftp_pool: Mutex::new(HashMap::new()),
-            sftp_opens: AtomicU64::new(0),
-            sessions: Arc::new(Mutex::new(HashMap::new())),
-            openings: Openings::default(),
-            home: Mutex::new(None),
-            streams: Mutex::new(HashMap::new()),
-        }
+            server_host: "127.0.0.1".into(),
+            server_port: 7070,
+            token: None,
+        })
     }
 
     const LOCAL: &str = "127.0.0.1";

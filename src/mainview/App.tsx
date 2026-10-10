@@ -7,6 +7,7 @@ import { connectPresence, presenceStore } from "./board/presenceStore";
 import { RoomsScreen } from "./board/RoomsScreen";
 import { RoomTerminalRoute } from "./board/RoomTerminalRoute";
 import { SpecDetail } from "./board/SpecDetail";
+import { ConnectScreen } from "./components/ConnectScreen";
 import { SyncHealthChip, useSyncStatus } from "./components/SyncHealth";
 import { Diagnostics } from "./components/Diagnostics";
 import { cx } from "./components/cx";
@@ -14,7 +15,6 @@ import { Board, Logo, Rooms, Terminal } from "./components/icons";
 import { LoadingMark } from "./components/Loading";
 import { ToastProvider, useToast } from "./components/Toast";
 import { Tooltip } from "./components/Tooltip";
-import { Button } from "./components/ui";
 import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
 import type { DeckServices, RoomTerminalRequest } from "./terminal/roomDeck";
@@ -41,43 +41,11 @@ function pill(status: ConnectionStatus): { label: string; state: string } {
       return { label: "Reconnecting…", state: "reconnecting" };
     case "unauthenticated":
       return { label: "Signed out", state: "disconnected" };
+    case "unpaired":
+      return { label: "Not connected", state: "disconnected" };
     default:
       return { label: "Offline", state: "disconnected" };
   }
-}
-
-function ConnectScreen({
-  status,
-  onLogin,
-  busy,
-  loginError,
-}: {
-  status: ConnectionStatus;
-  onLogin: () => void;
-  busy: boolean;
-  loginError: string | null;
-}) {
-  return (
-    <div className="connect-screen" data-testid="connect-screen">
-      <Logo size={40} />
-      <h1 className="connect-title">
-        {status.phase === "unauthenticated" ? "Sign in to Sail" : "Can’t reach the control plane"}
-      </h1>
-      {status.phase !== "unauthenticated" && (
-        <p className="connect-detail">{status.detail ?? `Nothing answered at ${status.server}.`}</p>
-      )}
-      {status.phase === "unauthenticated" ? (
-        <Button onClick={onLogin} disabled={busy} data-testid="connect-login">
-          {busy ? "Waiting for Touch ID…" : "Sign in with passkey"}
-        </Button>
-      ) : (
-        <p className="connect-detail">
-          Check <code>host:</code> and <code>server:</code> in <code>~/.sail/config.yaml</code>.
-        </p>
-      )}
-      {loginError && <p className="connect-error">{loginError}</p>}
-    </div>
-  );
 }
 
 function specIdFromHash(hash: string): string | null {
@@ -161,6 +129,8 @@ export function App({
   // views underneath stay mounted, so the room is exactly where it was.
   const [roomRoute, setRoomRoute] = useState<RoomTerminalRequest | null>(null);
 
+  // The gateway is for one box for as long as this page lives: pairing or forgetting starts
+  // the page over, so nothing here has to tell one box's rooms, tabs and files from another's.
   useEffect(
     () =>
       gateway.onConnectionStatus((next) => {
@@ -224,17 +194,20 @@ export function App({
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  // Losing authentication takes down every workspace surface, the room-terminal
-  // route included — and forgets the route, so a later sign-in can't restore a
-  // full-screen PTY the signed-out user was never shown. The catalog resets
-  // with it: rooms, specs, runs, and the FDE identity are the signed-in
+  // Losing the credential — signed out on the fallback path, or a paired box that
+  // will only take a new connect code — takes down every workspace surface, the
+  // room-terminal route included, and forgets the route, so a later sign-in can't
+  // restore a full-screen PTY the signed-out user was never shown. The catalog
+  // resets with it: rooms, specs, runs, and the FDE identity are the signed-in
   // account's data, and the next sign-in may be a different account.
   const needsLogin = status?.phase === "unauthenticated";
+  const needsCode = status?.phase === "unpaired";
+  const needsCredential = needsLogin || needsCode;
   useEffect(() => {
-    if (!needsLogin) return;
+    if (!needsCredential) return;
     setRoomRoute(null);
     catalogStore.reset();
-  }, [needsLogin]);
+  }, [needsCredential]);
 
   const openSpec = (id: string) => {
     location.hash = `#/spec/${encodeURIComponent(id)}`;
@@ -278,6 +251,9 @@ export function App({
     refreshStatus();
   };
 
+  /** Resolves to why the box could not be forgotten, for the menu to show where it was asked. */
+  const forget = async (): Promise<string> => (await gateway.forgetBox()).detail;
+
   const pillView = status ? pill(status) : { label: "Connecting…", state: "connecting" };
 
   // While the route is up you are still "in" the room — it badges unread instead
@@ -288,15 +264,16 @@ export function App({
 
   // The workspace renders once we've ever been ready — transient degradation keeps the
   // last view (pill carries the truth) instead of yanking it to a full-screen
-  // error. Only a genuinely unusable state takes over the whole surface:
-  // unauthenticated (needs sign-in), or first-connect probing/failure.
+  // error. Only a genuinely unusable state takes over the whole surface: no
+  // credential (needs sign-in, or a connect code), or first-connect probing/failure.
   const firstConnectBlocking =
     !everReady && (!status || status.phase !== "ready");
-  const showWorkspace = !needsLogin && !firstConnectBlocking;
+  const showWorkspace = !needsCredential && !firstConnectBlocking;
   const connectGate =
-    status && (needsLogin || status.phase === "no-host" || status.phase === "failed") ? (
+    status && (needsCredential || status.phase === "no-host" || status.phase === "failed") ? (
       <ConnectScreen
         status={status}
+        gateway={gateway}
         onLogin={() => void login()}
         busy={loginBusy}
         loginError={loginError}
@@ -382,8 +359,9 @@ export function App({
               tokenKind={status?.tokenKind}
               identity={identity}
               updater={updater}
-              onLogin={() => void login()}
+              onLogin={needsCode ? undefined : () => void login()}
               onLogout={() => void logout()}
+              onForget={status?.paired ? forget : undefined}
               onDiagnostics={() => setShowDiagnostics(true)}
             />
           </div>
