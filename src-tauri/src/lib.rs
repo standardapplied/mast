@@ -70,8 +70,9 @@ impl AppState {
 
     /// Admits one change of box at a time (pairing, forgetting), and only from the page whose
     /// backend is still the app's, or from a page with none while the app has none. A Connect
-    /// and a Forget asked of one page happen in turn, and the second finds its box gone: it
-    /// neither forgets the box the first one paired nor pairs over what the first one forgot.
+    /// and a Forget asked of one page happen in turn, and once the first has changed the box
+    /// the second is refused: it neither forgets the box the first one paired nor pairs over
+    /// what the first one forgot. After a first that failed, the second runs.
     async fn change(&self, page: Option<u64>) -> Result<MutexGuard<'_, ()>, ssh::Error> {
         let alone = self.changing.lock().await;
         let held = self.backend.lock().await.as_ref().map(|backend| backend.generation());
@@ -822,9 +823,11 @@ mod bound_command_tests {
     }
 
     /// A command that took the app's state unbound would be served by whichever backend is
-    /// there when it arrives. The status read is how a page learns its backend, so it alone may.
+    /// there when it arrives. The status read is how a page learns its backend, so it alone
+    /// may. This reads the source for the one spelling every command here uses, so it catches a
+    /// command added the old way, not one that reaches the state by another route.
     #[test]
-    fn only_the_status_read_takes_the_app_state_unbound() {
+    fn only_the_status_read_is_declared_with_the_app_state_unbound() {
         let unbound = concat!("State<'_, ", "AppState>");
         let source = include_str!("lib.rs");
         assert_eq!(source.matches(unbound).count(), 1);

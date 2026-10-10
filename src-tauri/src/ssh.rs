@@ -3339,7 +3339,7 @@ Host bastion
     /// A command can take its backend from the app a moment before that backend is replaced,
     /// and open its terminal a moment after. The open is refused where it would have
     /// registered, before anything is asked of the host: here its launch lane is held, so an
-    /// open that got as far as the host would wait forever and keep the retired backend alive.
+    /// open that got as far as the host would wait forever.
     #[tokio::test]
     async fn a_terminal_opened_on_a_backend_already_replaced_is_refused_before_it_reaches_the_host() {
         let state = crate::AppState::default();
