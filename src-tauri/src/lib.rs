@@ -3,6 +3,7 @@
 //! desktop (main.rs) and mobile (the `mobile_entry_point`).
 
 mod login;
+mod pairing;
 mod pty;
 #[cfg(test)]
 mod pty_probe;
@@ -16,22 +17,32 @@ use ssh::Backend;
 use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Request};
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
-use tokio::sync::OnceCell;
+use tokio::sync::Mutex;
 
-/// Lazily-built backend. Construction reads `~/.sail/config.yaml`; if that is
-/// missing the app still renders (demo/disconnected) and the first real call
-/// surfaces a clear error instead of panicking at startup. Held behind an `Arc`
-/// so the passkey ceremony can hand a clone to its background port-forward task.
+/// Lazily-built backend. Construction reads the settings on disk (`~/.sail/mast.yaml`, else
+/// the CLI's `~/.sail/config.yaml`); if neither is there the app still renders and the first
+/// real call surfaces a clear error instead of panicking at startup. The slot is replaceable:
+/// pairing installs a backend built from a connect code, forgetting the box empties it. Held
+/// behind an `Arc` so the passkey ceremony can hand a clone to its background port-forward task.
+#[derive(Default)]
 struct AppState {
-    backend: OnceCell<Arc<Backend>>,
+    backend: Mutex<Option<Arc<Backend>>>,
 }
 
 impl AppState {
-    async fn backend(&self) -> Result<Arc<Backend>, String> {
-        self.backend
-            .get_or_try_init(|| async { Backend::new().map(Arc::new).map_err(String::from) })
-            .await
-            .cloned()
+    async fn backend(&self) -> Result<Arc<Backend>, ssh::Error> {
+        let mut slot = self.backend.lock().await;
+        if let Some(backend) = slot.as_ref() {
+            return Ok(backend.clone());
+        }
+        let settings = ssh::ConnectionSettings::load(&ssh::local_home()?)?;
+        let backend = Arc::new(Backend::new(settings));
+        *slot = Some(backend.clone());
+        Ok(backend)
+    }
+
+    async fn replace(&self, backend: Option<Arc<Backend>>) {
+        *self.backend.lock().await = backend;
     }
 }
 
@@ -52,48 +63,39 @@ async fn sail_request(
 
 #[tauri::command]
 async fn connection_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let backend = match state.backend().await {
-        Ok(backend) => backend,
-        Err(detail) => {
-            return Ok(json!({
-                "phase": "error",
-                "server": "",
-                "tokenPresent": false,
-                "tokenKind": "none",
-                "stream": "disconnected",
-                "detail": detail,
-            }))
-        }
-    };
+    Ok(ssh::connection_status(state.backend().await).await)
+}
 
-    // `sess_` = passkey-login session; anything else is a long-lived API token.
-    // Read the *runtime* token, not the on-disk one, so a login/logout this
-    // session is reflected without a restart.
-    let has_token = backend.has_token().await;
-    let cfg = backend.describe();
-    let mut status = json!({
-        "server": format!("{}:{}", cfg.server_host, cfg.server_port),
-        "sshHost": cfg.ssh_host,
-        "tokenPresent": has_token,
-        "tokenKind": backend.token_kind().await,
-    });
-    if !has_token {
-        status["phase"] = json!("unauthenticated");
-        status["stream"] = json!("disconnected");
-        return Ok(status);
-    }
-    match backend.connect().await {
-        Ok(()) => {
-            status["phase"] = json!("ready");
-            status["stream"] = json!("connected");
-        }
-        Err(e) => {
-            status["phase"] = json!("error");
-            status["stream"] = json!("disconnected");
-            status["detail"] = json!(e.to_string());
-        }
-    }
-    Ok(status)
+/// What a pasted connect code names (who, which box), or the one sentence saying why it is not
+/// a usable code. Parsed here so the webview never handles the key or the token as fields.
+#[tauri::command]
+fn connect_code_preview(code: String) -> Result<pairing::CodePreview, String> {
+    Ok(pairing::ConnectCode::parse(&code)?.preview())
+}
+
+/// Connect with a pasted code. Nothing is written until the box has answered `whoami`; then the
+/// settings land in `~/.sail/mast.yaml` and the backend that proved them becomes the app's.
+#[tauri::command]
+async fn pair(state: State<'_, AppState>, code: String) -> Result<(), String> {
+    let backend = pairing::pair(&ssh::local_home()?, &code).await?;
+    state.replace(Some(Arc::new(backend))).await;
+    Ok(())
+}
+
+/// Forget the paired box on this Mac: `mast.yaml` and the key file go, and the next status read
+/// starts from whatever settings remain. The pairing on the box is untouched.
+#[tauri::command]
+async fn forget_box(state: State<'_, AppState>) -> Result<(), String> {
+    pairing::forget(&ssh::local_home()?)?;
+    state.replace(None).await;
+    Ok(())
+}
+
+/// The box refused the token (`invalid_bearer_token`). The backend decides what that means for
+/// the path it is on: a logout on the fallback, a kept-but-unusable pairing otherwise.
+#[tauri::command]
+async fn token_refused(state: State<'_, AppState>) -> Result<(), String> {
+    state.backend().await?.token_refused().await.map_err(String::from)
 }
 
 /// Run the passkey sign-in ceremony (system browser → Touch ID → loopback
@@ -144,7 +146,7 @@ fn url_scheme(url: &str) -> Option<&str> {
 
 #[tauri::command]
 async fn list_targets(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    Ok(state.backend().await?.list_targets())
+    state.backend().await?.list_targets().await.map_err(String::from)
 }
 
 #[tauri::command]
@@ -640,12 +642,14 @@ pub fn run() {
             }
             Ok(())
         })
-        .manage(AppState {
-            backend: OnceCell::new(),
-        })
+        .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             sail_request,
             connection_status,
+            connect_code_preview,
+            pair,
+            forget_box,
+            token_refused,
             login,
             logout,
             open_url,
