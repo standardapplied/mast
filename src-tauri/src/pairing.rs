@@ -1343,6 +1343,20 @@ mod tests {
         assert_eq!(std::fs::read_to_string(home.path(".sail/config.yaml")).unwrap(), cli_settings);
     }
 
+    /// One hostname can front two boxes on two SSH ports, each answering its API on its own
+    /// loopback: the port is part of which box a status names, and each backend has its own name.
+    #[tokio::test]
+    async fn two_boxes_behind_one_host_read_as_two_boxes() {
+        let (first, second) = (FakeBox::start().await, FakeBox::start().await);
+        let on_first = Arc::new(pair(&TempHome::new().0, &first.code()).await.ok().unwrap());
+        let on_second = Arc::new(pair(&TempHome::new().0, &second.code()).await.ok().unwrap());
+
+        let (a, b) = (connection_status(Ok(on_first)).await, connection_status(Ok(on_second)).await);
+        assert_eq!((&a["sshHost"], &a["server"]), (&b["sshHost"], &b["server"]));
+        assert_eq!((&a["sshPort"], &b["sshPort"]), (&json!(first.port), &json!(second.port)));
+        assert_ne!(a["backend"], b["backend"]);
+    }
+
     #[tokio::test]
     async fn a_refusal_for_the_role_is_not_a_refusal_of_the_token() {
         let (home, fake) = (TempHome::new(), FakeBox::start().await);

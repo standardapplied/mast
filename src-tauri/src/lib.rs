@@ -10,12 +10,14 @@ mod pty_probe;
 mod session_frames;
 mod ssh;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde_json::json;
 use ssh::Backend;
-use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Request};
-use tauri::{AppHandle, State};
+use tauri::http::HeaderMap;
+use tauri::ipc::{Channel, CommandArg, CommandItem, InvokeBody, InvokeError, InvokeResponseBody, Request};
+use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::Mutex;
 
@@ -27,9 +29,14 @@ use tokio::sync::Mutex;
 #[derive(Default)]
 struct AppState {
     backend: Mutex<Option<Arc<Backend>>>,
+    /// Whether this run of the app forgot a box: the first-run screen then says the pairing is
+    /// still on the box. Pairing again takes it back.
+    forgotten: AtomicBool,
 }
 
 impl AppState {
+    /// The backend the settings on disk name, built on first use. Only the status read asks
+    /// this way; every other command names the backend it is for (see [`Bound`]).
     async fn backend(&self) -> Result<Arc<Backend>, ssh::Error> {
         let mut slot = self.backend.lock().await;
         if let Some(backend) = slot.as_ref() {
@@ -41,8 +48,17 @@ impl AppState {
         Ok(backend)
     }
 
-    /// Swaps the backend, and the one it replaces lets go of its terminals and streams: nothing
-    /// the webview does afterwards can reach them.
+    /// The backend a command was sent for, or a refusal: never the one that took its place,
+    /// and never one built to answer it.
+    async fn backend_for(&self, generation: Option<u64>) -> Result<Arc<Backend>, ssh::Error> {
+        match self.backend.lock().await.as_ref() {
+            Some(backend) if Some(backend.generation()) == generation => Ok(backend.clone()),
+            _ => Err(ssh::Error::BoxChanged),
+        }
+    }
+
+    /// Swaps the backend, and the one it replaces lets go of its terminals and streams and takes
+    /// no more: nothing the webview does afterwards can reach them.
     async fn replace(&self, backend: Option<Arc<Backend>>) {
         let retired = std::mem::replace(&mut *self.backend.lock().await, backend);
         if let Some(retired) = retired {
@@ -51,9 +67,38 @@ impl AppState {
     }
 }
 
+/// The header on which a command names the backend it is for.
+const BACKEND_HEADER: &str = "x-mast-backend";
+
+/// A command's claim on the backend it was sent for. A page of the webview is for one backend,
+/// the first its status named, and says so on every command; the command is served from that
+/// backend or refused. Whatever a page began on one box (a kill waiting on a lookup, a save, a
+/// close) therefore cannot land on the box that replaced it, however late it arrives.
+struct Bound<'r> {
+    state: State<'r, AppState>,
+    generation: Option<u64>,
+}
+
+impl Bound<'_> {
+    async fn backend(&self) -> Result<Arc<Backend>, ssh::Error> {
+        self.state.backend_for(self.generation).await
+    }
+}
+
+impl<'r, 'de: 'r, R: Runtime> CommandArg<'de, R> for Bound<'r> {
+    fn from_command(command: CommandItem<'de, R>) -> Result<Self, InvokeError> {
+        let generation = named_backend(command.message.headers());
+        Ok(Bound { state: State::from_command(command)?, generation })
+    }
+}
+
+fn named_backend(headers: &HeaderMap) -> Option<u64> {
+    headers.get(BACKEND_HEADER)?.to_str().ok()?.parse().ok()
+}
+
 #[tauri::command]
 async fn sail_request(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     method: String,
     path: String,
     body: Option<String>,
@@ -68,7 +113,9 @@ async fn sail_request(
 
 #[tauri::command]
 async fn connection_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    Ok(ssh::connection_status(state.backend().await).await)
+    let mut status = ssh::connection_status(state.backend().await).await;
+    status["forgotten"] = json!(state.forgotten.load(Ordering::Relaxed));
+    Ok(status)
 }
 
 /// What a pasted connect code names (who, which box), or the one sentence saying why it is not
@@ -84,6 +131,7 @@ fn connect_code_preview(code: String) -> Result<pairing::CodePreview, String> {
 async fn pair(state: State<'_, AppState>, code: String) -> Result<(), String> {
     let backend = pairing::pair(&ssh::local_home()?, &code).await?;
     state.replace(Some(Arc::new(backend))).await;
+    state.forgotten.store(false, Ordering::Relaxed);
     Ok(())
 }
 
@@ -93,13 +141,14 @@ async fn pair(state: State<'_, AppState>, code: String) -> Result<(), String> {
 async fn forget_box(state: State<'_, AppState>) -> Result<(), String> {
     pairing::forget(&ssh::local_home()?)?;
     state.replace(None).await;
+    state.forgotten.store(true, Ordering::Relaxed);
     Ok(())
 }
 
 /// Run the passkey sign-in ceremony (system browser → Touch ID → loopback
 /// callback) and persist the resulting session token.
 #[tauri::command]
-async fn login(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+async fn login(app: AppHandle, state: Bound<'_>) -> Result<(), String> {
     let backend = state.backend().await?;
     login::run(backend, app).await.map_err(String::from)
 }
@@ -107,7 +156,7 @@ async fn login(app: AppHandle, state: State<'_, AppState>) -> Result<(), String>
 /// Clear the API/session token from config and memory; the next request will be
 /// unauthenticated until the user signs in again.
 #[tauri::command]
-async fn logout(state: State<'_, AppState>) -> Result<(), String> {
+async fn logout(state: Bound<'_>) -> Result<(), String> {
     state.backend().await?.set_token(None).await.map_err(String::from)
 }
 
@@ -143,13 +192,13 @@ fn url_scheme(url: &str) -> Option<&str> {
 }
 
 #[tauri::command]
-async fn list_targets(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+async fn list_targets(state: Bound<'_>) -> Result<Vec<String>, String> {
     state.backend().await?.list_targets().await.map_err(String::from)
 }
 
 #[tauri::command]
 async fn fs_list(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     target: String,
     path: Option<String>,
 ) -> Result<ssh::FsListing, String> {
@@ -162,7 +211,7 @@ async fn fs_list(
 /// left off.
 #[tauri::command]
 async fn fs_list_deep(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     target: String,
     path: Option<String>,
     depth: Option<u32>,
@@ -184,13 +233,13 @@ async fn fs_list_deep(
 }
 
 #[tauri::command]
-async fn fs_stat(state: State<'_, AppState>, target: String, path: String) -> Result<ssh::FsStat, String> {
+async fn fs_stat(state: Bound<'_>, target: String, path: String) -> Result<ssh::FsStat, String> {
     state.backend().await?.fs_stat(&target, path).await.map_err(String::from)
 }
 
 #[tauri::command]
 async fn fs_read(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     target: String,
     path: String,
     max_bytes: Option<u64>,
@@ -206,7 +255,7 @@ async fn fs_read(
 #[tauri::command]
 async fn fs_upload(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     target: String,
     remote_dir: String,
     local_paths: Vec<String>,
@@ -223,7 +272,7 @@ async fn fs_upload(
 #[tauri::command]
 async fn fs_download(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     target: String,
     remote_paths: Vec<String>,
     local_dir: Option<String>,
@@ -241,7 +290,7 @@ async fn fs_download(
 /// path instead of truncating it.
 #[tauri::command]
 async fn fs_create_file(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     target: String,
     path: String,
 ) -> Result<(), String> {
@@ -250,7 +299,7 @@ async fn fs_create_file(
 
 #[tauri::command]
 async fn fs_write(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     target: String,
     path: String,
     contents: Vec<u8>,
@@ -262,7 +311,7 @@ async fn fs_write(
 /// file still holds `expected`, in one backend operation.
 #[tauri::command]
 async fn fs_write_checked(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     target: String,
     path: String,
     expected: Vec<u8>,
@@ -277,19 +326,19 @@ async fn fs_write_checked(
 }
 
 #[tauri::command]
-async fn fs_rename(state: State<'_, AppState>, target: String, from: String, to: String) -> Result<(), String> {
+async fn fs_rename(state: Bound<'_>, target: String, from: String, to: String) -> Result<(), String> {
     state.backend().await?.fs_rename(&target, from, to).await.map_err(String::from)
 }
 
 #[tauri::command]
-async fn fs_mkdir(state: State<'_, AppState>, target: String, path: String) -> Result<(), String> {
+async fn fs_mkdir(state: Bound<'_>, target: String, path: String) -> Result<(), String> {
     state.backend().await?.fs_mkdir(&target, path).await.map_err(String::from)
 }
 
 #[tauri::command]
 async fn fs_delete(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     target: String,
     path: String,
     transfer_id: String,
@@ -301,7 +350,7 @@ async fn fs_delete(
 #[tauri::command]
 async fn fs_open(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     target: String,
     remote_path: String,
     transfer_id: String,
@@ -451,7 +500,7 @@ impl From<String> for SessionEnd {
 /// `create` mints the session first (durable, survives the app).
 #[tauri::command]
 async fn session_open(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     id: String,
     socket_path: String,
     token: String,
@@ -487,7 +536,7 @@ const SESSION_HEADER: &str = "x-mast-session";
 /// Keystrokes and pastes toward a session. The body is the raw bytes (no JSON number array per
 /// byte); the attachment id rides the `x-mast-session` header.
 #[tauri::command]
-async fn session_write(state: State<'_, AppState>, request: Request<'_>) -> Result<(), String> {
+async fn session_write(state: Bound<'_>, request: Request<'_>) -> Result<(), String> {
     let id = request
         .headers()
         .get(SESSION_HEADER)
@@ -504,7 +553,7 @@ async fn session_write(state: State<'_, AppState>, request: Request<'_>) -> Resu
 
 #[tauri::command]
 async fn session_resize(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     id: String,
     cols: u32,
     rows: u32,
@@ -513,14 +562,14 @@ async fn session_resize(
 }
 
 #[tauri::command]
-async fn session_close(state: State<'_, AppState>, id: String) -> Result<(), String> {
+async fn session_close(state: Bound<'_>, id: String) -> Result<(), String> {
     state.backend().await?.session_close(&id).await.map_err(String::from)
 }
 
 /// Claim the write token on an attached session; the grant arrives for every
 /// subscriber as a `writer_changed` meta event, never as a direct reply.
 #[tauri::command]
-async fn session_take_write(state: State<'_, AppState>, id: String) -> Result<(), String> {
+async fn session_take_write(state: Bound<'_>, id: String) -> Result<(), String> {
     state.backend().await?.session_take_write(&id).await.map_err(String::from)
 }
 
@@ -529,7 +578,7 @@ async fn session_take_write(state: State<'_, AppState>, id: String) -> Result<()
 /// cursor-paginated listing.
 #[tauri::command]
 async fn session_list(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     socket_path: String,
     token: String,
 ) -> Result<serde_json::Value, String> {
@@ -558,7 +607,7 @@ async fn session_list(
 /// Create a host-owned session without attaching (a durable named shell).
 #[tauri::command]
 async fn session_new(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     socket_path: String,
     token: String,
     create: SessionCreate,
@@ -586,7 +635,7 @@ async fn session_new(
 /// End a host-owned session and its process.
 #[tauri::command]
 async fn session_kill(
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     socket_path: String,
     token: String,
     session: String,
@@ -614,7 +663,7 @@ fn expect_ok(reply: Result<pty::Frame, String>) -> Result<(), String> {
 #[tauri::command]
 async fn stream_open(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: Bound<'_>,
     id: String,
     path: String,
 ) -> Result<(), String> {
@@ -622,7 +671,7 @@ async fn stream_open(
 }
 
 #[tauri::command]
-async fn stream_close(state: State<'_, AppState>, id: String) -> Result<(), String> {
+async fn stream_close(state: Bound<'_>, id: String) -> Result<(), String> {
     state.backend().await?.stream_close(&id).await.map_err(String::from)
 }
 
@@ -680,6 +729,58 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Mast");
+}
+
+#[cfg(test)]
+mod bound_command_tests {
+    use super::*;
+
+    fn backend_to(alias: &str) -> Arc<Backend> {
+        Arc::new(Backend::new(ssh::ConnectionSettings {
+            home: std::env::temp_dir(),
+            route: ssh::Route::SshConfig { alias: alias.into(), fallback_user: None, key_path: None },
+            server_host: "127.0.0.1".into(),
+            server_port: 7070,
+            token: None,
+        }))
+    }
+
+    fn naming(generation: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(BACKEND_HEADER, generation.parse().unwrap());
+        headers
+    }
+
+    /// A kill sent for one box while it was being forgotten: by the time it is served the app
+    /// holds the next box, and the kill must not reach a session of the same name there.
+    #[tokio::test]
+    async fn a_command_is_served_by_the_backend_it_names_and_refused_by_the_one_that_replaced_it() {
+        let (first, second) = (backend_to("first"), backend_to("second"));
+        let state = AppState::default();
+        state.replace(Some(first.clone())).await;
+        let for_first = named_backend(&naming(&first.generation().to_string()));
+        assert!(Arc::ptr_eq(&state.backend_for(for_first).await.ok().unwrap(), &first));
+
+        state.replace(Some(second.clone())).await;
+
+        assert!(matches!(state.backend_for(for_first).await, Err(ssh::Error::BoxChanged)));
+        let for_second = named_backend(&naming(&second.generation().to_string()));
+        assert!(Arc::ptr_eq(&state.backend_for(for_second).await.ok().unwrap(), &second));
+    }
+
+    #[tokio::test]
+    async fn a_command_that_names_no_backend_or_a_forgotten_one_is_refused_and_builds_none() {
+        let state = AppState::default();
+        let first = backend_to("first");
+        state.replace(Some(first.clone())).await;
+        assert!(matches!(state.backend_for(named_backend(&HeaderMap::new())).await, Err(ssh::Error::BoxChanged)));
+        assert!(matches!(state.backend_for(named_backend(&naming("not a number"))).await, Err(ssh::Error::BoxChanged)));
+
+        state.replace(None).await;
+
+        assert!(matches!(state.backend_for(Some(first.generation())).await, Err(ssh::Error::BoxChanged)));
+        assert!(state.backend.lock().await.is_none());
+    }
 }
 
 #[cfg(test)]

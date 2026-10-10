@@ -7,7 +7,7 @@ import { connectPresence, presenceStore } from "./board/presenceStore";
 import { RoomsScreen } from "./board/RoomsScreen";
 import { RoomTerminalRoute } from "./board/RoomTerminalRoute";
 import { SpecDetail } from "./board/SpecDetail";
-import { ConnectScreen, FORGOTTEN_NOTICE } from "./components/ConnectScreen";
+import { ConnectScreen } from "./components/ConnectScreen";
 import { SyncHealthChip, useSyncStatus } from "./components/SyncHealth";
 import { Diagnostics } from "./components/Diagnostics";
 import { cx } from "./components/cx";
@@ -22,7 +22,7 @@ import { clipboardPolicy } from "./terminal/clipboardPolicy";
 import { terminalFontSize } from "./terminal/fontSize";
 import { latencyChip } from "./terminal/latency";
 import { scrollbackBudget } from "./terminal/scrollbackBudget";
-import { boxKeyOf, connectSessions, sessionStore } from "./terminal/sessionStore";
+import { connectSessions, sessionStore } from "./terminal/sessionStore";
 import type { ThemeController } from "./theme";
 import type { Updater } from "./updater";
 
@@ -113,6 +113,7 @@ export function App({
   updater?: Updater;
 }) {
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
+  const [everReady, setEverReady] = useState(false);
   const [specId, setSpecId] = useState<string | null>(specIdFromHash(location.hash));
   const [view, setView] = useState<AppView>(() => specId ? "board" : "rooms");
   // Mount the terminal on first visit and keep it alive (hidden) thereafter, so
@@ -120,7 +121,6 @@ export function App({
   const [terminalOpened, setTerminalOpened] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [forgotten, setForgotten] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [identity, setIdentity] = useState<WhoAmI | null>(null);
   const [roomFocus, setRoomFocus] = useState<string | null>(null);
@@ -129,46 +129,34 @@ export function App({
   // views underneath stay mounted, so the room is exactly where it was.
   const [roomRoute, setRoomRoute] = useState<RoomTerminalRequest | null>(null);
 
-  useEffect(() => gateway.onConnectionStatus(setStatus), [gateway]);
+  // The gateway is for one box for as long as this page lives: pairing or forgetting starts
+  // the page over, so nothing here has to tell one box's rooms, tabs and files from another's.
+  useEffect(
+    () =>
+      gateway.onConnectionStatus((next) => {
+        setStatus(next);
+        if (next.phase === "ready") setEverReady(true);
+      }),
+    [gateway],
+  );
   useEffect(() => {
     // The one-shot snapshot only seeds the first render — a later push always
     // wins, so a stale snapshot resolving late can never clobber it.
-    void gateway.connection().then((snapshot) => setStatus((current) => current ?? snapshot));
+    void gateway.connection().then((snapshot) => {
+      setStatus((current) => current ?? snapshot);
+      if (snapshot.phase === "ready") setEverReady(true);
+    });
   }, [gateway]);
-
-  // Which box the status names, in any phase, and which one the live connection is to. A
-  // Mac can change box without ever leaving ready (forgetting a paired box lands straight
-  // on the CLI's settings when they connect), so everything read from a box is keyed by
-  // the box, not by the phase.
-  const ready = status?.phase === "ready";
-  const namedBox = status ? boxKeyOf(status) : null;
-  const box = ready ? namedBox : null;
-  const syncStatus = useSyncStatus(gateway, ready);
 
   // Load the caller's identity once the connection is live, and drop it the
   // moment it isn't (logout → unauthenticated), so the menu never shows a stale
   // name. Refetched automatically when a login flips the phase back to ready.
+  const ready = status?.phase === "ready";
+  const syncStatus = useSyncStatus(gateway, ready);
   useEffect(() => {
-    if (!box) return void setIdentity(null);
+    if (!ready) return void setIdentity(null);
     void gateway.whoami().then((r) => setIdentity(r.ok ? r.value : null));
-  }, [gateway, box]);
-
-  // Another box's rooms, specs, runs, tabs and files are not this one's. The workspace is
-  // up for the box that was last ready and for no other: it comes down in the render in
-  // which the status stops naming that box, whether the next one is ready (it goes up
-  // again over an empty catalog, which the effect below seeds) or still failing to
-  // connect (the gate has the window until it does). Nothing mounted or selected on the
-  // earlier box is left to act on this one. A status that names the same box in another
-  // phase is that box degraded, and keeps the workspace.
-  const [heldBox, setHeldBox] = useState<string | null>(null);
-  const leftBox = !!heldBox && namedBox !== heldBox;
-  useEffect(() => {
-    if (leftBox) {
-      setRoomRoute(null);
-      catalogStore.reset();
-    }
-    if (leftBox || (box && !heldBox)) setHeldBox(box);
-  }, [leftBox, box, heldBox]);
+  }, [gateway, ready]);
 
   // Presence rides the app-wide event stream — no polling. One runs listing on
   // connect seeds chips for agents already mid-work (or mid-silence); after
@@ -183,7 +171,7 @@ export function App({
   }, []);
 
   useEffect(() => {
-    if (!box) return;
+    if (!ready) return;
     connectCatalog(gateway);
     const disconnectPresence = connectPresence(gateway, presenceStore);
     const disconnectSessions = connectSessions(gateway, sessionStore);
@@ -191,7 +179,7 @@ export function App({
       disconnectPresence();
       disconnectSessions();
     };
-  }, [gateway, box]);
+  }, [gateway, ready]);
 
   useEffect(() => {
     const onHashChange = () => {
@@ -263,22 +251,8 @@ export function App({
     refreshStatus();
   };
 
-  const paired = () => {
-    setForgotten(false);
-    refreshStatus();
-  };
-
   /** Resolves to why the box could not be forgotten, for the menu to show where it was asked. */
-  const forget = async (): Promise<string | null> => {
-    const result = await gateway.forgetBox();
-    if (!result.ok) return result.detail ?? "Mast could not forget this box.";
-    setForgotten(true);
-    // The status held describes a connection that is gone; until the next one is read
-    // there is no box, so the workspace does not wait on a slow connect to come down.
-    setStatus(null);
-    refreshStatus();
-    return null;
-  };
+  const forget = async (): Promise<string> => (await gateway.forgetBox()).detail;
 
   const pillView = status ? pill(status) : { label: "Connecting…", state: "connecting" };
 
@@ -288,22 +262,21 @@ export function App({
     ? roomRoute.roomId
     : view === "rooms" ? roomFocus : view === "board" ? specId : null;
 
-  // The workspace renders once its box has been ready — transient degradation keeps the
+  // The workspace renders once we've ever been ready — transient degradation keeps the
   // last view (pill carries the truth) instead of yanking it to a full-screen
   // error. Only a genuinely unusable state takes over the whole surface: no
-  // credential (needs sign-in, or a connect code), a box that has not connected yet
-  // (probing/failure), or the render in which the box changed.
-  const showWorkspace = !needsCredential && !leftBox && (ready || !!heldBox);
+  // credential (needs sign-in, or a connect code), or first-connect probing/failure.
+  const firstConnectBlocking =
+    !everReady && (!status || status.phase !== "ready");
+  const showWorkspace = !needsCredential && !firstConnectBlocking;
   const connectGate =
     status && (needsCredential || status.phase === "no-host" || status.phase === "failed") ? (
       <ConnectScreen
         status={status}
         gateway={gateway}
-        onPaired={paired}
         onLogin={() => void login()}
         busy={loginBusy}
         loginError={loginError}
-        notice={forgotten ? FORGOTTEN_NOTICE : null}
       />
     ) : (
       <LoadingMark

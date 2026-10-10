@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Dialog } from "../components/Dialog";
@@ -8,6 +7,7 @@ import { Splitter } from "../components/Splitter";
 import { useToast } from "../components/Toast";
 import { ToggleButton } from "../components/ToggleButton";
 import { Button } from "../components/ui";
+import { invoke } from "./core";
 import { classifyDrop, parentDir, shellQuote, type DropTarget } from "./dropTarget";
 import { FileTree, type FileActions } from "./FileTree";
 import { FileTreeStore, type FileEntry, type FsApi } from "./fileTreeStore";

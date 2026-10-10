@@ -18,19 +18,15 @@ type PairingGateway = Pick<Gateway, "previewConnectCode" | "pair">;
 export function ConnectScreen({
   status,
   gateway,
-  onPaired,
   onLogin,
   busy,
   loginError,
-  notice,
 }: {
   status: ConnectionStatus;
   gateway: PairingGateway;
-  onPaired: () => void;
   onLogin: () => void;
   busy: boolean;
   loginError: string | null;
-  notice?: string | null;
 }) {
   if (status.phase === "unpaired") {
     return (
@@ -43,8 +39,10 @@ export function ConnectScreen({
           </p>
         )}
         {status.detail && <p className="connect-error" data-testid="connect-reason">{status.detail}</p>}
-        {notice && <p className="connect-detail" data-testid="connect-notice">{notice}</p>}
-        <CodeForm gateway={gateway} onPaired={onPaired} />
+        {status.forgotten && (
+          <p className="connect-detail" data-testid="connect-notice">{FORGOTTEN_NOTICE}</p>
+        )}
+        <CodeForm gateway={gateway} />
       </div>
     );
   }
@@ -72,7 +70,7 @@ export function ConnectScreen({
   );
 }
 
-function CodeForm({ gateway, onPaired }: { gateway: PairingGateway; onPaired: () => void }) {
+function CodeForm({ gateway }: { gateway: PairingGateway }) {
   const [code, setCode] = useState("");
   const [check, setCheck] = useState<ConnectCodeCheck | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -94,10 +92,9 @@ function CodeForm({ gateway, onPaired }: { gateway: PairingGateway; onPaired: ()
     if (connecting || !check?.ok) return;
     setConnecting(true);
     setFailure(null);
-    const result = await gateway.pair(code);
+    const refused = await gateway.pair(code);
     setConnecting(false);
-    if (result.ok) onPaired();
-    else setFailure(result.detail ?? "Mast could not connect with this code.");
+    setFailure(refused.detail);
   };
 
   return (

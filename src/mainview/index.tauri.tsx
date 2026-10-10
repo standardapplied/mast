@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -6,6 +5,7 @@ import { App } from "./App";
 import { CrashScreen } from "./components/CrashScreen";
 import { logError } from "./errorLog";
 import { Styleguide } from "./styleguide";
+import { invoke } from "./tauri/core";
 import { createTauriGateway } from "./tauri/gateway";
 import type { RosterSources } from "./tauri/projectRoster";
 import { tauriDeckServices } from "./tauri/RoomWorkbench";

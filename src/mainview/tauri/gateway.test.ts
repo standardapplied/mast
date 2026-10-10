@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ConnectionStatus } from "../../shared/sail-models";
+import { unbindPage } from "./core";
 import { createTauriGateway } from "./gateway";
 
 /**
@@ -8,7 +9,7 @@ import { createTauriGateway } from "./gateway";
  * are exactly what sail receives.
  */
 
-type Invocation = { cmd: string; args: Record<string, unknown> };
+type Invocation = { cmd: string; args: Record<string, unknown>; backend?: string };
 
 type TauriWindow = Window & {
   __TAURI_INTERNALS__?: {
@@ -30,6 +31,7 @@ function stubInvoke(response: { status: number; body: string }): Invocation[] {
 
 afterEach(() => {
   delete (window as TauriWindow).__TAURI_INTERNALS__;
+  unbindPage();
 });
 
 describe("Tauri gateway stop wire", () => {
@@ -320,12 +322,13 @@ describe("Tauri gateway pairing wire", () => {
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (event) => listening.delete(event) };
     (window as TauriWindow).__TAURI_INTERNALS__ = {
       transformCallback: (callback) => callbacks.push(callback) - 1,
-      invoke: (cmd: unknown, args: unknown) => {
+      invoke: (cmd: unknown, args: unknown, options: unknown) => {
         const name = cmd as string;
         const given = args as Record<string, unknown>;
         if (name === "plugin:event|listen") listening.set(given.event as string, given.handler as number);
         if (name.startsWith("plugin:event|")) return Promise.resolve(given.handler ?? null);
-        calls.push({ cmd: name, args: given });
+        const backend = (options as { headers: Record<string, string> }).headers["x-mast-backend"];
+        calls.push({ cmd: name, args: given, ...(backend === undefined ? {} : { backend }) });
         const answer = answers[name];
         if (!answer) return Promise.reject(`unexpected command ${name}`);
         try {
@@ -336,6 +339,18 @@ describe("Tauri gateway pairing wire", () => {
       },
     };
     return calls;
+  }
+
+  /** A page restart as the gateway asks for it: counted, and never settled. */
+  function restarts(): { count: number; restart: () => Promise<never> } {
+    const seen = {
+      count: 0,
+      restart: () => {
+        seen.count += 1;
+        return new Promise<never>(() => {});
+      },
+    };
+    return seen;
   }
 
   test("a fresh Mac reads as unpaired, and a paired one names its box", async () => {
@@ -369,6 +384,17 @@ describe("Tauri gateway pairing wire", () => {
     expect(revoked).toMatchObject({ phase: "unpaired", paired: true, host: "34.1.2.3", detail: REVOKED });
   });
 
+  test("a status says which SSH port its box is behind and whether a box was forgotten this run", async () => {
+    stubCore({ connection_status: () => ({ ...ready, backend: 4, sshPort: 2222, forgotten: true }) });
+    expect(await createTauriGateway().connection()).toMatchObject({ host: "34.1.2.3", sshPort: 2222, forgotten: true });
+    unbindPage();
+
+    stubCore({ connection_status: () => ({ ...ready, backend: 5, sshHost: "devbox", sshPort: null, paired: false }) });
+    const cli = await createTauriGateway().connection();
+    expect(cli.sshPort).toBeUndefined();
+    expect(cli.forgotten).toBe(false);
+  });
+
   test("a token the box refuses was the core's to act on: the gateway only reads its status again, once, and pushes it", async () => {
     let refused = false;
     const calls = stubCore({
@@ -397,61 +423,94 @@ describe("Tauri gateway pairing wire", () => {
     ]);
   });
 
-  test("a change of box starts the event cursor again, so the next box's lower event ids are heard", async () => {
-    const streams: string[] = [];
-    const closed: string[] = [];
-    stubCore({
-      connection_status: () => ready,
-      pair: () => null,
-      forget_box: () => null,
-      stream_open: ({ id }) => {
-        streams.push(id as string);
-        emit(`stream://open/${id}`, { status: 200 });
+  test("a command names the backend its page is for, however late it is sent: a kill begun before the box was forgotten cannot be for the next box", async () => {
+    let held = 7;
+    let answerRoom: (response: unknown) => void = () => {};
+    const calls = stubCore({
+      connection_status: () => ({ ...ready, backend: held }),
+      sail_request: () => new Promise((resolve) => (answerRoom = resolve)),
+      session_kill: () => null,
+      forget_box: () => {
+        held = 8;
         return null;
       },
-      stream_close: ({ id }) => closed.push(id as string),
     });
-    const says = (stream: string | undefined, id: number) =>
-      emit(`stream://data/${stream}`, `id: ${id}\ndata: ${JSON.stringify({ v: 1, id, type: "spec_updated" })}\n\n`);
-    const gateway = createTauriGateway();
-    const heard: Array<number | undefined> = [];
-    gateway.onEvent((event) => heard.push(event.id));
-    await flush();
+    const page = restarts();
+    const gateway = createTauriGateway(page.restart);
+    await gateway.connection();
 
-    says(streams[0], 1000);
+    const killed = gateway.getRoom("design-talk").then(() => gateway.killSession("room-design-talk"));
     await flush();
-    expect(await gateway.forgetBox()).toEqual({ ok: true });
-    expect(await gateway.pair("sail1.good")).toEqual({ ok: true });
+    void gateway.forgetBox();
     await flush();
-    expect(streams).toHaveLength(3);
-    expect(closed, "each box's stream ends with its box").toEqual(streams.slice(0, 2));
+    answerRoom({ status: 200, etag: null, body: "{}" });
+    await killed;
 
-    says(streams[2], 1);
-    await flush();
-    expect(heard).toEqual([1000, 1]);
-    expect((await gateway.connection()).stream).toBe("connected");
+    expect(page.count).toBe(1);
+    expect(calls.map((call) => [call.cmd, call.backend])).toEqual([
+      ["connection_status", undefined],
+      ["sail_request", "7"],
+      ["forget_box", "7"],
+      ["session_kill", "7"],
+    ]);
   });
 
-  test("a status asked of a box that was forgotten before it answered is asked again of the box there now", async () => {
-    const cliBox = { ...ready, sshHost: "devbox", paired: false };
-    let answerForgottenBox: (status: typeof ready) => void = () => {};
-    let forgotten = false;
-    stubCore({
-      connection_status: () =>
-        forgotten ? cliBox : new Promise((resolve) => (answerForgottenBox = resolve)),
-      forget_box: () => {
-        forgotten = true;
-        return null;
-      },
-    });
-    const gateway = createTauriGateway();
-
-    const asked = gateway.connection();
+  test("a status from another backend, or from none once the page has one, is never shown: the page starts over", async () => {
+    let held: number | undefined = 7;
+    stubCore({ connection_status: () => ({ ...ready, backend: held }) });
+    const page = restarts();
+    const gateway = createTauriGateway(page.restart);
+    const shown: ConnectionStatus[] = [];
+    gateway.onConnectionStatus((status) => shown.push(status));
     await flush();
-    expect(await gateway.forgetBox()).toEqual({ ok: true });
-    answerForgottenBox(ready);
+    expect(shown.map((status) => status.phase)).toEqual(["ready"]);
 
-    expect(await asked).toMatchObject({ phase: "ready", paired: false, host: "devbox" });
+    held = 8;
+    void gateway.connection().then((status) => shown.push(status));
+    await flush();
+    expect(page.count).toBe(1);
+
+    held = undefined;
+    void gateway.connection().then((status) => shown.push(status));
+    await flush();
+    expect(page.count).toBe(2);
+    expect(shown).toHaveLength(1);
+  });
+
+  test("a page that has seen no backend takes the first one a status names, with no restart", async () => {
+    let held: number | undefined;
+    const calls = stubCore({
+      connection_status: () => (held === undefined ? { ...revoked, paired: false } : { ...ready, backend: held }),
+      list_targets: () => [],
+      sail_request: () => ({ status: 200, etag: null, body: "{}" }),
+    });
+    const page = restarts();
+    const gateway = createTauriGateway(page.restart);
+    expect((await gateway.connection()).phase).toBe("unpaired");
+    await gateway.whoami();
+
+    held = 3;
+    expect((await gateway.connection()).phase).toBe("ready");
+    await gateway.whoami();
+
+    expect(page.count).toBe(0);
+    expect(calls.filter((call) => call.cmd === "sail_request").map((call) => call.backend)).toEqual([undefined, "3"]);
+  });
+
+  test("pairing and forgetting end the page: a success asks for the restart and never settles", async () => {
+    stubCore({ pair: () => null, forget_box: () => null });
+    const page = restarts();
+    const gateway = createTauriGateway(page.restart);
+    let settled = false;
+
+    void gateway.pair("sail1.good").then(() => (settled = true));
+    await flush();
+    expect(page.count).toBe(1);
+
+    void gateway.forgetBox().then(() => (settled = true));
+    await flush();
+    expect(page.count).toBe(2);
+    expect(settled).toBe(false);
   });
 
   test("preview, pair and forget carry the code in and the core's sentence out", async () => {
@@ -464,9 +523,12 @@ describe("Tauri gateway pairing wire", () => {
       pair: () => {
         throw sentence;
       },
-      forget_box: () => null,
+      forget_box: () => {
+        throw "Mast could not delete ~/.sail/mast.yaml (permission denied).";
+      },
     });
-    const gateway = createTauriGateway();
+    const page = restarts();
+    const gateway = createTauriGateway(page.restart);
 
     expect(await gateway.previewConnectCode("sail1.good")).toEqual({
       ok: true,
@@ -476,8 +538,9 @@ describe("Tauri gateway pairing wire", () => {
       ok: false,
       detail: "That does not look like a connect code; paste the whole code, starting with sail1.",
     });
-    expect(await gateway.pair("sail1.good")).toEqual({ ok: false, detail: sentence });
-    expect(await gateway.forgetBox()).toEqual({ ok: true });
+    expect(await gateway.pair("sail1.good")).toEqual({ detail: sentence });
+    expect(await gateway.forgetBox()).toEqual({ detail: "Mast could not delete ~/.sail/mast.yaml (permission denied)." });
+    expect(page.count, "a refusal leaves the page where it was").toBe(0);
     expect(calls.map((call) => [call.cmd, call.args])).toEqual([
       ["connect_code_preview", { code: "sail1.good" }],
       ["connect_code_preview", { code: "nope" }],

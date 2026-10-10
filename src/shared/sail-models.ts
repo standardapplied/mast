@@ -573,6 +573,10 @@ export type ConnectionStatus = {
   paired?: boolean;
   /** The box as the settings name it: the paired host, or the fallback's ssh alias. */
   host?: string;
+  /** The SSH port a connect code named; one host can front two boxes on two ports. */
+  sshPort?: number;
+  /** This run of Mast forgot a box: its pairing is still on the box until the owner ends it. */
+  forgotten?: boolean;
 };
 
 /** What a pasted connect code names, shown under the field once it parses. */

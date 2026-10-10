@@ -50,6 +50,11 @@ Law, not preference — review against these:
   were laid out, never whether they exist — existence is the backend's truth, checked
   against the owner's records (a session the store watched dying is never resurrected by a
   stored layout).
+- **A page is for one box.** The webview binds to the first backend its status names and names
+  it on every command (`tauri/core.ts`, the only importer of Tauri's `invoke`); the core serves
+  a command from that backend or refuses it. Pairing or forgetting restarts the page. Never
+  switch boxes in place: every store, the event cursor and every continuation in flight
+  assumes one box, and each of them would need its own guard.
 - **Scope refetches to what the event names.** An event refreshes the state it identifies,
   not the world; anything outside the vocabulary falls back to the conservative refresh so
   a new server event type is never silently dropped.

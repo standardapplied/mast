@@ -115,6 +115,8 @@ pub enum Error {
     BadStreamPath,
     #[error("no session with id {0}")]
     NoSession(String),
+    #[error("Mast is no longer connected to the box this was for.")]
+    BoxChanged,
     #[error("pty session: {0}")]
     PtySession(String),
     #[error("{LINK_DROPPED}")]
@@ -221,6 +223,14 @@ impl ConnectionSettings {
         matches!(self.route, Route::Paired(_))
     }
 
+    /// The SSH port a connect code named. The fallback's alias carries its own in `~/.ssh/config`.
+    pub fn ssh_port(&self) -> Option<u16> {
+        match &self.route {
+            Route::Paired(pairing) => Some(pairing.port),
+            Route::SshConfig { .. } => None,
+        }
+    }
+
     /// The file the token lives in: Mast's own when paired, the `sail` CLI's otherwise.
     fn file(&self) -> PathBuf {
         self.home.join(if self.paired() { pairing::SETTINGS_FILE } else { ".sail/config.yaml" })
@@ -274,6 +284,9 @@ impl Handler for Client {
 /// One lazily-connected russh session, shared by the HTTP proxy and every
 /// terminal. Held in Tauri managed state.
 pub struct Backend {
+    /// Which of this run's backends this is. The webview learns it from the status and names
+    /// it on every command, so a command is only ever served by the backend it was sent for.
+    generation: u64,
     settings: ConnectionSettings,
     /// The API bearer token, mutable at runtime so login/logout take effect
     /// without a restart. Mirrors the settings file.
@@ -299,7 +312,7 @@ pub struct Backend {
     /// own, not only when the UI closes the tab — weakly, since the map holds the sender
     /// that driver waits on: a driver that kept the map alive would keep itself alive,
     /// and a backend that is dropped must take its attachments with it.
-    sessions: Arc<Mutex<HashMap<String, Attachment>>>,
+    sessions: Arc<Registry<Attachment>>,
     /// Launches still talking to the host, by session name; a kill of that name waits its turn.
     openings: Openings,
     /// The remote `$HOME` for the node SSH user, resolved once and cached — so a `~/`-relative
@@ -308,7 +321,42 @@ pub struct Backend {
     /// Live long-read streams (SSE tails: events + agent log), keyed by a
     /// client-chosen id. The sender signals the pump task to stop when the
     /// webview closes the stream.
-    streams: Mutex<HashMap<String, mpsc::Sender<()>>>,
+    streams: Registry<mpsc::Sender<()>>,
+}
+
+static GENERATIONS: AtomicU64 = AtomicU64::new(1);
+
+/// What a backend keeps running for the webview, by client-chosen id. A retired registry has
+/// dropped every entry and takes no more: an open that was still in flight when the app
+/// replaced its backend is refused, where it would have registered a terminal or a stream
+/// that nothing could reach again.
+struct Registry<T>(Mutex<Option<HashMap<String, T>>>);
+
+impl<T> Default for Registry<T> {
+    fn default() -> Self {
+        Registry(Mutex::new(Some(HashMap::new())))
+    }
+}
+
+impl<T> Registry<T> {
+    async fn insert(&self, id: String, entry: T) -> Result<(), Error> {
+        self.0.lock().await.as_mut().ok_or(Error::BoxChanged)?.insert(id, entry);
+        Ok(())
+    }
+
+    async fn remove(&self, id: &str) -> Option<T> {
+        self.0.lock().await.as_mut()?.remove(id)
+    }
+
+    async fn retire(&self) {
+        self.0.lock().await.take();
+    }
+}
+
+impl Registry<Attachment> {
+    async fn commands(&self, id: &str) -> Option<mpsc::Sender<crate::pty::SessionCmd>> {
+        Some(self.0.lock().await.as_ref()?.get(id)?.commands.clone())
+    }
 }
 
 /// One pane's attachment as the backend holds it: the lane its keystrokes, resizes, and detach
@@ -531,17 +579,22 @@ impl Backend {
     pub fn new(settings: ConnectionSettings) -> Self {
         let token = settings.token.clone();
         Backend {
+            generation: GENERATIONS.fetch_add(1, Ordering::Relaxed),
             settings,
             token: Mutex::new(token),
             session: Mutex::new(None),
             containers: Mutex::new(HashMap::new()),
             sftp_pool: Mutex::new(HashMap::new()),
             sftp_opens: AtomicU64::new(0),
-            sessions: Arc::new(Mutex::new(HashMap::new())),
+            sessions: Arc::default(),
             openings: Openings::default(),
             home: Mutex::new(None),
-            streams: Mutex::new(HashMap::new()),
+            streams: Registry::default(),
         }
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn describe(&self) -> &ConnectionSettings {
@@ -883,10 +936,11 @@ impl Backend {
     ) -> Result<(), Error> {
         // The attachment is registered BEFORE the first remote await: a session_close that lands
         // while the prologue is still talking to the host abandons it (see `until_closed`)
-        // instead of leaving a ghost attachment — or a durable session — no one can reach.
+        // instead of leaving a ghost attachment — or a durable session — no one can reach. A
+        // retired backend refuses it here, before anything is asked of the host.
         let (tx, rx) = mpsc::channel::<crate::pty::SessionCmd>(256);
         let (close, closed) = oneshot::channel::<()>();
-        self.sessions.lock().await.insert(id.clone(), Attachment { commands: tx, close });
+        self.sessions.insert(id.clone(), Attachment { commands: tx, close }).await?;
         let prologue = async {
             // The launch holds its session's lane so a kill racing it (close during the prologue)
             // is ordered after the Create it must undo — see [`Openings`]. The guard lives in
@@ -903,7 +957,7 @@ impl Backend {
         let stream = match until_closed(prologue, closed).await {
             Ok(stream) => stream,
             Err(error) => {
-                self.sessions.lock().await.remove(&id);
+                self.sessions.remove(&id).await;
                 return Err(error);
             }
         };
@@ -949,19 +1003,15 @@ impl Backend {
             // Evict the id whether the session ended on its own, detached, or the
             // transport failed — the map must not keep a sender to a dead driver.
             if let Some(sessions) = sessions.upgrade() {
-                sessions.lock().await.remove(&id);
+                sessions.remove(&id).await;
             }
         });
     }
 
     async fn send_session(&self, id: &str, cmd: crate::pty::SessionCmd) -> Result<(), Error> {
-        // Clone the sender and drop the map lock before awaiting the send: a full
+        // The sender is cloned out and the map lock dropped before awaiting the send: a full
         // channel must never hold the lock and stall every other session's writes.
-        let tx = {
-            let sessions = self.sessions.lock().await;
-            let attachment = sessions.get(id).ok_or_else(|| Error::NoSession(id.into()))?;
-            attachment.commands.clone()
-        };
+        let tx = self.sessions.commands(id).await.ok_or_else(|| Error::NoSession(id.into()))?;
         tx.send(cmd).await.map_err(|_| Error::NoSession(id.into()))
     }
 
@@ -981,7 +1031,7 @@ impl Backend {
     /// attached, the driver writes Detach and returns. The host session survives either way —
     /// closing here never kills.
     pub async fn session_close(&self, id: &str) -> Result<(), Error> {
-        let Some(attachment) = self.sessions.lock().await.remove(id) else {
+        let Some(attachment) = self.sessions.remove(id).await else {
             return Ok(());
         };
         let _ = attachment.close.send(());
@@ -1726,7 +1776,7 @@ impl Backend {
         let _ = app.emit(&format!("stream://open/{id}"), json!({ "status": status }));
 
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
-        self.streams.lock().await.insert(id.clone(), cancel_tx);
+        self.streams.insert(id.clone(), cancel_tx).await?;
 
         let data_event = format!("stream://data/{id}");
         let end_event = format!("stream://end/{id}");
@@ -1758,7 +1808,7 @@ impl Backend {
 
     /// Stop a live stream: signal its pump to end. Idempotent.
     pub async fn stream_close(&self, id: &str) -> Result<(), Error> {
-        if let Some(tx) = self.streams.lock().await.remove(id) {
+        if let Some(tx) = self.streams.remove(id).await {
             let _ = tx.send(()).await;
         }
         Ok(())
@@ -1768,10 +1818,10 @@ impl Backend {
     /// the webview's later closes reach the backend that took its place, never this one. An
     /// attachment dropped from the map is a closed pane to its prologue and a detach to its
     /// driver, and a stream whose entry is dropped ends its pump. Host sessions survive, as
-    /// with any detach.
+    /// with any detach. An open still in flight on this backend registers nothing afterwards.
     pub async fn retire(&self) {
-        self.sessions.lock().await.clear();
-        self.streams.lock().await.clear();
+        self.sessions.retire().await;
+        self.streams.retire().await;
     }
 
 }
@@ -1837,8 +1887,10 @@ pub async fn connection_status(loaded: Result<Arc<Backend>, Error>) -> serde_jso
     let has_token = backend.has_token().await;
     let settings = backend.describe();
     let mut status = json!({
+        "backend": backend.generation(),
         "server": format!("{}:{}", settings.server_host, settings.server_port),
         "sshHost": settings.host(),
+        "sshPort": settings.ssh_port(),
         "paired": settings.paired(),
         "tokenPresent": has_token,
         "tokenKind": backend.token_kind().await,
@@ -3245,16 +3297,16 @@ Host bastion
         let (client, host) = tokio::io::duplex(1024);
         let (commands, driven) = mpsc::channel(8);
         let (close, _closed) = oneshot::channel();
-        backend.sessions.lock().await.insert("attached".into(), Attachment { commands, close });
+        backend.sessions.insert("attached".into(), Attachment { commands, close }).await.unwrap();
         backend.drive_session("attached".into(), client, driven, IpcChannel::new(|_| Ok(())));
 
         let (commands, _unread) = mpsc::channel(8);
         let (close, closed) = oneshot::channel();
-        backend.sessions.lock().await.insert("opening".into(), Attachment { commands, close });
+        backend.sessions.insert("opening".into(), Attachment { commands, close }).await.unwrap();
         let opening = tokio::spawn(until_closed(std::future::pending::<Result<(), Error>>(), closed));
 
         let (cancel, stream_cancel) = mpsc::channel(1);
-        backend.streams.lock().await.insert("events".into(), cancel);
+        backend.streams.insert("events".into(), cancel).await.unwrap();
         Held { backend, host, opening, stream_cancel }
     }
 
@@ -3279,7 +3331,42 @@ Host bastion
         let abandoned = settles(opening).await.unwrap().unwrap_err();
         assert!(abandoned.to_string().contains("pane closed"), "{abandoned}");
         assert_eq!(settles(stream_cancel.recv()).await, None);
-        assert!(backend.sessions.lock().await.is_empty());
+        assert!(backend.sessions.commands("attached").await.is_none());
+    }
+
+    /// A command can take its backend from the app a moment before that backend is replaced,
+    /// and open its terminal a moment after. The open is refused where it would have
+    /// registered, before anything is asked of the host: here its launch lane is held, so an
+    /// open that got as far as the host would wait forever and keep the retired backend alive.
+    #[tokio::test]
+    async fn a_terminal_opened_on_a_backend_already_replaced_is_refused_before_it_reaches_the_host() {
+        let state = crate::AppState::default();
+        state.replace(Some(Arc::new(test_backend()))).await;
+        let taken = state.backend().await.ok().unwrap();
+        let _held = taken.openings.hold("mast-node.2").await;
+        state.replace(None).await;
+
+        let request = crate::pty::AttachRequest {
+            token: String::new(),
+            session: "mast-node.2".into(),
+            write: true,
+            create: None,
+        };
+        let late = taken.session_open("late".into(), "~/.sail/pty.sock".into(), request, IpcChannel::new(|_| Ok(())));
+
+        assert!(matches!(settles(late).await, Err(Error::BoxChanged)));
+        assert!(taken.sessions.commands("late").await.is_none());
+        assert_eq!(Arc::strong_count(&taken), 1);
+    }
+
+    /// The same for a stream whose request was in flight: its pump is never registered.
+    #[tokio::test]
+    async fn a_retired_backend_takes_no_more_streams() {
+        let backend = test_backend();
+        backend.retire().await;
+
+        let (cancel, _pump) = mpsc::channel(1);
+        assert!(matches!(backend.streams.insert("events".into(), cancel).await, Err(Error::BoxChanged)));
     }
 
     /// A terminal that registers on a backend after it was replaced (its open was already in

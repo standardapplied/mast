@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   AgentLogResponse,
@@ -20,6 +19,7 @@ import { formatRecentErrors, logError } from "../errorLog";
 import type { AgentLogHandle, Gateway } from "../gateway";
 import type { SessionListing } from "../terminal/roomDeck";
 import { AgentLogStream, latestRun, TerminalLogError } from "./agentLogStream";
+import { bindPage, invoke, restartPage } from "./core";
 
 /**
  * The Tauri seam to the control plane. Every read/write is one `sail_request`
@@ -35,9 +35,13 @@ type RustResponse = { status: number; etag: string | null; body: string };
 
 type RawStatus = {
   phase: string;
+  /** Which of the core's backends answered; absent when no settings produced one. */
+  backend?: number;
   server: string;
   sshHost?: string;
+  sshPort?: number | null;
   paired?: boolean;
+  forgotten?: boolean;
   tokenPresent: boolean;
   tokenKind: "session" | "api" | "none";
   detail?: string | null;
@@ -270,7 +274,10 @@ function tauriAgentLog(specId: string, role: AgentLogRole, since: number): Agent
   };
 }
 
-export function createTauriGateway(): Gateway {
+/**
+ * `restart` ends the page (see {@link restartPage}); a test hands in its own to see it asked for.
+ */
+export function createTauriGateway(restart: () => Promise<never> = restartPage): Gateway {
   const recent = async (limit: number): Promise<RecentEventsResponse> => {
     const result = await read<RecentEventsResponse>("GET", `/v1/events/recent?limit=${limit}`);
     return result.ok ? result.value : { limit, returned: 0, events: [] };
@@ -280,70 +287,40 @@ export function createTauriGateway(): Gateway {
   // what makes the board update live (spec_* / board_updated), and its state
   // drives the connection pill's stream health. The dummy origin only satisfies
   // EventStream.url()'s URL() parse — the Rust side owns routing and the token.
-  // Its cursor counts one box's event ids, so the consumer lasts as long as the
-  // box does: pairing or forgetting retires it, and the subscribers carry over to
-  // one that starts from nothing. A retired consumer is no longer heard.
-  const eventListeners = new Set<(event: SailEvent) => void>();
-  const streamListeners = new Set<() => void>();
-  let streamState: EventStreamState = "disconnected";
-  let events: EventStream | null = null;
-
-  const openEvents = () => {
-    const stream = new EventStream(
-      { server: "http://ipc.localhost", token: null },
-      {
-        connect: (url) => {
-          const parsed = new URL(url);
-          return tauriStreamConnect(parsed.pathname + parsed.search);
-        },
-        recent,
-        schedule: timerSchedule,
+  // Its cursor counts one box's event ids, which holds because the page is for one box.
+  const events = new EventStream(
+    { server: "http://ipc.localhost", token: null },
+    {
+      connect: (url) => {
+        const parsed = new URL(url);
+        return tauriStreamConnect(parsed.pathname + parsed.search);
       },
-    );
-    stream.onEvent((event) => {
-      if (events === stream) eventListeners.forEach((listener) => listener(event));
-    });
-    stream.onState((state) => {
-      if (events !== stream) return;
-      streamState = state;
-      streamListeners.forEach((listener) => listener());
-    });
-    events = stream;
-    void stream.start();
-  };
+      recent,
+      schedule: timerSchedule,
+    },
+  );
+
+  let streamState: EventStreamState = "disconnected";
+  events.onState((state) => {
+    streamState = state;
+  });
 
   // The events stream is the app-wide live channel. Start it lazily on the first
   // subscriber (the board/detail mount once connected, so no pre-auth churn) and
-  // then let it run for the box's lifetime — EventStream.stop() is terminal,
+  // then let it run for the gateway's lifetime — EventStream.stop() is terminal,
   // so a stop/restart across board↔detail navigation would leave a dead stream.
+  let started = false;
   const ensureStarted = () => {
-    if (!events) openEvents();
-  };
-
-  let boxChanges = 0;
-  const boxChanged = () => {
-    boxChanges += 1;
-    const retired = events;
-    if (!retired) return;
-    events = null;
-    retired.stop();
-    openEvents();
+    if (!started) {
+      started = true;
+      void events.start();
+    }
   };
 
   const baseConnection = async (): Promise<ConnectionStatus> => {
+    let raw: RawStatus;
     try {
-      const raw = await invoke<RawStatus>("connection_status");
-      return {
-        phase: PHASES[raw.phase] ?? "probing",
-        server: raw.server,
-        loginOrigin: raw.sshHost ? `ssh://${raw.sshHost}` : raw.server,
-        tokenPresent: raw.tokenPresent,
-        tokenKind: raw.tokenKind ?? (raw.tokenPresent ? "api" : "none"),
-        stream: "disconnected",
-        detail: raw.detail ?? undefined,
-        paired: raw.paired ?? false,
-        host: raw.sshHost,
-      };
+      raw = await invoke<RawStatus>("connection_status");
     } catch (error) {
       return {
         phase: "failed",
@@ -355,14 +332,26 @@ export function createTauriGateway(): Gateway {
         detail: String(error),
       };
     }
+    // A status from a backend other than the page's is another box's: this page never
+    // shows it or acts on it, and the page that follows reads it as its own.
+    if (!bindPage(raw.backend)) return restart();
+    return {
+      phase: PHASES[raw.phase] ?? "probing",
+      server: raw.server,
+      loginOrigin: raw.sshHost ? `ssh://${raw.sshHost}` : raw.server,
+      tokenPresent: raw.tokenPresent,
+      tokenKind: raw.tokenKind ?? (raw.tokenPresent ? "api" : "none"),
+      stream: "disconnected",
+      detail: raw.detail ?? undefined,
+      paired: raw.paired ?? false,
+      host: raw.sshHost,
+      sshPort: raw.sshPort ?? undefined,
+      forgotten: raw.forgotten ?? false,
+    };
   };
 
-  // A status asked of one box and answered after pairing or forgetting describes a
-  // connection the core no longer holds, so it is asked again of the box there now.
   const connection = async (): Promise<ConnectionStatus> => {
-    const asked = boxChanges;
     const base = await baseConnection();
-    if (asked !== boxChanges) return connection();
     return { ...base, stream: base.phase === "ready" ? streamState : "disconnected" };
   };
 
@@ -505,21 +494,19 @@ export function createTauriGateway(): Gateway {
     async pair(code) {
       try {
         await invoke("pair", { code });
-        boxChanged();
-        return { ok: true };
       } catch (error) {
-        return { ok: false, detail: refusal(error) };
+        return { detail: refusal(error) };
       }
+      return restart();
     },
 
     async forgetBox() {
       try {
         await invoke("forget_box");
-        boxChanged();
-        return { ok: true };
       } catch (error) {
-        return { ok: false, detail: refusal(error) };
+        return { detail: refusal(error) };
       }
+      return restart();
     },
 
     async login() {
@@ -549,20 +536,19 @@ export function createTauriGateway(): Gateway {
     },
 
     onEvent(listener: (event: SailEvent) => void) {
-      eventListeners.add(listener);
+      const off = events.onEvent(listener);
       ensureStarted();
-      return () => eventListeners.delete(listener);
+      return off;
     },
 
     onConnectionStatus(listener: (status: ConnectionStatus) => void) {
       statusListeners.add(listener);
       void connection().then(listener);
-      const onStream = () => void connection().then(listener);
-      streamListeners.add(onStream);
+      const offState = events.onState(() => void connection().then(listener));
       const unlisten = listen<ConnectionStatus>("connection://status", (e) => listener(e.payload));
       return () => {
         statusListeners.delete(listener);
-        streamListeners.delete(onStream);
+        offState();
         void unlisten.then((off) => off());
       };
     },

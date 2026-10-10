@@ -53,9 +53,9 @@ export function UserMenu({
   updater?: Updater;
   onLogin?: () => void;
   onLogout?: () => void;
-  /** Present when Mast is paired with a box: forgetting it is how a paired Mac leaves. Resolves
-   *  to the reason it could not, which is shown here, where it was asked. */
-  onForget?: () => Promise<string | null>;
+  /** Present when Mast is paired with a box: forgetting it is how a paired Mac leaves, and ends
+   *  the page. Resolves only to the reason it could not, which is shown here, where it was asked. */
+  onForget?: () => Promise<string>;
   onDiagnostics?: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -78,9 +78,7 @@ export function UserMenu({
   }, [isOpen]);
 
   const forget = async () => {
-    const error = await onForget?.();
-    setForgetError(error ?? null);
-    if (!error) setIsOpen(false);
+    setForgetError((await onForget?.()) ?? null);
   };
 
   const setTheme = (value: string) => {

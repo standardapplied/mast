@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, useEffect } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { ConnectCodeCheck, ConnectionStatus } from "../shared/sail-models";
 import { App } from "./App";
@@ -872,36 +872,25 @@ describe("App pairing", () => {
     host: "34.1.2.3",
   };
 
-  type Outcome = { ok: boolean; detail?: string };
-
-  /** The app over a gateway whose connection the test owns: what `pair` and `forgetBox` answer,
-   *  and the status the next read (or a push) reports. */
+  /** The app over a gateway whose connection the test owns, as one page sees it: `pair` and
+   *  `forgetBox` resolve only with the refusal named here, since a success ends the page. */
   async function renderPairing(
     initial: ConnectionStatus,
     answers: {
-      pair?: Outcome;
-      forget?: Outcome;
-      afterForget?: ConnectionStatus;
-      beforeStatusRead?: () => Promise<void>;
+      pairRefusal?: string;
+      forgetRefusal?: string;
       preview?: (code: string) => Promise<ConnectCodeCheck>;
     } = {},
-    surfaces: Pick<Parameters<typeof App>[0], "terminal" | "deck"> = {},
   ) {
     gateway = createDemoGateway();
     let current = initial;
     const listeners = new Set<(status: ConnectionStatus) => void>();
-    const calls = { pair: [] as string[], forget: 0, login: 0, logout: 0, catalogReads: 0 };
-    const demo = gateway;
+    const calls = { pair: [] as string[], forget: 0, login: 0, logout: 0 };
+    const refusedOrPageEnds = (detail?: string) =>
+      detail === undefined ? new Promise<never>(() => {}) : Promise.resolve({ detail });
     const pairing = {
       ...gateway,
-      listProjects: () => {
-        calls.catalogReads += 1;
-        return demo.listProjects();
-      },
-      connection: async () => {
-        await answers.beforeStatusRead?.();
-        return current;
-      },
+      connection: async () => current,
       onConnectionStatus: (listener: (status: ConnectionStatus) => void) => {
         listeners.add(listener);
         listener(current);
@@ -919,17 +908,13 @@ describe("App pairing", () => {
           code === GOOD_CODE
             ? { ok: true, value: { handle: "ada", email: "ada@example.com", host: "34.1.2.3" } }
             : { ok: false, detail: NOT_A_CODE }),
-      pair: async (code: string) => {
+      pair: (code: string) => {
         calls.pair.push(code);
-        const outcome = answers.pair ?? { ok: true };
-        if (outcome.ok) current = PAIRED_READY;
-        return outcome;
+        return refusedOrPageEnds(answers.pairRefusal);
       },
-      forgetBox: async () => {
+      forgetBox: () => {
         calls.forget += 1;
-        const outcome = answers.forget ?? { ok: true };
-        if (outcome.ok) current = answers.afterForget ?? UNPAIRED;
-        return outcome;
+        return refusedOrPageEnds(answers.forgetRefusal);
       },
       login: async () => {
         calls.login += 1;
@@ -943,7 +928,7 @@ describe("App pairing", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
-    act(() => root.render(<App gateway={pairing as never} theme={theme} {...surfaces} />));
+    act(() => root.render(<App gateway={pairing as never} theme={theme} />));
     await flush();
     const push = async (status: ConnectionStatus) => {
       current = status;
@@ -1021,12 +1006,21 @@ describe("App pairing", () => {
     expect(at("connect-code-error")).toBeNull();
   });
 
-  test("connecting with a code lands on the rooms with the code's email in the user menu", async () => {
+  test("connecting hands the code over and holds the screen for the page that follows", async () => {
     const { calls } = await renderPairing(UNPAIRED);
     await paste(GOOD_CODE);
     await click("connect-pair");
 
     expect(calls.pair).toEqual([GOOD_CODE]);
+    expect(at<HTMLInputElement>("connect-code")?.disabled).toBe(true);
+    expect(at<HTMLButtonElement>("connect-pair")?.disabled).toBe(true);
+    expect(at("connect-code-error")).toBeNull();
+    expect(at("view-rooms"), "the paired box is the next page's").toBeNull();
+  });
+
+  test("a page on a paired box lands on the rooms with the code's email in the user menu", async () => {
+    await renderPairing(PAIRED_READY);
+
     expect(at("connect-screen")).toBeNull();
     expect(at("view-rooms")).not.toBeNull();
 
@@ -1039,7 +1033,7 @@ describe("App pairing", () => {
   test("a refused connection says why under the field and keeps the code there", async () => {
     const refusal =
       "The box at 34.1.2.3 answered with a different host key than the one in its connect code, so Mast refused it; pair again with a new code.";
-    const { calls } = await renderPairing(UNPAIRED, { pair: { ok: false, detail: refusal } });
+    const { calls } = await renderPairing(UNPAIRED, { pairRefusal: refusal });
     await paste(GOOD_CODE);
     await click("connect-pair");
 
@@ -1066,21 +1060,26 @@ describe("App pairing", () => {
 
     await paste(GOOD_CODE);
     await click("connect-pair");
-    expect(at("connect-screen")).toBeNull();
-    expect(at("view-rooms")).not.toBeNull();
+    expect(calls.pair, "the same screen takes the new code").toEqual([GOOD_CODE]);
   });
 
-  test("Forget this box deletes the pairing and says the box still holds its side", async () => {
+  test("Forget this box asks the gateway once and leaves the rest to the page that follows", async () => {
     const { calls } = await renderPairing(PAIRED_READY);
     await click("user-menu-trigger");
     await click("user-menu-forget");
 
     expect(calls.forget).toBe(1);
-    expect(at("user-menu-panel")).toBeNull();
+    expect(at("user-menu-forget-error")).toBeNull();
+  });
+
+  test("the page after a forgotten box is the first run, and says the box still holds its side", async () => {
+    await renderPairing({ ...UNPAIRED, forgotten: true });
+
     expect(at("connect-code")).not.toBeNull();
     expect(at("connect-notice")?.textContent).toBe(FORGOTTEN_NOTICE);
     expect(FORGOTTEN_NOTICE).toContain("sail fde unpair");
     expect(at("connect-host")).toBeNull();
+    expect(at("view-rooms")).toBeNull();
 
     await click("user-menu-trigger");
     expect(at("user-menu-forget"), "there is no box left to forget").toBeNull();
@@ -1091,18 +1090,14 @@ describe("App pairing", () => {
     ).toBe(true);
   });
 
-  test("forgetting a box on a Mac that still has the CLI's settings lands on them as their own person", async () => {
-    const { calls } = await renderPairing(PAIRED_READY, {
-      afterForget: { ...PAIRED_READY, paired: false, host: "devbox", tokenKind: "session" },
-    });
-    await click("user-menu-trigger");
-    expect(at("user-menu-panel")!.textContent).toContain("ada@example.com");
-    const readsOfTheForgottenBox = calls.catalogReads;
-    await click("user-menu-forget");
+  test("a first run that forgot nothing says nothing about a box", async () => {
+    await renderPairing(UNPAIRED);
+    expect(at("connect-notice")).toBeNull();
+  });
 
-    expect(calls.catalogReads, "the catalog is read again from the box now connected").toBeGreaterThan(
-      readsOfTheForgottenBox,
-    );
+  test("the page after a forgotten box on a Mac with the CLI's settings is that person's, with no box to forget", async () => {
+    await renderPairing({ ...PAIRED_READY, paired: false, host: "devbox", tokenKind: "session", forgotten: true });
+
     expect(at("connect-screen")).toBeNull();
     expect(at("view-rooms")).not.toBeNull();
     await click("user-menu-trigger");
@@ -1111,119 +1106,9 @@ describe("App pairing", () => {
     expect(at("user-menu-forget")).toBeNull();
   });
 
-  /** A terminal and a room workbench that record when each mounts and when it is left. */
-  function recordedSurfaces() {
-    const mounted: string[] = [];
-    const left: string[] = [];
-    const Surface = ({ name }: { name: string }) => {
-      useEffect(() => {
-        mounted.push(name);
-        return () => void left.push(name);
-      }, [name]);
-      return null;
-    };
-    const surfaces: Pick<Parameters<typeof App>[0], "terminal" | "deck"> = {
-      terminal: (openRoomTerminal) => (
-        <>
-          <Surface name="terminal" />
-          <button
-            type="button"
-            data-testid="open-room"
-            onClick={() => openRoomTerminal({ roomId: "room-of-the-paired-box", project: "sail", title: "Design" })}
-          />
-        </>
-      ),
-      deck: { Workbench: ({ roomId }) => <Surface name={roomId} /> },
-    };
-    return { mounted, left, surfaces };
-  }
-
-  test("forgetting a box for the CLI's settings takes down what was open on it, and opens none of it on the next box", async () => {
-    const { mounted, left, surfaces } = recordedSurfaces();
-    await renderPairing(
-      PAIRED_READY,
-      { afterForget: { ...PAIRED_READY, paired: false, host: "devbox", tokenKind: "session" } },
-      surfaces,
-    );
-    await click("nav-terminal");
-    await click("open-room");
-    expect(mounted).toEqual(["terminal", "room-of-the-paired-box"]);
-
-    await click("user-menu-trigger");
-    await click("user-menu-forget");
-
-    expect(left.toSorted()).toEqual(["room-of-the-paired-box", "terminal"]);
-    expect(mounted, "the terminal starts over, and the forgotten box's room is not opened on this one").toEqual([
-      "terminal",
-      "room-of-the-paired-box",
-      "terminal",
-    ]);
-    expect(at("view-room-terminal")).toBeNull();
-    expect(at("view-rooms")).not.toBeNull();
-  });
-
-  test("forgetting a box for CLI settings that cannot connect takes down what was open on it until they do", async () => {
-    const { mounted, left, surfaces } = recordedSurfaces();
-    const cliBox: ConnectionStatus = { ...PAIRED_READY, paired: false, host: "devbox", tokenKind: "session" };
-    const detail = "devbox did not answer; check that the box is running and this Mac is online.";
-    const { push } = await renderPairing(
-      PAIRED_READY,
-      { afterForget: { ...cliBox, phase: "failed", stream: "disconnected", detail } },
-      surfaces,
-    );
-    await click("nav-terminal");
-    await click("open-room");
-
-    await click("user-menu-trigger");
-    await click("user-menu-forget");
-
-    expect(left.toSorted()).toEqual(["room-of-the-paired-box", "terminal"]);
-    expect(at("view-rooms"), "nothing of the forgotten box is left to act on the next one").toBeNull();
-    expect(at("connect-screen")!.textContent).toContain(detail);
-    expect(catalogStore.specList()).toEqual([]);
-
-    await push(cliBox);
-
-    expect(at("connect-screen")).toBeNull();
-    expect(at("view-rooms")).not.toBeNull();
-    expect(mounted, "the terminal starts over, and the forgotten box's room is not opened on this one").toEqual([
-      "terminal",
-      "room-of-the-paired-box",
-      "terminal",
-    ]);
-    expect(at("view-room-terminal")).toBeNull();
-  });
-
-  test("a forgotten box's workspace is down before the next box has answered", async () => {
-    const { left, surfaces } = recordedSurfaces();
-    let nextBoxAnswers: (() => void) | null = null;
-    let forgetting = false;
-    await renderPairing(
-      PAIRED_READY,
-      {
-        afterForget: { ...PAIRED_READY, paired: false, host: "devbox", tokenKind: "session" },
-        beforeStatusRead: () =>
-          forgetting ? new Promise((resolve) => (nextBoxAnswers = resolve)) : Promise.resolve(),
-      },
-      surfaces,
-    );
-    await click("nav-terminal");
-    await click("user-menu-trigger");
-    forgetting = true;
-    await click("user-menu-forget");
-
-    expect(left).toEqual(["terminal"]);
-    expect(at("view-rooms")).toBeNull();
-    expect(at("connect-screen"), "the next box is still connecting, not refused").toBeNull();
-
-    await act(async () => nextBoxAnswers!());
-    await flush();
-    expect(at("view-rooms")).not.toBeNull();
-  });
-
   test("a box that cannot be forgotten says why in the menu, and the workspace stays", async () => {
     const { calls } = await renderPairing(PAIRED_READY, {
-      forget: { ok: false, detail: "Permission denied (os error 13)" },
+      forgetRefusal: "Permission denied (os error 13)",
     });
     await click("user-menu-trigger");
     await click("user-menu-forget");
