@@ -882,6 +882,7 @@ describe("App pairing", () => {
       pair?: Outcome;
       forget?: Outcome;
       afterForget?: ConnectionStatus;
+      beforeStatusRead?: () => Promise<void>;
       preview?: (code: string) => Promise<ConnectCodeCheck>;
     } = {},
     surfaces: Pick<Parameters<typeof App>[0], "terminal" | "deck"> = {},
@@ -897,7 +898,10 @@ describe("App pairing", () => {
         calls.catalogReads += 1;
         return demo.listProjects();
       },
-      connection: async () => current,
+      connection: async () => {
+        await answers.beforeStatusRead?.();
+        return current;
+      },
       onConnectionStatus: (listener: (status: ConnectionStatus) => void) => {
         listeners.add(listener);
         listener(current);
@@ -1107,7 +1111,8 @@ describe("App pairing", () => {
     expect(at("user-menu-forget")).toBeNull();
   });
 
-  test("forgetting a box for the CLI's settings takes down what was open on it, and opens none of it on the next box", async () => {
+  /** A terminal and a room workbench that record when each mounts and when it is left. */
+  function recordedSurfaces() {
     const mounted: string[] = [];
     const left: string[] = [];
     const Surface = ({ name }: { name: string }) => {
@@ -1117,22 +1122,28 @@ describe("App pairing", () => {
       }, [name]);
       return null;
     };
+    const surfaces: Pick<Parameters<typeof App>[0], "terminal" | "deck"> = {
+      terminal: (openRoomTerminal) => (
+        <>
+          <Surface name="terminal" />
+          <button
+            type="button"
+            data-testid="open-room"
+            onClick={() => openRoomTerminal({ roomId: "room-of-the-paired-box", project: "sail", title: "Design" })}
+          />
+        </>
+      ),
+      deck: { Workbench: ({ roomId }) => <Surface name={roomId} /> },
+    };
+    return { mounted, left, surfaces };
+  }
+
+  test("forgetting a box for the CLI's settings takes down what was open on it, and opens none of it on the next box", async () => {
+    const { mounted, left, surfaces } = recordedSurfaces();
     await renderPairing(
       PAIRED_READY,
       { afterForget: { ...PAIRED_READY, paired: false, host: "devbox", tokenKind: "session" } },
-      {
-        terminal: (openRoomTerminal) => (
-          <>
-            <Surface name="terminal" />
-            <button
-              type="button"
-              data-testid="open-room"
-              onClick={() => openRoomTerminal({ roomId: "room-of-the-paired-box", project: "sail", title: "Design" })}
-            />
-          </>
-        ),
-        deck: { Workbench: ({ roomId }) => <Surface name={roomId} /> },
-      },
+      surfaces,
     );
     await click("nav-terminal");
     await click("open-room");
@@ -1148,6 +1159,65 @@ describe("App pairing", () => {
       "terminal",
     ]);
     expect(at("view-room-terminal")).toBeNull();
+    expect(at("view-rooms")).not.toBeNull();
+  });
+
+  test("forgetting a box for CLI settings that cannot connect takes down what was open on it until they do", async () => {
+    const { mounted, left, surfaces } = recordedSurfaces();
+    const cliBox: ConnectionStatus = { ...PAIRED_READY, paired: false, host: "devbox", tokenKind: "session" };
+    const detail = "devbox did not answer; check that the box is running and this Mac is online.";
+    const { push } = await renderPairing(
+      PAIRED_READY,
+      { afterForget: { ...cliBox, phase: "failed", stream: "disconnected", detail } },
+      surfaces,
+    );
+    await click("nav-terminal");
+    await click("open-room");
+
+    await click("user-menu-trigger");
+    await click("user-menu-forget");
+
+    expect(left.toSorted()).toEqual(["room-of-the-paired-box", "terminal"]);
+    expect(at("view-rooms"), "nothing of the forgotten box is left to act on the next one").toBeNull();
+    expect(at("connect-screen")!.textContent).toContain(detail);
+    expect(catalogStore.specList()).toEqual([]);
+
+    await push(cliBox);
+
+    expect(at("connect-screen")).toBeNull();
+    expect(at("view-rooms")).not.toBeNull();
+    expect(mounted, "the terminal starts over, and the forgotten box's room is not opened on this one").toEqual([
+      "terminal",
+      "room-of-the-paired-box",
+      "terminal",
+    ]);
+    expect(at("view-room-terminal")).toBeNull();
+  });
+
+  test("a forgotten box's workspace is down before the next box has answered", async () => {
+    const { left, surfaces } = recordedSurfaces();
+    let nextBoxAnswers: (() => void) | null = null;
+    let forgetting = false;
+    await renderPairing(
+      PAIRED_READY,
+      {
+        afterForget: { ...PAIRED_READY, paired: false, host: "devbox", tokenKind: "session" },
+        beforeStatusRead: () =>
+          forgetting ? new Promise((resolve) => (nextBoxAnswers = resolve)) : Promise.resolve(),
+      },
+      surfaces,
+    );
+    await click("nav-terminal");
+    await click("user-menu-trigger");
+    forgetting = true;
+    await click("user-menu-forget");
+
+    expect(left).toEqual(["terminal"]);
+    expect(at("view-rooms")).toBeNull();
+    expect(at("connect-screen"), "the next box is still connecting, not refused").toBeNull();
+
+    await act(async () => nextBoxAnswers!());
+    await flush();
     expect(at("view-rooms")).not.toBeNull();
   });
 

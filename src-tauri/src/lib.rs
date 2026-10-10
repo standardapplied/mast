@@ -41,8 +41,13 @@ impl AppState {
         Ok(backend)
     }
 
+    /// Swaps the backend, and the one it replaces lets go of its terminals and streams: nothing
+    /// the webview does afterwards can reach them.
     async fn replace(&self, backend: Option<Arc<Backend>>) {
-        *self.backend.lock().await = backend;
+        let retired = std::mem::replace(&mut *self.backend.lock().await, backend);
+        if let Some(retired) = retired {
+            retired.retire().await;
+        }
     }
 }
 

@@ -113,7 +113,6 @@ export function App({
   updater?: Updater;
 }) {
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
-  const [everReady, setEverReady] = useState(false);
   const [specId, setSpecId] = useState<string | null>(specIdFromHash(location.hash));
   const [view, setView] = useState<AppView>(() => specId ? "board" : "rooms");
   // Mount the terminal on first visit and keep it alive (hidden) thereafter, so
@@ -130,28 +129,20 @@ export function App({
   // views underneath stay mounted, so the room is exactly where it was.
   const [roomRoute, setRoomRoute] = useState<RoomTerminalRequest | null>(null);
 
-  useEffect(
-    () =>
-      gateway.onConnectionStatus((next) => {
-        setStatus(next);
-        if (next.phase === "ready") setEverReady(true);
-      }),
-    [gateway],
-  );
+  useEffect(() => gateway.onConnectionStatus(setStatus), [gateway]);
   useEffect(() => {
     // The one-shot snapshot only seeds the first render — a later push always
     // wins, so a stale snapshot resolving late can never clobber it.
-    void gateway.connection().then((snapshot) => {
-      setStatus((current) => current ?? snapshot);
-      if (snapshot.phase === "ready") setEverReady(true);
-    });
+    void gateway.connection().then((snapshot) => setStatus((current) => current ?? snapshot));
   }, [gateway]);
 
-  // Which box the live connection is to. A Mac can change box without ever leaving
-  // ready (forgetting a paired box lands straight on the CLI's settings when they
-  // connect), so everything read from a box is keyed by this, not by the phase.
+  // Which box the status names, in any phase, and which one the live connection is to. A
+  // Mac can change box without ever leaving ready (forgetting a paired box lands straight
+  // on the CLI's settings when they connect), so everything read from a box is keyed by
+  // the box, not by the phase.
   const ready = status?.phase === "ready";
-  const box = status?.phase === "ready" ? boxKeyOf(status) : null;
+  const namedBox = status ? boxKeyOf(status) : null;
+  const box = ready ? namedBox : null;
   const syncStatus = useSyncStatus(gateway, ready);
 
   // Load the caller's identity once the connection is live, and drop it the
@@ -162,20 +153,22 @@ export function App({
     void gateway.whoami().then((r) => setIdentity(r.ok ? r.value : null));
   }, [gateway, box]);
 
-  // Another box's rooms, specs, runs, tabs and files are not this one's. The workspace
-  // comes down for the one render in which the box changed and goes up again over an
-  // empty catalog, which the effect below seeds from the box now connected: nothing
-  // mounted or selected on the earlier box is left to act on this one.
-  const [heldBox, setHeldBox] = useState(box);
-  const changingBox = !!box && !!heldBox && box !== heldBox;
+  // Another box's rooms, specs, runs, tabs and files are not this one's. The workspace is
+  // up for the box that was last ready and for no other: it comes down in the render in
+  // which the status stops naming that box, whether the next one is ready (it goes up
+  // again over an empty catalog, which the effect below seeds) or still failing to
+  // connect (the gate has the window until it does). Nothing mounted or selected on the
+  // earlier box is left to act on this one. A status that names the same box in another
+  // phase is that box degraded, and keeps the workspace.
+  const [heldBox, setHeldBox] = useState<string | null>(null);
+  const leftBox = !!heldBox && namedBox !== heldBox;
   useEffect(() => {
-    if (!box || box === heldBox) return;
-    if (heldBox) {
+    if (leftBox) {
       setRoomRoute(null);
       catalogStore.reset();
     }
-    setHeldBox(box);
-  }, [box, heldBox]);
+    if (leftBox || (box && !heldBox)) setHeldBox(box);
+  }, [leftBox, box, heldBox]);
 
   // Presence rides the app-wide event stream — no polling. One runs listing on
   // connect seeds chips for agents already mid-work (or mid-silence); after
@@ -280,6 +273,9 @@ export function App({
     const result = await gateway.forgetBox();
     if (!result.ok) return result.detail ?? "Mast could not forget this box.";
     setForgotten(true);
+    // The status held describes a connection that is gone; until the next one is read
+    // there is no box, so the workspace does not wait on a slow connect to come down.
+    setStatus(null);
     refreshStatus();
     return null;
   };
@@ -292,13 +288,12 @@ export function App({
     ? roomRoute.roomId
     : view === "rooms" ? roomFocus : view === "board" ? specId : null;
 
-  // The workspace renders once we've ever been ready — transient degradation keeps the
+  // The workspace renders once its box has been ready — transient degradation keeps the
   // last view (pill carries the truth) instead of yanking it to a full-screen
   // error. Only a genuinely unusable state takes over the whole surface: no
-  // credential (needs sign-in, or a connect code), or first-connect probing/failure.
-  const firstConnectBlocking =
-    !everReady && (!status || status.phase !== "ready");
-  const showWorkspace = !needsCredential && !firstConnectBlocking && !changingBox;
+  // credential (needs sign-in, or a connect code), a box that has not connected yet
+  // (probing/failure), or the render in which the box changed.
+  const showWorkspace = !needsCredential && !leftBox && (ready || !!heldBox);
   const connectGate =
     status && (needsCredential || status.phase === "no-host" || status.phase === "failed") ? (
       <ConnectScreen

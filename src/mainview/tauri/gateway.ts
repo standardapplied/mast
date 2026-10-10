@@ -320,7 +320,9 @@ export function createTauriGateway(): Gateway {
     if (!events) openEvents();
   };
 
+  let boxChanges = 0;
   const boxChanged = () => {
+    boxChanges += 1;
     const retired = events;
     if (!retired) return;
     events = null;
@@ -355,8 +357,12 @@ export function createTauriGateway(): Gateway {
     }
   };
 
+  // A status asked of one box and answered after pairing or forgetting describes a
+  // connection the core no longer holds, so it is asked again of the box there now.
   const connection = async (): Promise<ConnectionStatus> => {
+    const asked = boxChanges;
     const base = await baseConnection();
+    if (asked !== boxChanges) return connection();
     return { ...base, stream: base.phase === "ready" ? streamState : "disconnected" };
   };
 

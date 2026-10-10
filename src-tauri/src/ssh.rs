@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::ipc::{Channel as IpcChannel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::pairing::{self, ContainerHop, Pairing};
@@ -295,8 +295,10 @@ pub struct Backend {
     /// Host-owned pty sessions attached over SSH direct-streamlocal, keyed by a
     /// client-chosen id. The sender carries keystrokes/resize/detach into the
     /// session driver; the session outlives the connection on the host side.
-    /// Shared with each driver task so it can evict its own id when the session
-    /// ends on its own, not only when the UI closes the tab.
+    /// Each driver task can reach it to evict its own id when the session ends on its
+    /// own, not only when the UI closes the tab — weakly, since the map holds the sender
+    /// that driver waits on: a driver that kept the map alive would keep itself alive,
+    /// and a backend that is dropped must take its attachments with it.
     sessions: Arc<Mutex<HashMap<String, Attachment>>>,
     /// Launches still talking to the host, by session name; a kill of that name waits its turn.
     openings: Openings,
@@ -905,9 +907,23 @@ impl Backend {
                 return Err(error);
             }
         };
+        self.drive_session(id, stream, rx, on_data);
+        Ok(())
+    }
 
-        let sessions = self.sessions.clone();
-        let cleanup_id = id;
+    /// Runs an attached session on its own task until it ends, is detached, or its transport
+    /// fails. Losing the command lane — the attachment left the map, or the map went with its
+    /// backend — is a detach.
+    fn drive_session<S>(
+        &self,
+        id: String,
+        stream: S,
+        commands: mpsc::Receiver<crate::pty::SessionCmd>,
+        on_data: IpcChannel<InvokeResponseBody>,
+    ) where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let sessions = Arc::downgrade(&self.sessions);
         let ending = on_data.clone();
         tokio::spawn(async move {
             // Everything rides ONE raw channel, in order: a Tauri event runs on its own lane and
@@ -919,7 +935,7 @@ impl Backend {
             let pump = tokio::spawn(crate::session_frames::pump(pending, move |frame| {
                 let _ = on_data.send(InvokeResponseBody::Raw(frame));
             }));
-            let outcome = crate::pty::run(stream, rx, move |event| {
+            let outcome = crate::pty::run(stream, commands, move |event| {
                 let _ = events.send(event);
             })
             .await;
@@ -932,9 +948,10 @@ impl Backend {
             }
             // Evict the id whether the session ended on its own, detached, or the
             // transport failed — the map must not keep a sender to a dead driver.
-            sessions.lock().await.remove(&cleanup_id);
+            if let Some(sessions) = sessions.upgrade() {
+                sessions.lock().await.remove(&id);
+            }
         });
-        Ok(())
     }
 
     async fn send_session(&self, id: &str, cmd: crate::pty::SessionCmd) -> Result<(), Error> {
@@ -1745,6 +1762,16 @@ impl Backend {
             let _ = tx.send(()).await;
         }
         Ok(())
+    }
+
+    /// Lets go of everything this backend keeps running, for a backend the app is replacing:
+    /// the webview's later closes reach the backend that took its place, never this one. An
+    /// attachment dropped from the map is a closed pane to its prologue and a detach to its
+    /// driver, and a stream whose entry is dropped ends its pump. Host sessions survive, as
+    /// with any detach.
+    pub async fn retire(&self) {
+        self.sessions.lock().await.clear();
+        self.streams.lock().await.clear();
     }
 
 }
@@ -3202,6 +3229,71 @@ Host bastion
         tokio::time::timeout(std::time::Duration::from_secs(5), openings.hold("mast-node.2"))
             .await
             .expect("the abandoned launch released its lane for the kill");
+    }
+
+    /// A backend holding one terminal attached over `host`'s other end, one still opening, and
+    /// one live stream, each registered as `session_open` and `stream_open` register them.
+    struct Held {
+        backend: Arc<Backend>,
+        host: tokio::io::DuplexStream,
+        opening: tokio::task::JoinHandle<Result<(), Error>>,
+        stream_cancel: mpsc::Receiver<()>,
+    }
+
+    async fn backend_holding_terminals_and_a_stream() -> Held {
+        let backend = Arc::new(test_backend());
+        let (client, host) = tokio::io::duplex(1024);
+        let (commands, driven) = mpsc::channel(8);
+        let (close, _closed) = oneshot::channel();
+        backend.sessions.lock().await.insert("attached".into(), Attachment { commands, close });
+        backend.drive_session("attached".into(), client, driven, IpcChannel::new(|_| Ok(())));
+
+        let (commands, _unread) = mpsc::channel(8);
+        let (close, closed) = oneshot::channel();
+        backend.sessions.lock().await.insert("opening".into(), Attachment { commands, close });
+        let opening = tokio::spawn(until_closed(std::future::pending::<Result<(), Error>>(), closed));
+
+        let (cancel, stream_cancel) = mpsc::channel(1);
+        backend.streams.lock().await.insert("events".into(), cancel);
+        Held { backend, host, opening, stream_cancel }
+    }
+
+    async fn settles<T>(what: impl std::future::Future<Output = T>) -> T {
+        tokio::time::timeout(std::time::Duration::from_secs(5), what)
+            .await
+            .expect("the backend let go of it")
+    }
+
+    /// Pairing or forgetting swaps the backend while the webview still has panes on the old one,
+    /// and its closes then reach the new backend, which knows none of those ids. So the swap
+    /// itself detaches them, even while a command in flight still holds the old backend.
+    #[tokio::test]
+    async fn a_replaced_backend_detaches_its_terminals_and_ends_its_streams() {
+        let Held { backend, mut host, opening, mut stream_cancel } = backend_holding_terminals_and_a_stream().await;
+        let state = crate::AppState::default();
+        state.replace(Some(backend.clone())).await;
+
+        state.replace(None).await;
+
+        assert_eq!(settles(crate::pty::read_frame(&mut host)).await.unwrap(), crate::pty::Frame::Detach);
+        let abandoned = settles(opening).await.unwrap().unwrap_err();
+        assert!(abandoned.to_string().contains("pane closed"), "{abandoned}");
+        assert_eq!(settles(stream_cancel.recv()).await, None);
+        assert!(backend.sessions.lock().await.is_empty());
+    }
+
+    /// A terminal that registers on a backend after it was replaced (its open was already in
+    /// flight) is not reached by the swap; it goes when the backend does, because a driver does
+    /// not keep alive the map that holds its own command lane.
+    #[tokio::test]
+    async fn a_dropped_backend_takes_its_terminals_with_it() {
+        let Held { backend, mut host, opening, mut stream_cancel } = backend_holding_terminals_and_a_stream().await;
+
+        drop(backend);
+
+        assert_eq!(settles(crate::pty::read_frame(&mut host)).await.unwrap(), crate::pty::Frame::Detach);
+        assert!(settles(opening).await.unwrap().is_err());
+        assert_eq!(settles(stream_cancel.recv()).await, None);
     }
 
     /// A Backend aimed at 127.0.0.1 for the live tests below — no

@@ -432,6 +432,28 @@ describe("Tauri gateway pairing wire", () => {
     expect((await gateway.connection()).stream).toBe("connected");
   });
 
+  test("a status asked of a box that was forgotten before it answered is asked again of the box there now", async () => {
+    const cliBox = { ...ready, sshHost: "devbox", paired: false };
+    let answerForgottenBox: (status: typeof ready) => void = () => {};
+    let forgotten = false;
+    stubCore({
+      connection_status: () =>
+        forgotten ? cliBox : new Promise((resolve) => (answerForgottenBox = resolve)),
+      forget_box: () => {
+        forgotten = true;
+        return null;
+      },
+    });
+    const gateway = createTauriGateway();
+
+    const asked = gateway.connection();
+    await flush();
+    expect(await gateway.forgetBox()).toEqual({ ok: true });
+    answerForgottenBox(ready);
+
+    expect(await asked).toMatchObject({ phase: "ready", paired: false, host: "devbox" });
+  });
+
   test("preview, pair and forget carry the code in and the core's sentence out", async () => {
     const sentence = "The box at 34.1.2.3 refused this code (Bearer token is invalid); ask for a new one.";
     const calls = stubCore({
