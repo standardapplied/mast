@@ -337,7 +337,9 @@ pub async fn pair(home: &Path, text: &str) -> Result<Backend, Error> {
             said.trim_end_matches('.')
         )));
     }
-    store(home, &code)?;
+    store(home, &code).map_err(|e| {
+        Error::Refused(format!("Mast reached the box at {host} but could not save the connection on this Mac ({e})."))
+    })?;
     Ok(backend)
 }
 
