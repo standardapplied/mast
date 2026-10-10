@@ -92,10 +92,16 @@ async fn forget_box(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 /// The box refused the token (`invalid_bearer_token`). The backend decides what that means for
-/// the path it is on: a logout on the fallback, a kept-but-unusable pairing otherwise.
+/// the path it is on: a logout on the fallback, a kept-but-unusable pairing otherwise. Only the
+/// backend that made the request is told: a refusal that lands after its box was forgotten must
+/// not load whatever settings remain and strip their token.
 #[tauri::command]
 async fn token_refused(state: State<'_, AppState>) -> Result<(), String> {
-    state.backend().await?.token_refused().await.map_err(String::from)
+    let current = state.backend.lock().await.clone();
+    match current {
+        Some(backend) => backend.token_refused().await.map_err(String::from),
+        None => Ok(()),
+    }
 }
 
 /// Run the passkey sign-in ceremony (system browser → Touch ID → loopback

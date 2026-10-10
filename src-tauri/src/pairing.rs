@@ -170,7 +170,7 @@ fn text_field(fields: &Map<String, Value>, name: &str, valid: fn(&str) -> bool) 
 
 /// A handle, a login or a project: the characters that are safe in a file name and a URL path.
 fn is_name(text: &str) -> bool {
-    !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    text.chars().any(|c| c != '.') && text.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// A hostname or an IP literal (`:` for IPv6). No `/`, so it is also safe in the key's file name.
@@ -246,7 +246,10 @@ pub fn load(home: &Path) -> Result<Option<ConnectionSettings>, Error> {
 
     let port = field("port")?.parse().map_err(|_| unusable("its port is not a number"))?;
     let (_, host_key) = parse_host_key(field("host_key")?).ok_or_else(|| unusable("its host key cannot be read"))?;
-    let key = load_secret_key(field("key_path")?, None).map_err(|_| unusable("its key file is missing or unreadable"))?;
+    field("key_path")?;
+    let key = stored_key(home)
+        .and_then(|path| load_secret_key(path, None).ok())
+        .ok_or_else(|| unusable("its key file is missing or unreadable"))?;
     let (server_host, server_port) = parse_server(field("server")?);
 
     Ok(Some(ConnectionSettings {
@@ -264,13 +267,30 @@ pub fn load(home: &Path) -> Result<Option<ConnectionSettings>, Error> {
     }))
 }
 
+/// The key file `mast.yaml` records, found by its file name alone under `~/.sail/keys`: a home
+/// that moved still finds its key, and no path the file claims can point Mast at anything else.
+fn stored_key(home: &Path) -> Option<PathBuf> {
+    let raw = std::fs::read_to_string(home.join(SETTINGS_FILE)).ok()?;
+    let recorded = PathBuf::from(parse_yaml(&raw).remove("key_path")?);
+    Some(home.join(KEYS_DIR).join(recorded.file_name()?))
+}
+
+fn remove_if_present(path: &Path) -> Result<(), Error> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
 /// Writes what a code carried: the private key to `~/.sail/keys/<host>-<handle>` and the rest to
-/// `~/.sail/mast.yaml`, both readable by their owner alone. An earlier pairing goes first, so
-/// its key never outlives it.
+/// `~/.sail/mast.yaml`, both readable by their owner alone. An earlier pairing is replaced, not
+/// destroyed first: its key goes only once the new settings are down, and a save that fails
+/// midway leaves no new key behind.
 fn store(home: &Path, code: &ConnectCode) -> Result<(), Error> {
-    forget(home)?;
+    let previous = stored_key(home);
     let keys = home.join(KEYS_DIR);
     let key_path = keys.join(format!("{}-{}", code.pairing.host, code.handle));
+    let replaces_in_place = previous.as_deref() == Some(key_path.as_path());
     write_private(&key_path, &format!("{}\n", code.key_text.trim_end()))?;
     #[cfg(unix)]
     {
@@ -279,13 +299,13 @@ fn store(home: &Path, code: &ConnectCode) -> Result<(), Error> {
     }
 
     let port = code.pairing.port.to_string();
-    let key_path = key_path.to_string_lossy();
+    let recorded = key_path.to_string_lossy();
     let settings: String = [
         ("host", code.pairing.host.as_str()),
         ("port", port.as_str()),
         ("user", code.pairing.user.as_str()),
         ("host_key", code.host_key_line.as_str()),
-        ("key_path", key_path.as_ref()),
+        ("key_path", recorded.as_ref()),
         ("token", code.token.as_str()),
         ("server", code.server.as_str()),
         ("handle", code.handle.as_str()),
@@ -294,27 +314,25 @@ fn store(home: &Path, code: &ConnectCode) -> Result<(), Error> {
     .iter()
     .map(|(name, value)| format!("{name}: {}\n", yaml_scalar(value)))
     .collect();
-    write_private(&home.join(SETTINGS_FILE), &settings)
+    if let Err(e) = write_private(&home.join(SETTINGS_FILE), &settings) {
+        if !replaces_in_place {
+            let _ = std::fs::remove_file(&key_path);
+        }
+        return Err(e);
+    }
+    match previous {
+        Some(old) if !replaces_in_place => remove_if_present(&old),
+        _ => Ok(()),
+    }
 }
 
 /// Forgets the box on this Mac: the key file, then `mast.yaml`. The pairing on the box is not
-/// touched (that is `sail fde unpair`). Only a key under `~/.sail/keys` is ever deleted,
-/// whatever the file claims its path is.
+/// touched (that is `sail fde unpair`).
 pub fn forget(home: &Path) -> Result<(), Error> {
-    let settings = home.join(SETTINGS_FILE);
-    let keys = home.join(KEYS_DIR);
-    let key = std::fs::read_to_string(&settings)
-        .ok()
-        .and_then(|raw| parse_yaml(&raw).remove("key_path"))
-        .map(PathBuf::from)
-        .filter(|path| path.parent() == Some(keys.as_path()));
-    for path in key.iter().chain([&settings]) {
-        match std::fs::remove_file(path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-            _ => {}
-        }
+    if let Some(key) = stored_key(home) {
+        remove_if_present(&key)?;
     }
-    Ok(())
+    remove_if_present(&home.join(SETTINGS_FILE))
 }
 
 /// The first run's Connect: builds the backend from the code alone, proves the whole path (SSH
@@ -749,6 +767,41 @@ mod tests {
         forget(&home.0).unwrap();
         assert!(outside.exists(), "only a key under ~/.sail/keys is Mast's to delete");
         assert!(!home.path(SETTINGS_FILE).exists());
+
+        std::fs::write(home.path(SETTINGS_FILE), format!("key_path: {}/..\n", home.path(KEYS_DIR).display())).unwrap();
+        forget(&home.0).expect("a path that names no file is nothing to delete");
+        assert!(home.path(KEYS_DIR).exists());
+    }
+
+    #[test]
+    fn a_home_that_moved_still_finds_and_forgets_its_key() {
+        let (before, after) = (TempHome::new(), TempHome::new());
+        store(&before.0, &ConnectCode::parse(&encode(&sample_fields())).ok().unwrap()).unwrap();
+        std::fs::remove_dir(&after.0).unwrap();
+        std::fs::rename(&before.0, &after.0).unwrap();
+
+        assert!(ConnectionSettings::load(&after.0).ok().unwrap().paired());
+        forget(&after.0).unwrap();
+        assert!(!after.path(".sail/keys/127.0.0.1-ada").exists());
+    }
+
+    #[test]
+    fn a_pairing_that_cannot_be_saved_leaves_the_one_before_it_whole_and_no_key_behind() {
+        let home = TempHome::new();
+        store(&home.0, &ConnectCode::parse(&encode(&sample_fields())).ok().unwrap()).unwrap();
+        let before = std::fs::read_to_string(home.path(SETTINGS_FILE)).unwrap();
+        let mut other = sample_fields();
+        other["handle"] = json!("grace");
+        std::fs::create_dir(home.path(".sail/keys/127.0.0.1-grace")).unwrap();
+
+        assert!(store(&home.0, &ConnectCode::parse(&encode(&other)).ok().unwrap()).is_err());
+        assert_eq!(std::fs::read_to_string(home.path(SETTINGS_FILE)).unwrap(), before);
+        assert!(ConnectionSettings::load(&home.0).ok().unwrap().paired());
+
+        let fresh = TempHome::new();
+        std::fs::create_dir_all(fresh.path(SETTINGS_FILE)).unwrap();
+        assert!(store(&fresh.0, &ConnectCode::parse(&encode(&sample_fields())).ok().unwrap()).is_err());
+        assert!(!fresh.path(".sail/keys/127.0.0.1-ada").exists());
     }
 
     #[test]
@@ -812,7 +865,7 @@ mod tests {
 
     #[test]
     fn a_project_name_that_would_rewrite_the_request_is_refused() {
-        for hostile in ["", "a/b", "alpha HTTP/1.1\r\nX: y", "../whoami", "a?b"] {
+        for hostile in ["", ".", "..", "a/b", "alpha HTTP/1.1\r\nX: y", "../whoami", "a?b"] {
             assert!(matches!(connect_path(hostile), Err(Error::Refused(_))), "{hostile}");
         }
     }

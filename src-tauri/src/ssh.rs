@@ -1835,10 +1835,10 @@ async fn dial_box(pairing: &Pairing) -> Result<Handle<Client>, Error> {
             russh::Error::UnknownKey => Error::HostKeyChanged(pairing.host.clone()),
             _ => unreachable(),
         })?;
-    if handle.authenticate_publickey(&pairing.user, pairing.key.clone()).await? {
-        Ok(handle)
-    } else {
-        Err(Error::KeyRefused(pairing.host.clone()))
+    match handle.authenticate_publickey(&pairing.user, pairing.key.clone()).await {
+        Ok(true) => Ok(handle),
+        Ok(false) => Err(Error::KeyRefused(pairing.host.clone())),
+        Err(_) => Err(unreachable()),
     }
 }
 
