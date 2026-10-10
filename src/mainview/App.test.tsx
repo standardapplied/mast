@@ -878,14 +878,24 @@ describe("App pairing", () => {
    *  and the status the next read (or a push) reports. */
   async function renderPairing(
     initial: ConnectionStatus,
-    answers: { pair?: Outcome; forget?: Outcome; preview?: (code: string) => Promise<ConnectCodeCheck> } = {},
+    answers: {
+      pair?: Outcome;
+      forget?: Outcome;
+      afterForget?: ConnectionStatus;
+      preview?: (code: string) => Promise<ConnectCodeCheck>;
+    } = {},
   ) {
     gateway = createDemoGateway();
     let current = initial;
     const listeners = new Set<(status: ConnectionStatus) => void>();
-    const calls = { pair: [] as string[], forget: 0, login: 0, logout: 0 };
+    const calls = { pair: [] as string[], forget: 0, login: 0, logout: 0, catalogReads: 0 };
+    const demo = gateway;
     const pairing = {
       ...gateway,
+      listProjects: () => {
+        calls.catalogReads += 1;
+        return demo.listProjects();
+      },
       connection: async () => current,
       onConnectionStatus: (listener: (status: ConnectionStatus) => void) => {
         listeners.add(listener);
@@ -894,7 +904,9 @@ describe("App pairing", () => {
       },
       whoami: async () => ({
         ok: true as const,
-        value: { fde: "ada", name: "mast-ada", email: "ada@example.com", role: "member" as const, capabilities: [] },
+        value: current.paired
+          ? { fde: "ada", name: "mast-ada", email: "ada@example.com", role: "member" as const, capabilities: [] }
+          : { fde: "uday", name: "cli", email: "uday@example.com", role: "admin" as const, capabilities: [] },
       }),
       previewConnectCode:
         answers.preview ??
@@ -911,7 +923,7 @@ describe("App pairing", () => {
       forgetBox: async () => {
         calls.forget += 1;
         const outcome = answers.forget ?? { ok: true };
-        if (outcome.ok) current = UNPAIRED;
+        if (outcome.ok) current = answers.afterForget ?? UNPAIRED;
         return outcome;
       },
       login: async () => {
@@ -1072,6 +1084,26 @@ describe("App pairing", () => {
         ?.disabled,
       "the passkey door is not offered on the first run",
     ).toBe(true);
+  });
+
+  test("forgetting a box on a Mac that still has the CLI's settings lands on them as their own person", async () => {
+    const { calls } = await renderPairing(PAIRED_READY, {
+      afterForget: { ...PAIRED_READY, paired: false, host: "devbox", tokenKind: "session" },
+    });
+    await click("user-menu-trigger");
+    expect(at("user-menu-panel")!.textContent).toContain("ada@example.com");
+    const readsOfTheForgottenBox = calls.catalogReads;
+    await click("user-menu-forget");
+
+    expect(calls.catalogReads, "the catalog is read again from the box now connected").toBeGreaterThan(
+      readsOfTheForgottenBox,
+    );
+    expect(at("connect-screen")).toBeNull();
+    expect(at("view-rooms")).not.toBeNull();
+    await click("user-menu-trigger");
+    expect(at("user-menu-panel")!.textContent).toContain("uday@example.com");
+    expect(at("user-menu-panel")!.textContent).not.toContain("ada@example.com");
+    expect(at("user-menu-forget")).toBeNull();
   });
 
   test("a box that cannot be forgotten says why in the menu, and the workspace stays", async () => {

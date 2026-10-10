@@ -280,33 +280,52 @@ export function createTauriGateway(): Gateway {
   // what makes the board update live (spec_* / board_updated), and its state
   // drives the connection pill's stream health. The dummy origin only satisfies
   // EventStream.url()'s URL() parse — the Rust side owns routing and the token.
-  const events = new EventStream(
-    { server: "http://ipc.localhost", token: null },
-    {
-      connect: (url) => {
-        const parsed = new URL(url);
-        return tauriStreamConnect(parsed.pathname + parsed.search);
-      },
-      recent,
-      schedule: timerSchedule,
-    },
-  );
-
+  // Its cursor counts one box's event ids, so the consumer lasts as long as the
+  // box does: pairing or forgetting retires it, and the subscribers carry over to
+  // one that starts from nothing. A retired consumer is no longer heard.
+  const eventListeners = new Set<(event: SailEvent) => void>();
+  const streamListeners = new Set<() => void>();
   let streamState: EventStreamState = "disconnected";
-  events.onState((state) => {
-    streamState = state;
-  });
+  let events: EventStream | null = null;
+
+  const openEvents = () => {
+    const stream = new EventStream(
+      { server: "http://ipc.localhost", token: null },
+      {
+        connect: (url) => {
+          const parsed = new URL(url);
+          return tauriStreamConnect(parsed.pathname + parsed.search);
+        },
+        recent,
+        schedule: timerSchedule,
+      },
+    );
+    stream.onEvent((event) => {
+      if (events === stream) eventListeners.forEach((listener) => listener(event));
+    });
+    stream.onState((state) => {
+      if (events !== stream) return;
+      streamState = state;
+      streamListeners.forEach((listener) => listener());
+    });
+    events = stream;
+    void stream.start();
+  };
 
   // The events stream is the app-wide live channel. Start it lazily on the first
   // subscriber (the board/detail mount once connected, so no pre-auth churn) and
-  // then let it run for the gateway's lifetime — EventStream.stop() is terminal,
+  // then let it run for the box's lifetime — EventStream.stop() is terminal,
   // so a stop/restart across board↔detail navigation would leave a dead stream.
-  let started = false;
   const ensureStarted = () => {
-    if (!started) {
-      started = true;
-      void events.start();
-    }
+    if (!events) openEvents();
+  };
+
+  const boxChanged = () => {
+    const retired = events;
+    if (!retired) return;
+    events = null;
+    retired.stop();
+    openEvents();
   };
 
   const baseConnection = async (): Promise<ConnectionStatus> => {
@@ -341,17 +360,17 @@ export function createTauriGateway(): Gateway {
     return { ...base, stream: base.phase === "ready" ? streamState : "disconnected" };
   };
 
-  // On a refused token: tell the Rust core, which owns what that means (the fallback path
-  // logs out; a paired Mac keeps its settings and only stops presenting the token), then push
-  // the status it now reports to every connection listener, so the shell shows the sign-in or
-  // first-run screen. Guarded so a burst of concurrent refusals collapses into one.
+  // On a refused token: the Rust core has already acted on it, in the backend that made the
+  // request (the fallback path logs out; a paired Mac keeps its settings and only stops
+  // presenting the token), so only push the status it now reports to every connection
+  // listener, and the shell shows the sign-in or first-run screen. Guarded so a burst of
+  // concurrent refusals collapses into one.
   const statusListeners = new Set<(s: ConnectionStatus) => void>();
   let expiring = false;
   onAuthExpired = () => {
     if (expiring) return;
     expiring = true;
     void (async () => {
-      await invoke("token_refused").catch(() => {});
       const status = await connection();
       statusListeners.forEach((listener) => listener(status));
       expiring = false;
@@ -480,6 +499,7 @@ export function createTauriGateway(): Gateway {
     async pair(code) {
       try {
         await invoke("pair", { code });
+        boxChanged();
         return { ok: true };
       } catch (error) {
         return { ok: false, detail: refusal(error) };
@@ -489,6 +509,7 @@ export function createTauriGateway(): Gateway {
     async forgetBox() {
       try {
         await invoke("forget_box");
+        boxChanged();
         return { ok: true };
       } catch (error) {
         return { ok: false, detail: refusal(error) };
@@ -522,19 +543,20 @@ export function createTauriGateway(): Gateway {
     },
 
     onEvent(listener: (event: SailEvent) => void) {
-      const off = events.onEvent(listener);
+      eventListeners.add(listener);
       ensureStarted();
-      return off;
+      return () => eventListeners.delete(listener);
     },
 
     onConnectionStatus(listener: (status: ConnectionStatus) => void) {
       statusListeners.add(listener);
       void connection().then(listener);
-      const offState = events.onState(() => void connection().then(listener));
+      const onStream = () => void connection().then(listener);
+      streamListeners.add(onStream);
       const unlisten = listen<ConnectionStatus>("connection://status", (e) => listener(e.payload));
       return () => {
         statusListeners.delete(listener);
-        offState();
+        streamListeners.delete(onStream);
         void unlisten.then((off) => off());
       };
     },

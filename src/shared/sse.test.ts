@@ -197,6 +197,20 @@ describe("EventStream", () => {
     h.stream.stop();
   });
 
+  test("a stop while the connection is still opening closes it once it opens", async () => {
+    const h = harness();
+    void h.stream.start();
+    h.stream.stop();
+    await flush();
+
+    expect(h.streams).toHaveLength(1);
+    expect(h.streams[0]!.cancelled).toBe(true);
+    expect(h.states.at(-1)).toBe("disconnected");
+    h.streams[0]!.push(frame(1, "late"));
+    await flush();
+    expect(h.events).toEqual([]);
+  });
+
   test("honors Retry-After on a 503 connection cap", async () => {
     const h = harness();
     h.scripted.push({ status: 503, retryAfter: "1" }, { status: 200 });

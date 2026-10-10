@@ -56,7 +56,7 @@ async fn sail_request(
 ) -> Result<ssh::SailResponse, String> {
     let backend = state.backend().await?;
     backend
-        .sail_request(&method, &path, body, if_match)
+        .webview_request(&method, &path, body, if_match)
         .await
         .map_err(String::from)
 }
@@ -89,19 +89,6 @@ async fn forget_box(state: State<'_, AppState>) -> Result<(), String> {
     pairing::forget(&ssh::local_home()?)?;
     state.replace(None).await;
     Ok(())
-}
-
-/// The box refused the token (`invalid_bearer_token`). The backend decides what that means for
-/// the path it is on: a logout on the fallback, a kept-but-unusable pairing otherwise. Only the
-/// backend that made the request is told: a refusal that lands after its box was forgotten must
-/// not load whatever settings remain and strip their token.
-#[tauri::command]
-async fn token_refused(state: State<'_, AppState>) -> Result<(), String> {
-    let current = state.backend.lock().await.clone();
-    match current {
-        Some(backend) => backend.token_refused().await.map_err(String::from),
-        None => Ok(()),
-    }
 }
 
 /// Run the passkey sign-in ceremony (system browser → Touch ID → loopback
@@ -655,7 +642,6 @@ pub fn run() {
             connect_code_preview,
             pair,
             forget_box,
-            token_refused,
             login,
             logout,
             open_url,

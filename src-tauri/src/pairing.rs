@@ -282,22 +282,36 @@ fn remove_if_present(path: &Path) -> Result<(), Error> {
     }
 }
 
+/// Puts a private file in place whole or not at all: written beside its destination, then
+/// renamed over it, so a write that fails midway leaves what was there.
+fn replace_private(path: &Path, content: &str) -> Result<(), Error> {
+    let mut staged = path.as_os_str().to_owned();
+    staged.push(".new");
+    let staged = PathBuf::from(staged);
+    let placed = write_private(&staged, content).and_then(|()| Ok(std::fs::rename(&staged, path)?));
+    if placed.is_err() {
+        let _ = std::fs::remove_file(&staged);
+    }
+    placed
+}
+
+fn owner_only_dir(dir: &Path) -> Result<(), Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
 /// Writes what a code carried: the private key to `~/.sail/keys/<host>-<handle>` and the rest to
 /// `~/.sail/mast.yaml`, both readable by their owner alone. An earlier pairing is replaced, not
 /// destroyed first: its key goes only once the new settings are down, and a save that fails
-/// midway leaves no new key behind.
+/// midway puts the key back as it was, which for the same box and handle is the earlier key.
 fn store(home: &Path, code: &ConnectCode) -> Result<(), Error> {
     let previous = stored_key(home);
     let keys = home.join(KEYS_DIR);
     let key_path = keys.join(format!("{}-{}", code.pairing.host, code.handle));
-    let replaces_in_place = previous.as_deref() == Some(key_path.as_path());
-    write_private(&key_path, &format!("{}\n", code.key_text.trim_end()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o700))?;
-    }
-
     let port = code.pairing.port.to_string();
     let recorded = key_path.to_string_lossy();
     let settings: String = [
@@ -314,9 +328,15 @@ fn store(home: &Path, code: &ConnectCode) -> Result<(), Error> {
     .iter()
     .map(|(name, value)| format!("{name}: {}\n", yaml_scalar(value)))
     .collect();
-    if let Err(e) = write_private(&home.join(SETTINGS_FILE), &settings) {
-        if !replaces_in_place {
-            let _ = std::fs::remove_file(&key_path);
+
+    let replaces_in_place = previous.as_deref() == Some(key_path.as_path());
+    let key_before = replaces_in_place.then(|| std::fs::read_to_string(&key_path).ok()).flatten();
+    replace_private(&key_path, &format!("{}\n", code.key_text.trim_end()))?;
+    let saved = owner_only_dir(&keys).and_then(|()| replace_private(&home.join(SETTINGS_FILE), &settings));
+    if let Err(e) = saved {
+        match key_before {
+            Some(key) => replace_private(&key_path, &key)?,
+            None => remove_if_present(&key_path)?,
         }
         return Err(e);
     }
@@ -429,7 +449,7 @@ impl ContainerHop {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
     use std::time::Duration;
 
@@ -439,6 +459,7 @@ mod tests {
     use russh::{Channel, ChannelId};
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::oneshot;
 
     use super::*;
     use crate::ssh::connection_status;
@@ -805,6 +826,33 @@ mod tests {
     }
 
     #[test]
+    fn pairing_the_same_box_again_that_cannot_be_saved_keeps_the_key_it_had() {
+        let home = TempHome::new();
+        store(&home.0, &ConnectCode::parse(&encode(&sample_fields())).ok().unwrap()).unwrap();
+        let key = home.path(".sail/keys/127.0.0.1-ada");
+        let key_before = std::fs::read_to_string(&key).unwrap();
+        let settings_before = std::fs::read_to_string(home.path(SETTINGS_FILE)).unwrap();
+        let mut again = sample_fields();
+        again["key"] = json!(openssh_pem(&fresh_key()));
+        let again = ConnectCode::parse(&encode(&again)).ok().unwrap();
+        let staged_settings = home.path(".sail/mast.yaml.new");
+        std::fs::create_dir(&staged_settings).unwrap();
+
+        assert!(store(&home.0, &again).is_err());
+        assert_eq!(std::fs::read_to_string(&key).unwrap(), key_before);
+        assert_eq!(std::fs::read_to_string(home.path(SETTINGS_FILE)).unwrap(), settings_before);
+        assert!(ConnectionSettings::load(&home.0).ok().unwrap().paired());
+        assert!(!home.path(".sail/keys/127.0.0.1-ada.new").exists());
+
+        std::fs::remove_dir(&staged_settings).unwrap();
+        std::fs::remove_file(&key).unwrap();
+        store(&home.0, &again).expect("a pairing whose key file is gone is mended by pairing again");
+        assert_ne!(std::fs::read_to_string(&key).unwrap(), key_before);
+        assert_eq!(mode(&key), 0o600);
+        assert!(ConnectionSettings::load(&home.0).ok().unwrap().paired());
+    }
+
+    #[test]
     fn pairing_again_removes_the_key_of_the_pairing_it_replaces() {
         let home = TempHome::new();
         store(&home.0, &ConnectCode::parse(&encode(&sample_fields())).ok().unwrap()).unwrap();
@@ -874,6 +922,8 @@ mod tests {
     struct Seen {
         auth_attempts: AtomicUsize,
         container_logins: StdMutex<Vec<String>>,
+        token_revoked: AtomicBool,
+        held_answer: StdMutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
     }
 
     /// A box in this process: an SSH server with a known host key that lets one public key in
@@ -921,6 +971,20 @@ mod tests {
 
         fn auth_attempts(&self) -> usize {
             self.seen.auth_attempts.load(Ordering::Relaxed)
+        }
+
+        /// What `sail fde unpair` does to a running Mast: every later request is refused.
+        fn revoke_token(&self) {
+            self.seen.token_revoked.store(true, Ordering::Relaxed);
+        }
+
+        /// Holds the API's next answer back: the receiver fires once that request has arrived,
+        /// the sender lets its answer go.
+        fn hold_next_answer(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+            let (arrived, has_arrived) = oneshot::channel();
+            let (release, released) = oneshot::channel();
+            *self.seen.held_answer.lock().unwrap() = Some((arrived, released));
+            (has_arrived, release)
         }
     }
 
@@ -987,7 +1051,7 @@ mod tests {
         ) -> Result<bool, Self::Error> {
             match (host, port) {
                 ("127.0.0.1", 7070) => {
-                    tokio::spawn(serve_api(channel));
+                    tokio::spawn(serve_api(channel, self.seen.clone()));
                     Ok(true)
                 }
                 (CONTAINER_IP, 22) => {
@@ -1027,7 +1091,7 @@ mod tests {
     }
 
     /// The box's API, answered on the forwarded channel: one request, one response, then EOF.
-    async fn serve_api(channel: Channel<Msg>) {
+    async fn serve_api(channel: Channel<Msg>, seen: Arc<Seen>) {
         let mut stream = channel.into_stream();
         let mut request = Vec::new();
         let mut chunk = [0u8; 1024];
@@ -1037,7 +1101,13 @@ mod tests {
                 _ => break,
             }
         }
-        let (status, body) = answer(&String::from_utf8_lossy(&request));
+        let held = seen.held_answer.lock().unwrap().take();
+        if let Some((arrived, released)) = held {
+            let _ = arrived.send(());
+            let _ = released.await;
+        }
+        let revoked = seen.token_revoked.load(Ordering::Relaxed);
+        let (status, body) = answer(&String::from_utf8_lossy(&request), revoked);
         let body = body.to_string();
         let response = format!(
             "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -1047,9 +1117,9 @@ mod tests {
         let _ = stream.shutdown().await;
     }
 
-    fn answer(request: &str) -> (u16, Value) {
+    fn answer(request: &str, revoked: bool) -> (u16, Value) {
         let error = |code: &str, message: &str| json!({ "schema_version": 1, "error": { "code": code, "message": message } });
-        if !request.contains(&format!("Authorization: Bearer {TOKEN}\r\n")) {
+        if revoked || !request.contains(&format!("Authorization: Bearer {TOKEN}\r\n")) {
             return (403, error("invalid_bearer_token", "Bearer token is invalid."));
         }
         match request.split_whitespace().nth(1).unwrap_or_default() {
@@ -1231,7 +1301,10 @@ mod tests {
         let backend = Arc::new(pair(&home.0, &fake.code()).await.ok().unwrap());
         let stored = std::fs::read_to_string(home.path(SETTINGS_FILE)).unwrap();
 
-        backend.token_refused().await.unwrap();
+        fake.revoke_token();
+        let refusal = backend.webview_request("GET", "/v1/whoami", None, None).await.ok().unwrap();
+        assert_eq!(refusal.status, 403);
+        assert!(refusal.body.contains("invalid_bearer_token"), "the webview still reads the box's answer");
 
         let status = connection_status(Ok(backend)).await;
         assert_eq!(status["phase"], "unpaired");
@@ -1239,6 +1312,45 @@ mod tests {
         assert_eq!((&status["paired"], &status["sshHost"]), (&json!(true), &json!("127.0.0.1")));
         assert_eq!(std::fs::read_to_string(home.path(SETTINGS_FILE)).unwrap(), stored);
         assert!(!home.path(".sail/config.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn a_refusal_that_lands_after_another_box_was_paired_reaches_only_the_backend_that_asked() {
+        let (home, first, second) = (TempHome::new(), FakeBox::start().await, FakeBox::start().await);
+        let cli_settings = "{host: devbox, token: sess_cli, server: 'http://localhost:7070'}\n";
+        std::fs::create_dir_all(home.path(".sail")).unwrap();
+        std::fs::write(home.path(".sail/config.yaml"), cli_settings).unwrap();
+        let forgotten = Arc::new(pair(&home.0, &first.code()).await.ok().unwrap());
+
+        first.revoke_token();
+        let (arrived, release) = first.hold_next_answer();
+        let asking = tokio::spawn({
+            let forgotten = forgotten.clone();
+            async move { forgotten.webview_request("GET", "/v1/whoami", None, None).await.ok().map(|answer| answer.status) }
+        });
+        arrived.await.unwrap();
+        forget(&home.0).unwrap();
+        let current = Arc::new(pair(&home.0, &second.code()).await.ok().unwrap());
+        let stored = std::fs::read_to_string(home.path(SETTINGS_FILE)).unwrap();
+        release.send(()).unwrap();
+
+        assert_eq!(asking.await.unwrap(), Some(403));
+        assert!(!forgotten.has_token().await);
+        assert!(current.has_token().await);
+        assert_eq!(connection_status(Ok(current.clone())).await["phase"], "ready");
+        assert_eq!(whoami(&current).await["fde"], "ada");
+        assert_eq!(std::fs::read_to_string(home.path(SETTINGS_FILE)).unwrap(), stored);
+        assert_eq!(std::fs::read_to_string(home.path(".sail/config.yaml")).unwrap(), cli_settings);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_for_the_role_is_not_a_refusal_of_the_token() {
+        let (home, fake) = (TempHome::new(), FakeBox::start().await);
+        let backend = pair(&home.0, &fake.code()).await.ok().unwrap();
+
+        let stopped = backend.webview_request("GET", "/v1/projects/beta/connect", None, None).await.ok().unwrap();
+        assert_eq!(stopped.status, 409);
+        assert!(backend.has_token().await);
     }
 
     #[tokio::test]

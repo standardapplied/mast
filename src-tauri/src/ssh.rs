@@ -357,6 +357,18 @@ pub struct SailResponse {
     pub body: String,
 }
 
+impl SailResponse {
+    /// Whether the box turned the bearer token away. Read from the error code, not the status:
+    /// Sail answers 403 here, and a role's 403 must not read as a dead token.
+    fn refuses_token(&self) -> bool {
+        !(200..300).contains(&self.status)
+            && serde_json::from_str::<serde_json::Value>(&self.body)
+                .ok()
+                .and_then(|body| Some(body.pointer("/error/code")?.as_str()? == "invalid_bearer_token"))
+                .unwrap_or(false)
+    }
+}
+
 /// One entry in a container directory listing.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -558,7 +570,7 @@ impl Backend {
     /// The box refused the token mid-session. On the fallback path that is a logout. A paired
     /// Mac only stops presenting the token: `mast.yaml` is kept so the first-run screen can name
     /// the box whose code was revoked, and nothing is written anywhere.
-    pub async fn token_refused(&self) -> Result<(), Error> {
+    pub(crate) async fn token_refused(&self) -> Result<(), Error> {
         if self.settings.paired() {
             self.drop_token(None).await;
             return Ok(());
@@ -1618,6 +1630,23 @@ impl Backend {
         .map_err(|_| self.timed_out(&format!("{}:{}", self.settings.server_host, self.settings.server_port)))??;
 
         parse_http(&raw)
+    }
+
+    /// A request the webview makes. The box's answer goes back as it came, and a refusal of
+    /// the token is acted on here first, by the backend that presented it: one that arrives
+    /// after its box was forgotten or replaced never reaches the backend that took its place.
+    pub async fn webview_request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+        if_match: Option<String>,
+    ) -> Result<SailResponse, Error> {
+        let response = self.sail_request(method, path, body, if_match).await?;
+        if response.refuses_token() {
+            self.token_refused().await?;
+        }
+        Ok(response)
     }
 
     /// Open a long-lived HTTP GET to the control plane and stream its body to the

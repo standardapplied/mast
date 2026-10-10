@@ -167,6 +167,10 @@ export class EventStream {
         continue;
       }
 
+      if (this.stopped) {
+        response.cancel();
+        break;
+      }
       if (response.status === 503) {
         const retryAfter = Number(response.header("Retry-After"));
         this.failures++;

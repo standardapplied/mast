@@ -147,15 +147,32 @@ export function App({
     });
   }, [gateway]);
 
+  // Which box the live connection is to. A Mac can change box without ever leaving
+  // ready (forgetting a paired box lands straight on the CLI's settings when they
+  // connect), so everything read from a box is keyed by this, not by the phase.
+  const ready = status?.phase === "ready";
+  const box = status?.phase === "ready" ? `${status.paired ? "paired" : "cli"} ${status.host ?? ""}` : null;
+  const syncStatus = useSyncStatus(gateway, ready);
+
   // Load the caller's identity once the connection is live, and drop it the
   // moment it isn't (logout → unauthenticated), so the menu never shows a stale
   // name. Refetched automatically when a login flips the phase back to ready.
-  const ready = status?.phase === "ready";
-  const syncStatus = useSyncStatus(gateway, ready);
   useEffect(() => {
-    if (!ready) return void setIdentity(null);
+    if (!box) return void setIdentity(null);
     void gateway.whoami().then((r) => setIdentity(r.ok ? r.value : null));
-  }, [gateway, ready]);
+  }, [gateway, box]);
+
+  // Another box's rooms, specs and runs are not this one's: the catalog starts
+  // over, and the effect below seeds it from the box now connected.
+  const heldBox = useRef(box);
+  useEffect(() => {
+    if (!box || box === heldBox.current) return;
+    if (heldBox.current) {
+      setRoomRoute(null);
+      catalogStore.reset();
+    }
+    heldBox.current = box;
+  }, [box]);
 
   // Presence rides the app-wide event stream — no polling. One runs listing on
   // connect seeds chips for agents already mid-work (or mid-silence); after
@@ -170,7 +187,7 @@ export function App({
   }, []);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!box) return;
     connectCatalog(gateway);
     const disconnectPresence = connectPresence(gateway, presenceStore);
     const disconnectSessions = connectSessions(gateway, sessionStore);
@@ -178,7 +195,7 @@ export function App({
       disconnectPresence();
       disconnectSessions();
     };
-  }, [gateway, ready]);
+  }, [gateway, box]);
 
   useEffect(() => {
     const onHashChange = () => {

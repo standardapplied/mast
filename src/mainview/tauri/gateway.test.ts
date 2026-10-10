@@ -11,7 +11,10 @@ import { createTauriGateway } from "./gateway";
 type Invocation = { cmd: string; args: Record<string, unknown> };
 
 type TauriWindow = Window & {
-  __TAURI_INTERNALS__?: { invoke: (...args: unknown[]) => unknown; transformCallback?: () => number };
+  __TAURI_INTERNALS__?: {
+    invoke: (...args: unknown[]) => unknown;
+    transformCallback?: (callback: (event: { payload: unknown }) => void) => number;
+  };
 };
 
 function stubInvoke(response: { status: number; body: string }): Invocation[] {
@@ -288,24 +291,50 @@ describe("Tauri gateway pairing wire", () => {
     }),
   };
 
-  /** A core that answers each command by name; `plugin:event|listen` is the status subscription. */
+  const ready = {
+    phase: "ready",
+    server: "127.0.0.1:7070",
+    sshHost: "34.1.2.3",
+    paired: true,
+    tokenPresent: true,
+    tokenKind: "api",
+  };
+  const revoked = { ...ready, phase: "unpaired", tokenPresent: false, tokenKind: "none", detail: REVOKED };
+
+  /** Speaks as the core on a Tauri event the gateway is listening to. */
+  let emit: (event: string, payload: unknown) => void = () => {};
+
+  const flush = async () => {
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+  };
+
+  /** A core that answers each command by name and delivers what `emit` says to whoever listens. */
   function stubCore(answers: Record<string, (args: Record<string, unknown>) => unknown>): Invocation[] {
     const calls: Invocation[] = [];
+    const callbacks: Array<(event: { payload: unknown }) => void> = [];
+    const listening = new Map<string, number>();
+    emit = (event, payload) => {
+      const handler = listening.get(event);
+      if (handler !== undefined) callbacks[handler]!({ payload });
+    };
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (event) => listening.delete(event) };
     (window as TauriWindow).__TAURI_INTERNALS__ = {
-      transformCallback: () => 1,
+      transformCallback: (callback) => callbacks.push(callback) - 1,
       invoke: (cmd: unknown, args: unknown) => {
         const name = cmd as string;
-        if (name.startsWith("plugin:event|")) return Promise.resolve(1);
-        calls.push({ cmd: name, args: args as Record<string, unknown> });
+        const given = args as Record<string, unknown>;
+        if (name === "plugin:event|listen") listening.set(given.event as string, given.handler as number);
+        if (name.startsWith("plugin:event|")) return Promise.resolve(given.handler ?? null);
+        calls.push({ cmd: name, args: given });
         const answer = answers[name];
         if (!answer) return Promise.reject(`unexpected command ${name}`);
         try {
-          return Promise.resolve(answer(args as Record<string, unknown>));
+          return Promise.resolve(answer(given));
         } catch (refusal) {
           return Promise.reject(refusal);
         }
       },
-    } as TauriWindow["__TAURI_INTERNALS__"];
+    };
     return calls;
   }
 
@@ -340,21 +369,17 @@ describe("Tauri gateway pairing wire", () => {
     expect(revoked).toMatchObject({ phase: "unpaired", paired: true, host: "34.1.2.3", detail: REVOKED });
   });
 
-  test("a token the box refuses is the core's to handle: it is told once, never logged out, and its status is pushed", async () => {
+  test("a token the box refuses was the core's to act on: the gateway only reads its status again, once, and pushes it", async () => {
     let refused = false;
     const calls = stubCore({
-      sail_request: () => refusedToken,
-      token_refused: () => {
+      sail_request: () => {
         refused = true;
-        return null;
+        return refusedToken;
       },
-      connection_status: () =>
-        refused
-          ? { phase: "unpaired", server: "127.0.0.1:7070", sshHost: "34.1.2.3", paired: true, tokenPresent: false, tokenKind: "none", detail: REVOKED }
-          : { phase: "ready", server: "127.0.0.1:7070", sshHost: "34.1.2.3", paired: true, tokenPresent: true, tokenKind: "api" },
+      connection_status: () => (refused ? revoked : ready),
     });
     const gateway = createTauriGateway();
-    const revoked = new Promise<ConnectionStatus>((resolve) => {
+    const pushed = new Promise<ConnectionStatus>((resolve) => {
       gateway.onConnectionStatus((status) => {
         if (status.phase === "unpaired") resolve(status);
       });
@@ -363,9 +388,48 @@ describe("Tauri gateway pairing wire", () => {
     const [first, second] = await Promise.all([gateway.whoami(), gateway.listProjects()]);
     expect(first.ok || second.ok).toBe(false);
 
-    expect(await revoked).toMatchObject({ phase: "unpaired", paired: true, host: "34.1.2.3", detail: REVOKED });
-    expect(calls.filter((call) => call.cmd === "token_refused")).toHaveLength(1);
-    expect(calls.some((call) => call.cmd === "logout")).toBe(false);
+    expect(await pushed).toMatchObject({ phase: "unpaired", paired: true, host: "34.1.2.3", detail: REVOKED });
+    expect(calls.map((call) => call.cmd).sort()).toEqual([
+      "connection_status",
+      "connection_status",
+      "sail_request",
+      "sail_request",
+    ]);
+  });
+
+  test("a change of box starts the event cursor again, so the next box's lower event ids are heard", async () => {
+    const streams: string[] = [];
+    const closed: string[] = [];
+    stubCore({
+      connection_status: () => ready,
+      pair: () => null,
+      forget_box: () => null,
+      stream_open: ({ id }) => {
+        streams.push(id as string);
+        emit(`stream://open/${id}`, { status: 200 });
+        return null;
+      },
+      stream_close: ({ id }) => closed.push(id as string),
+    });
+    const says = (stream: string | undefined, id: number) =>
+      emit(`stream://data/${stream}`, `id: ${id}\ndata: ${JSON.stringify({ v: 1, id, type: "spec_updated" })}\n\n`);
+    const gateway = createTauriGateway();
+    const heard: Array<number | undefined> = [];
+    gateway.onEvent((event) => heard.push(event.id));
+    await flush();
+
+    says(streams[0], 1000);
+    await flush();
+    expect(await gateway.forgetBox()).toEqual({ ok: true });
+    expect(await gateway.pair("sail1.good")).toEqual({ ok: true });
+    await flush();
+    expect(streams).toHaveLength(3);
+    expect(closed, "each box's stream ends with its box").toEqual(streams.slice(0, 2));
+
+    says(streams[2], 1);
+    await flush();
+    expect(heard).toEqual([1000, 1]);
+    expect((await gateway.connection()).stream).toBe("connected");
   });
 
   test("preview, pair and forget carry the code in and the core's sentence out", async () => {
