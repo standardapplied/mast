@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { ConnectCodeCheck, ConnectionStatus } from "../shared/sail-models";
 import { App } from "./App";
@@ -884,6 +884,7 @@ describe("App pairing", () => {
       afterForget?: ConnectionStatus;
       preview?: (code: string) => Promise<ConnectCodeCheck>;
     } = {},
+    surfaces: Pick<Parameters<typeof App>[0], "terminal" | "deck"> = {},
   ) {
     gateway = createDemoGateway();
     let current = initial;
@@ -938,7 +939,7 @@ describe("App pairing", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
-    act(() => root.render(<App gateway={pairing as never} theme={theme} />));
+    act(() => root.render(<App gateway={pairing as never} theme={theme} {...surfaces} />));
     await flush();
     const push = async (status: ConnectionStatus) => {
       current = status;
@@ -1104,6 +1105,50 @@ describe("App pairing", () => {
     expect(at("user-menu-panel")!.textContent).toContain("uday@example.com");
     expect(at("user-menu-panel")!.textContent).not.toContain("ada@example.com");
     expect(at("user-menu-forget")).toBeNull();
+  });
+
+  test("forgetting a box for the CLI's settings takes down what was open on it, and opens none of it on the next box", async () => {
+    const mounted: string[] = [];
+    const left: string[] = [];
+    const Surface = ({ name }: { name: string }) => {
+      useEffect(() => {
+        mounted.push(name);
+        return () => void left.push(name);
+      }, [name]);
+      return null;
+    };
+    await renderPairing(
+      PAIRED_READY,
+      { afterForget: { ...PAIRED_READY, paired: false, host: "devbox", tokenKind: "session" } },
+      {
+        terminal: (openRoomTerminal) => (
+          <>
+            <Surface name="terminal" />
+            <button
+              type="button"
+              data-testid="open-room"
+              onClick={() => openRoomTerminal({ roomId: "room-of-the-paired-box", project: "sail", title: "Design" })}
+            />
+          </>
+        ),
+        deck: { Workbench: ({ roomId }) => <Surface name={roomId} /> },
+      },
+    );
+    await click("nav-terminal");
+    await click("open-room");
+    expect(mounted).toEqual(["terminal", "room-of-the-paired-box"]);
+
+    await click("user-menu-trigger");
+    await click("user-menu-forget");
+
+    expect(left.toSorted()).toEqual(["room-of-the-paired-box", "terminal"]);
+    expect(mounted, "the terminal starts over, and the forgotten box's room is not opened on this one").toEqual([
+      "terminal",
+      "room-of-the-paired-box",
+      "terminal",
+    ]);
+    expect(at("view-room-terminal")).toBeNull();
+    expect(at("view-rooms")).not.toBeNull();
   });
 
   test("a box that cannot be forgotten says why in the menu, and the workspace stays", async () => {

@@ -22,7 +22,7 @@ import { clipboardPolicy } from "./terminal/clipboardPolicy";
 import { terminalFontSize } from "./terminal/fontSize";
 import { latencyChip } from "./terminal/latency";
 import { scrollbackBudget } from "./terminal/scrollbackBudget";
-import { connectSessions, sessionStore } from "./terminal/sessionStore";
+import { boxKeyOf, connectSessions, sessionStore } from "./terminal/sessionStore";
 import type { ThemeController } from "./theme";
 import type { Updater } from "./updater";
 
@@ -151,7 +151,7 @@ export function App({
   // ready (forgetting a paired box lands straight on the CLI's settings when they
   // connect), so everything read from a box is keyed by this, not by the phase.
   const ready = status?.phase === "ready";
-  const box = status?.phase === "ready" ? `${status.paired ? "paired" : "cli"} ${status.host ?? ""}` : null;
+  const box = status?.phase === "ready" ? boxKeyOf(status) : null;
   const syncStatus = useSyncStatus(gateway, ready);
 
   // Load the caller's identity once the connection is live, and drop it the
@@ -162,17 +162,20 @@ export function App({
     void gateway.whoami().then((r) => setIdentity(r.ok ? r.value : null));
   }, [gateway, box]);
 
-  // Another box's rooms, specs and runs are not this one's: the catalog starts
-  // over, and the effect below seeds it from the box now connected.
-  const heldBox = useRef(box);
+  // Another box's rooms, specs, runs, tabs and files are not this one's. The workspace
+  // comes down for the one render in which the box changed and goes up again over an
+  // empty catalog, which the effect below seeds from the box now connected: nothing
+  // mounted or selected on the earlier box is left to act on this one.
+  const [heldBox, setHeldBox] = useState(box);
+  const changingBox = !!box && !!heldBox && box !== heldBox;
   useEffect(() => {
-    if (!box || box === heldBox.current) return;
-    if (heldBox.current) {
+    if (!box || box === heldBox) return;
+    if (heldBox) {
       setRoomRoute(null);
       catalogStore.reset();
     }
-    heldBox.current = box;
-  }, [box]);
+    setHeldBox(box);
+  }, [box, heldBox]);
 
   // Presence rides the app-wide event stream — no polling. One runs listing on
   // connect seeds chips for agents already mid-work (or mid-silence); after
@@ -295,7 +298,7 @@ export function App({
   // credential (needs sign-in, or a connect code), or first-connect probing/failure.
   const firstConnectBlocking =
     !everReady && (!status || status.phase !== "ready");
-  const showWorkspace = !needsCredential && !firstConnectBlocking;
+  const showWorkspace = !needsCredential && !firstConnectBlocking && !changingBox;
   const connectGate =
     status && (needsCredential || status.phase === "no-host" || status.phase === "failed") ? (
       <ConnectScreen

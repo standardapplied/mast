@@ -651,9 +651,13 @@ function sameSize(a: LaneFact["ptySize"], b: LaneFact["ptySize"]): boolean {
 /** The app-wide instance; wired to the gateway in App via {@link connectSessions}. */
 export const sessionStore = new SessionStore();
 
-/** The box key: the connection target — one SSH backend, one box. */
-export function boxKeyOf(status: Pick<ConnectionStatus, "server">): string {
-  return status.server;
+/**
+ * The box key: which box the connection is to. `server` is the API address as the box sees
+ * it, loopback on nearly every box, so the host and the route (paired or the CLI's settings)
+ * are what tell two boxes apart.
+ */
+export function boxKeyOf(status: Pick<ConnectionStatus, "server" | "host" | "paired">): string {
+  return JSON.stringify([status.paired ?? false, status.host ?? "", status.server]);
 }
 
 /**
