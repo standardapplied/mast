@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { ConnectionStatus } from "../../shared/sail-models";
 import { createTauriGateway } from "./gateway";
 
 /**
@@ -9,7 +10,9 @@ import { createTauriGateway } from "./gateway";
 
 type Invocation = { cmd: string; args: Record<string, unknown> };
 
-type TauriWindow = Window & { __TAURI_INTERNALS__?: { invoke: (...args: unknown[]) => unknown } };
+type TauriWindow = Window & {
+  __TAURI_INTERNALS__?: { invoke: (...args: unknown[]) => unknown; transformCallback?: () => number };
+};
 
 function stubInvoke(response: { status: number; body: string }): Invocation[] {
   const calls: Invocation[] = [];
@@ -271,5 +274,129 @@ describe("Tauri gateway prune wire", () => {
       },
     ]);
     expect(result).toEqual({ ok: true, value: report, etag: undefined });
+  });
+});
+
+describe("Tauri gateway pairing wire", () => {
+  const REVOKED = "This code was revoked on the box; ask for a new one.";
+  const refusedToken = {
+    status: 403,
+    etag: null,
+    body: JSON.stringify({
+      schema_version: 1,
+      error: { code: "invalid_bearer_token", message: "Bearer token is invalid." },
+    }),
+  };
+
+  /** A core that answers each command by name; `plugin:event|listen` is the status subscription. */
+  function stubCore(answers: Record<string, (args: Record<string, unknown>) => unknown>): Invocation[] {
+    const calls: Invocation[] = [];
+    (window as TauriWindow).__TAURI_INTERNALS__ = {
+      transformCallback: () => 1,
+      invoke: (cmd: unknown, args: unknown) => {
+        const name = cmd as string;
+        if (name.startsWith("plugin:event|")) return Promise.resolve(1);
+        calls.push({ cmd: name, args: args as Record<string, unknown> });
+        const answer = answers[name];
+        if (!answer) return Promise.reject(`unexpected command ${name}`);
+        try {
+          return Promise.resolve(answer(args as Record<string, unknown>));
+        } catch (refusal) {
+          return Promise.reject(refusal);
+        }
+      },
+    } as TauriWindow["__TAURI_INTERNALS__"];
+    return calls;
+  }
+
+  test("a fresh Mac reads as unpaired, and a paired one names its box", async () => {
+    stubCore({
+      connection_status: () => ({
+        phase: "unpaired",
+        server: "",
+        paired: false,
+        tokenPresent: false,
+        tokenKind: "none",
+        detail: null,
+      }),
+    });
+    const fresh = await createTauriGateway().connection();
+    expect(fresh.phase).toBe("unpaired");
+    expect(fresh.paired).toBe(false);
+    expect(fresh.detail).toBeUndefined();
+
+    stubCore({
+      connection_status: () => ({
+        phase: "unpaired",
+        server: "127.0.0.1:7070",
+        sshHost: "34.1.2.3",
+        paired: true,
+        tokenPresent: false,
+        tokenKind: "none",
+        detail: REVOKED,
+      }),
+    });
+    const revoked = await createTauriGateway().connection();
+    expect(revoked).toMatchObject({ phase: "unpaired", paired: true, host: "34.1.2.3", detail: REVOKED });
+  });
+
+  test("a token the box refuses is the core's to handle: it is told once, never logged out, and its status is pushed", async () => {
+    let refused = false;
+    const calls = stubCore({
+      sail_request: () => refusedToken,
+      token_refused: () => {
+        refused = true;
+        return null;
+      },
+      connection_status: () =>
+        refused
+          ? { phase: "unpaired", server: "127.0.0.1:7070", sshHost: "34.1.2.3", paired: true, tokenPresent: false, tokenKind: "none", detail: REVOKED }
+          : { phase: "ready", server: "127.0.0.1:7070", sshHost: "34.1.2.3", paired: true, tokenPresent: true, tokenKind: "api" },
+    });
+    const gateway = createTauriGateway();
+    const revoked = new Promise<ConnectionStatus>((resolve) => {
+      gateway.onConnectionStatus((status) => {
+        if (status.phase === "unpaired") resolve(status);
+      });
+    });
+
+    const [first, second] = await Promise.all([gateway.whoami(), gateway.listProjects()]);
+    expect(first.ok || second.ok).toBe(false);
+
+    expect(await revoked).toMatchObject({ phase: "unpaired", paired: true, host: "34.1.2.3", detail: REVOKED });
+    expect(calls.filter((call) => call.cmd === "token_refused")).toHaveLength(1);
+    expect(calls.some((call) => call.cmd === "logout")).toBe(false);
+  });
+
+  test("preview, pair and forget carry the code in and the core's sentence out", async () => {
+    const sentence = "The box at 34.1.2.3 refused this code (Bearer token is invalid); ask for a new one.";
+    const calls = stubCore({
+      connect_code_preview: ({ code }) => {
+        if (code !== "sail1.good") throw "That does not look like a connect code; paste the whole code, starting with sail1.";
+        return { handle: "ada", email: "ada@example.com", host: "34.1.2.3" };
+      },
+      pair: () => {
+        throw sentence;
+      },
+      forget_box: () => null,
+    });
+    const gateway = createTauriGateway();
+
+    expect(await gateway.previewConnectCode("sail1.good")).toEqual({
+      ok: true,
+      value: { handle: "ada", email: "ada@example.com", host: "34.1.2.3" },
+    });
+    expect(await gateway.previewConnectCode("nope")).toEqual({
+      ok: false,
+      detail: "That does not look like a connect code; paste the whole code, starting with sail1.",
+    });
+    expect(await gateway.pair("sail1.good")).toEqual({ ok: false, detail: sentence });
+    expect(await gateway.forgetBox()).toEqual({ ok: true });
+    expect(calls.map((call) => [call.cmd, call.args])).toEqual([
+      ["connect_code_preview", { code: "sail1.good" }],
+      ["connect_code_preview", { code: "nope" }],
+      ["pair", { code: "sail1.good" }],
+      ["forget_box", {}],
+    ]);
   });
 });

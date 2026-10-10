@@ -5,6 +5,7 @@ import type {
   AgentListResponse,
   AgentLogResponse,
   AgentLogRole,
+  ConnectCodeCheck,
   ConnectionStatus,
   SyncStatus,
   DispatchRequest,
@@ -160,6 +161,12 @@ export type Gateway = {
   /** Begin following the spec's newest run log live from `since` (0 = live tail). */
   followAgentLog(specId: string, role: AgentLogRole, since: number): AgentLogHandle;
   connection(): Promise<ConnectionStatus>;
+  /** Parse a pasted connect code without connecting: who and where, or why it is not one. */
+  previewConnectCode(code: string): Promise<ConnectCodeCheck>;
+  /** Connect with a code; the settings are kept only once the box has answered. */
+  pair(code: string): Promise<{ ok: boolean; detail?: string }>;
+  /** Delete this Mac's pairing (settings and key). The box's side is untouched. */
+  forgetBox(): Promise<{ ok: boolean; detail?: string }>;
   login(): Promise<{ ok: boolean; detail?: string }>;
   logout(): Promise<void>;
   diagnostics(): Promise<{ report: string; logPath: string }>;
@@ -1217,6 +1224,18 @@ export function createDemoGateway(): DemoGateway {
 
     async connection() {
       return DEMO_STATUS;
+    },
+
+    async previewConnectCode() {
+      return { ok: false, detail: "The browser preview has no box to pair with." };
+    },
+
+    async pair() {
+      return { ok: false, detail: "The browser preview has no box to pair with." };
+    },
+
+    async forgetBox() {
+      return { ok: true };
     },
 
     async login() {
