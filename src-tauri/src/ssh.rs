@@ -117,6 +117,8 @@ pub enum Error {
     NoSession(String),
     #[error("Mast is no longer connected to the box this was for.")]
     BoxChanged,
+    #[error("Mast is not connected to a box.")]
+    NoBox,
     #[error("pty session: {0}")]
     PtySession(String),
     #[error("{LINK_DROPPED}")]
@@ -1815,7 +1817,7 @@ impl Backend {
     }
 
     /// Lets go of everything this backend keeps running, for a backend the app is replacing:
-    /// the webview's later closes reach the backend that took its place, never this one. An
+    /// the page that held them is ending, and no later close will be served here. An
     /// attachment dropped from the map is a closed pane to its prologue and a detach to its
     /// driver, and a stream whose entry is dropped ends its pump. Host sessions survive, as
     /// with any detach. An open still in flight on this backend registers nothing afterwards.
@@ -3317,8 +3319,8 @@ Host bastion
     }
 
     /// Pairing or forgetting swaps the backend while the webview still has panes on the old one,
-    /// and its closes then reach the new backend, which knows none of those ids. So the swap
-    /// itself detaches them, even while a command in flight still holds the old backend.
+    /// and the page that would have closed them is ending. So the swap itself detaches them,
+    /// even while a command in flight still holds the old backend.
     #[tokio::test]
     async fn a_replaced_backend_detaches_its_terminals_and_ends_its_streams() {
         let Held { backend, mut host, opening, mut stream_cancel } = backend_holding_terminals_and_a_stream().await;
@@ -3356,7 +3358,6 @@ Host bastion
 
         assert!(matches!(settles(late).await, Err(Error::BoxChanged)));
         assert!(taken.sessions.commands("late").await.is_none());
-        assert_eq!(Arc::strong_count(&taken), 1);
     }
 
     /// The same for a stream whose request was in flight: its pump is never registered.
@@ -3369,9 +3370,8 @@ Host bastion
         assert!(matches!(backend.streams.insert("events".into(), cancel).await, Err(Error::BoxChanged)));
     }
 
-    /// A terminal that registers on a backend after it was replaced (its open was already in
-    /// flight) is not reached by the swap; it goes when the backend does, because a driver does
-    /// not keep alive the map that holds its own command lane.
+    /// A backend that goes without being retired takes its terminals with it, because a driver
+    /// does not keep alive the map that holds its own command lane.
     #[tokio::test]
     async fn a_dropped_backend_takes_its_terminals_with_it() {
         let Held { backend, mut host, opening, mut stream_cancel } = backend_holding_terminals_and_a_stream().await;

@@ -10,6 +10,7 @@ mod pty_probe;
 mod session_frames;
 mod ssh;
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -19,16 +20,18 @@ use tauri::http::HeaderMap;
 use tauri::ipc::{Channel, CommandArg, CommandItem, InvokeBody, InvokeError, InvokeResponseBody, Request};
 use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_opener::OpenerExt;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 /// Lazily-built backend. Construction reads the settings on disk (`~/.sail/mast.yaml`, else
-/// the CLI's `~/.sail/config.yaml`); if neither is there the app still renders and the first
-/// real call surfaces a clear error instead of panicking at startup. The slot is replaceable:
-/// pairing installs a backend built from a connect code, forgetting the box empties it. Held
-/// behind an `Arc` so the passkey ceremony can hand a clone to its background port-forward task.
+/// the CLI's `~/.sail/config.yaml`); if neither is there the app still renders and the status
+/// read says why instead of panicking at startup. The slot is replaceable: pairing installs a
+/// backend built from a connect code, forgetting the box empties it. Held behind an `Arc` so
+/// the passkey ceremony can hand a clone to its background port-forward task.
 #[derive(Default)]
 struct AppState {
     backend: Mutex<Option<Arc<Backend>>>,
+    /// Held across a change of box (see [`AppState::change`]).
+    changing: Mutex<()>,
     /// Whether this run of the app forgot a box: the first-run screen then says the pairing is
     /// still on the box. Pairing again takes it back.
     forgotten: AtomicBool,
@@ -50,11 +53,54 @@ impl AppState {
 
     /// The backend a command was sent for, or a refusal: never the one that took its place,
     /// and never one built to answer it.
-    async fn backend_for(&self, generation: Option<u64>) -> Result<Arc<Backend>, ssh::Error> {
+    async fn backend_for(&self, page: Option<u64>) -> Result<Arc<Backend>, ssh::Error> {
+        let named = page.ok_or(ssh::Error::NoBox)?;
         match self.backend.lock().await.as_ref() {
-            Some(backend) if Some(backend.generation()) == generation => Ok(backend.clone()),
+            Some(backend) if backend.generation() == named => Ok(backend.clone()),
             _ => Err(ssh::Error::BoxChanged),
         }
+    }
+
+    /// The connection as the webview reads it, and whether this run forgot a box.
+    async fn status(&self, loaded: Result<Arc<Backend>, ssh::Error>) -> serde_json::Value {
+        let mut status = ssh::connection_status(loaded).await;
+        status["forgotten"] = json!(self.forgotten.load(Ordering::Relaxed));
+        status
+    }
+
+    /// Admits one change of box at a time (pairing, forgetting), and only from the page whose
+    /// backend is still the app's, or from a page with none while the app has none. A Connect
+    /// and a Forget asked of one page happen in turn, and the second finds its box gone: it
+    /// neither forgets the box the first one paired nor pairs over what the first one forgot.
+    async fn change(&self, page: Option<u64>) -> Result<MutexGuard<'_, ()>, ssh::Error> {
+        let alone = self.changing.lock().await;
+        let held = self.backend.lock().await.as_ref().map(|backend| backend.generation());
+        if held == page {
+            Ok(alone)
+        } else {
+            Err(ssh::Error::BoxChanged)
+        }
+    }
+
+    /// Connects with a pasted code. Nothing is written until the box has answered `whoami`;
+    /// then the settings land in `~/.sail/mast.yaml` and the backend that proved them becomes
+    /// the app's.
+    async fn pair(&self, page: Option<u64>, home: &Path, code: &str) -> Result<(), ssh::Error> {
+        let _alone = self.change(page).await?;
+        let backend = pairing::pair(home, code).await?;
+        self.replace(Some(Arc::new(backend))).await;
+        self.forgotten.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Forgets the paired box on this Mac: `mast.yaml` and the key file go, and the next status
+    /// read starts from whatever settings remain. The pairing on the box is untouched.
+    async fn forget(&self, page: Option<u64>, home: &Path) -> Result<(), ssh::Error> {
+        let _alone = self.change(page).await?;
+        pairing::forget(home)?;
+        self.replace(None).await;
+        self.forgotten.store(true, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Swaps the backend, and the one it replaces lets go of its terminals and streams and takes
@@ -73,22 +119,24 @@ const BACKEND_HEADER: &str = "x-mast-backend";
 /// A command's claim on the backend it was sent for. A page of the webview is for one backend,
 /// the first its status named, and says so on every command; the command is served from that
 /// backend or refused. Whatever a page began on one box (a kill waiting on a lookup, a save, a
-/// close) therefore cannot land on the box that replaced it, however late it arrives.
+/// close, a Connect, a Forget) therefore cannot land on the box that replaced it, however late
+/// it arrives. Only the status read, which is how a page learns its backend, takes the app's
+/// state unbound.
 struct Bound<'r> {
     state: State<'r, AppState>,
-    generation: Option<u64>,
+    page: Option<u64>,
 }
 
 impl Bound<'_> {
     async fn backend(&self) -> Result<Arc<Backend>, ssh::Error> {
-        self.state.backend_for(self.generation).await
+        self.state.backend_for(self.page).await
     }
 }
 
 impl<'r, 'de: 'r, R: Runtime> CommandArg<'de, R> for Bound<'r> {
     fn from_command(command: CommandItem<'de, R>) -> Result<Self, InvokeError> {
-        let generation = named_backend(command.message.headers());
-        Ok(Bound { state: State::from_command(command)?, generation })
+        let page = named_backend(command.message.headers());
+        Ok(Bound { state: State::from_command(command)?, page })
     }
 }
 
@@ -113,9 +161,7 @@ async fn sail_request(
 
 #[tauri::command]
 async fn connection_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let mut status = ssh::connection_status(state.backend().await).await;
-    status["forgotten"] = json!(state.forgotten.load(Ordering::Relaxed));
-    Ok(status)
+    Ok(state.status(state.backend().await).await)
 }
 
 /// What a pasted connect code names (who, which box), or the one sentence saying why it is not
@@ -125,24 +171,16 @@ fn connect_code_preview(code: String) -> Result<pairing::CodePreview, String> {
     Ok(pairing::ConnectCode::parse(&code)?.preview())
 }
 
-/// Connect with a pasted code. Nothing is written until the box has answered `whoami`; then the
-/// settings land in `~/.sail/mast.yaml` and the backend that proved them becomes the app's.
+/// Connect with a pasted code, for the page that asked (see [`AppState::pair`]).
 #[tauri::command]
-async fn pair(state: State<'_, AppState>, code: String) -> Result<(), String> {
-    let backend = pairing::pair(&ssh::local_home()?, &code).await?;
-    state.replace(Some(Arc::new(backend))).await;
-    state.forgotten.store(false, Ordering::Relaxed);
-    Ok(())
+async fn pair(state: Bound<'_>, code: String) -> Result<(), String> {
+    state.state.pair(state.page, &ssh::local_home()?, &code).await.map_err(String::from)
 }
 
-/// Forget the paired box on this Mac: `mast.yaml` and the key file go, and the next status read
-/// starts from whatever settings remain. The pairing on the box is untouched.
+/// Forget the paired box on this Mac, for the page that asked (see [`AppState::forget`]).
 #[tauri::command]
-async fn forget_box(state: State<'_, AppState>) -> Result<(), String> {
-    pairing::forget(&ssh::local_home()?)?;
-    state.replace(None).await;
-    state.forgotten.store(true, Ordering::Relaxed);
-    Ok(())
+async fn forget_box(state: Bound<'_>) -> Result<(), String> {
+    state.state.forget(state.page, &ssh::local_home()?).await.map_err(String::from)
 }
 
 /// Run the passkey sign-in ceremony (system browser → Touch ID → loopback
@@ -773,13 +811,24 @@ mod bound_command_tests {
         let state = AppState::default();
         let first = backend_to("first");
         state.replace(Some(first.clone())).await;
-        assert!(matches!(state.backend_for(named_backend(&HeaderMap::new())).await, Err(ssh::Error::BoxChanged)));
-        assert!(matches!(state.backend_for(named_backend(&naming("not a number"))).await, Err(ssh::Error::BoxChanged)));
+        assert!(matches!(state.backend_for(named_backend(&HeaderMap::new())).await, Err(ssh::Error::NoBox)));
+        assert!(matches!(state.backend_for(named_backend(&naming("not a number"))).await, Err(ssh::Error::NoBox)));
 
         state.replace(None).await;
 
         assert!(matches!(state.backend_for(Some(first.generation())).await, Err(ssh::Error::BoxChanged)));
+        assert!(matches!(state.backend_for(None).await, Err(ssh::Error::NoBox)));
         assert!(state.backend.lock().await.is_none());
+    }
+
+    /// A command that took the app's state unbound would be served by whichever backend is
+    /// there when it arrives. The status read is how a page learns its backend, so it alone may.
+    #[test]
+    fn only_the_status_read_takes_the_app_state_unbound() {
+        let unbound = concat!("State<'_, ", "AppState>");
+        let source = include_str!("lib.rs");
+        assert_eq!(source.matches(unbound).count(), 1);
+        assert!(source.contains(&format!("async fn connection_status(state: {unbound})")));
     }
 }
 

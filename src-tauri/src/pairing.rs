@@ -1357,6 +1357,67 @@ mod tests {
         assert_ne!(a["backend"], b["backend"]);
     }
 
+    async fn held_by(state: &crate::AppState) -> Option<Arc<Backend>> {
+        state.backend.lock().await.clone()
+    }
+
+    /// Connect, then Forget, both clicked on the revoked screen while the code is still
+    /// connecting: the forget waits its turn and then finds the box it was for replaced, so it
+    /// neither runs beside the pairing nor forgets the box that code paired.
+    #[tokio::test]
+    async fn a_forget_asked_while_a_code_is_connecting_does_not_forget_the_box_that_code_pairs() {
+        let (home, first, second) = (TempHome::new(), FakeBox::start().await, FakeBox::start().await);
+        let state = crate::AppState::default();
+        state.pair(None, &home.0, &first.code()).await.ok().unwrap();
+        let page = held_by(&state).await.map(|backend| backend.generation());
+        assert!(matches!(state.forget(None, &home.0).await, Err(Error::BoxChanged)), "a page names its box");
+
+        let (arrived, release) = second.hold_next_answer();
+        let code = second.code();
+        let connecting = state.pair(page, &home.0, &code);
+        let forgetting = state.forget(page, &home.0);
+        tokio::pin!(connecting, forgetting);
+        tokio::select! {
+            biased;
+            _ = &mut connecting => panic!("the box's answer was held"),
+            _ = arrived => {}
+        }
+        tokio::select! {
+            biased;
+            _ = &mut forgetting => panic!("a forget ran beside a pairing"),
+            _ = std::future::ready(()) => {}
+        }
+        release.send(()).unwrap();
+        connecting.await.ok().unwrap();
+
+        assert!(matches!(forgetting.await, Err(Error::BoxChanged)));
+        assert_eq!(ConnectionSettings::load(&home.0).ok().unwrap().ssh_port(), Some(second.port));
+        assert_eq!(held_by(&state).await.unwrap().describe().ssh_port(), Some(second.port));
+        assert_eq!(state.status(Ok(held_by(&state).await.unwrap())).await["forgotten"], false);
+    }
+
+    /// The other order: the forget wins, and the code that was for the forgotten box's page
+    /// dials nothing and writes nothing. The page that follows names no box and can pair.
+    #[tokio::test]
+    async fn a_code_asked_of_a_page_whose_box_was_forgotten_is_refused_and_writes_nothing() {
+        let (home, first, second) = (TempHome::new(), FakeBox::start().await, FakeBox::start().await);
+        let state = crate::AppState::default();
+        state.pair(None, &home.0, &first.code()).await.ok().unwrap();
+        let page = held_by(&state).await.map(|backend| backend.generation());
+
+        state.forget(page, &home.0).await.ok().unwrap();
+
+        assert!(matches!(state.pair(page, &home.0, &second.code()).await, Err(Error::BoxChanged)));
+        assert_eq!(second.auth_attempts(), 0);
+        assert!(!home.path(SETTINGS_FILE).exists());
+        let status = state.status(ConnectionSettings::load(&home.0).map(|settings| Arc::new(Backend::new(settings)))).await;
+        assert_eq!((&status["phase"], &status["forgotten"]), (&json!("unpaired"), &json!(true)));
+
+        state.pair(None, &home.0, &second.code()).await.ok().unwrap();
+        let status = state.status(Ok(held_by(&state).await.unwrap())).await;
+        assert_eq!((&status["phase"], &status["forgotten"]), (&json!("ready"), &json!(false)));
+    }
+
     #[tokio::test]
     async fn a_refusal_for_the_role_is_not_a_refusal_of_the_token() {
         let (home, fake) = (TempHome::new(), FakeBox::start().await);

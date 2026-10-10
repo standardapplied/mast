@@ -36,11 +36,12 @@ export function invoke<T>(
 }
 
 /**
- * Starts the page over at its first screen. Everything it held or had in flight (stores, event
- * cursor, open panes, a continuation waiting on an answer) ends with it, and so do the route
- * and the per-launch choices (the board's filters) that named things on the box it was for:
- * the next page starts as a relaunch would. Never settles: there is nothing for the page that
- * asked to do next.
+ * Starts the page over at its first screen. Everything the page held or was waiting to do
+ * (stores, event cursor, open panes, a continuation waiting on an answer) ends with it, and so
+ * do the route and the per-launch choices (the board's filters) that named things on the box
+ * it was for: the next page starts as a relaunch would. What the core is already doing for
+ * this page (a request, a transfer) finishes on the backend it was sent to. Never settles:
+ * there is nothing for the page that asked to do next.
  */
 export function restartPage(): Promise<never> {
   sessionStorage.clear();
