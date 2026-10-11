@@ -1353,8 +1353,23 @@ html.is-dragging-active * {
 
 .connect-error {
   margin: 0;
+  max-width: 52ch;
   font-size: 13px;
   color: var(--error);
+  line-height: 1.6;
+}
+
+.connect-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: min(100%, 44ch);
+}
+
+.connect-code {
+  width: 100%;
+  font-family: var(--font-mono);
 }
 
 /* Loading mark ---------------------------------------------------------------- */

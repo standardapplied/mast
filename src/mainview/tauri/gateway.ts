@@ -1,9 +1,10 @@
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   AgentLogResponse,
   AgentLogRole,
   ApiErrorBody,
+  ConnectCodePreview,
+  ConnectionPhase,
   ConnectionStatus,
   EventStreamState,
   RecentEventsResponse,
@@ -18,6 +19,7 @@ import { formatRecentErrors, logError } from "../errorLog";
 import type { AgentLogHandle, Gateway } from "../gateway";
 import type { SessionListing } from "../terminal/roomDeck";
 import { AgentLogStream, latestRun, TerminalLogError } from "./agentLogStream";
+import { bindPage, invoke, restartPage } from "./core";
 
 /**
  * The Tauri seam to the control plane. Every read/write is one `sail_request`
@@ -33,12 +35,30 @@ type RustResponse = { status: number; etag: string | null; body: string };
 
 type RawStatus = {
   phase: string;
+  /** Which of the core's backends answered; absent when no settings produced one. */
+  backend?: number;
   server: string;
   sshHost?: string;
+  sshPort?: number | null;
+  paired?: boolean;
+  forgotten?: boolean;
   tokenPresent: boolean;
   tokenKind: "session" | "api" | "none";
-  detail?: string;
+  detail?: string | null;
 };
+
+/** The Rust core's phase words in the app's vocabulary; an unknown one reads as still probing. */
+const PHASES: Record<string, ConnectionPhase> = {
+  ready: "ready",
+  unauthenticated: "unauthenticated",
+  unpaired: "unpaired",
+  error: "failed",
+};
+
+/** A rejected invoke as the sentence the Rust core wrote, without the `Error:` a thrown one adds. */
+function refusal(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 async function sailRequest(
   method: string,
@@ -79,8 +99,8 @@ function parseError(status: number, body: string): SailWireError {
   return { status, code: "internal", message: `HTTP ${status}` };
 }
 
-// Set by createTauriGateway; invoked when a call reveals the session token is
-// dead so the app can drop to the login screen instead of a dead retry loop.
+// Set by createTauriGateway; invoked when a call reveals the token is dead so the
+// app can drop to the sign-in (or first-run) screen instead of a dead retry loop.
 let onAuthExpired: (() => void) | null = null;
 
 async function read<T>(
@@ -98,9 +118,9 @@ async function read<T>(
   if (response.status < 200 || response.status >= 300) {
     const error = parseError(response.status, response.body);
     logError("api", `${method} ${path} → ${error.status} ${error.code}: ${error.message}`);
-    // An expired/invalid *session* token means "you're logged out" — signal it so
-    // the shell shows the login screen. Scoped to invalid_bearer_token only, so a
-    // role 403 (e.g. non-admin dispatch) never logs anyone out.
+    // A token the box refuses means "you're signed out" (or, paired, "this code was
+    // revoked") — signal it so the shell shows the screen that fixes it. Scoped to
+    // invalid_bearer_token only, so a role 403 (e.g. non-admin dispatch) never does.
     if (error.code === "invalid_bearer_token") onAuthExpired?.();
     return { ok: false, error };
   }
@@ -254,7 +274,10 @@ function tauriAgentLog(specId: string, role: AgentLogRole, since: number): Agent
   };
 }
 
-export function createTauriGateway(): Gateway {
+/**
+ * `restart` ends the page (see {@link restartPage}); a test hands in its own to see it asked for.
+ */
+export function createTauriGateway(restart: () => Promise<never> = restartPage): Gateway {
   const recent = async (limit: number): Promise<RecentEventsResponse> => {
     const result = await read<RecentEventsResponse>("GET", `/v1/events/recent?limit=${limit}`);
     return result.ok ? result.value : { limit, returned: 0, events: [] };
@@ -264,6 +287,7 @@ export function createTauriGateway(): Gateway {
   // what makes the board update live (spec_* / board_updated), and its state
   // drives the connection pill's stream health. The dummy origin only satisfies
   // EventStream.url()'s URL() parse — the Rust side owns routing and the token.
+  // Its cursor counts one box's event ids, which holds because the page is for one box.
   const events = new EventStream(
     { server: "http://ipc.localhost", token: null },
     {
@@ -294,24 +318,9 @@ export function createTauriGateway(): Gateway {
   };
 
   const baseConnection = async (): Promise<ConnectionStatus> => {
+    let raw: RawStatus;
     try {
-      const raw = await invoke<RawStatus>("connection_status");
-      return {
-        phase:
-          raw.phase === "ready"
-            ? "ready"
-            : raw.phase === "unauthenticated"
-              ? "unauthenticated"
-              : raw.phase === "error"
-                ? "failed"
-                : "probing",
-        server: raw.server,
-        loginOrigin: raw.sshHost ? `ssh://${raw.sshHost}` : raw.server,
-        tokenPresent: raw.tokenPresent,
-        tokenKind: raw.tokenKind ?? (raw.tokenPresent ? "api" : "none"),
-        stream: "disconnected",
-        detail: raw.detail,
-      };
+      raw = await invoke<RawStatus>("connection_status");
     } catch (error) {
       return {
         phase: "failed",
@@ -323,6 +332,22 @@ export function createTauriGateway(): Gateway {
         detail: String(error),
       };
     }
+    // A status from a backend other than the page's is another box's: this page never
+    // shows it or acts on it, and the page that follows reads it as its own.
+    if (!bindPage(raw.backend)) return restart();
+    return {
+      phase: PHASES[raw.phase] ?? "probing",
+      server: raw.server,
+      loginOrigin: raw.sshHost ? `ssh://${raw.sshHost}` : raw.server,
+      tokenPresent: raw.tokenPresent,
+      tokenKind: raw.tokenKind ?? (raw.tokenPresent ? "api" : "none"),
+      stream: "disconnected",
+      detail: raw.detail ?? undefined,
+      paired: raw.paired ?? false,
+      host: raw.sshHost,
+      sshPort: raw.sshPort ?? undefined,
+      forgotten: raw.forgotten ?? false,
+    };
   };
 
   const connection = async (): Promise<ConnectionStatus> => {
@@ -330,16 +355,17 @@ export function createTauriGateway(): Gateway {
     return { ...base, stream: base.phase === "ready" ? streamState : "disconnected" };
   };
 
-  // On a dead session: clear the token and push an unauthenticated status to
-  // every connection listener, so the shell shows the login screen. Guarded so a
-  // burst of concurrent 401s collapses into a single logout.
+  // On a refused token: the Rust core has already acted on it, in the backend that made the
+  // request (the fallback path logs out; a paired Mac keeps its settings and only stops
+  // presenting the token), so only push the status it now reports to every connection
+  // listener, and the shell shows the sign-in or first-run screen. Guarded so a burst of
+  // concurrent refusals collapses into one.
   const statusListeners = new Set<(s: ConnectionStatus) => void>();
   let expiring = false;
   onAuthExpired = () => {
     if (expiring) return;
     expiring = true;
     void (async () => {
-      await invoke("logout").catch(() => {});
       const status = await connection();
       statusListeners.forEach((listener) => listener(status));
       expiring = false;
@@ -456,6 +482,32 @@ export function createTauriGateway(): Gateway {
     followAgentLog: (specId, role, since) => tauriAgentLog(specId, role, since),
 
     connection,
+
+    async previewConnectCode(code) {
+      try {
+        return { ok: true, value: await invoke<ConnectCodePreview>("connect_code_preview", { code }) };
+      } catch (error) {
+        return { ok: false, detail: refusal(error) };
+      }
+    },
+
+    async pair(code) {
+      try {
+        await invoke("pair", { code });
+      } catch (error) {
+        return { detail: refusal(error) };
+      }
+      return restart();
+    },
+
+    async forgetBox() {
+      try {
+        await invoke("forget_box");
+      } catch (error) {
+        return { detail: refusal(error) };
+      }
+      return restart();
+    },
 
     async login() {
       try {

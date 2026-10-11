@@ -20,20 +20,29 @@ the user menu, which also shows the version you are running.
 
 ## Connecting
 
-Mast is a client, so it needs a Sail control plane to talk to. It reads the same
-configuration the `sail` CLI writes:
+Paste the connect code your box's owner sent you (the one `sail fde pair` prints) into Mast's
+first screen and press Connect. Mast keeps what the code carried in `~/.sail/mast.yaml` and
+`~/.sail/keys/`, readable only by you, and from then on reaches the box and its project
+containers with nothing else on the Mac, refusing any box whose SSH host key is not the one
+the code named. "Forget this box" in the user menu deletes those files; the box keeps its side
+of the pairing until its owner runs `sail fde unpair`.
 
-- `~/.sail/config.yaml` gives it the host and the control-plane address. Without that file
-  Mast reports `no ~/.sail/config.yaml` at startup. Run `sail host config` first.
+### Without a connect code
+
+When `~/.sail/mast.yaml` is absent, Mast falls back to the configuration the `sail` CLI
+writes:
+
+- `~/.sail/config.yaml` gives it the host and the control-plane address. Run
+  `sail host config` to write it; with neither file Mast shows the connect code screen.
 - `~/.ssh/config` gives it the route. Mast dials the host and follows every `ProxyJump` in
   the chain to reach project containers.
 - Authentication tries your ssh-agent first, then key files: `IdentityFile`, the `key:` in
   `~/.sail/config.yaml`, then the default `~/.ssh/id_*`. Run `ssh-add` if your agent is
   empty.
 
-Signing in to the control plane is a passkey ceremony. Mast forwards `127.0.0.1:7070` to the
-devbox, opens your browser at that origin, and captures the session token the login page
-hands back.
+Signing in to the control plane on this path is a passkey ceremony. Mast forwards
+`127.0.0.1:7070` to the devbox, opens your browser at that origin, and captures the session
+token the login page hands back.
 
 ## Development
 

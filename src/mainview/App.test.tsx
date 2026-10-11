@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import type { ConnectCodeCheck, ConnectionStatus } from "../shared/sail-models";
 import { App } from "./App";
 import { catalogStore } from "./board/catalogStore";
+import { FORGOTTEN_NOTICE } from "./components/ConnectScreen";
 import { createDemoGateway, type DemoGateway } from "./gateway";
 import { dispatchPush } from "./push";
 import { attentionStore } from "./terminal/attention";
@@ -843,5 +845,294 @@ describe("App cockpit", () => {
     expect(localStorage.getItem("mast.terminal.scrollback-mib")).toBe("5");
     localStorage.removeItem("mast.terminal.scrollback-mib");
     scrollbackBudget.reset();
+  });
+});
+
+describe("App pairing", () => {
+  const GOOD_CODE = "sail1.eyJ2IjoxfQ";
+  const NOT_A_CODE = "That does not look like a connect code; paste the whole code, starting with sail1.";
+  const REVOKED = "This code was revoked on the box; ask for a new one.";
+  const UNPAIRED: ConnectionStatus = {
+    phase: "unpaired",
+    server: "",
+    loginOrigin: "",
+    tokenPresent: false,
+    tokenKind: "none",
+    stream: "disconnected",
+    paired: false,
+  };
+  const PAIRED_READY: ConnectionStatus = {
+    phase: "ready",
+    server: "127.0.0.1:7070",
+    loginOrigin: "ssh://34.1.2.3",
+    tokenPresent: true,
+    tokenKind: "api",
+    stream: "connected",
+    paired: true,
+    host: "34.1.2.3",
+  };
+
+  /** The app over a gateway whose connection the test owns, as one page sees it: `pair` and
+   *  `forgetBox` resolve only with the refusal named here, since a success ends the page. */
+  async function renderPairing(
+    initial: ConnectionStatus,
+    answers: {
+      pairRefusal?: string;
+      forgetRefusal?: string;
+      preview?: (code: string) => Promise<ConnectCodeCheck>;
+    } = {},
+  ) {
+    gateway = createDemoGateway();
+    let current = initial;
+    const listeners = new Set<(status: ConnectionStatus) => void>();
+    const calls = { pair: [] as string[], forget: 0, login: 0, logout: 0 };
+    const refusedOrPageEnds = (detail?: string) =>
+      detail === undefined ? new Promise<never>(() => {}) : Promise.resolve({ detail });
+    const pairing = {
+      ...gateway,
+      connection: async () => current,
+      onConnectionStatus: (listener: (status: ConnectionStatus) => void) => {
+        listeners.add(listener);
+        listener(current);
+        return () => listeners.delete(listener);
+      },
+      whoami: async () => ({
+        ok: true as const,
+        value: current.paired
+          ? { fde: "ada", name: "mast-ada", email: "ada@example.com", role: "member" as const, capabilities: [] }
+          : { fde: "uday", name: "cli", email: "uday@example.com", role: "admin" as const, capabilities: [] },
+      }),
+      previewConnectCode:
+        answers.preview ??
+        (async (code: string): Promise<ConnectCodeCheck> =>
+          code === GOOD_CODE
+            ? { ok: true, value: { handle: "ada", email: "ada@example.com", host: "34.1.2.3" } }
+            : { ok: false, detail: NOT_A_CODE }),
+      pair: (code: string) => {
+        calls.pair.push(code);
+        return refusedOrPageEnds(answers.pairRefusal);
+      },
+      forgetBox: () => {
+        calls.forget += 1;
+        return refusedOrPageEnds(answers.forgetRefusal);
+      },
+      login: async () => {
+        calls.login += 1;
+        return { ok: false };
+      },
+      logout: async () => {
+        calls.logout += 1;
+      },
+    };
+    const theme = createThemeController(browserThemeDeps(() => {}));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root.render(<App gateway={pairing as never} theme={theme} />));
+    await flush();
+    const push = async (status: ConnectionStatus) => {
+      current = status;
+      await act(async () => {
+        for (const listener of listeners) listener(status);
+      });
+      await flush();
+    };
+    return { calls, push };
+  }
+
+  const at = <T extends HTMLElement>(testId: string) =>
+    container.querySelector<T>(`[data-testid="${testId}"]`);
+
+  const paste = async (text: string) => {
+    const input = at<HTMLInputElement>("connect-code")!;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    await act(async () => {
+      setter?.call(input, text);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await flush();
+  };
+
+  const click = async (testId: string) => {
+    await act(async () => at<HTMLButtonElement>(testId)!.click());
+    await flush();
+  };
+
+  test("a Mac with no settings opens on the connect code field and names no file", async () => {
+    await renderPairing(UNPAIRED);
+
+    expect(at("connect-screen")).not.toBeNull();
+    expect(at<HTMLInputElement>("connect-code")?.type, "the code is a secret on screen too").toBe("password");
+    expect(at<HTMLButtonElement>("connect-pair")?.disabled).toBe(true);
+    expect(at("connect-login"), "the passkey door is the fallback path's").toBeNull();
+    expect(at("connect-code-error"), "an empty field is not an error").toBeNull();
+    for (const word of ["config.yaml", "~/.ssh", "ssh-add", "passkey"]) {
+      expect(at("connect-screen")!.textContent).not.toContain(word);
+    }
+    expect(at("view-rooms")).toBeNull();
+  });
+
+  test("a pasted code that parses shows who and where and arms Connect; one that does not says why", async () => {
+    await renderPairing(UNPAIRED);
+
+    await paste(GOOD_CODE);
+    expect(at("connect-code-preview")?.textContent).toBe("ada@example.com on 34.1.2.3");
+    expect(at<HTMLButtonElement>("connect-pair")?.disabled).toBe(false);
+
+    await paste("hello");
+    expect(at("connect-code-preview")).toBeNull();
+    expect(at("connect-code-error")?.textContent).toBe(NOT_A_CODE);
+    expect(at<HTMLButtonElement>("connect-pair")?.disabled).toBe(true);
+
+    await paste("");
+    expect(at("connect-code-error")).toBeNull();
+    expect(at<HTMLButtonElement>("connect-pair")?.disabled).toBe(true);
+  });
+
+  test("a slow check of an earlier paste never overwrites the later one", async () => {
+    const pending = new Map<string, (check: ConnectCodeCheck) => void>();
+    await renderPairing(UNPAIRED, {
+      preview: (code) => new Promise((resolve) => pending.set(code, resolve)),
+    });
+
+    await paste("hello");
+    await paste(GOOD_CODE);
+    await act(async () =>
+      pending.get(GOOD_CODE)!({ ok: true, value: { handle: "ada", email: null, host: "34.1.2.3" } }),
+    );
+    await act(async () => pending.get("hello")!({ ok: false, detail: NOT_A_CODE }));
+
+    expect(at("connect-code-preview")?.textContent, "a code with no email names the handle").toBe("ada on 34.1.2.3");
+    expect(at("connect-code-error")).toBeNull();
+  });
+
+  test("connecting hands the code over and holds the screen for the page that follows", async () => {
+    const { calls } = await renderPairing(UNPAIRED);
+    await paste(GOOD_CODE);
+    await click("connect-pair");
+
+    expect(calls.pair).toEqual([GOOD_CODE]);
+    expect(at<HTMLInputElement>("connect-code")?.disabled).toBe(true);
+    expect(at<HTMLButtonElement>("connect-pair")?.disabled).toBe(true);
+    expect(at("connect-code-error")).toBeNull();
+    expect(at("view-rooms"), "the paired box is the next page's").toBeNull();
+  });
+
+  test("a page on a paired box lands on the rooms with the code's email in the user menu", async () => {
+    await renderPairing(PAIRED_READY);
+
+    expect(at("connect-screen")).toBeNull();
+    expect(at("view-rooms")).not.toBeNull();
+
+    await click("user-menu-trigger");
+    expect(at("user-menu-panel")!.textContent).toContain("ada@example.com");
+    expect(at("user-menu-forget")).not.toBeNull();
+    expect(at("user-menu-signout"), "a paired Mac leaves by forgetting the box").toBeNull();
+  });
+
+  test("a refused connection says why under the field and keeps the code there", async () => {
+    const refusal =
+      "The box at 34.1.2.3 answered with a different host key than the one in its connect code, so Mast refused it; pair again with a new code.";
+    const { calls } = await renderPairing(UNPAIRED, { pairRefusal: refusal });
+    await paste(GOOD_CODE);
+    await click("connect-pair");
+
+    expect(calls.pair).toEqual([GOOD_CODE]);
+    expect(at("connect-code-error")?.textContent).toBe(refusal);
+    expect(at<HTMLInputElement>("connect-code")?.value).toBe(GOOD_CODE);
+    expect(at<HTMLButtonElement>("connect-pair")?.disabled, "the same code can be tried again").toBe(false);
+    expect(at("view-rooms")).toBeNull();
+  });
+
+  test("a token revoked while running returns to the first-run screen naming the box", async () => {
+    const { calls, push } = await renderPairing(PAIRED_READY);
+    expect(at("view-rooms")).not.toBeNull();
+    expect(catalogStore.specList().length).toBeGreaterThan(0);
+
+    await push({ ...UNPAIRED, paired: true, host: "34.1.2.3", detail: REVOKED });
+
+    expect(at("view-rooms"), "the gate owns the whole window").toBeNull();
+    expect(at("connect-host")?.textContent).toBe("Paired with 34.1.2.3");
+    expect(at("connect-reason")?.textContent).toBe(REVOKED);
+    expect(at("connect-code")).not.toBeNull();
+    expect(catalogStore.specList(), "the next code may be someone else's").toEqual([]);
+    expect(calls.logout, "a paired Mac is never logged out").toBe(0);
+
+    await paste(GOOD_CODE);
+    await click("connect-pair");
+    expect(calls.pair, "the same screen takes the new code").toEqual([GOOD_CODE]);
+  });
+
+  test("Forget this box asks the gateway once and leaves the rest to the page that follows", async () => {
+    const { calls } = await renderPairing(PAIRED_READY);
+    await click("user-menu-trigger");
+    await click("user-menu-forget");
+
+    expect(calls.forget).toBe(1);
+    expect(at("user-menu-forget-error")).toBeNull();
+  });
+
+  test("the page after a forgotten box is the first run, and says the box still holds its side", async () => {
+    await renderPairing({ ...UNPAIRED, forgotten: true });
+
+    expect(at("connect-code")).not.toBeNull();
+    expect(at("connect-notice")?.textContent).toBe(FORGOTTEN_NOTICE);
+    expect(FORGOTTEN_NOTICE).toContain("sail fde unpair");
+    expect(at("connect-host")).toBeNull();
+    expect(at("view-rooms")).toBeNull();
+
+    await click("user-menu-trigger");
+    expect(at("user-menu-forget"), "there is no box left to forget").toBeNull();
+    expect(
+      [...at("user-menu-panel")!.querySelectorAll("button")].find((b) => b.textContent === "Sign in with passkey")
+        ?.disabled,
+      "the passkey door is not offered on the first run",
+    ).toBe(true);
+  });
+
+  test("a first run that forgot nothing says nothing about a box", async () => {
+    await renderPairing(UNPAIRED);
+    expect(at("connect-notice")).toBeNull();
+  });
+
+  test("the page after a forgotten box on a Mac with the CLI's settings is that person's, with no box to forget", async () => {
+    await renderPairing({ ...PAIRED_READY, paired: false, host: "devbox", tokenKind: "session", forgotten: true });
+
+    expect(at("connect-screen")).toBeNull();
+    expect(at("view-rooms")).not.toBeNull();
+    await click("user-menu-trigger");
+    expect(at("user-menu-panel")!.textContent).toContain("uday@example.com");
+    expect(at("user-menu-panel")!.textContent).not.toContain("ada@example.com");
+    expect(at("user-menu-forget")).toBeNull();
+  });
+
+  test("a box that cannot be forgotten says why in the menu, and the workspace stays", async () => {
+    const { calls } = await renderPairing(PAIRED_READY, {
+      forgetRefusal: "Permission denied (os error 13)",
+    });
+    await click("user-menu-trigger");
+    await click("user-menu-forget");
+
+    expect(calls.forget).toBe(1);
+    expect(at("user-menu-forget-error")?.textContent).toBe("Permission denied (os error 13)");
+    expect(at("view-rooms")).not.toBeNull();
+    expect(at("connect-screen")).toBeNull();
+  });
+
+  test("a paired Mac that cannot reach its box says so without pointing at the CLI's file", async () => {
+    const detail = "34.1.2.3 did not answer; check that the box is running and this Mac is online.";
+    await renderPairing({ ...UNPAIRED, phase: "failed", paired: true, host: "34.1.2.3", detail });
+
+    expect(at("connect-screen")!.textContent).toContain(detail);
+    expect(at("connect-screen")!.textContent).not.toContain("config.yaml");
+    await click("user-menu-trigger");
+    expect(at("user-menu-forget"), "a pairing that cannot connect can still be forgotten").not.toBeNull();
+  });
+
+  test("a Mac on the CLI's settings keeps the passkey door and Sign out, and is offered no box to forget", async () => {
+    await renderPairing({ ...PAIRED_READY, paired: false, tokenKind: "session" });
+    await click("user-menu-trigger");
+    expect(at("user-menu-signout")).not.toBeNull();
+    expect(at("user-menu-forget")).toBeNull();
   });
 });

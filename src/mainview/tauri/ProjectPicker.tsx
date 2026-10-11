@@ -6,9 +6,9 @@ import { loadRoster, rowHint, rowMeta, type Roster, type RosterSources } from ".
 
 /**
  * Pick which project container (or the node) to open a terminal into. The list
- * is the full synced catalog (`GET /v1/projects`) merged with the SSH routes
- * from `~/.ssh/config` — every project shows with its state; only ones with a
- * running container and a route are openable.
+ * is the full synced catalog (`GET /v1/projects`) merged with the routes the
+ * core can open (see `projectRoster`) — every project shows with its state; only
+ * ones with a running container and a route are openable.
  */
 export function ProjectPicker({
   sources,

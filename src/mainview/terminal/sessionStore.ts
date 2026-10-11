@@ -31,6 +31,8 @@ import {
  */
 
 const KILLED_REASON = "closed from Mast";
+/** The kill's refusal when the connection it was asked on is no longer the store's. */
+const CONNECTION_CHANGED = "the connection changed before the session was closed; close it again";
 
 /**
  * What a session's data lane last said about itself, per attached pane's meta events: the pty
@@ -560,6 +562,7 @@ export class SessionStore {
       const room = await box.gateway.getRoom(entry.room);
       if (!room.ok) return refuse(`room ${entry.room} unresolved: ${room.error.message}`);
       if (room.value.id !== entry.room) return refuse(`room ${entry.room} unresolved`);
+      if (this.box() !== box) return refuse(CONNECTION_CHANGED);
     }
     const result = await box.gateway.killSession(name);
     if (!result.ok) return refuse(result.error.message);
@@ -651,9 +654,20 @@ function sameSize(a: LaneFact["ptySize"], b: LaneFact["ptySize"]): boolean {
 /** The app-wide instance; wired to the gateway in App via {@link connectSessions}. */
 export const sessionStore = new SessionStore();
 
-/** The box key: the connection target — one SSH backend, one box. */
-export function boxKeyOf(status: Pick<ConnectionStatus, "server">): string {
-  return status.server;
+/**
+ * The box key: which box the connection is to. `server` is the API address as the box sees
+ * it, loopback on nearly every box, so the route (paired or the CLI's settings), the host and
+ * the SSH port a connect code named are what tell two boxes apart.
+ */
+export function boxKeyOf(
+  status: Pick<ConnectionStatus, "server" | "host" | "paired" | "sshPort">,
+): string {
+  return JSON.stringify([
+    status.paired ?? false,
+    status.host ?? "",
+    status.sshPort ?? null,
+    status.server,
+  ]);
 }
 
 /**

@@ -1041,9 +1041,80 @@ describe("connectSessions", () => {
     const store = new SessionStore();
     const off = connectSessions(fake.gateway, store);
     await flush();
-    expect(boxKeyOf({ server: "ssh://devbox" })).toBe("ssh://devbox");
-    expect(store.sessions("ssh://devbox")?.length).toBe(1);
+    expect(store.sessions(boxKeyOf({ server: "ssh://devbox" }))?.length).toBe(1);
     off();
+  });
+
+  test("two boxes that both serve their API on loopback are two boxes", async () => {
+    const loopback = { phase: "ready", server: "127.0.0.1:7070" };
+    const store = new SessionStore();
+    const paired = makeGateway([session({})]);
+    paired.gateway.connection = async () => ({ ...loopback, paired: true, host: "34.1.2.3" }) as never;
+    const offPaired = connectSessions(paired.gateway, store);
+    await flush();
+    expect(store.sessions()?.length).toBe(1);
+    offPaired();
+
+    const cli = makeGateway([]);
+    cli.gateway.connection = async () => ({ ...loopback, paired: false, host: "devbox" }) as never;
+    cli.failListings("devbox did not answer");
+    const offCli = connectSessions(cli.gateway, store);
+    await flush();
+    expect(store.sessions(), "the paired box's sessions are not this box's").toBeNull();
+    offCli();
+  });
+
+  test("two boxes behind one host on two SSH ports are two boxes", async () => {
+    const behindOneHost = { phase: "ready", server: "127.0.0.1:7070", paired: true, host: "34.1.2.3" };
+    const store = new SessionStore();
+    const first = makeGateway([session({})]);
+    first.gateway.connection = async () => ({ ...behindOneHost, sshPort: 2201 }) as never;
+    const offFirst = connectSessions(first.gateway, store);
+    await flush();
+    expect(store.sessions()?.length).toBe(1);
+    offFirst();
+
+    const second = makeGateway([]);
+    second.gateway.connection = async () => ({ ...behindOneHost, sshPort: 2202 }) as never;
+    second.failListings("34.1.2.3 did not answer");
+    const offSecond = connectSessions(second.gateway, store);
+    await flush();
+    expect(store.sessions(), "the first box's sessions are not this box's").toBeNull();
+    offSecond();
+  });
+
+  test("a kill that was waiting on its room when the connection changed is refused, not sent on the next one", async () => {
+    const fake = makeGateway([session({})]);
+    let answerRoom: () => void = () => {};
+    const resolveRoom = fake.gateway.getRoom;
+    fake.gateway.getRoom = (async (id: string) => {
+      await new Promise<void>((resolve) => (answerRoom = resolve));
+      return resolveRoom(id);
+    }) as never;
+    const store = new SessionStore();
+    const leave = store.connect(fake.gateway, "box-a");
+    await flush();
+
+    const killing = store.kill("room-design-talk");
+    await flush();
+    leave();
+    store.connect(fake.gateway, "box-b");
+    await flush();
+    answerRoom();
+
+    const result = await killing;
+    expect(result.ok).toBe(false);
+    expect(result.refusal).toContain("connection changed");
+    expect(fake.calls.kill, "the next box holds a session of the same name").toEqual([]);
+    expect(store.byName("room-design-talk", "box-a")?.refusal).toContain("connection changed");
+  });
+
+  test("the same host reached through a pairing and through the CLI's settings is keyed apart", () => {
+    const server = "127.0.0.1:7070";
+    expect(boxKeyOf({ server, host: "devbox", paired: true })).not.toBe(
+      boxKeyOf({ server, host: "devbox", paired: false }),
+    );
+    expect(boxKeyOf({ server, host: "devbox" })).toBe(boxKeyOf({ server, host: "devbox", paired: false }));
   });
 
   test("a pty event accelerates: it folds in and kicks a re-list", async () => {

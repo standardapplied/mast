@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -6,6 +5,7 @@ import { App } from "./App";
 import { CrashScreen } from "./components/CrashScreen";
 import { logError } from "./errorLog";
 import { Styleguide } from "./styleguide";
+import { invoke } from "./tauri/core";
 import { createTauriGateway } from "./tauri/gateway";
 import type { RosterSources } from "./tauri/projectRoster";
 import { tauriDeckServices } from "./tauri/RoomWorkbench";
@@ -55,6 +55,9 @@ const gateway = createTauriGateway();
 // The bell's transport is the Rust `attention` command; the store is connected where the
 // transport is wired, beside the pane services it belongs to.
 attentionStore.connect(window.localStorage, tauriTerminalServices.link.attention);
+// A page starts with no unseen bells, and the dock says so: the badge a page before it left
+// (panes on a box since forgotten) is not this page's to clear one pane at a time.
+void tauriTerminalServices.link.attention({ sound: false, bounce: false, badge: null }).catch(() => {});
 const rosterSources: RosterSources = {
   listProjects: () => gateway.listProjects(),
   listTargets: () => invoke<string[]>("list_targets"),

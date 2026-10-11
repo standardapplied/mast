@@ -1,8 +1,9 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
 import type { HostListing } from "../terminal/connection";
 import { TerminalRenderer } from "../terminal/renderer";
 import type { SessionLink, TerminalServices } from "../terminal/terminalServices";
+import { invoke } from "./core";
 
 /**
  * The Tauri side of the pane's seam: `session_*` commands over `invoke`, the session channel as
