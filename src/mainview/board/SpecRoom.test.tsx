@@ -1079,9 +1079,30 @@ describe("SpecRoom live turns", () => {
     });
   }
 
+  /** Tells the room of a scroll, as an engine does a frame after the reader's place changed. */
+  const tellScroll = () =>
+    act(() => timeline().dispatchEvent(new Event("scroll", { bubbles: true })));
+
   function scrollTo(scrollTop: number, scrollHeight = 1000, clientHeight = 100) {
     layOut(scrollTop, scrollHeight, clientHeight);
-    act(() => timeline().dispatchEvent(new Event("scroll", { bubbles: true })));
+    tellScroll();
+  }
+
+  /**
+   * Lays the timeline out as an engine does: as tall as what is drawn makes it, with the reader
+   * held within it, so a room that shrinks under them leaves them resting on its new end.
+   */
+  function layOutBy(scrollHeight: () => number) {
+    let top = 0;
+    Object.defineProperties(timeline(), {
+      scrollHeight: { configurable: true, get: scrollHeight },
+      clientHeight: { configurable: true, value: 100 },
+      scrollTop: {
+        configurable: true,
+        get: () => (top = Math.min(top, Math.max(0, scrollHeight() - 100))),
+        set: (place: number) => void (top = place),
+      },
+    });
   }
 
   /** The member's chat run as the presence store sees it once its turn starts. */
@@ -1992,50 +2013,86 @@ describe("SpecRoom live turns", () => {
     const fake = makeGateway();
     fake.receive(remoteMessage("message-old", "Already visible"));
     await mount(fake.gateway);
-    scrollTo(900);
-    paint();
+    const next = () => container.querySelector('[data-testid="draft-run-7-8"]');
+    layOutBy(() => 400 + (draft() ? 1000 : 0) + (next() ? 300 : 0));
     stream(fake, delta("A tall turn."));
-    layOut(900, 1400);
     paint();
-    expect(timeline().scrollTop).toBe(1400);
+    expect(timeline().scrollTop).toBe(1300);
 
     stream(fake, turnEnded({ message_id: "message-7" }));
-    layOut(300, 400);
     act(() => fake.receive(reply("Short.")));
     await settle();
-    layOut(300, 700);
+    expect(timeline().scrollTop).toBe(300);
     stream(fake, live("agent_text_delta", { text: "The next turn.", turn: 8 }));
-    scrollTo(300, 700);
+    tellScroll();
     paint();
 
-    expect(timeline().scrollTop).toBe(700);
+    expect(timeline().scrollTop).toBe(600);
     act(() => fake.receive(remoteMessage("message-2", "Landed after")));
     await settle();
     expect(container.textContent).toContain("Landed after");
     expect(pill()).toBeNull();
   });
 
+  test("a reader the engine moves short of the end, as the room draws a reply over a draft, has not left", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    const next = () => container.querySelector('[data-testid="draft-run-7-8"]');
+    let top = 0;
+    let anchored = false;
+    Object.defineProperties(timeline(), {
+      scrollHeight: { configurable: true, get: () => (draft() ? 1400 : 400) + (next() ? 300 : 0) },
+      clientHeight: { configurable: true, value: 100 },
+      scrollTop: {
+        configurable: true,
+        get: () => {
+          if (!draft() && next() && !anchored) {
+            anchored = true;
+            top = 200;
+          }
+          return top;
+        },
+        set: (place: number) => void (top = place),
+      },
+    });
+    stream(fake, delta("A tall turn."));
+    paint();
+    expect(timeline().scrollTop).toBe(1400);
+
+    stream(fake, turnEnded({ message_id: "message-7" }));
+    stream(fake, live("agent_text_delta", { text: "The next turn.", turn: 8 }));
+    act(() => fake.receive(reply("Short.")));
+    await settle();
+    expect(timeline().scrollTop).toBe(200);
+    tellScroll();
+    paint();
+
+    expect(timeline().scrollTop).toBe(700);
+  });
+
   test("a reader the room finds resting at the very end still follows once that scroll is told, after what the pill released has grown the room", async () => {
     const fake = makeGateway();
     fake.receive(remoteMessage("message-old", "Already visible"));
     await mount(fake.gateway);
-    scrollTo(900);
+    layOutBy(() => 400 + (draft() ? 1000 : 0) + (container.textContent!.includes("Behind the pill") ? 60 : 0));
     stream(fake, delta("A tall turn."));
-    scrollTo(400, 1400);
+    paint();
+    timeline().scrollTop = 400;
+    tellScroll();
     act(() => fake.receive(remoteMessage("message-2", "Behind the pill")));
     await settle();
     expect(pill()?.textContent).toBe("1 new");
 
     stream(fake, turnEnded({ message_id: "message-7" }));
-    layOut(300, 400);
     act(() => fake.receive(reply("Short.")));
     await settle();
     expect(container.textContent).toContain("Behind the pill");
     expect(pill()).toBeNull();
 
-    scrollTo(300, 460);
+    tellScroll();
     paint();
-    expect(timeline().scrollTop).toBe(460);
+    expect(timeline().scrollTop).toBe(360);
   });
 
   test("a window that grows taller under a reader who follows has not moved them", async () => {

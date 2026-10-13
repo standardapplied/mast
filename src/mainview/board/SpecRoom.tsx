@@ -381,17 +381,20 @@ export function SpecRoom({
   }, [advanceLive]);
 
   /**
-   * The room has just been laid out anew, by what it drew or by its window. A shrink leaves a
-   * reader who was past the new end resting on it, lower than they were, and the scroll that
-   * tells of it comes a frame later, when the end may have moved again and they no longer rest
-   * on it. So it is read here, before anything else can move them: a reader resting at the very
-   * end did not move up to get there, and follows.
+   * The room has just been laid out anew, by what it drew or by its window, and the engine may
+   * have moved the reader to fit: a reply shorter than its draft leaves them lower than they
+   * were. The scroll that tells of it comes a frame later, when the end may have moved again,
+   * and would read as the reader moving up. So what a layout did to their place is taken off
+   * here, where it can be measured: from where they were before the room drew, or, when only
+   * the window changed, by their resting at the very end. A reader resting there follows.
    */
-  const laidOut = useCallback(() => {
+  const laidOut = useCallback((placeBefore?: number) => {
     const element = scroller.current;
-    if (!element || element.clientHeight === 0 || fromLatest(element) > AT_LATEST_PX) return;
-    scrolledTo.current = Math.min(scrolledTo.current, element.scrollTop);
-    follow(true);
+    if (!element || element.clientHeight === 0) return;
+    const resting = fromLatest(element) <= AT_LATEST_PX;
+    if (placeBefore !== undefined) scrolledTo.current += element.scrollTop - placeBefore;
+    else if (resting) scrolledTo.current = Math.min(scrolledTo.current, element.scrollTop);
+    if (resting) follow(true);
   }, [follow]);
 
   /**
@@ -496,7 +499,8 @@ export function SpecRoom({
     [engagement, specId, presenceVersion, lastAgentReplyAt],
   );
 
-  useLayoutEffect(laidOut);
+  const placeBeforeDrawing = scroller.current?.scrollTop;
+  useLayoutEffect(() => laidOut(placeBeforeDrawing));
 
   useEffect(keepPlace, [keepPlace, tail.visible.length, typing, live]);
 
