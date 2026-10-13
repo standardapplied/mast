@@ -599,10 +599,10 @@ export function SpecRoom({
       if (event.spec !== specId && event.spec !== roomId) return;
       if (isTelemetryEvent(event.type)) return;
       if (event.type === "spec_message_posted") {
-        advanceLive((state) => liveTurns(state, event));
         const messageId =
           typeof event.data?.message_id === "string" ? event.data.message_id : undefined;
         if (messageId && sources.current.messages.some((message) => message.id === messageId)) return;
+        advanceLive((state) => liveTurns(state, event));
         if (posting.current && messageId) {
           deferredMessageEvents.current.add(messageId);
           return;

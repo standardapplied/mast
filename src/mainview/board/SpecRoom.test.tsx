@@ -1341,6 +1341,24 @@ describe("SpecRoom live turns", () => {
     expect(occurrences("The turn before.")).toBe(1);
   });
 
+  test("a replayed live event for a reply the room already held leaves the draft of the turn still being written", async () => {
+    const fake = makeGateway();
+    const before = { ...reply("The turn before."), id: "message-6" };
+    fake.store(before);
+    await mount(fake.gateway);
+    expect(container.querySelector('[data-testid="room-message-message-6"]')).not.toBeNull();
+    stream(fake, delta("Current turn partial"));
+
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+    act(() => fake.emit(announced(11, before)));
+    await settle();
+
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe(
+      "Current turn partial … ",
+    );
+    expect(occurrences("The turn before.")).toBe(1);
+  });
+
   test("a question asked mid-turn does not take the draft's place when the stream drops", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);
