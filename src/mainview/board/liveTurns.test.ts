@@ -3,8 +3,10 @@ import type { SailEvent } from "../../shared/sail-models";
 import {
   liveTurns,
   NO_LIVE_TURNS,
+  revealLiveTurns,
   settleLiveTurns,
   streamGapped,
+  takingADraftsPlace,
   type LiveTurns,
 } from "./liveTurns";
 
@@ -32,7 +34,7 @@ const turnEnded = (more: Record<string, unknown> = {}) =>
 const at = (event: SailEvent, ts: string): SailEvent => ({ ...event, ts });
 
 const fold = (events: SailEvent[], from: LiveTurns = NO_LIVE_TURNS) =>
-  events.reduce(liveTurns, from);
+  events.reduce((state, event) => liveTurns(state, event), from);
 const room = (...ids: string[]) =>
   ids.map((id) => ({ id, author: "uday", created_at: "2026-10-13T10:00:05Z" }));
 const reply = (id: string, more: { created_at?: string; question?: boolean } = {}) => ({
@@ -55,6 +57,7 @@ describe("a turn is drawn once", () => {
         tools: [],
         gapped: false,
         lastEventAt: Date.parse("2026-10-13T10:00:00Z"),
+        behind: false,
       },
     ]);
   });
@@ -95,6 +98,14 @@ describe("a turn is drawn once", () => {
 
     expect(liveTurns(NO_LIVE_TURNS, loop)).toBe(NO_LIVE_TURNS);
     expect(liveTurns(NO_LIVE_TURNS, { ...loop, type: "agent_tool_finished" })).toBe(NO_LIVE_TURNS);
+  });
+
+  test("another run's turn of the same number is another draft", () => {
+    const state = fold([delta("The old member."), delta("The new member.", { run_id: "run-2" })]);
+
+    expect(state.drafts.map((draft) => [draft.runId, draft.text])).toEqual([
+      ["run-2", "The new member."],
+    ]);
   });
 
   test("the next turn of the same run is a draft of its own", () => {
@@ -243,6 +254,25 @@ describe("a reconnect loses nothing a reader needs", () => {
     expect(untouched.drafts.map((draft) => draft.turn)).toEqual([8]);
   });
 
+  test("an event that writes nothing still says its turn is open", () => {
+    const gapped = streamGapped(fold([delta("Half a sent")]));
+    const note = [reply("note-1", { created_at: "2026-10-13T10:00:30Z" })];
+
+    for (const empty of [delta(""), toolCall("finished"), toolCall("exploded")]) {
+      const heard = liveTurns(gapped, at(empty, "2026-10-13T10:00:20Z"));
+      expect(heard.drafts[0]!.gapped).toBe(false);
+      expect(heard.drafts[0]!.lastEventAt).toBe(Date.parse("2026-10-13T10:00:20Z"));
+      expect(settleLiveTurns(heard, note)).toBe(heard);
+    }
+  });
+
+  test("a gap before any text leaves no marker to read", () => {
+    const gapped = streamGapped(fold([toolCall("started", { summary: "bun test" })]));
+
+    expect(gapped.drafts[0]!.text).toBe("");
+    expect(gapped.drafts[0]!.gapped).toBe(true);
+  });
+
   test("a gap marks the turn being written and leaves an ended one as it was", () => {
     const owed = fold([delta("First."), turnEnded({ message_id: "m-1" }), delta("Second", { turn: 8 })]);
 
@@ -265,6 +295,46 @@ describe("a reconnect loses nothing a reader needs", () => {
     expect(streamGapped(NO_LIVE_TURNS)).toBe(NO_LIVE_TURNS);
     const ended = fold([delta("Done."), turnEnded({ message_id: "m-1" })]);
     expect(streamGapped(ended)).toBe(ended);
+  });
+});
+
+describe("a draft has the place a message arriving when it began would have", () => {
+  const away = (events: SailEvent[], from: LiveTurns = NO_LIVE_TURNS) =>
+    events.reduce((state, event) => liveTurns(state, event, true), from);
+
+  test("a turn that begins while the reader is away waits behind the pill, wherever they are later", () => {
+    const begun = away([delta("Away.")]);
+    expect(begun.drafts[0]!.behind).toBe(true);
+
+    expect(liveTurns(begun, delta(" Back.")).drafts[0]!.behind).toBe(true);
+  });
+
+  test("a turn that begins while the reader follows stays drawn when they move away", () => {
+    const begun = fold([delta("Following.")]);
+
+    expect(away([delta(" Away.")], begun).drafts[0]!.behind).toBe(false);
+  });
+
+  test("returning to the latest draws every draft that waited", () => {
+    const waiting = away([delta("Away.")]);
+
+    const revealed = revealLiveTurns(waiting);
+    expect(revealed.drafts.map((draft) => [draft.text, draft.behind])).toEqual([["Away.", false]]);
+    expect(revealLiveTurns(revealed)).toBe(revealed);
+    expect(revealLiveTurns(NO_LIVE_TURNS)).toBe(NO_LIVE_TURNS);
+  });
+
+  test("the message of a draft the reader can see takes its place; one behind the pill arrives as any message", () => {
+    const seen = fold([delta("Seen."), turnEnded({ message_id: "m-1" })]);
+    expect(takingADraftsPlace(seen, room("m-0"))).toEqual([]);
+    expect(takingADraftsPlace(seen, room("m-0", "m-1"))).toEqual(["m-1"]);
+
+    const lost = streamGapped(fold([delta("Half a sent")]));
+    expect(takingADraftsPlace(lost, [reply("m-2")])).toEqual(["m-2"]);
+
+    const unseen = away([delta("Unseen."), turnEnded({ message_id: "m-1" })]);
+    expect(takingADraftsPlace(unseen, room("m-1"))).toEqual([]);
+    expect(settleLiveTurns(unseen, room("m-1")).drafts).toEqual([]);
   });
 });
 
@@ -298,6 +368,12 @@ describe("an error turn is told", () => {
     expect(silent.drafts).toHaveLength(1);
     expect(silent.drafts[0]!.ended).toEqual({ messageId: undefined, isError: true, reason: "" });
     expect(settleLiveTurns(silent, room("m-1"))).toBe(silent);
+  });
+
+  test("only a true is_error is an error, and only a non-empty message_id names a message", () => {
+    const claimed = fold([delta("Done."), turnEnded({ is_error: "yes", message_id: "" })]);
+
+    expect(claimed.drafts).toEqual([]);
   });
 
   test("a clean turn end leaves its message unmarked", () => {

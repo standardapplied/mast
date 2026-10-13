@@ -40,6 +40,12 @@ export type Draft = {
   gapped: boolean;
   /** The box's time on the newest event of the turn the room saw; NaN when it was unreadable. */
   lastEventAt: number;
+  /**
+   * The reader was away from the latest when the turn began, so it waits behind the "new" pill
+   * as a message arriving then would, until they return. Decided once: a draft drawn by where
+   * the reader is would move where the reader is.
+   */
+  behind: boolean;
   ended?: { messageId?: string; isError: boolean; reason: string };
 };
 
@@ -62,26 +68,25 @@ function clip(value: unknown, limit: number): string {
 }
 
 /**
- * Whether a message the room holds takes the draft's place. A turn's end names its message. An
- * end a stream gap may have swallowed is read off the room instead: the draft yields to a reply
- * its principal wrote since the last of the turn the room saw, however and whenever the room
- * came to hold it. The box that runs the member stamps both times and posts the reply after the
- * turn's last event, so an earlier turn's reply, and a note posted before that event, are older;
- * a question is asked mid-turn and is never the reply; a time that cannot be read is no reply.
+ * The message the room holds that takes the draft's place, if any. A turn's end names its
+ * message. An end a stream gap may have swallowed is read off the room instead: the draft yields
+ * to a reply its principal wrote since the last of the turn the room saw, however and whenever
+ * the room came to hold it. The box that runs the member stamps both times and posts the reply
+ * after the turn's last event, so an earlier turn's reply, and a note posted before that event,
+ * are older; a question is asked mid-turn and is never the reply; a time that cannot be read is
+ * no reply.
  */
-function replacedBy(draft: Draft, messages: readonly HeldMessage[]): boolean {
+function replacementOf(draft: Draft, messages: readonly HeldMessage[]): HeldMessage | undefined {
   if (draft.ended) {
     const named = draft.ended.messageId;
-    return messages.some((message) => message.id === named);
+    return messages.find((message) => message.id === named);
   }
-  return (
-    draft.gapped &&
-    messages.some(
-      (message) =>
-        message.author === draft.principal &&
-        !message.question &&
-        Date.parse(message.created_at) >= draft.lastEventAt,
-    )
+  if (!draft.gapped) return undefined;
+  return messages.find(
+    (message) =>
+      message.author === draft.principal &&
+      !message.question &&
+      Date.parse(message.created_at) >= draft.lastEventAt,
   );
 }
 
@@ -108,9 +113,10 @@ function withToolCall(draft: Draft, data: Record<string, unknown>): Draft {
 
 /**
  * Folds one live event in. Anything else, any live event without a run, a turn and a principal,
- * and one that would open a draft with nothing in it, leaves the state as it was.
+ * and one that would open a draft with nothing in it, leaves the state as it was. `readerAway`
+ * says where a draft this event opens is placed.
  */
-export function liveTurns(state: LiveTurns, event: SailEvent): LiveTurns {
+export function liveTurns(state: LiveTurns, event: SailEvent, readerAway = false): LiveTurns {
   if (!isLiveTurnEvent(event.type)) return state;
   const data = event.data ?? {};
   const runId = clip(data.run_id, NAME_LIMIT);
@@ -125,7 +131,7 @@ export function liveTurns(state: LiveTurns, event: SailEvent): LiveTurns {
 
   // An event of a turn says the turn is still open, whatever a gap before it left in doubt.
   const draft: Draft = {
-    ...(known ?? { runId, turn, principal, text: "", tools: [] }),
+    ...(known ?? { runId, turn, principal, text: "", tools: [], behind: readerAway }),
     gapped: false,
     lastEventAt: Date.parse(event.ts),
   };
@@ -182,12 +188,28 @@ export function streamGapped(state: LiveTurns): LiveTurns {
   };
 }
 
+/** The reader is back at the latest: every draft that waited behind the pill is drawn. */
+export function revealLiveTurns(state: LiveTurns): LiveTurns {
+  if (!state.drafts.some((draft) => draft.behind)) return state;
+  return { ...state, drafts: state.drafts.map((draft) => ({ ...draft, behind: false })) };
+}
+
+/**
+ * The messages that take the place of a draft the reader can see. They are drawn where the
+ * draft was, wherever the reader is: behind the pill they would leave neither on screen.
+ */
+export function takingADraftsPlace(state: LiveTurns, messages: readonly HeldMessage[]): string[] {
+  return state.drafts
+    .filter((draft) => !draft.behind)
+    .flatMap((draft) => replacementOf(draft, messages)?.id ?? []);
+}
+
 /**
  * Drops every draft a message the room holds takes the place of, remembering which of those
  * messages a turn that ended early left behind. Returns the same state when nothing was replaced.
  */
 export function settleLiveTurns(state: LiveTurns, messages: readonly HeldMessage[]): LiveTurns {
-  const replaced = state.drafts.filter((draft) => replacedBy(draft, messages));
+  const replaced = state.drafts.filter((draft) => replacementOf(draft, messages) !== undefined);
   if (replaced.length === 0) return state;
   const cutShort = new Map(state.cutShort);
   for (const { ended } of replaced) {

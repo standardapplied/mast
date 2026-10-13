@@ -516,7 +516,10 @@ export function createDemoGateway(
   const liveTurnCounts = new Map<string, number>();
   const liveTurnsOpen = new Set<string>();
   const liveTurnsOwed = new Set<string>();
-  const streamLiveTurn = (spec: DemoSpec, agent: string) => {
+  const streamLiveTurn = (spec: DemoSpec) => {
+    // Codex is not a live member: its reply arrives whole, as a woken turn's does.
+    const agent = spec.engagement?.agent;
+    if (!agent || agent === "codex") return;
     if (liveTurnsOpen.has(spec.id)) return void liveTurnsOwed.add(spec.id);
     liveTurnsOpen.add(spec.id);
     const runId = `demo-live-${spec.id}`;
@@ -542,10 +545,10 @@ export function createDemoGateway(
       () => tell("agent_tool_call", { tool: "Read", status: "finished" }),
       ...rest.map((text) => () => tell("agent_text_delta", { text })),
       () => {
+        liveTurnsOpen.delete(spec.id);
         const reply = appendMessage(spec, principal, { body: DEMO_REPLY.join("") });
         tell("agent_turn_ended", { message_id: reply.id, is_error: false });
-        liveTurnsOpen.delete(spec.id);
-        if (liveTurnsOwed.delete(spec.id)) streamLiveTurn(spec, agent);
+        if (liveTurnsOwed.delete(spec.id)) streamLiveTurn(spec);
       },
     ];
     steps.forEach((step, index) => schedule(step, (index + 1) * DEMO_TURN_STEP_MS));
@@ -1230,10 +1233,7 @@ export function createDemoGateway(
       const spec = find(id);
       if (!spec) return notFound(id);
       const message = appendMessage(spec, "uday", request);
-      // Codex is not a live member: its reply arrives whole, as a woken turn's does.
-      if (spec.engagement && spec.engagement.agent !== "codex") {
-        streamLiveTurn(spec, spec.engagement.agent);
-      }
+      streamLiveTurn(spec);
       return ok({ message });
     },
 

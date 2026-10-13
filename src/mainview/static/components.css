@@ -3371,7 +3371,6 @@ button.room-section-head:hover {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 6px 0 16px;
-  scroll-behavior: smooth;
 }
 
 .room-loading {

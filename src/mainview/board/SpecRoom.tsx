@@ -28,8 +28,10 @@ import type { Gateway } from "../gateway";
 import {
   liveTurns,
   NO_LIVE_TURNS,
+  revealLiveTurns,
   settleLiveTurns,
   streamGapped,
+  takingADraftsPlace,
   type Draft,
   type LiveTurns,
 } from "./liveTurns";
@@ -51,6 +53,7 @@ import {
 
 const PAGE_SIZE = 100;
 const SCROLL_EDGE_PX = 48;
+const AT_LATEST_PX = 1;
 
 const SEVERITY_TONE: Record<Finding["severity"], BadgeTone> = {
   CRITICAL: "error",
@@ -144,6 +147,24 @@ function reconcileTimeline(
   return {
     visible: next.filter((item) => visibleIds.has(item.id)),
     buffered: next.filter((item) => bufferedIds.has(item.id) || fresh.includes(item)),
+  };
+}
+
+function byOccurrence(left: TimelineItem, right: TimelineItem): number {
+  return left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id);
+}
+
+/** Brings the named messages out from behind the pill, to where the reader is reading. */
+function inPlace(
+  tail: BufferedTail<TimelineItem>,
+  messageIds: readonly string[],
+): BufferedTail<TimelineItem> {
+  const named = (item: TimelineItem) =>
+    item.kind === "message" && messageIds.includes(item.message.id);
+  if (!tail.buffered.some(named)) return tail;
+  return {
+    visible: [...tail.visible, ...tail.buffered.filter(named)].sort(byOccurrence),
+    buffered: tail.buffered.filter((item) => !named(item)),
   };
 }
 
@@ -315,15 +336,17 @@ export function SpecRoom({
 
   /**
    * Every change to the live turns is settled against the messages the room holds, in the
-   * render that shows them, so a draft leaves in the render its message arrives in: the
-   * reader never sees neither. A draft is drawn where the typing row is, at the end of the
-   * timeline wherever the reader is: drawing it by where they are would move where they are.
+   * render that shows them: a draft the reader can see leaves in the render its message is
+   * drawn in, where the draft was, so they never see neither.
    */
   const advanceLive = useCallback((step: (state: LiveTurns) => LiveTurns) => {
-    const next = settleLiveTurns(step(liveNow.current), sources.current.messages);
+    const stepped = step(liveNow.current);
+    const taking = takingADraftsPlace(stepped, sources.current.messages);
+    const next = settleLiveTurns(stepped, sources.current.messages);
     if (next === liveNow.current) return;
     liveNow.current = next;
     setLive(next);
+    if (taking.length > 0) setTail((previous) => inPlace(previous, taking));
   }, []);
 
   /**
@@ -336,6 +359,21 @@ export function SpecRoom({
     setTail((previous) => reconcileTimeline(previous, timeline, update, atLatest.current));
     advanceLive((state) => state);
   }, [advanceLive]);
+
+  const follow = useCallback((latest: boolean) => {
+    atLatest.current = latest;
+    if (latest) advanceLive(revealLiveTurns);
+  }, [advanceLive]);
+
+  /** The room's own move to the latest, remembered so the reader's next move is told from it. */
+  const scrollToLatest = useCallback(() => {
+    requestAnimationFrame(() => {
+      const element = scroller.current;
+      if (!element) return;
+      element.scrollTop = element.scrollHeight;
+      scrolledTo.current = element.scrollTop;
+    });
+  }, []);
 
   const loadReviewDetails = useCallback(
     async (reviews: ReviewView[]): Promise<ReviewDetailResponse[]> => {
@@ -426,18 +464,16 @@ export function SpecRoom({
   );
 
   useEffect(() => {
-    if (!atLatest.current) return;
-    requestAnimationFrame(() => {
-      const element = scroller.current;
-      if (element) element.scrollTop = element.scrollHeight;
-    });
-  }, [tail.visible.length, typing, live]);
+    if (atLatest.current) scrollToLatest();
+  }, [scrollToLatest, tail.visible.length, typing, live]);
 
   useEffect(() => {
     advanceLive(() => NO_LIVE_TURNS);
     const stream = gateway.openRoomStream(roomId);
     const offEvent = stream.onEvent((event) => {
-      if (event.spec === roomId) advanceLive((state) => liveTurns(state, event));
+      if (event.spec === roomId) {
+        advanceLive((state) => liveTurns(state, event, !atLatest.current));
+      }
     });
     const offState = stream.onState((state) => {
       if (state === "reconnecting") advanceLive(streamGapped);
@@ -702,33 +738,30 @@ export function SpecRoom({
   }, [gapFill, gateway]);
 
   const jumpToLatest = useCallback(() => {
-    atLatest.current = true;
+    follow(true);
     setTail((previous) => ({
-      visible: [...previous.visible, ...previous.buffered].sort(
-        (left, right) =>
-          left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id),
-      ),
+      visible: [...previous.visible, ...previous.buffered].sort(byOccurrence),
       buffered: [],
     }));
-    requestAnimationFrame(() => {
-      const element = scroller.current;
-      if (element) element.scrollTop = element.scrollHeight;
-    });
-  }, []);
+    scrollToLatest();
+  }, [follow, scrollToLatest]);
 
   /**
-   * A reader follows the latest until they move up, and again once they are back at it. The
-   * room's own glide to a bottom that just moved passes through places that are not the bottom,
-   * and a turn being written moves it many times a second: moving down is never leaving.
+   * A reader follows the latest until they move up, and again once they are back within reach
+   * of it. A turn being written moves the latest many times a second, and a scroll is told
+   * after it may have moved again, so the latest moving away is never the reader leaving; and
+   * a reader who moves up at all has left, or the next delta would pull them back. Moving up
+   * ends at the very latest only when what was below them shrank.
    */
   const onScroll = (event: UIEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
-    const latest =
-      element.scrollHeight - element.scrollTop - element.clientHeight <= SCROLL_EDGE_PX;
     const movedUp = element.scrollTop < scrolledTo.current;
     scrolledTo.current = element.scrollTop;
+    const latest =
+      element.scrollHeight - element.scrollTop - element.clientHeight <=
+      (movedUp ? AT_LATEST_PX : SCROLL_EDGE_PX);
     if (latest && !atLatest.current && tail.buffered.length > 0) return jumpToLatest();
-    atLatest.current = latest || (atLatest.current && !movedUp);
+    follow(latest || (atLatest.current && !movedUp));
   };
 
   const loadEarlier = async () => {
@@ -742,7 +775,7 @@ export function SpecRoom({
     setLoadingEarlier(false);
     if (!result.ok) return showToast("error", result.error.message);
     setHasEarlier(result.value.messages.length === PAGE_SIZE);
-    atLatest.current = false;
+    follow(false);
     applySources(
       {
         ...sources.current,
@@ -804,7 +837,7 @@ export function SpecRoom({
       delivery: "pending",
     };
     setDraft("");
-    atLatest.current = true;
+    follow(true);
     applySources(
       { ...sources.current, messages: mergeMessages(sources.current.messages, [message]) },
       "replace",
@@ -819,6 +852,7 @@ export function SpecRoom({
   };
 
   const groups = groupTimeline(tail.visible);
+  const behindPill = tail.buffered.length + live.drafts.filter((entry) => entry.behind).length;
 
   return (
     <div className="spec-room">
@@ -1012,13 +1046,15 @@ export function SpecRoom({
               </Fragment>
             );
           })}
-          {live.drafts.map((entry) => (
-            <DraftRow
-              key={`${entry.runId}:${entry.turn}`}
-              draft={entry}
-              label={authorLabel(entry.principal, sources.current.runs)}
-            />
-          ))}
+          {live.drafts
+            .filter((entry) => !entry.behind)
+            .map((entry) => (
+              <DraftRow
+                key={`${entry.runId}:${entry.turn}`}
+                draft={entry}
+                label={authorLabel(entry.principal, sources.current.runs)}
+              />
+            ))}
           {live.drafts.length === 0 && (
             <TypingRow
               specId={specId}
@@ -1027,9 +1063,9 @@ export function SpecRoom({
             />
           )}
       </div>
-      {tail.buffered.length > 0 && (
+      {behindPill > 0 && (
         <button type="button" className="room-new-pill" onClick={jumpToLatest}>
-          {tail.buffered.length} new
+          {behindPill} new
         </button>
       )}
       {canWrite ? (
