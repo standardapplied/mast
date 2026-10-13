@@ -153,6 +153,25 @@ describe("a turn that begins is drawn before anything of it is written", () => {
     expect(next.drafts.map((draft) => draft.turn)).toEqual([8]);
   });
 
+  test("a gap drops a draft that had written nothing, and the turn's next event draws it again", () => {
+    const gapped = streamGapped(fold([turnBegan()]));
+    expect(gapped.drafts).toEqual([]);
+
+    expect(liveTurns(gapped, delta("Back.")).drafts.map((draft) => draft.text)).toEqual(["Back."]);
+  });
+
+  test("a gap keeps a draft that wrote only a tool step, and one whose end named its message", () => {
+    const tooled = streamGapped(fold([turnBegan(), toolCall("started", { summary: "README.md" })]));
+    expect(tooled.drafts.map((draft) => draft.gapped)).toEqual([true]);
+
+    const waiting = fold([
+      turnBegan(),
+      turnEnded({ message_id: "m-9" }),
+      delta("Next.", { turn: 8 }),
+    ]);
+    expect(streamGapped(waiting).drafts.map((draft) => draft.turn)).toEqual([7, 8]);
+  });
+
   test("a turn that began while the reader was away waits behind the pill", () => {
     expect(liveTurns(NO_LIVE_TURNS, turnBegan(), true).drafts[0]!.behind).toBe(true);
   });

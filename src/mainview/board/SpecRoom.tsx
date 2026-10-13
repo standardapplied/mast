@@ -27,6 +27,7 @@ import { useToast } from "../components/Toast";
 import { Badge, Button, type BadgeTone } from "../components/ui";
 import type { Gateway } from "../gateway";
 import {
+  hasWritten,
   liveTurns,
   NO_LIVE_TURNS,
   revealLiveTurns,
@@ -253,8 +254,9 @@ function TypingDots({ name }: { name: string }) {
 
 /**
  * A turn as it is written: the member's row, with the text so far, a line per tool step, and
- * the dots that say it is still working until its end is told. The text is the box's payload
- * drawn as text, never as Markdown; the message it becomes is what gets rendered.
+ * the dots that say it is still working: until its end is told, and not while a stream gap
+ * leaves that in doubt. The text is the box's payload drawn as text, never as Markdown; the
+ * message it becomes is what gets rendered.
  */
 function DraftRow({ draft, label }: { draft: Draft; label: string }) {
   const cutShort = draft.ended?.isError ? draft.ended : undefined;
@@ -284,7 +286,7 @@ function DraftRow({ draft, label }: { draft: Draft; label: string }) {
             ))}
           </ul>
         )}
-        {!draft.ended && <TypingDots name={label} />}
+        {!draft.ended && !draft.gapped && <TypingDots name={label} />}
         {cutShort && <TurnCutShort reason={cutShort.reason} />}
       </div>
     </article>
@@ -349,6 +351,7 @@ export function SpecRoom({
   const scroller = useRef<HTMLDivElement>(null);
   const sources = useRef<Sources>(EMPTY_SOURCES);
   const liveNow = useRef<LiveTurns>(NO_LIVE_TURNS);
+  const tailDrawn = useRef(tail);
   const atLatest = useRef(true);
   const scrolledTo = useRef(0);
   const posting = useRef(false);
@@ -361,7 +364,8 @@ export function SpecRoom({
    * Every change to the live turns is settled against the messages the room holds, in the
    * render that shows them: a draft the reader can see leaves in the render its message is
    * drawn in, where the draft was, so they never see neither. A reader who is away is told of
-   * it by the pill, as of any message that arrives while they are.
+   * it by the pill, as of any message that arrives while they are; one already drawn before they
+   * left is not news.
    */
   const advanceLive = useCallback((step: (state: LiveTurns) => LiveTurns) => {
     const stepped = step(liveNow.current);
@@ -372,7 +376,12 @@ export function SpecRoom({
     setLive(next);
     if (taking.length === 0) return;
     setTail((previous) => inPlace(previous, taking));
-    if (!atLatest.current) setRepliesUnseen((unseen) => unseen + taking.length);
+    if (atLatest.current) return;
+    const seen = tailDrawn.current.visible;
+    const news = taking.filter(
+      (id) => !seen.some((item) => item.kind === "message" && item.message.id === id),
+    );
+    setRepliesUnseen((unseen) => unseen + news.length);
   }, []);
 
   /**
@@ -508,6 +517,7 @@ export function SpecRoom({
    * before the room draws is undone once.
    */
   useLayoutEffect(() => {
+    tailDrawn.current = tail;
     const element = scroller.current;
     if (!element || element.clientHeight === 0) return;
     scrolledTo.current = element.scrollTop;
@@ -896,7 +906,9 @@ export function SpecRoom({
 
   const groups = groupTimeline(tail.visible);
   const behindPill =
-    tail.buffered.length + live.drafts.filter((entry) => entry.behind).length + repliesUnseen;
+    tail.buffered.length +
+    live.drafts.filter((entry) => entry.behind && hasWritten(entry)).length +
+    repliesUnseen;
 
   return (
     <div className="spec-room">

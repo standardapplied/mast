@@ -95,6 +95,11 @@ function replacementOf(draft: Draft, messages: readonly HeldMessage[]): HeldMess
   );
 }
 
+/** Whether the turn has written anything: a draft that has not stands only for the member working. */
+export function hasWritten(draft: Draft): boolean {
+  return draft.text !== "" || draft.tools.length > 0;
+}
+
 /** A turn that is over leaves a draft only for the message its end named. */
 function awaitsMessage(draft: Draft): boolean {
   return draft.ended?.messageId !== undefined;
@@ -175,23 +180,29 @@ export function liveTurns(state: LiveTurns, event: SailEvent, readerAway = false
   });
 }
 
-/** The stream dropped: every open draft keeps what arrived and marks where text went missing. */
+/**
+ * The stream dropped: every open draft keeps what arrived and marks where text went missing. One
+ * that had written nothing has nothing to keep, and whether its member still works is no longer
+ * known, so it goes; the turn's next event draws it again.
+ */
 export function streamGapped(state: LiveTurns): LiveTurns {
   if (!state.drafts.some((draft) => !draft.ended)) return state;
   return {
     ...state,
-    drafts: state.drafts.map((draft) =>
-      draft.ended
-        ? draft
-        : {
-            ...draft,
-            gapped: true,
-            text:
-              draft.text === "" || draft.text.endsWith(GAP_MARK)
-                ? draft.text
-                : draft.text + GAP_MARK,
-          },
-    ),
+    drafts: state.drafts
+      .filter((draft) => draft.ended || hasWritten(draft))
+      .map((draft) =>
+        draft.ended
+          ? draft
+          : {
+              ...draft,
+              gapped: true,
+              text:
+                draft.text === "" || draft.text.endsWith(GAP_MARK)
+                  ? draft.text
+                  : draft.text + GAP_MARK,
+            },
+      ),
   };
 }
 

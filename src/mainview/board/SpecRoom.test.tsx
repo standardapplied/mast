@@ -1372,6 +1372,24 @@ describe("SpecRoom live turns", () => {
     expect(container.querySelector(".typing-dots")).toBeNull();
   });
 
+  test("a stream that drops says nothing of a member working until the turn is heard from again", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+
+    stream(fake, live("agent_turn_began"));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+    expect(draft()).toBeNull();
+
+    stream(fake, delta("Half a sent"));
+    expect(draft()?.querySelector(".typing-dots")).not.toBeNull();
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Half a sent … ");
+    expect(draft()?.querySelector(".typing-dots")).toBeNull();
+
+    stream(fake, delta("ence."));
+    expect(draft()?.querySelector(".typing-dots")).not.toBeNull();
+  });
+
   test("a turn that failed before it wrote anything says so, with no dots", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);
@@ -1885,6 +1903,40 @@ describe("SpecRoom live turns", () => {
 
     act(() => pill()!.click());
     expect(container.textContent).toContain("Landed while away");
+    expect(pill()).toBeNull();
+  });
+
+  test("a turn that begins while the reader is away is on the pill once it has written something", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    scrollTo(900);
+    scrollTo(0);
+
+    stream(fake, live("agent_turn_began"));
+    expect(draft()).toBeNull();
+    expect(pill()).toBeNull();
+
+    stream(fake, delta("Something."));
+    expect(pill()?.textContent).toBe("1 new");
+
+    stream(fake, turnEnded());
+    expect(pill()).toBeNull();
+  });
+
+  test("a reply the reader saw arrive before they left is not news when its turn's end names it", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    stream(fake, delta("The full reply."));
+    act(() => fake.receive(reply("The full reply, posted.")));
+    await settle();
+    expect(container.textContent).toContain("The full reply, posted.");
+
+    scrollTo(400, 1400);
+    stream(fake, turnEnded({ message_id: "message-7" }));
+
+    expect(draft()).toBeNull();
     expect(pill()).toBeNull();
   });
 
