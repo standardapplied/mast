@@ -1119,31 +1119,16 @@ describe("SpecRoom live turns", () => {
   const frames: FrameRequestCallback[] = [];
   const paint = () => act(() => frames.splice(0).forEach((frame) => frame(0)));
   const timeline = () => container.querySelector<HTMLElement>('[data-testid="room-timeline"]')!;
-  /** What the room asked to hear of its window's size, told when a test resizes it. */
-  const resizes: Array<() => void> = [];
-  const resize = () => act(() => resizes.forEach((told) => told()));
   let requestFrame: typeof globalThis.requestAnimationFrame;
-  let resizeObserver: typeof globalThis.ResizeObserver;
 
   beforeEach(() => {
     frames.length = 0;
-    resizes.length = 0;
     requestFrame = globalThis.requestAnimationFrame;
-    resizeObserver = globalThis.ResizeObserver;
     globalThis.requestAnimationFrame = (frame) => frames.push(frame);
-    globalThis.ResizeObserver = class implements ResizeObserver {
-      constructor(callback: ResizeObserverCallback) {
-        resizes.push(() => callback([], this));
-      }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
   });
 
   afterEach(() => {
     globalThis.requestAnimationFrame = requestFrame;
-    globalThis.ResizeObserver = resizeObserver;
     act(() => presenceStore.noteRuns([]));
   });
 
@@ -2095,18 +2080,16 @@ describe("SpecRoom live turns", () => {
     expect(timeline().scrollTop).toBe(360);
   });
 
-  test("a window that grows taller under a reader who follows has not moved them", async () => {
+  test("a window that grows taller while a turn is written has not moved a reader who follows", async () => {
     const fake = makeGateway();
     fake.receive(remoteMessage("message-old", "Already visible"));
     await mount(fake.gateway);
     scrollTo(900);
     paint();
 
-    layOut(850, 1000, 150);
-    resize();
     layOut(850, 1100, 150);
     stream(fake, delta("Written as the window grew."));
-    scrollTo(850, 1100, 150);
+    tellScroll();
     paint();
 
     expect(timeline().scrollTop).toBe(1100);
@@ -2123,28 +2106,11 @@ describe("SpecRoom live turns", () => {
     act(() => fake.receive(remoteMessage("message-2", "Landed while hidden")));
     await settle();
     layOut(0, 1000);
-    resize();
     paint();
 
     expect(timeline().scrollTop).toBe(0);
     expect(container.textContent).not.toContain("Landed while hidden");
     expect(pill()?.textContent).toBe("1 new");
-  });
-
-  test("a room that returns to the screen takes a reader who follows to the latest", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway);
-    scrollTo(900);
-    paint();
-    layOut(0, 0, 0);
-    stream(fake, delta("Written while hidden."));
-    paint();
-
-    layOut(900, 1400);
-    resize();
-    paint();
-
-    expect(timeline().scrollTop).toBe(1400);
   });
 
   test("a room that is not on screen keeps no place: the reader's first move up after it returns is still told", async () => {

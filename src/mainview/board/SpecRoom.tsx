@@ -381,25 +381,9 @@ export function SpecRoom({
   }, [advanceLive]);
 
   /**
-   * The room has just been laid out anew, by what it drew or by its window, and the engine may
-   * have moved the reader to fit: a reply shorter than its draft leaves them lower than they
-   * were. The scroll that tells of it comes a frame later, when the end may have moved again,
-   * and would read as the reader moving up. So where a layout leaves them is where their next
-   * move is told from, and a reader it leaves resting at the very end follows. An engine tells
-   * a reader's own scroll before anything else runs in the frame it learns of it, so none of
-   * theirs is waiting to be mistaken for the layout's.
-   */
-  const laidOut = useCallback(() => {
-    const element = scroller.current;
-    if (!element || element.clientHeight === 0) return;
-    scrolledTo.current = element.scrollTop;
-    if (fromLatest(element) <= AT_LATEST_PX) follow(true);
-  }, [follow]);
-
-  /**
-   * In the frame after the room was laid out anew, a reader who still follows is taken to the
-   * latest, and that move is remembered so their next one is told from it. One who has left by
-   * then is let be, and a room that is not on screen has no place to keep.
+   * In the frame after the room drew, a reader who still follows is taken to the latest, and
+   * that move is remembered so their next one is told from it. One who has left by then is let
+   * be, and a room that is not on screen has no place to keep.
    */
   const keepPlace = useCallback(() => {
     requestAnimationFrame(() => {
@@ -498,20 +482,22 @@ export function SpecRoom({
     [engagement, specId, presenceVersion, lastAgentReplyAt],
   );
 
-  useLayoutEffect(laidOut);
+  /**
+   * The room has just drawn, and the engine may have moved the reader to fit: a reply shorter
+   * than its draft leaves them lower than they were. The scroll that tells of it comes a frame
+   * later, when the end may have moved again, and would read as the reader moving up. So where
+   * a layout leaves them is where their next move is told from, and a reader it leaves resting
+   * at the very end follows. An engine tells a reader's own scroll before anything else runs in
+   * the frame it learns of it, so none of theirs is waiting to be taken for the layout's.
+   */
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    if (!element || element.clientHeight === 0) return;
+    scrolledTo.current = element.scrollTop;
+    if (fromLatest(element) <= AT_LATEST_PX) follow(true);
+  });
 
   useEffect(keepPlace, [keepPlace, tail.visible.length, typing, live]);
-
-  useEffect(() => {
-    const element = scroller.current;
-    if (!element) return;
-    const resized = new ResizeObserver(() => {
-      laidOut();
-      keepPlace();
-    });
-    resized.observe(element);
-    return () => resized.disconnect();
-  }, [keepPlace, laidOut]);
 
   useEffect(() => {
     advanceLive(() => NO_LIVE_TURNS);
