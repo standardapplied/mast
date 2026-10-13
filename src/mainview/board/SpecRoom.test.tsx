@@ -2112,6 +2112,25 @@ describe("SpecRoom live turns", () => {
     expect(timeline().scrollTop).toBe(1100);
   });
 
+  test("a reader who was away when the room left the screen is still away when it returns", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    scrollTo(0);
+    layOut(0, 0, 0);
+
+    act(() => fake.receive(remoteMessage("message-2", "Landed while hidden")));
+    await settle();
+    layOut(0, 1000);
+    resize();
+    paint();
+
+    expect(timeline().scrollTop).toBe(0);
+    expect(container.textContent).not.toContain("Landed while hidden");
+    expect(pill()?.textContent).toBe("1 new");
+  });
+
   test("a room that returns to the screen takes a reader who follows to the latest", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);
