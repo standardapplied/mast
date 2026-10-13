@@ -1163,6 +1163,29 @@ describe("SpecRoom live turns", () => {
     expect(draft()).toBeNull();
   });
 
+  test("a room swapped in place forgets the replies the reader had not seen in the old one", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, "room-a");
+    scrollTo(900);
+    stream(fake, live("agent_text_delta", { text: "Room A's turn." }, "room-a"));
+    scrollTo(400, 1400);
+    stream(fake, live("agent_turn_ended", { is_error: false, message_id: "message-7" }, "room-a"));
+    act(() => fake.receive(reply("Room A's turn.")));
+    await settle();
+    expect(pill()?.textContent).toBe("1 new");
+
+    act(() =>
+      root.render(
+        <ToastProvider>
+          <SpecRoom gateway={fake.gateway} specId="s1" roomId="room-b" canWrite />
+        </ToastProvider>,
+      ),
+    );
+    await settle();
+
+    expect(pill()).toBeNull();
+  });
+
   test("a spec whose conversation lives in another room streams that room", async () => {
     const fake = makeGateway();
     await mount(fake.gateway, undefined, undefined, "room-9");
@@ -1302,6 +1325,62 @@ describe("SpecRoom live turns", () => {
     stream(fake, delta("Here"));
     expect(container.querySelector(TYPING)).toBeNull();
     expect(draft()).not.toBeNull();
+  });
+
+  test("on a later turn of the same run the member is shown working from the turn's beginning to its end", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+    chatTurnStarted();
+    stream(fake, delta("First answer."), turnEnded({ message_id: "message-7" }));
+    act(() => fake.receive(reply("First answer.", new Date(Date.now() + 60_000).toISOString())));
+    await settle();
+    expect(container.querySelector(TYPING)).toBeNull();
+
+    enterMessage("And then?");
+    await settle();
+    const next = () => container.querySelector<HTMLElement>('[data-testid="draft-run-7-8"]');
+    expect(next()).toBeNull();
+
+    stream(fake, live("agent_turn_began", { turn: 8 }));
+    expect(next()?.querySelector(".typing-dots")?.getAttribute("aria-label")).toBe(
+      "claude-code is typing",
+    );
+    expect(container.querySelectorAll(".typing-dots")).toHaveLength(1);
+
+    stream(
+      fake,
+      live("agent_text_delta", { text: "Then this.", turn: 8 }),
+      live("agent_tool_call", { tool: "Read", summary: "README.md", status: "started", turn: 8 }),
+    );
+    expect(next()?.querySelector(".room-draft-text")?.textContent).toBe("Then this.");
+    expect(next()?.querySelector(".typing-dots")).not.toBeNull();
+
+    stream(fake, live("agent_turn_ended", { is_error: false, message_id: "message-8", turn: 8 }));
+    expect(next()?.querySelector(".room-draft-text")?.textContent).toBe("Then this.");
+    expect(next()?.querySelector(".typing-dots")).toBeNull();
+  });
+
+  test("a turn that begins and ends having said nothing leaves no dots behind", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+
+    stream(fake, live("agent_turn_began"));
+    expect(draft()?.querySelector(".typing-dots")).not.toBeNull();
+
+    stream(fake, turnEnded());
+    expect(draft()).toBeNull();
+    expect(container.querySelector(".typing-dots")).toBeNull();
+  });
+
+  test("a turn that failed before it wrote anything says so, with no dots", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+
+    stream(fake, live("agent_turn_began"), turnEnded({ is_error: true, reason: "out of memory" }));
+
+    expect(draft()?.querySelector(".typing-dots")).toBeNull();
+    expect(draft()?.textContent).toContain("the agent's turn ended early");
+    expect(draft()?.textContent).toContain("out of memory");
   });
 
   test("a stream that drops mid-turn keeps the draft with a marker, and the final message still replaces it", async () => {
@@ -1777,7 +1856,7 @@ describe("SpecRoom live turns", () => {
     expect(pill()).toBeNull();
   });
 
-  test("a reader who scrolls up while a turn is written keeps its draft, and its message takes the draft's place where they are", async () => {
+  test("a reader who scrolls up while a turn is written keeps its draft; its message takes the draft's place and the pill tells them of it", async () => {
     const fake = makeGateway();
     fake.receive(remoteMessage("message-old", "Already visible"));
     await mount(fake.gateway);
@@ -1795,14 +1874,18 @@ describe("SpecRoom live turns", () => {
 
     expect(draft()).toBeNull();
     expect(container.querySelector('[data-testid="room-message-message-7"]')).not.toBeNull();
-    expect(pill()).toBeNull();
+    expect(pill()?.textContent).toBe("1 new");
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((count) => count === 1)).toBe(true);
 
     act(() => fake.receive(remoteMessage("message-8", "Landed while away")));
     await settle();
     expect(container.textContent).not.toContain("Landed while away");
-    expect(pill()?.textContent).toBe("1 new");
+    expect(pill()?.textContent).toBe("2 new");
+
+    act(() => pill()!.click());
+    expect(container.textContent).toContain("Landed while away");
+    expect(pill()).toBeNull();
   });
 
   test("a message that waited behind the pill before its turn's end named it comes out to take the draft's place", async () => {
@@ -1822,7 +1905,7 @@ describe("SpecRoom live turns", () => {
 
     expect(draft()).toBeNull();
     expect(container.textContent).toContain("The full reply, posted.");
-    expect(pill()).toBeNull();
+    expect(pill()?.textContent).toBe("1 new");
   });
 
   test("the bottom moving away under a reader is not the reader leaving; moving up is, until they are back", async () => {
@@ -1969,9 +2052,10 @@ describe("SpecRoom live turns", () => {
     act(() => fake.receive(reply("Short.")));
     await settle();
 
+    expect(pill()?.textContent).toBe("1 new");
     stream(fake, live("agent_text_delta", { text: "The next turn.", turn: 8 }));
     expect(container.querySelector('[data-testid="draft-run-7-8"]')).toBeNull();
-    expect(pill()?.textContent).toBe("1 new");
+    expect(pill()?.textContent).toBe("2 new");
   });
 
   test("a reader the room finds resting at the very end has nothing left behind the pill", async () => {
@@ -2171,7 +2255,7 @@ describe("SpecRoom live turns", () => {
     await settle();
 
     expect(container.textContent).not.toContain("Behind the pill");
-    expect(pill()?.textContent).toBe("1 new");
+    expect(pill()?.textContent).toBe("2 new");
     const drawn = () =>
       [...container.querySelectorAll('[data-testid^="room-message-"]')].map((row) =>
         row.getAttribute("data-testid"),

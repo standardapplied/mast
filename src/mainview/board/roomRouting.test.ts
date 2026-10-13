@@ -22,6 +22,7 @@ describe("roomRefreshFor", () => {
       "agent_log_chunk",
       "agent_presence",
       "heartbeat",
+      "agent_turn_began",
       "agent_text_delta",
       "agent_tool_call",
       "agent_turn_ended",

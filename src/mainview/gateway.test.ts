@@ -160,6 +160,7 @@ describe("the demo's live member", () => {
     steps.forEach((step) => step());
 
     expect(live.map((event) => [event.type, event.data?.status].filter(Boolean).join(":"))).toEqual([
+      "agent_turn_began",
       "agent_text_delta",
       "agent_tool_call:started",
       "agent_tool_call:finished",

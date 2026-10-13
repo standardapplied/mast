@@ -9,7 +9,12 @@ import type { SailEvent } from "../../shared/sail-models";
  * Framework-free and pure; the room holds the state and says which messages it has.
  */
 
-export const LIVE_TURN_EVENT_TYPES = ["agent_text_delta", "agent_tool_call", "agent_turn_ended"];
+export const LIVE_TURN_EVENT_TYPES = [
+  "agent_turn_began",
+  "agent_text_delta",
+  "agent_tool_call",
+  "agent_turn_ended",
+];
 
 const LIVE_TURN_EVENTS = new Set(LIVE_TURN_EVENT_TYPES);
 
@@ -113,8 +118,9 @@ function withToolCall(draft: Draft, data: Record<string, unknown>): Draft {
 
 /**
  * Folds one live event in. Anything else, any live event without a run, a turn and a principal,
- * and one that would open a draft with nothing in it, leaves the state as it was. `readerAway`
- * says where a draft this event opens is placed.
+ * and one that would open a draft with nothing in it, leaves the state as it was: only a turn's
+ * beginning opens an empty draft, which stands for the member working. `readerAway` says where a
+ * draft this event opens is placed.
  */
 export function liveTurns(state: LiveTurns, event: SailEvent, readerAway = false): LiveTurns {
   if (!isLiveTurnEvent(event.type)) return state;
@@ -144,6 +150,7 @@ export function liveTurns(state: LiveTurns, event: SailEvent, readerAway = false
       : [...state.drafts.filter(awaitsMessage), next].slice(-DRAFT_LIMIT),
   });
 
+  if (event.type === "agent_turn_began") return place(draft);
   if (event.type === "agent_text_delta") {
     const text = clip(data.text, TEXT_LIMIT);
     if (!known && text === "") return state;

@@ -241,10 +241,20 @@ function TurnCutShort({ reason }: { reason: string }) {
   );
 }
 
+function TypingDots({ name }: { name: string }) {
+  return (
+    <span className="typing-dots" aria-label={name + " is typing"}>
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
+
 /**
- * A turn as it is written: the member's row, with the text so far and a line per tool step.
- * The text is the box's payload drawn as text, never as Markdown; the message it becomes is
- * what gets rendered.
+ * A turn as it is written: the member's row, with the text so far, a line per tool step, and
+ * the dots that say it is still working until its end is told. The text is the box's payload
+ * drawn as text, never as Markdown; the message it becomes is what gets rendered.
  */
 function DraftRow({ draft, label }: { draft: Draft; label: string }) {
   const cutShort = draft.ended?.isError ? draft.ended : undefined;
@@ -274,6 +284,7 @@ function DraftRow({ draft, label }: { draft: Draft; label: string }) {
             ))}
           </ul>
         )}
+        {!draft.ended && <TypingDots name={label} />}
         {cutShort && <TurnCutShort reason={cutShort.reason} />}
       </div>
     </article>
@@ -332,6 +343,7 @@ export function SpecRoom({
   const [hasEarlier, setHasEarlier] = useState(false);
   const [draft, setDraft] = useState("");
   const [live, setLive] = useState<LiveTurns>(NO_LIVE_TURNS);
+  const [repliesUnseen, setRepliesUnseen] = useState(0);
   const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
   const [snapshotsProject, setSnapshotsProject] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -348,7 +360,8 @@ export function SpecRoom({
   /**
    * Every change to the live turns is settled against the messages the room holds, in the
    * render that shows them: a draft the reader can see leaves in the render its message is
-   * drawn in, where the draft was, so they never see neither.
+   * drawn in, where the draft was, so they never see neither. A reader who is away is told of
+   * it by the pill, as of any message that arrives while they are.
    */
   const advanceLive = useCallback((step: (state: LiveTurns) => LiveTurns) => {
     const stepped = step(liveNow.current);
@@ -357,7 +370,9 @@ export function SpecRoom({
     if (next === liveNow.current) return;
     liveNow.current = next;
     setLive(next);
-    if (taking.length > 0) setTail((previous) => inPlace(previous, taking));
+    if (taking.length === 0) return;
+    setTail((previous) => inPlace(previous, taking));
+    if (!atLatest.current) setRepliesUnseen((unseen) => unseen + taking.length);
   }, []);
 
   /**
@@ -378,6 +393,7 @@ export function SpecRoom({
     if (!returned) return;
     advanceLive(revealLiveTurns);
     setTail(released);
+    setRepliesUnseen(0);
   }, [advanceLive]);
 
   /**
@@ -502,6 +518,7 @@ export function SpecRoom({
 
   useEffect(() => {
     advanceLive(() => NO_LIVE_TURNS);
+    setRepliesUnseen(0);
     const stream = gateway.openRoomStream(roomId);
     const offEvent = stream.onEvent((event) => {
       if (event.spec === roomId) {
@@ -878,7 +895,8 @@ export function SpecRoom({
   };
 
   const groups = groupTimeline(tail.visible);
-  const behindPill = tail.buffered.length + live.drafts.filter((entry) => entry.behind).length;
+  const behindPill =
+    tail.buffered.length + live.drafts.filter((entry) => entry.behind).length + repliesUnseen;
 
   return (
     <div className="spec-room">
@@ -1187,11 +1205,7 @@ function TypingRow({
         <header className="room-message-head">
           <strong>{engagement.agent}</strong>
         </header>
-        <span className="typing-dots" aria-label={engagement.agent + " is typing"}>
-          <span />
-          <span />
-          <span />
-        </span>
+        <TypingDots name={engagement.agent} />
       </div>
     </article>
   );
