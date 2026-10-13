@@ -1391,6 +1391,55 @@ describe("SpecRoom live turns", () => {
     expect(occurrences("Half a sent")).toBe(1);
   });
 
+  test("an earlier turn's reply paged in by a recovery fetch leaves the draft of the turn still being written", async () => {
+    const fake = makeGateway();
+    fake.store({ ...reply("The turn before.", "2026-07-28T09:30:00Z"), id: "msg-000" });
+    const missed = { ...remoteMessage("msg-001", "An old aside"), author: "priya" };
+    fake.store(missed);
+    for (let i = 2; i <= 101; i++) {
+      fake.store(remoteMessage(`msg-${String(i).padStart(3, "0")}`, `Body ${i}`));
+    }
+    await mount(fake.gateway);
+    expect(container.querySelector('[data-testid="room-message-msg-000"]')).toBeNull();
+    stream(fake, delta("Current turn partial"));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+
+    act(() => fake.emit(announced(12, missed)));
+    await settle();
+
+    expect(fake.calls.messageOptions.at(-1)).toEqual({ before: "msg-002", limit: 100 });
+    expect(container.querySelector('[data-testid="room-message-msg-000"]')).not.toBeNull();
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe(
+      "Current turn partial … ",
+    );
+  });
+
+  test("an earlier turn's reply first loaded mid-turn, after the room's message load failed, leaves the draft", async () => {
+    const fake = makeGateway();
+    fake.store({ ...reply("The turn before.", "2026-07-28T09:30:00Z"), id: "message-5" });
+    let failing = true;
+    const gateway = {
+      ...fake.gateway,
+      listSpecMessages: async (...request: Parameters<Gateway["listSpecMessages"]>) =>
+        failing
+          ? { ok: false as const, error: { status: 503, code: "unavailable", message: "down" } }
+          : fake.gateway.listSpecMessages(...request),
+    };
+    await mount(gateway);
+    expect(container.querySelector('[data-testid="room-message-message-5"]')).toBeNull();
+    stream(fake, delta("Current turn partial"));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+
+    failing = false;
+    act(() => fake.receive({ ...reply("Any news?"), id: "message-6", author: "priya" }));
+    await settle();
+
+    expect(container.querySelector('[data-testid="room-message-message-5"]')).not.toBeNull();
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe(
+      "Current turn partial … ",
+    );
+  });
+
   test("a question fetched before its event leaves the draft of the turn still being written", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);

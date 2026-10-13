@@ -36,6 +36,8 @@ export type Draft = {
   tools: ToolLine[];
   /** The stream dropped while this turn was open, so its end may never be told. */
   gapped: boolean;
+  /** The box's time on the first event of the turn the room saw; NaN when it was unreadable. */
+  firstEventAt: number;
   /**
    * The newest message the principal posted while the turn was open. A question is never it:
    * the member asks one mid-turn and goes on writing.
@@ -93,16 +95,21 @@ function withToolCall(draft: Draft, data: Record<string, unknown>): Draft {
 
 /**
  * A message its author posted while a turn of theirs is open may be that turn's reply, however
- * the room came to know of it: by its event, or by a fetch that outran the event.
+ * the room came to know of it: by its event, or by a fetch that outran the event. A fetch also
+ * brings replies of earlier turns, so only a message written since the turn's first event
+ * counts; the box that runs the member stamps both, and a time that cannot be read is no reply.
  */
 export function messagePosted(
   state: LiveTurns,
-  message: { id: string; author: string; question?: boolean },
+  message: { id: string; author: string; question?: boolean; created_at: string },
 ): LiveTurns {
   const draft = state.drafts.find(
     (candidate) => !candidate.ended && candidate.principal === message.author,
   );
   if (!draft || message.question || !message.id || draft.posted === message.id) return state;
+  const writtenAt = Date.parse(message.created_at);
+  if (Number.isNaN(writtenAt) || Number.isNaN(draft.firstEventAt)) return state;
+  if (writtenAt < draft.firstEventAt) return state;
   return update(state, draft, { ...draft, posted: message.id });
 }
 
@@ -116,7 +123,7 @@ export function liveTurns(state: LiveTurns, event: SailEvent): LiveTurns {
     const id = event.data?.message_id;
     if (typeof id !== "string") return state;
     const question = event.data?.question === true;
-    return messagePosted(state, { id, author: event.agent, question });
+    return messagePosted(state, { id, author: event.agent, question, created_at: event.ts });
   }
   if (!isLiveTurnEvent(event.type)) return state;
   const data = event.data ?? {};
@@ -134,7 +141,15 @@ export function liveTurns(state: LiveTurns, event: SailEvent): LiveTurns {
 
   // A room has one member and a member one turn at a time, so a turn that begins ends every
   // draft before it; only one still owed its message stays to be replaced by it.
-  const begun: Draft = { runId, turn, principal, text: "", tools: [], gapped: false };
+  const begun: Draft = {
+    runId,
+    turn,
+    principal,
+    text: "",
+    tools: [],
+    gapped: false,
+    firstEventAt: Date.parse(event.ts),
+  };
   const opened = known
     ? state
     : {
