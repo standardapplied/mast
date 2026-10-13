@@ -1391,6 +1391,44 @@ describe("SpecRoom live turns", () => {
     expect(occurrences("Half a sent")).toBe(1);
   });
 
+  test("two turns whose ends were both lost each yield to their own reply, one fetch bringing both", async () => {
+    const fake = makeGateway();
+    let releaseMessages!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseMessages = resolve;
+    });
+    let gated = false;
+    const gateway = {
+      ...fake.gateway,
+      listSpecMessages: async (...request: Parameters<Gateway["listSpecMessages"]>) => {
+        if (gated) await gate;
+        return fake.gateway.listSpecMessages(...request);
+      },
+    };
+    await mount(gateway);
+    stream(fake, delta("Seventh, half"));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+
+    gated = true;
+    act(() => fake.receive(reply("Seventh, whole.")));
+    act(() => fake.roomStreams.setState("s1", "connected"));
+    stream(fake, {
+      ...live("agent_text_delta", { text: "Eighth, half", turn: 8 }),
+      ts: "2026-07-28T10:03:00Z",
+    });
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+    act(() =>
+      fake.receive({ ...reply("Eighth, whole.", "2026-07-28T10:03:30Z"), id: "message-8" }),
+    );
+    expect(container.querySelectorAll(".room-draft")).toHaveLength(2);
+    releaseMessages();
+    await settle();
+
+    expect(container.querySelector('[data-testid="room-message-message-7"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="room-message-message-8"]')).not.toBeNull();
+    expect(container.querySelectorAll(".room-draft")).toHaveLength(0);
+  });
+
   test("an earlier turn's reply paged in by a recovery fetch leaves the draft of the turn still being written", async () => {
     const fake = makeGateway();
     fake.store({ ...reply("The turn before.", "2026-07-28T09:30:00Z"), id: "msg-000" });

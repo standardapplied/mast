@@ -227,6 +227,31 @@ describe("a reconnect loses nothing a reader needs", () => {
     expect(settleLiveTurns(atItsStart, room("m-1")).drafts).toEqual([]);
   });
 
+  test("a draft still owed its message keeps it when the turn after it is replied to", () => {
+    const at = (event: SailEvent, ts: string): SailEvent => ({ ...event, ts });
+    const owed = liveTurns(
+      streamGapped(fold([delta("Seventh, half")])),
+      at(posted("m-7"), "2026-10-13T10:00:05Z"),
+    );
+    const next = streamGapped(
+      liveTurns(owed, at(delta("Eighth, half", { turn: 8 }), "2026-10-13T10:00:10Z")),
+    );
+
+    const both = liveTurns(next, at(posted("m-8"), "2026-10-13T10:00:15Z"));
+    expect(both.drafts.map((draft) => [draft.turn, draft.posted])).toEqual([
+      [7, "m-7"],
+      [8, "m-8"],
+    ]);
+    expect(settleLiveTurns(both, room("m-7")).drafts.map((draft) => draft.turn)).toEqual([8]);
+    expect(settleLiveTurns(both, room("m-7", "m-8")).drafts).toEqual([]);
+
+    const late = { id: "m-7b", author: PRINCIPAL, created_at: "2026-10-13T10:00:09Z" };
+    expect(messagePosted(next, late).drafts.map((draft) => [draft.turn, draft.posted])).toEqual([
+      [7, "m-7b"],
+      [8, undefined],
+    ]);
+  });
+
   test("a time that cannot be read never replaces a draft, the message's or the turn's", () => {
     const gapped = streamGapped(fold([delta("Half a sent")]));
     const unreadable = { id: "m-1", author: PRINCIPAL, created_at: "soon" };

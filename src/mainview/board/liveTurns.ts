@@ -98,18 +98,23 @@ function withToolCall(draft: Draft, data: Record<string, unknown>): Draft {
  * the room came to know of it: by its event, or by a fetch that outran the event. A fetch also
  * brings replies of earlier turns, so only a message written since the turn's first event
  * counts; the box that runs the member stamps both, and a time that cannot be read is no reply.
+ * A draft still owed its message stays open beside the turn after it, so the reply goes to the
+ * newest turn begun by the time it was written.
  */
 export function messagePosted(
   state: LiveTurns,
   message: { id: string; author: string; question?: boolean; created_at: string },
 ): LiveTurns {
-  const draft = state.drafts.find(
-    (candidate) => !candidate.ended && candidate.principal === message.author,
-  );
-  if (!draft || message.question || !message.id || draft.posted === message.id) return state;
+  if (message.question || !message.id) return state;
   const writtenAt = Date.parse(message.created_at);
-  if (Number.isNaN(writtenAt) || Number.isNaN(draft.firstEventAt)) return state;
-  if (writtenAt < draft.firstEventAt) return state;
+  if (Number.isNaN(writtenAt)) return state;
+  const draft = state.drafts.findLast(
+    (candidate) =>
+      !candidate.ended &&
+      candidate.principal === message.author &&
+      candidate.firstEventAt <= writtenAt,
+  );
+  if (!draft || draft.posted === message.id) return state;
   return update(state, draft, { ...draft, posted: message.id });
 }
 
