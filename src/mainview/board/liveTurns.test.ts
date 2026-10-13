@@ -5,6 +5,7 @@ import {
   NO_LIVE_TURNS,
   revealLiveTurns,
   settleLiveTurns,
+  showsWorking,
   streamGapped,
   takingADraftsPlace,
   type LiveTurns,
@@ -170,6 +171,17 @@ describe("a turn that begins is drawn before anything of it is written", () => {
       delta("Next.", { turn: 8 }),
     ]);
     expect(streamGapped(waiting).drafts.map((draft) => draft.turn)).toEqual([7, 8]);
+  });
+
+  test("a draft says its member is working until the end is told, and for a turn that wrote nothing until its message comes", () => {
+    const working = (events: SailEvent[]) => showsWorking(fold(events).drafts[0]!);
+
+    expect(working([turnBegan()])).toBe(true);
+    expect(working([turnBegan(), delta("Text.")])).toBe(true);
+    expect(working([turnBegan(), delta("Text."), turnEnded({ message_id: "m-9" })])).toBe(false);
+    expect(working([turnBegan(), turnEnded({ message_id: "m-9" })])).toBe(true);
+    expect(working([turnBegan(), turnEnded({ is_error: true })])).toBe(false);
+    expect(showsWorking(streamGapped(fold([turnBegan(), delta("Text.")])).drafts[0]!)).toBe(false);
   });
 
   test("a turn that began while the reader was away waits behind the pill", () => {

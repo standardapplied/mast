@@ -100,6 +100,16 @@ export function hasWritten(draft: Draft): boolean {
   return draft.text !== "" || draft.tools.length > 0;
 }
 
+/**
+ * Whether the draft says its member is working: until its turn's end is told, and after it while
+ * a turn that wrote nothing waits for its message. Never once a stream gap leaves that in doubt,
+ * nor for a turn that ended early.
+ */
+export function showsWorking(draft: Draft): boolean {
+  if (draft.gapped || draft.ended?.isError) return false;
+  return !draft.ended || !hasWritten(draft);
+}
+
 /** A turn that is over leaves a draft only for the message its end named. */
 function awaitsMessage(draft: Draft): boolean {
   return draft.ended?.messageId !== undefined;

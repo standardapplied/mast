@@ -1390,6 +1390,33 @@ describe("SpecRoom live turns", () => {
     expect(draft()?.querySelector(".typing-dots")).not.toBeNull();
   });
 
+  test("the typing row yields to a turn's beginning: the member is shown working once, not twice", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+    chatTurnStarted();
+    expect(container.querySelector(TYPING)).not.toBeNull();
+
+    stream(fake, live("agent_turn_began"));
+
+    expect(container.querySelector(TYPING)).toBeNull();
+    expect(container.querySelectorAll(".typing-dots")).toHaveLength(1);
+    expect(draft()?.querySelector(".typing-dots")).not.toBeNull();
+  });
+
+  test("a turn that wrote nothing keeps its dots until the message its end named takes their place", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+
+    stream(fake, live("agent_turn_began"), turnEnded({ message_id: "message-7" }));
+    expect(draft()?.querySelector(".typing-dots")).not.toBeNull();
+
+    act(() => fake.receive(reply("All of it at once.")));
+    await settle();
+    expect(draft()).toBeNull();
+    expect(container.querySelector(".typing-dots")).toBeNull();
+    expect(container.textContent).toContain("All of it at once.");
+  });
+
   test("a turn that failed before it wrote anything says so, with no dots", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);
@@ -2325,6 +2352,22 @@ describe("SpecRoom live turns", () => {
       "room-message-message-8",
       "room-message-message-9",
     ]);
+  });
+
+  test("the typing row stays for a reader who is away until the turn behind the pill has written something", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+    chatTurnStarted();
+    scrollTo(900);
+    scrollTo(0);
+
+    stream(fake, live("agent_turn_began"));
+    expect(draft()).toBeNull();
+    expect(container.querySelector(TYPING)).not.toBeNull();
+
+    stream(fake, delta("Away."));
+    expect(container.querySelector(TYPING)).toBeNull();
+    expect(pill()?.textContent).toBe("1 new");
   });
 
   test("the typing row is not drawn beside a turn that waits behind the pill", async () => {

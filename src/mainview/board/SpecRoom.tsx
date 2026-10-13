@@ -32,6 +32,7 @@ import {
   NO_LIVE_TURNS,
   revealLiveTurns,
   settleLiveTurns,
+  showsWorking,
   streamGapped,
   takingADraftsPlace,
   type Draft,
@@ -254,9 +255,8 @@ function TypingDots({ name }: { name: string }) {
 
 /**
  * A turn as it is written: the member's row, with the text so far, a line per tool step, and
- * the dots that say it is still working: until its end is told, and not while a stream gap
- * leaves that in doubt. The text is the box's payload drawn as text, never as Markdown; the
- * message it becomes is what gets rendered.
+ * the dots while it says its member is working. The text is the box's payload drawn as text,
+ * never as Markdown; the message it becomes is what gets rendered.
  */
 function DraftRow({ draft, label }: { draft: Draft; label: string }) {
   const cutShort = draft.ended?.isError ? draft.ended : undefined;
@@ -286,7 +286,7 @@ function DraftRow({ draft, label }: { draft: Draft; label: string }) {
             ))}
           </ul>
         )}
-        {!draft.ended && !draft.gapped && <TypingDots name={label} />}
+        {showsWorking(draft) && <TypingDots name={label} />}
         {cutShort && <TurnCutShort reason={cutShort.reason} />}
       </div>
     </article>
@@ -1111,7 +1111,7 @@ export function SpecRoom({
                 label={authorLabel(entry.principal, sources.current.runs)}
               />
             ))}
-          {live.drafts.length === 0 && (
+          {!live.drafts.some((entry) => !entry.behind || hasWritten(entry)) && (
             <TypingRow
               specId={specId}
               engagement={engagement}
