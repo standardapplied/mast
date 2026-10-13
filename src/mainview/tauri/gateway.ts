@@ -14,7 +14,8 @@ import type {
   SpecFilter,
 } from "../../shared/sail-models";
 import type { SailResult, SailWireError } from "../../shared/types";
-import { EventStream, type StreamResponse } from "../../shared/sse";
+import { EventStream, type EventStreamDeps, type StreamResponse } from "../../shared/sse";
+import { LIVE_TURN_EVENT_TYPES } from "../board/liveTurns";
 import { formatRecentErrors, logError } from "../errorLog";
 import type { AgentLogHandle, Gateway } from "../gateway";
 import type { SessionListing } from "../terminal/roomDeck";
@@ -288,17 +289,15 @@ export function createTauriGateway(restart: () => Promise<never> = restartPage):
   // drives the connection pill's stream health. The dummy origin only satisfies
   // EventStream.url()'s URL() parse — the Rust side owns routing and the token.
   // Its cursor counts one box's event ids, which holds because the page is for one box.
-  const events = new EventStream(
-    { server: "http://ipc.localhost", token: null },
-    {
-      connect: (url) => {
-        const parsed = new URL(url);
-        return tauriStreamConnect(parsed.pathname + parsed.search);
-      },
-      recent,
-      schedule: timerSchedule,
+  const streamDeps: EventStreamDeps = {
+    connect: (url) => {
+      const parsed = new URL(url);
+      return tauriStreamConnect(parsed.pathname + parsed.search);
     },
-  );
+    recent,
+    schedule: timerSchedule,
+  };
+  const events = new EventStream({ server: "http://ipc.localhost", token: null }, streamDeps);
 
   let streamState: EventStreamState = "disconnected";
   events.onState((state) => {
@@ -539,6 +538,23 @@ export function createTauriGateway(restart: () => Promise<never> = restartPage):
       const off = events.onEvent(listener);
       ensureStarted();
       return off;
+    },
+
+    // A stream of its own per open room, beside the app-wide one: the box filters it to the
+    // room's live turn events, which it never stores, so a reconnect has nothing to backfill.
+    openRoomStream(roomId) {
+      const stream = new EventStream(
+        {
+          server: "http://ipc.localhost",
+          token: null,
+          room: roomId,
+          type: LIVE_TURN_EVENT_TYPES.join(","),
+          backfill: false,
+        },
+        streamDeps,
+      );
+      void stream.start();
+      return stream;
     },
 
     onConnectionStatus(listener: (status: ConnectionStatus) => void) {

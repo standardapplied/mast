@@ -33,6 +33,7 @@ import { refusalDetail } from "./snapshots";
 import { RosterChip } from "./RosterChip";
 import { PresenceChip } from "./PresenceChip";
 import { LiveLog } from "./LiveLog";
+import { isLiveTurnEvent } from "./liveTurns";
 import { SpecRoom } from "./SpecRoom";
 import { canLaunchAgents, STATUS_LABEL, statusLabel } from "./lifecycle";
 import { mapStopOutcome, noRunningRunMessage, runningBuildRun } from "./stopRun";
@@ -240,6 +241,7 @@ export function SpecDetail({
     let timer: ReturnType<typeof setTimeout> | null = null;
     const off = gateway.onEvent((event) => {
       if (event.spec !== specId || event.type === "spec_message_posted") return;
+      if (isLiveTurnEvent(event.type)) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => void load(), eventDebounceMs);
     });

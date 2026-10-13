@@ -30,6 +30,12 @@ export type EventStreamOptions = {
   token: string | null;
   project?: string;
   type?: string;
+  /** Narrows the stream to one room's events. */
+  room?: string;
+  /** Replay what a reconnect missed from /v1/events/recent, told apart from what was seen by a
+   *  cursor of event ids. Off for a stream of events the server never stores: it keeps no
+   *  cursor, as the ids count from one again whenever the box starts. On unless set false. */
+  backfill?: boolean;
 };
 
 const HEARTBEAT_TIMEOUT_MS = 45_000;
@@ -112,7 +118,7 @@ export class EventStream {
   }
 
   private emit(event: SailEvent): void {
-    if (event.id !== undefined) {
+    if (this.options.backfill !== false && event.id !== undefined) {
       if (this.lastSeenId !== undefined && event.id <= this.lastSeenId) return;
       this.lastSeenId = event.id;
     }
@@ -122,6 +128,7 @@ export class EventStream {
   private url(): string {
     const url = new URL(this.options.server + "/v1/events/stream");
     if (this.options.project) url.searchParams.set("project", this.options.project);
+    if (this.options.room) url.searchParams.set("room", this.options.room);
     if (this.options.type) url.searchParams.set("type", this.options.type);
     return url.toString();
   }

@@ -4,6 +4,7 @@ import type {
   ServerRoomView,
   SpecStatus,
 } from "../../shared/sail-models";
+import { LIVE_TURN_EVENT_TYPES } from "./liveTurns";
 
 export const ROOM_WATERMARKS_KEY = "mast.rooms.watermarks";
 export const ROOM_SELECTIONS_KEY = "mast.rooms.selections";
@@ -27,6 +28,7 @@ const NON_RECORD_EVENT_TYPES = new Set([
   "agent_log_chunk",
   "agent_presence",
   "heartbeat",
+  ...LIVE_TURN_EVENT_TYPES,
 ]);
 
 function timestamp(value: string): number {

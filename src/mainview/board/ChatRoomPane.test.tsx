@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { ServerRoomView } from "../../shared/sail-models";
+import type { SailEvent, ServerRoomView } from "../../shared/sail-models";
 import { ToastProvider } from "../components/Toast";
 import { createDemoGateway } from "../gateway";
 import type { RoomTerminalRequest } from "../terminal/roomDeck";
@@ -54,6 +54,7 @@ async function render(requests: RoomTerminalRequest[]) {
     );
   });
   await flush();
+  return gateway;
 }
 
 describe("ChatRoomPane terminal entries", () => {
@@ -96,5 +97,43 @@ describe("ChatRoomPane terminal entries", () => {
     expect(requests).toEqual([
       { roomId: "design-talk", project: "sail-mast", title: "Design talk", launch: "codex" },
     ]);
+  });
+});
+
+describe("ChatRoomPane live turns", () => {
+  const live = (type: string, data: Record<string, unknown>, roomId = room.id): SailEvent => ({
+    v: 1,
+    ts: "2026-07-01T09:00:00Z",
+    project: room.project,
+    spec: roomId,
+    type,
+    agent: "claude",
+    host: "demo",
+    data: { run_id: "run-3", room_id: roomId, principal: "claude/room-run-3", turn: 1, ...data },
+  });
+  const draft = () => container.querySelector<HTMLElement>('[data-testid="draft-run-3-1"]');
+
+  test("a room with no spec draws its member's turn from its own stream, keyed by the room id", async () => {
+    const gateway = await render([]);
+
+    await act(async () =>
+      gateway.emit(live("agent_text_delta", { text: "Another room's turn." }, "sail-mast-notes")),
+    );
+    expect(container.querySelector('[data-testid^="draft-"]')).toBeNull();
+
+    await act(async () => {
+      gateway.emit(live("agent_text_delta", { text: "Thinking " }));
+      gateway.emit(live("agent_tool_call", { tool: "Read", summary: "notes.md", status: "started" }));
+      gateway.emit(live("agent_text_delta", { text: "aloud." }));
+    });
+
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Thinking aloud.");
+    expect(draft()?.querySelector(".room-message-head strong")?.textContent).toBe("claude");
+    expect(draft()?.querySelector(".room-draft-tools")?.textContent).toBe("Readnotes.mdrunning");
+
+    await act(async () => gateway.emit(live("agent_turn_ended", { is_error: true, reason: "idle" })));
+    expect(draft()?.querySelector(".room-turn-cut-short")?.textContent).toBe(
+      "the agent's turn ended early · idle",
+    );
   });
 });

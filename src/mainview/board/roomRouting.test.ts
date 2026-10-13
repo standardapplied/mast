@@ -22,6 +22,9 @@ describe("roomRefreshFor", () => {
       "agent_log_chunk",
       "agent_presence",
       "heartbeat",
+      "agent_text_delta",
+      "agent_tool_call",
+      "agent_turn_ended",
     ]) {
       expect(isTelemetryEvent(type)).toBe(true);
       expect(roomRefreshFor(event(type))).toEqual({ kind: "none" });

@@ -1,8 +1,9 @@
 # Mast
 
 Desktop cockpit for [Sail](https://github.com/standardapplied/sail). Mast connects to your
-Sail control plane over SSH and gives you the spec board, agent rooms, live agent logs, a
-terminal into any project container, and a file workbench.
+Sail control plane over SSH and gives you the spec board, agent rooms where an agent's reply
+streams in as it is written, live agent logs, a terminal into any project container, and a
+file workbench.
 
 macOS only today. The build is universal, so it runs on Apple Silicon and Intel.
 

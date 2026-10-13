@@ -124,6 +124,12 @@ describe("room ordering and unread state", () => {
     expect(rooms[0]?.unread).toBe(false);
   });
 
+  test("a live member's turn events are not activity: the message they become is", () => {
+    for (const type of ["agent_text_delta", "agent_tool_call", "agent_turn_ended"]) {
+      expect(isRoomActivityEvent(event(1, "s1", type, "2026-07-28T12:00:00Z"))).toBe(false);
+    }
+  });
+
   test("uses the persisted spec update time when recent events are unavailable", () => {
     const updated = {
       ...spec("s1", "pending", "2026-01-01T00:00:00Z"),

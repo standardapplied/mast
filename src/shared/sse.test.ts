@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { EventStreamState, RecentEventsResponse, SailEvent } from "./sail-models";
-import { EventStream, type StreamResponse } from "./sse";
+import { EventStream, type EventStreamOptions, type StreamResponse } from "./sse";
 
 /**
  * The stream, scheduler, and backfill source are all injected and driven
@@ -66,17 +66,19 @@ function fakeScheduler() {
 
 type Harness = ReturnType<typeof harness>;
 
-function harness(recentEvents: SailEvent[] = []) {
+function harness(recentEvents: SailEvent[] = [], options: Partial<EventStreamOptions> = {}) {
   const scheduler = fakeScheduler();
   const streams: Array<ReturnType<typeof pushable> & { cancelled: boolean }> = [];
   const scripted: Array<{ status: number; retryAfter?: string }> = [];
   const connects: Array<Record<string, string>> = [];
+  const urls: string[] = [];
   let recentCalls = 0;
 
   const stream = new EventStream(
-    { server: "http://localhost:7070", token: "sess_t", project: "sail-mast" },
+    { server: "http://localhost:7070", token: "sess_t", project: "sail-mast", ...options },
     {
-      connect: async (_url, headers) => {
+      connect: async (url, headers) => {
+        urls.push(url);
         connects.push(headers);
         const script = scripted.shift() ?? { status: 200 };
         const source = Object.assign(pushable(), { cancelled: false });
@@ -111,6 +113,7 @@ function harness(recentEvents: SailEvent[] = []) {
     streams,
     scripted,
     connects,
+    urls,
     events,
     states,
     recentCalls: () => recentCalls,
@@ -194,6 +197,50 @@ describe("EventStream", () => {
     h.streams[0]!.push(frame(6, "b"));
     await flush();
     expect(h.events.map((e) => e.id)).toEqual([5, 6]);
+    h.stream.stop();
+  });
+
+  test("a room's stream names the room beside its other filters", async () => {
+    const h = harness([], { room: "design talk", type: "agent_text_delta,agent_turn_ended" });
+    void h.stream.start();
+    await flush();
+
+    expect(h.urls).toEqual([
+      "http://localhost:7070/v1/events/stream?project=sail-mast&room=design+talk&type=agent_text_delta%2Cagent_turn_ended",
+    ]);
+    h.stream.stop();
+  });
+
+  test("a stream with backfill off keeps no cursor: nothing is replayed after a drop, and ids that start again with the box still arrive", async () => {
+    const stored: SailEvent[] = [2, 3].map((id) => ({
+      v: 1,
+      id,
+      ts: "t",
+      project: "sail-mast",
+      type: `evt-${id}`,
+      agent: "a",
+      host: "h",
+    }));
+    const h = harness(stored, { backfill: false });
+    void h.stream.start();
+    await flush();
+
+    h.streams[0]!.push(frame(1, "agent_text_delta"));
+    await flush();
+    h.streams[0]!.end();
+    await flush();
+    h.scheduler.firePending();
+    await flush();
+
+    expect(h.stream.currentState).toBe("connected");
+    expect(h.states).toEqual(["connecting", "connected", "reconnecting", "connected"]);
+    expect(h.recentCalls()).toBe(0);
+    expect(h.events.map((e) => e.id)).toEqual([1]);
+
+    expect(h.connects[1]).not.toHaveProperty("Last-Event-ID");
+    h.streams[1]!.push(frame(1, "agent_text_delta"));
+    await flush();
+    expect(h.events.map((e) => e.id)).toEqual([1, 1]);
     h.stream.stop();
   });
 

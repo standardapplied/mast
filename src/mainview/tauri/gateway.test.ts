@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ConnectionStatus } from "../../shared/sail-models";
+import type { ConnectionStatus, SailEvent } from "../../shared/sail-models";
 import { unbindPage } from "./core";
 import { createTauriGateway } from "./gateway";
 
@@ -282,6 +282,44 @@ describe("Tauri gateway prune wire", () => {
   });
 });
 
+/** Speaks as the core on a Tauri event the gateway is listening to. */
+let emit: (event: string, payload: unknown) => void = () => {};
+
+const flush = async () => {
+  for (let i = 0; i < 50; i++) await Promise.resolve();
+};
+
+/** A core that answers each command by name and delivers what `emit` says to whoever listens. */
+function stubCore(answers: Record<string, (args: Record<string, unknown>) => unknown>): Invocation[] {
+  const calls: Invocation[] = [];
+  const callbacks: Array<(event: { payload: unknown }) => void> = [];
+  const listening = new Map<string, number>();
+  emit = (event, payload) => {
+    const handler = listening.get(event);
+    if (handler !== undefined) callbacks[handler]!({ payload });
+  };
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (event) => listening.delete(event) };
+  (window as TauriWindow).__TAURI_INTERNALS__ = {
+    transformCallback: (callback) => callbacks.push(callback) - 1,
+    invoke: (cmd: unknown, args: unknown, options: unknown) => {
+      const name = cmd as string;
+      const given = args as Record<string, unknown>;
+      if (name === "plugin:event|listen") listening.set(given.event as string, given.handler as number);
+      if (name.startsWith("plugin:event|")) return Promise.resolve(given.handler ?? null);
+      const backend = (options as { headers: Record<string, string> }).headers["x-mast-backend"];
+      calls.push({ cmd: name, args: given, ...(backend === undefined ? {} : { backend }) });
+      const answer = answers[name];
+      if (!answer) return Promise.reject(`unexpected command ${name}`);
+      try {
+        return Promise.resolve(answer(given));
+      } catch (refusal) {
+        return Promise.reject(refusal);
+      }
+    },
+  };
+  return calls;
+}
+
 describe("Tauri gateway pairing wire", () => {
   const REVOKED = "This code was revoked on the box; ask for a new one.";
   const refusedToken = {
@@ -302,44 +340,6 @@ describe("Tauri gateway pairing wire", () => {
     tokenKind: "api",
   };
   const revoked = { ...ready, phase: "unpaired", tokenPresent: false, tokenKind: "none", detail: REVOKED };
-
-  /** Speaks as the core on a Tauri event the gateway is listening to. */
-  let emit: (event: string, payload: unknown) => void = () => {};
-
-  const flush = async () => {
-    for (let i = 0; i < 50; i++) await Promise.resolve();
-  };
-
-  /** A core that answers each command by name and delivers what `emit` says to whoever listens. */
-  function stubCore(answers: Record<string, (args: Record<string, unknown>) => unknown>): Invocation[] {
-    const calls: Invocation[] = [];
-    const callbacks: Array<(event: { payload: unknown }) => void> = [];
-    const listening = new Map<string, number>();
-    emit = (event, payload) => {
-      const handler = listening.get(event);
-      if (handler !== undefined) callbacks[handler]!({ payload });
-    };
-    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (event) => listening.delete(event) };
-    (window as TauriWindow).__TAURI_INTERNALS__ = {
-      transformCallback: (callback) => callbacks.push(callback) - 1,
-      invoke: (cmd: unknown, args: unknown, options: unknown) => {
-        const name = cmd as string;
-        const given = args as Record<string, unknown>;
-        if (name === "plugin:event|listen") listening.set(given.event as string, given.handler as number);
-        if (name.startsWith("plugin:event|")) return Promise.resolve(given.handler ?? null);
-        const backend = (options as { headers: Record<string, string> }).headers["x-mast-backend"];
-        calls.push({ cmd: name, args: given, ...(backend === undefined ? {} : { backend }) });
-        const answer = answers[name];
-        if (!answer) return Promise.reject(`unexpected command ${name}`);
-        try {
-          return Promise.resolve(answer(given));
-        } catch (refusal) {
-          return Promise.reject(refusal);
-        }
-      },
-    };
-    return calls;
-  }
 
   /** A page restart as the gateway asks for it: counted, and never settled. */
   function restarts(): { count: number; restart: () => Promise<never> } {
@@ -546,6 +546,48 @@ describe("Tauri gateway pairing wire", () => {
       ["connect_code_preview", { code: "nope" }],
       ["pair", { code: "sail1.good" }],
       ["forget_box", {}],
+    ]);
+  });
+});
+
+describe("Tauri gateway room stream wire", () => {
+  const delta: SailEvent = {
+    v: 1,
+    ts: "2026-10-13T10:00:00Z",
+    project: "mast",
+    spec: "design talk",
+    type: "agent_text_delta",
+    agent: "claude-code",
+    host: "devbox",
+    data: { run_id: "run-1", room_id: "design talk", principal: "claude-code/run-1", turn: 1, text: "Hi" },
+  };
+
+  test("a room's stream is its own GET of the event stream, filtered to the room's live turn, and closed with the room", async () => {
+    const calls = stubCore({ stream_open: () => null, stream_close: () => null });
+    const stream = createTauriGateway().openRoomStream("design talk");
+    const seen: SailEvent[] = [];
+    stream.onEvent((event) => seen.push(event));
+    await flush();
+
+    expect(calls.map((call) => [call.cmd, call.args.path])).toEqual([
+      [
+        "stream_open",
+        "/v1/events/stream?room=design+talk&type=agent_text_delta%2Cagent_tool_call%2Cagent_turn_ended",
+      ],
+    ]);
+    const id = calls[0]!.args.id;
+
+    emit(`stream://open/${id}`, { status: 200 });
+    await flush();
+    emit(`stream://data/${id}`, `id: 9\ndata: ${JSON.stringify(delta)}\n\n`);
+    await flush();
+    expect(seen).toEqual([{ ...delta, id: 9 }]);
+
+    stream.stop();
+    await flush();
+    expect(calls.map((call) => [call.cmd, call.args.id])).toEqual([
+      ["stream_open", id],
+      ["stream_close", id],
     ]);
   });
 });
