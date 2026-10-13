@@ -1936,6 +1936,27 @@ describe("SpecRoom live turns", () => {
     expect(pill()).toBeNull();
   });
 
+  test("a reader the room finds resting at the very end has nothing left behind the pill", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    stream(fake, delta("A tall turn."));
+    scrollTo(0, 1400);
+    act(() => fake.receive(remoteMessage("message-2", "Behind the pill")));
+    await settle();
+    expect(pill()?.textContent).toBe("1 new");
+
+    stream(fake, turnEnded({ message_id: "message-7" }));
+    act(() => fake.receive(reply("Short.")));
+    await settle();
+    layOut(0, 100);
+    paint();
+
+    expect(container.textContent).toContain("Behind the pill");
+    expect(pill()).toBeNull();
+  });
+
   test("a room that is not on screen keeps no place: the reader's first move up after it returns is still told", async () => {
     const fake = makeGateway();
     fake.receive(remoteMessage("message-old", "Already visible"));

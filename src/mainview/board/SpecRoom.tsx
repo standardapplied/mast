@@ -172,6 +172,12 @@ function inPlace(
   };
 }
 
+/** Brings everything out from behind the pill: the reader is at the latest. */
+function released(tail: BufferedTail<TimelineItem>): BufferedTail<TimelineItem> {
+  if (tail.buffered.length === 0) return tail;
+  return { visible: [...tail.visible, ...tail.buffered].sort(byOccurrence), buffered: [] };
+}
+
 function dayOf(value: string): string {
   const parsed = new Date(value);
   return Number.isNaN(parsed.valueOf())
@@ -364,9 +370,12 @@ export function SpecRoom({
     advanceLive((state) => state);
   }, [advanceLive]);
 
+  /** A reader at the latest has nothing behind the pill, however they came to be there. */
   const follow = useCallback((latest: boolean) => {
     atLatest.current = latest;
-    if (latest) advanceLive(revealLiveTurns);
+    if (!latest) return;
+    advanceLive(revealLiveTurns);
+    setTail(released);
   }, [advanceLive]);
 
   /**
@@ -751,10 +760,6 @@ export function SpecRoom({
 
   const jumpToLatest = useCallback(() => {
     follow(true);
-    setTail((previous) => ({
-      visible: [...previous.visible, ...previous.buffered].sort(byOccurrence),
-      buffered: [],
-    }));
     keepPlace();
   }, [follow, keepPlace]);
 
@@ -770,7 +775,6 @@ export function SpecRoom({
     const movedUp = element.scrollTop < scrolledTo.current;
     scrolledTo.current = element.scrollTop;
     const latest = fromLatest(element) <= (movedUp ? AT_LATEST_PX : SCROLL_EDGE_PX);
-    if (latest && !atLatest.current && tail.buffered.length > 0) return jumpToLatest();
     follow(latest || (atLatest.current && !movedUp));
   };
 
