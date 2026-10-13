@@ -91,15 +91,19 @@ function withToolCall(draft: Draft, data: Record<string, unknown>): Draft {
   };
 }
 
-function posted(state: LiveTurns, event: SailEvent): LiveTurns {
-  const messageId = event.data?.message_id;
+/**
+ * A message its author posted while a turn of theirs is open may be that turn's reply, however
+ * the room came to know of it: by its event, or by a fetch that outran the event.
+ */
+export function messagePosted(
+  state: LiveTurns,
+  message: { id: string; author: string; question?: boolean },
+): LiveTurns {
   const draft = state.drafts.find(
-    (candidate) => !candidate.ended && candidate.principal === event.agent,
+    (candidate) => !candidate.ended && candidate.principal === message.author,
   );
-  if (!draft || event.data?.question === true || typeof messageId !== "string" || !messageId) {
-    return state;
-  }
-  return update(state, draft, { ...draft, posted: messageId });
+  if (!draft || message.question || !message.id || draft.posted === message.id) return state;
+  return update(state, draft, { ...draft, posted: message.id });
 }
 
 /**
@@ -108,7 +112,12 @@ function posted(state: LiveTurns, event: SailEvent): LiveTurns {
  * without a run, a turn and a principal, leaves the state as it was.
  */
 export function liveTurns(state: LiveTurns, event: SailEvent): LiveTurns {
-  if (event.type === "spec_message_posted") return posted(state, event);
+  if (event.type === "spec_message_posted") {
+    const id = event.data?.message_id;
+    if (typeof id !== "string") return state;
+    const question = event.data?.question === true;
+    return messagePosted(state, { id, author: event.agent, question });
+  }
   if (!isLiveTurnEvent(event.type)) return state;
   const data = event.data ?? {};
   const runId = clip(data.run_id, NAME_LIMIT);

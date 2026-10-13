@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SailEvent } from "../../shared/sail-models";
 import {
   liveTurns,
+  messagePosted,
   NO_LIVE_TURNS,
   settleLiveTurns,
   streamGapped,
@@ -183,6 +184,17 @@ describe("a reconnect loses nothing a reader needs", () => {
     const state = liveTurns(streamGapped(fold([delta("Half a sent")])), posted("m-1", "uday"));
 
     expect(settleLiveTurns(state, room("m-1")).drafts).toHaveLength(1);
+  });
+
+  test("a message the room fetched counts as its event would: the principal's, never a question, told once", () => {
+    const gapped = streamGapped(fold([delta("Half a sent")]));
+
+    expect(messagePosted(gapped, { id: "m-1", author: "uday" })).toBe(gapped);
+    expect(messagePosted(gapped, { id: "q-1", author: PRINCIPAL, question: true })).toBe(gapped);
+
+    const fetched = messagePosted(gapped, { id: "m-1", author: PRINCIPAL });
+    expect(settleLiveTurns(fetched, room("m-1")).drafts).toEqual([]);
+    expect(messagePosted(fetched, { id: "m-1", author: PRINCIPAL })).toBe(fetched);
   });
 
   test("a gap with no turn open changes nothing", () => {

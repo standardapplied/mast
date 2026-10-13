@@ -27,6 +27,7 @@ import { Badge, Button, type BadgeTone } from "../components/ui";
 import type { Gateway } from "../gateway";
 import {
   liveTurns,
+  messagePosted,
   NO_LIVE_TURNS,
   settleLiveTurns,
   streamGapped,
@@ -325,11 +326,21 @@ export function SpecRoom({
     setLive(next);
   }, []);
 
+  /**
+   * Every message enters the room here, so here a live arrival is told to the live turns: a
+   * fetch can bring a reply before its event, and that event is then dropped as one for a
+   * message the room holds.
+   */
   const applySources = useCallback((next: Sources, update: TimelineUpdate) => {
+    const held = new Set(sources.current.messages.map((message) => message.id));
+    const arrived =
+      update === "live"
+        ? next.messages.filter((message) => !message.delivery && !held.has(message.id))
+        : [];
     sources.current = next;
     const timeline = assembleTimeline(next);
     setTail((previous) => reconcileTimeline(previous, timeline, update, atLatest.current));
-    advanceLive((state) => state);
+    advanceLive((state) => arrived.reduce(messagePosted, state));
   }, [advanceLive]);
 
   const follow = useCallback((latest: boolean) => {

@@ -1359,6 +1359,52 @@ describe("SpecRoom live turns", () => {
     expect(occurrences("The turn before.")).toBe(1);
   });
 
+  test("a reply fetched before its event arrives still takes the place of a draft whose end was lost", async () => {
+    const fake = makeGateway();
+    let releaseMessages!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseMessages = resolve;
+    });
+    let gated = false;
+    const gateway = {
+      ...fake.gateway,
+      listSpecMessages: async (...request: Parameters<Gateway["listSpecMessages"]>) => {
+        if (gated) await gate;
+        return fake.gateway.listSpecMessages(...request);
+      },
+    };
+    await mount(gateway);
+    stream(fake, delta("Half a sent"));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+
+    gated = true;
+    act(() => fake.receive({ ...reply("Any news?"), id: "message-6", author: "priya" }));
+    const whole = reply("Half a sentence, whole.");
+    fake.store(whole);
+    releaseMessages();
+    await settle();
+    act(() => fake.emit(announced(12, whole)));
+    await settle();
+
+    expect(container.querySelector('[data-testid="room-message-message-7"]')).not.toBeNull();
+    expect(draft()).toBeNull();
+    expect(occurrences("Half a sent")).toBe(1);
+  });
+
+  test("a question fetched before its event leaves the draft of the turn still being written", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    stream(fake, delta("Let me ask."));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+
+    fake.store({ ...reply("Which branch?"), id: "question-1", question: true });
+    act(() => fake.receive({ ...reply("Any news?"), id: "message-6", author: "priya" }));
+    await settle();
+
+    expect(container.querySelector('[data-testid="room-message-question-1"]')).not.toBeNull();
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Let me ask. … ");
+  });
+
   test("a question asked mid-turn does not take the draft's place when the stream drops", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);
