@@ -511,9 +511,14 @@ export function createDemoGateway(
     return message;
   };
 
-  // A live member is one run for as long as it lives, and its turns count up within it.
+  // A live member is one run for as long as it lives, and its turns count up within it. It
+  // writes one turn at a time: what is posted meanwhile is answered by the turn after.
   const liveTurnCounts = new Map<string, number>();
+  const liveTurnsOpen = new Set<string>();
+  const liveTurnsOwed = new Set<string>();
   const streamLiveTurn = (spec: DemoSpec, agent: string) => {
+    if (liveTurnsOpen.has(spec.id)) return void liveTurnsOwed.add(spec.id);
+    liveTurnsOpen.add(spec.id);
     const runId = `demo-live-${spec.id}`;
     const principal = `${agent}/${runId}`;
     const turn = (liveTurnCounts.get(spec.id) ?? 0) + 1;
@@ -539,6 +544,8 @@ export function createDemoGateway(
       () => {
         const reply = appendMessage(spec, principal, { body: DEMO_REPLY.join("") });
         tell("agent_turn_ended", { message_id: reply.id, is_error: false });
+        liveTurnsOpen.delete(spec.id);
+        if (liveTurnsOwed.delete(spec.id)) streamLiveTurn(spec, agent);
       },
     ];
     steps.forEach((step, index) => schedule(step, (index + 1) * DEMO_TURN_STEP_MS));

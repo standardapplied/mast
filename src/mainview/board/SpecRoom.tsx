@@ -300,13 +300,13 @@ export function SpecRoom({
   const [hasEarlier, setHasEarlier] = useState(false);
   const [draft, setDraft] = useState("");
   const [live, setLive] = useState<LiveTurns>(NO_LIVE_TURNS);
-  const [following, setFollowing] = useState(true);
   const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
   const [snapshotsProject, setSnapshotsProject] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const sources = useRef<Sources>(EMPTY_SOURCES);
   const liveNow = useRef<LiveTurns>(NO_LIVE_TURNS);
   const atLatest = useRef(true);
+  const scrolledTo = useRef(0);
   const posting = useRef(false);
   const deferredMessageEvents = useRef<Set<string>>(new Set());
   const expectedMessageEvents = useRef<Set<string>>(new Set());
@@ -315,8 +315,9 @@ export function SpecRoom({
 
   /**
    * Every change to the live turns is settled against the messages the room holds, in the
-   * render that shows them: a draft and the message that replaces it are never both drawn,
-   * and never neither.
+   * render that shows them, so a draft leaves in the render its message arrives in: the
+   * reader never sees neither. A draft is drawn where the typing row is, at the end of the
+   * timeline wherever the reader is: drawing it by where they are would move where they are.
    */
   const advanceLive = useCallback((step: (state: LiveTurns) => LiveTurns) => {
     const next = settleLiveTurns(step(liveNow.current), sources.current.messages);
@@ -335,11 +336,6 @@ export function SpecRoom({
     setTail((previous) => reconcileTimeline(previous, timeline, update, atLatest.current));
     advanceLive((state) => state);
   }, [advanceLive]);
-
-  const follow = useCallback((latest: boolean) => {
-    atLatest.current = latest;
-    setFollowing(latest);
-  }, []);
 
   const loadReviewDetails = useCallback(
     async (reviews: ReviewView[]): Promise<ReviewDetailResponse[]> => {
@@ -706,7 +702,7 @@ export function SpecRoom({
   }, [gapFill, gateway]);
 
   const jumpToLatest = useCallback(() => {
-    follow(true);
+    atLatest.current = true;
     setTail((previous) => ({
       visible: [...previous.visible, ...previous.buffered].sort(
         (left, right) =>
@@ -718,14 +714,21 @@ export function SpecRoom({
       const element = scroller.current;
       if (element) element.scrollTop = element.scrollHeight;
     });
-  }, [follow]);
+  }, []);
 
+  /**
+   * A reader follows the latest until they move up, and again once they are back at it. The
+   * room's own glide to a bottom that just moved passes through places that are not the bottom,
+   * and a turn being written moves it many times a second: moving down is never leaving.
+   */
   const onScroll = (event: UIEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
     const latest =
       element.scrollHeight - element.scrollTop - element.clientHeight <= SCROLL_EDGE_PX;
+    const movedUp = element.scrollTop < scrolledTo.current;
+    scrolledTo.current = element.scrollTop;
     if (latest && !atLatest.current && tail.buffered.length > 0) return jumpToLatest();
-    follow(latest);
+    atLatest.current = latest || (atLatest.current && !movedUp);
   };
 
   const loadEarlier = async () => {
@@ -739,7 +742,7 @@ export function SpecRoom({
     setLoadingEarlier(false);
     if (!result.ok) return showToast("error", result.error.message);
     setHasEarlier(result.value.messages.length === PAGE_SIZE);
-    follow(false);
+    atLatest.current = false;
     applySources(
       {
         ...sources.current,
@@ -801,7 +804,7 @@ export function SpecRoom({
       delivery: "pending",
     };
     setDraft("");
-    follow(true);
+    atLatest.current = true;
     applySources(
       { ...sources.current, messages: mergeMessages(sources.current.messages, [message]) },
       "replace",
@@ -816,8 +819,6 @@ export function SpecRoom({
   };
 
   const groups = groupTimeline(tail.visible);
-  // A reader away from the latest sees a turn as they see its message: behind the pill.
-  const behindPill = tail.buffered.length + (following ? 0 : live.drafts.length);
 
   return (
     <div className="spec-room">
@@ -1011,14 +1012,13 @@ export function SpecRoom({
               </Fragment>
             );
           })}
-          {following &&
-            live.drafts.map((entry) => (
-              <DraftRow
-                key={`${entry.runId}:${entry.turn}`}
-                draft={entry}
-                label={authorLabel(entry.principal, sources.current.runs)}
-              />
-            ))}
+          {live.drafts.map((entry) => (
+            <DraftRow
+              key={`${entry.runId}:${entry.turn}`}
+              draft={entry}
+              label={authorLabel(entry.principal, sources.current.runs)}
+            />
+          ))}
           {live.drafts.length === 0 && (
             <TypingRow
               specId={specId}
@@ -1027,9 +1027,9 @@ export function SpecRoom({
             />
           )}
       </div>
-      {behindPill > 0 && (
+      {tail.buffered.length > 0 && (
         <button type="button" className="room-new-pill" onClick={jumpToLatest}>
-          {behindPill} new
+          {tail.buffered.length} new
         </button>
       )}
       {canWrite ? (

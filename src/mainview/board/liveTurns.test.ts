@@ -54,7 +54,7 @@ describe("a turn is drawn once", () => {
         text: "Hello, room.",
         tools: [],
         gapped: false,
-        firstEventAt: Date.parse("2026-10-13T10:00:00Z"),
+        lastEventAt: Date.parse("2026-10-13T10:00:00Z"),
       },
     ]);
   });
@@ -134,6 +134,13 @@ describe("the message takes the draft's place", () => {
     expect(liveTurns(NO_LIVE_TURNS, turnEnded({ message_id: "m-1" }))).toBe(NO_LIVE_TURNS);
   });
 
+  test("an event of a turn that has ended changes nothing", () => {
+    const ended = fold([delta("Done."), turnEnded({ message_id: "m-1" })]);
+
+    expect(liveTurns(ended, delta(" And more."))).toBe(ended);
+    expect(liveTurns(ended, turnEnded({ is_error: true }))).toBe(ended);
+  });
+
   test("an open turn is not replaced by a message its principal posts mid-turn", () => {
     const writing = fold([delta("Let me note this.")]);
 
@@ -191,36 +198,59 @@ describe("a reconnect loses nothing a reader needs", () => {
     expect(settleLiveTurns(gapped, room("m-1"))).toBe(gapped);
   });
 
-  test("a message written before the turn's first event is an earlier turn's reply", () => {
+  test("only a message written since the last of the turn the room saw is its reply", () => {
     const gapped = streamGapped(
       fold([delta("Half a sent"), at(delta("ence"), "2026-10-13T10:00:09Z")]),
     );
 
-    expect(settleLiveTurns(gapped, [reply("m-0", { created_at: "2026-10-13T09:59:59.999Z" })]))
+    expect(settleLiveTurns(gapped, [reply("m-0", { created_at: "2026-10-13T10:00:08.999Z" })]))
       .toBe(gapped);
     expect(
-      settleLiveTurns(gapped, [reply("m-1", { created_at: "2026-10-13T10:00:00Z" })]).drafts,
+      settleLiveTurns(gapped, [reply("m-1", { created_at: "2026-10-13T10:00:09Z" })]).drafts,
     ).toEqual([]);
   });
 
-  test("a gapped draft outlives the turn after it, and each yields to a reply written since it began", () => {
-    const seventh = streamGapped(fold([delta("Seventh, half")]));
-    const both = streamGapped(
-      liveTurns(seventh, at(delta("Eighth, half", { turn: 8 }), "2026-10-13T10:00:10Z")),
+  test("an event after a gap says the turn is still open: a note posted then is not its reply", () => {
+    const note = [reply("note-1", { created_at: "2026-10-13T10:00:12Z" })];
+    const resumed = liveTurns(
+      streamGapped(fold([delta("Half a sent")])),
+      at(delta("ence."), "2026-10-13T10:00:10Z"),
     );
-    expect(both.drafts.map((draft) => draft.turn)).toEqual([7, 8]);
+    expect(resumed.drafts[0]!.gapped).toBe(false);
+    expect(settleLiveTurns(resumed, note)).toBe(resumed);
 
-    const seventhReply = reply("m-7", { created_at: "2026-10-13T10:00:05Z" });
-    const eighthReply = reply("m-8", { created_at: "2026-10-13T10:00:15Z" });
-    expect(settleLiveTurns(both, [seventhReply]).drafts.map((draft) => draft.turn)).toEqual([8]);
-    expect(settleLiveTurns(both, [seventhReply, eighthReply]).drafts).toEqual([]);
-    expect(settleLiveTurns(both, [eighthReply]).drafts).toEqual([]);
+    const gappedAgain = streamGapped(
+      liveTurns(resumed, at(toolCall("started"), "2026-10-13T10:00:20Z")),
+    );
+    expect(settleLiveTurns(gappedAgain, note)).toBe(gappedAgain);
+    expect(
+      settleLiveTurns(gappedAgain, [...note, reply("m-1", { created_at: "2026-10-13T10:00:25Z" })])
+        .drafts,
+    ).toEqual([]);
   });
 
-  test("a draft no gap touched is dropped by the turn after it", () => {
-    const next = fold([delta("Seventh, half"), delta("Eighth, half", { turn: 8 })]);
+  test("a turn that begins drops every draft with no end told, gapped or not", () => {
+    const gapped = streamGapped(fold([delta("Seventh, half")]));
+    expect(liveTurns(gapped, delta("Eighth", { turn: 8 })).drafts.map((draft) => draft.turn))
+      .toEqual([8]);
+    expect(
+      liveTurns(gapped, delta("Another run", { run_id: "run-2", turn: 1 })).drafts.map(
+        (draft) => draft.runId,
+      ),
+    ).toEqual(["run-2"]);
 
-    expect(next.drafts.map((draft) => draft.turn)).toEqual([8]);
+    const untouched = fold([delta("Seventh, half"), delta("Eighth", { turn: 8 })]);
+    expect(untouched.drafts.map((draft) => draft.turn)).toEqual([8]);
+  });
+
+  test("a gap marks the turn being written and leaves an ended one as it was", () => {
+    const owed = fold([delta("First."), turnEnded({ message_id: "m-1" }), delta("Second", { turn: 8 })]);
+
+    const gapped = streamGapped(owed);
+    expect(gapped.drafts.map((draft) => [draft.text, draft.gapped])).toEqual([
+      ["First.", false],
+      ["Second … ", true],
+    ]);
   });
 
   test("a time that cannot be read never replaces a draft, the message's or the turn's", () => {
@@ -317,6 +347,21 @@ describe("event payloads are untrusted", () => {
   });
 
   test("a tool call with an unknown status draws nothing", () => {
-    expect(fold([toolCall("exploded")]).drafts[0]!.tools).toEqual([]);
+    expect(fold([delta("Looking."), toolCall("exploded")]).drafts[0]!.tools).toEqual([]);
+  });
+
+  test("an event that writes nothing opens no draft", () => {
+    for (const empty of [delta(""), delta({ html: "<b>" }), toolCall("finished"), toolCall("exploded")]) {
+      expect(liveTurns(NO_LIVE_TURNS, empty)).toBe(NO_LIVE_TURNS);
+    }
+  });
+
+  test("a room keeps only its newest drafts when ends name messages that never come", () => {
+    const turns = Array.from({ length: 10 }, (_, index) => [
+      delta(`Turn ${index}`, { turn: index }),
+      turnEnded({ turn: index, message_id: `m-${index}` }),
+    ]).flat();
+
+    expect(fold(turns).drafts.map((draft) => draft.turn)).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
   });
 });

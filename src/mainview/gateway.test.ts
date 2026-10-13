@@ -205,14 +205,19 @@ describe("the demo's live member", () => {
     expect(types.filter((type) => LIVE_TYPES.includes(type))).toEqual([]);
   });
 
-  test("its next reply is the next turn of the same run", async () => {
+  test("a post that lands mid-turn is answered by the next turn of the same run, once this one ends", async () => {
     const { gateway, steps, live } = await demo("claude-code");
     await gateway.postSpecMessage(ROOM, { body: "One" });
+    steps.shift()!();
     await gateway.postSpecMessage(ROOM, { body: "Two" });
-    steps.forEach((step) => step());
+    await gateway.postSpecMessage(ROOM, { body: "Three" });
+    while (steps.length > 0) steps.shift()!();
 
     expect(new Set(live.map((event) => event.data?.run_id)).size).toBe(1);
-    expect([...new Set(live.map((event) => event.data?.turn))]).toEqual([1, 2]);
+    const turns = live.map((event) => event.data?.turn);
+    expect([...new Set(turns)]).toEqual([1, 2]);
+    expect(turns).toEqual([...turns].sort());
+    expect(live.filter((event) => event.type === "agent_turn_ended")).toHaveLength(2);
   });
 
   test("a Codex member is not live, and a room with no member has none: nothing is scripted", async () => {

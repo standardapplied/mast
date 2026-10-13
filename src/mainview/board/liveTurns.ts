@@ -23,6 +23,8 @@ const SUMMARY_LIMIT = 160;
 const NAME_LIMIT = 80;
 const REASON_LIMIT = 240;
 const TOOL_LINE_LIMIT = 50;
+/** More drafts than this are ends naming messages that never came. */
+const DRAFT_LIMIT = 8;
 const GAP_MARK = " … ";
 
 export type ToolLine = { tool: string; summary: string; running: boolean };
@@ -34,10 +36,10 @@ export type Draft = {
   principal: string;
   text: string;
   tools: ToolLine[];
-  /** The stream dropped while this turn was open, so its end may never be told. */
+  /** The stream dropped and nothing of the turn has arrived since, so its end may never be told. */
   gapped: boolean;
-  /** The box's time on the first event of the turn the room saw; NaN when it was unreadable. */
-  firstEventAt: number;
+  /** The box's time on the newest event of the turn the room saw; NaN when it was unreadable. */
+  lastEventAt: number;
   ended?: { messageId?: string; isError: boolean; reason: string };
 };
 
@@ -45,7 +47,7 @@ export type Draft = {
 export type HeldMessage = { id: string; author: string; question?: boolean; created_at: string };
 
 export type LiveTurns = {
-  /** Oldest first; more than one only while a turn that is over still waits for its message. */
+  /** Oldest first; more than one only while an ended turn still waits for its message. */
   drafts: Draft[];
   /** Messages whose turn ended early, with the box's reason ("" when it gave none). */
   cutShort: ReadonlyMap<string, string>;
@@ -62,9 +64,10 @@ function clip(value: unknown, limit: number): string {
 /**
  * Whether a message the room holds takes the draft's place. A turn's end names its message. An
  * end a stream gap may have swallowed is read off the room instead: the draft yields to a reply
- * its principal wrote since the turn's first event, however and whenever the room came to hold
- * it. The box that runs the member stamps both times, so an earlier turn's reply is older; a
- * question is asked mid-turn and is never the reply; a time that cannot be read is no reply.
+ * its principal wrote since the last of the turn the room saw, however and whenever the room
+ * came to hold it. The box that runs the member stamps both times and posts the reply after the
+ * turn's last event, so an earlier turn's reply, and a note posted before that event, are older;
+ * a question is asked mid-turn and is never the reply; a time that cannot be read is no reply.
  */
 function replacedBy(draft: Draft, messages: readonly HeldMessage[]): boolean {
   if (draft.ended) {
@@ -77,22 +80,14 @@ function replacedBy(draft: Draft, messages: readonly HeldMessage[]): boolean {
       (message) =>
         message.author === draft.principal &&
         !message.question &&
-        Date.parse(message.created_at) >= draft.firstEventAt,
+        Date.parse(message.created_at) >= draft.lastEventAt,
     )
   );
 }
 
-/** A draft whose turn is over waits only for a message: the one its end named, or the reply
- *  of an end a gap may have swallowed. */
+/** A turn that is over leaves a draft only for the message its end named. */
 function awaitsMessage(draft: Draft): boolean {
-  return draft.ended ? draft.ended.messageId !== undefined : draft.gapped;
-}
-
-function update(state: LiveTurns, draft: Draft, next: Draft): LiveTurns {
-  return {
-    ...state,
-    drafts: state.drafts.map((candidate) => (candidate === draft ? next : candidate)),
-  };
+  return draft.ended?.messageId !== undefined;
 }
 
 function withToolCall(draft: Draft, data: Record<string, unknown>): Draft {
@@ -112,8 +107,8 @@ function withToolCall(draft: Draft, data: Record<string, unknown>): Draft {
 }
 
 /**
- * Folds one live event in. Anything else, and any live event without a run, a turn and a
- * principal, leaves the state as it was.
+ * Folds one live event in. Anything else, any live event without a run, a turn and a principal,
+ * and one that would open a draft with nothing in it, leaves the state as it was.
  */
 export function liveTurns(state: LiveTurns, event: SailEvent): LiveTurns {
   if (!isLiveTurnEvent(event.type)) return state;
@@ -123,47 +118,44 @@ export function liveTurns(state: LiveTurns, event: SailEvent): LiveTurns {
   const turn = data.turn;
   if (!runId || !principal || typeof turn !== "number" || !Number.isFinite(turn)) return state;
 
-  const ending = event.type === "agent_turn_ended";
   const known = state.drafts.find(
     (candidate) => candidate.runId === runId && candidate.turn === turn,
   );
   if (known?.ended) return state;
-  if (!known && ending && data.is_error !== true) return state;
 
-  // A room has one member and a member one turn at a time, so a turn that begins ends every
-  // draft before it; only one that still waits for its message stays to be replaced by it.
-  const begun: Draft = {
-    runId,
-    turn,
-    principal,
-    text: "",
-    tools: [],
+  // An event of a turn says the turn is still open, whatever a gap before it left in doubt.
+  const draft: Draft = {
+    ...(known ?? { runId, turn, principal, text: "", tools: [] }),
     gapped: false,
-    firstEventAt: Date.parse(event.ts),
+    lastEventAt: Date.parse(event.ts),
   };
-  const opened = known
-    ? state
-    : {
-        ...state,
-        drafts: [...state.drafts.filter(awaitsMessage), begun],
-      };
-  const draft = known ?? begun;
+  // A room has one member and a member one turn at a time, so a turn that begins ends every
+  // draft before it; only one whose end named a message stays to be replaced by it.
+  const place = (next: Draft): LiveTurns => ({
+    ...state,
+    drafts: known
+      ? state.drafts.map((candidate) => (candidate === known ? next : candidate))
+      : [...state.drafts.filter(awaitsMessage), next].slice(-DRAFT_LIMIT),
+  });
 
   if (event.type === "agent_text_delta") {
-    return update(opened, draft, {
-      ...draft,
-      text: (draft.text + clip(data.text, TEXT_LIMIT)).slice(0, TEXT_LIMIT),
-    });
+    const text = clip(data.text, TEXT_LIMIT);
+    if (!known && text === "") return state;
+    return place({ ...draft, text: (draft.text + text).slice(0, TEXT_LIMIT) });
   }
-  if (event.type === "agent_tool_call") return update(opened, draft, withToolCall(draft, data));
+  if (event.type === "agent_tool_call") {
+    const called = withToolCall(draft, data);
+    return !known && called === draft ? state : place(called);
+  }
 
   const messageId =
     typeof data.message_id === "string" && data.message_id ? data.message_id : undefined;
   const isError = data.is_error === true;
+  if (!known && !isError) return state;
   if (!messageId && !isError) {
-    return { ...opened, drafts: opened.drafts.filter((candidate) => candidate !== draft) };
+    return { ...state, drafts: state.drafts.filter((candidate) => candidate !== known) };
   }
-  return update(opened, draft, {
+  return place({
     ...draft,
     tools: draft.tools.map((line) => (line.running ? { ...line, running: false } : line)),
     ended: { messageId, isError, reason: clip(data.reason, REASON_LIMIT) },

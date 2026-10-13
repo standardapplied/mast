@@ -211,7 +211,7 @@ describe("EventStream", () => {
     h.stream.stop();
   });
 
-  test("a stream with backfill off replays nothing after a drop, whatever ids it has seen", async () => {
+  test("a stream with backfill off keeps no cursor: nothing is replayed after a drop, and ids that start again with the box still arrive", async () => {
     const stored: SailEvent[] = [2, 3].map((id) => ({
       v: 1,
       id,
@@ -237,9 +237,10 @@ describe("EventStream", () => {
     expect(h.recentCalls()).toBe(0);
     expect(h.events.map((e) => e.id)).toEqual([1]);
 
-    h.streams[1]!.push(frame(4, "agent_text_delta"));
+    expect(h.connects[1]).not.toHaveProperty("Last-Event-ID");
+    h.streams[1]!.push(frame(1, "agent_text_delta"));
     await flush();
-    expect(h.events.map((e) => e.id)).toEqual([1, 4]);
+    expect(h.events.map((e) => e.id)).toEqual([1, 1]);
     h.stream.stop();
   });
 

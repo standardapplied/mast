@@ -32,8 +32,9 @@ export type EventStreamOptions = {
   type?: string;
   /** Narrows the stream to one room's events. */
   room?: string;
-  /** Replay what a reconnect missed from /v1/events/recent; off for a stream of events the
-   *  server never stores. On unless set false. */
+  /** Replay what a reconnect missed from /v1/events/recent, told apart from what was seen by a
+   *  cursor of event ids. Off for a stream of events the server never stores: it keeps no
+   *  cursor, as the ids count from one again whenever the box starts. On unless set false. */
   backfill?: boolean;
 };
 
@@ -117,7 +118,7 @@ export class EventStream {
   }
 
   private emit(event: SailEvent): void {
-    if (event.id !== undefined) {
+    if (this.options.backfill !== false && event.id !== undefined) {
       if (this.lastSeenId !== undefined && event.id <= this.lastSeenId) return;
       this.lastSeenId = event.id;
     }
@@ -148,7 +149,7 @@ export class EventStream {
   }
 
   private async backfill(): Promise<void> {
-    if (this.options.backfill === false || this.lastSeenId === undefined) return;
+    if (this.lastSeenId === undefined) return;
     try {
       const recent = await this.deps.recent(BACKFILL_LIMIT);
       const missed = recent.events

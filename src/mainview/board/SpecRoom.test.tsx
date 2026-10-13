@@ -427,8 +427,10 @@ describe("SpecRoom", () => {
     Object.defineProperties(timeline, {
       scrollHeight: { configurable: true, value: 1000 },
       clientHeight: { configurable: true, value: 100 },
-      scrollTop: { configurable: true, writable: true, value: 0 },
+      scrollTop: { configurable: true, writable: true, value: 900 },
     });
+    act(() => timeline.dispatchEvent(new Event("scroll", { bubbles: true })));
+    timeline.scrollTop = 0;
     act(() => timeline.dispatchEvent(new Event("scroll", { bubbles: true })));
 
     act(() => fake.receive(remoteMessage("message-3", "Held at the tail")));
@@ -1068,10 +1070,10 @@ describe("SpecRoom live turns", () => {
   const occurrences = (text: string) => container.textContent!.split(text).length - 1;
   const pill = () => container.querySelector<HTMLButtonElement>(".room-new-pill");
 
-  function scrollTo(scrollTop: number) {
+  function scrollTo(scrollTop: number, scrollHeight = 1000) {
     const timeline = container.querySelector<HTMLElement>('[data-testid="room-timeline"]')!;
     Object.defineProperties(timeline, {
-      scrollHeight: { configurable: true, value: 1000 },
+      scrollHeight: { configurable: true, value: scrollHeight },
       clientHeight: { configurable: true, value: 100 },
       scrollTop: { configurable: true, writable: true, value: scrollTop },
     });
@@ -1129,7 +1131,7 @@ describe("SpecRoom live turns", () => {
     stream(fake, live("agent_text_delta", { text: "In the home room." }, "room-9"));
     expect(draft()?.textContent).toContain("In the home room.");
 
-    stream(fake, { ...delta("Another room's turn."), data: { ...delta("").data, run_id: "run-8" } });
+    act(() => fake.roomStreams.emit("room-9", delta("Another room's turn.")));
     expect(container.textContent).not.toContain("Another room's turn.");
   });
 
@@ -1435,7 +1437,7 @@ describe("SpecRoom live turns", () => {
     expect(occurrences("Half a sent")).toBe(1);
   });
 
-  test("two turns whose ends were both lost each yield to their own reply, one fetch bringing both", async () => {
+  test("two turns whose ends were both lost end with both replies and no draft, one fetch bringing both", async () => {
     const fake = makeGateway();
     let releaseMessages!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -1464,13 +1466,55 @@ describe("SpecRoom live turns", () => {
     act(() =>
       fake.receive({ ...reply("Eighth, whole.", "2026-07-28T10:03:30Z"), id: "message-8" }),
     );
-    expect(container.querySelectorAll(".room-draft")).toHaveLength(2);
+    expect(
+      [...container.querySelectorAll<HTMLElement>(".room-draft")].map((row) => row.dataset.testid),
+    ).toEqual(["draft-run-7-8"]);
     releaseMessages();
     await settle();
 
     expect(container.querySelector('[data-testid="room-message-message-7"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="room-message-message-8"]')).not.toBeNull();
     expect(container.querySelectorAll(".room-draft")).toHaveLength(0);
+  });
+
+  test("a member that dies with its box mid-turn leaves a draft only until the next member's turn begins", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    stream(fake, delta("Half a sent"));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+    act(() => fake.roomStreams.setState("s1", "connected"));
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Half a sent … ");
+
+    stream(fake, {
+      ...live("agent_text_delta", {
+        text: "A new member.",
+        run_id: "run-8",
+        principal: "claude-code/run-8",
+        turn: 1,
+      }),
+      ts: "2026-07-28T10:05:00Z",
+    });
+
+    expect(
+      [...container.querySelectorAll<HTMLElement>(".room-draft")].map((row) => row.dataset.testid),
+    ).toEqual(["draft-run-8-1"]);
+  });
+
+  test("a note the member posts after a drop its turn survived leaves the draft", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    stream(fake, delta("I'll start on the build."));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+    act(() => fake.roomStreams.setState("s1", "connected"));
+    stream(fake, delta("Still going."));
+
+    act(() => fake.receive({ ...reply("Progress: step 1 done.", "2026-07-28T10:02:10Z"), id: "note-1" }));
+    await settle();
+
+    expect(container.querySelector('[data-testid="room-message-note-1"]')).not.toBeNull();
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe(
+      "I'll start on the build. … Still going.",
+    );
   });
 
   test("an earlier turn's reply paged in by a recovery fetch leaves the draft of the turn still being written", async () => {
@@ -1496,7 +1540,7 @@ describe("SpecRoom live turns", () => {
     );
   });
 
-  test("a reader who loads earlier messages mid-turn finds the draft behind the pill, and an earlier reply leaves it", async () => {
+  test("an earlier turn's reply paged in by loading earlier leaves the draft of the turn still being written", async () => {
     const fake = makeGateway();
     fake.store({ ...reply("The turn before.", "2026-07-28T09:30:00Z"), id: "msg-000" });
     for (let i = 1; i <= 100; i++) {
@@ -1511,14 +1555,9 @@ describe("SpecRoom live turns", () => {
 
     expect(fake.calls.messageOptions.at(-1)).toEqual({ before: "msg-001", limit: 100 });
     expect(container.querySelector('[data-testid="room-message-msg-000"]')).not.toBeNull();
-    expect(draft()).toBeNull();
-    expect(pill()?.textContent).toBe("1 new");
-
-    scrollTo(900);
     expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe(
       "Current turn partial … ",
     );
-    expect(pill()).toBeNull();
   });
 
   test("an earlier turn's reply first loaded mid-turn, after the room's message load failed, leaves the draft", async () => {
@@ -1653,15 +1692,16 @@ describe("SpecRoom live turns", () => {
     expect(container.querySelector(".room-system-row")).toBeNull();
   });
 
-  test("a reader scrolled up sees no draft: the pill counts the turn, and scrolling down shows the message", async () => {
+  test("a reader scrolled up is not moved by a turn: its draft is drawn below them, and its message waits behind the pill", async () => {
     const fake = makeGateway();
     fake.receive(remoteMessage("message-old", "Already visible"));
     await mount(fake.gateway);
+    scrollTo(900);
     scrollTo(0);
 
     stream(fake, delta("The full reply."));
-    expect(draft()).toBeNull();
-    expect(pill()?.textContent).toBe("1 new");
+    expect(draft()?.textContent).toContain("The full reply.");
+    expect(pill()).toBeNull();
 
     stream(fake, turnEnded({ message_id: "message-7" }));
     act(() => fake.receive(reply("The full reply.")));
@@ -1674,16 +1714,22 @@ describe("SpecRoom live turns", () => {
     expect(pill()).toBeNull();
   });
 
-  test("a reader who scrolls back down mid-turn finds the draft where the pill was", async () => {
+  test("the room's own glide to a bottom that moved is not the reader leaving; moving up is", async () => {
     const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
     await mount(fake.gateway);
-    scrollTo(0);
-    stream(fake, delta("Still writing"));
-    expect(draft()).toBeNull();
-
     scrollTo(900);
 
-    expect(draft()?.textContent).toContain("Still writing");
+    scrollTo(950, 1400);
+    act(() => fake.receive(remoteMessage("message-2", "Landed mid-glide")));
+    await settle();
+    expect(container.textContent).toContain("Landed mid-glide");
     expect(pill()).toBeNull();
+
+    scrollTo(800, 1400);
+    act(() => fake.receive(remoteMessage("message-3", "Landed while away")));
+    await settle();
+    expect(container.textContent).not.toContain("Landed while away");
+    expect(pill()?.textContent).toBe("1 new");
   });
 });
