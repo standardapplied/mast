@@ -2,6 +2,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -370,33 +371,42 @@ export function SpecRoom({
     advanceLive((state) => state);
   }, [advanceLive]);
 
-  /** A reader at the latest has nothing behind the pill, however they came to be there. */
+  /** A reader who returns to the latest has nothing behind the pill, however they came back. */
   const follow = useCallback((latest: boolean) => {
+    const returned = latest && !atLatest.current;
     atLatest.current = latest;
-    if (!latest) return;
+    if (!returned) return;
     advanceLive(revealLiveTurns);
     setTail(released);
   }, [advanceLive]);
 
   /**
-   * After what is drawn changes, in the frame that lays it out: a reader who still follows is
-   * taken to the latest, and that move is remembered so their next one is told from it; one who
-   * has left is let be; one left resting at the very end, because what was below them shrank
-   * away without a scroll to tell of it, follows again. A room that is not on screen has no
-   * place to keep.
+   * The room has just been laid out anew, by what it drew or by its window. A shrink leaves a
+   * reader who was past the new end resting on it, lower than they were, and the scroll that
+   * tells of it comes a frame later, when the end may have moved again and they no longer rest
+   * on it. So it is read here, before anything else can move them: a reader resting at the very
+   * end did not move up to get there, and follows.
+   */
+  const laidOut = useCallback(() => {
+    const element = scroller.current;
+    if (!element || element.clientHeight === 0 || fromLatest(element) > AT_LATEST_PX) return;
+    scrolledTo.current = Math.min(scrolledTo.current, element.scrollTop);
+    follow(true);
+  }, [follow]);
+
+  /**
+   * In the frame after the room was laid out anew, a reader who still follows is taken to the
+   * latest, and that move is remembered so their next one is told from it. One who has left by
+   * then is let be, and a room that is not on screen has no place to keep.
    */
   const keepPlace = useCallback(() => {
     requestAnimationFrame(() => {
       const element = scroller.current;
-      if (!element || element.clientHeight === 0) return;
-      if (atLatest.current) {
-        element.scrollTop = element.scrollHeight;
-        scrolledTo.current = element.scrollTop;
-      } else if (fromLatest(element) <= AT_LATEST_PX) {
-        follow(true);
-      }
+      if (!element || element.clientHeight === 0 || !atLatest.current) return;
+      element.scrollTop = element.scrollHeight;
+      scrolledTo.current = element.scrollTop;
     });
-  }, [follow]);
+  }, []);
 
   const loadReviewDetails = useCallback(
     async (reviews: ReviewView[]): Promise<ReviewDetailResponse[]> => {
@@ -486,7 +496,20 @@ export function SpecRoom({
     [engagement, specId, presenceVersion, lastAgentReplyAt],
   );
 
+  useLayoutEffect(laidOut);
+
   useEffect(keepPlace, [keepPlace, tail.visible.length, typing, live]);
+
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    const resized = new ResizeObserver(() => {
+      laidOut();
+      keepPlace();
+    });
+    resized.observe(element);
+    return () => resized.disconnect();
+  }, [keepPlace, laidOut]);
 
   useEffect(() => {
     advanceLive(() => NO_LIVE_TURNS);

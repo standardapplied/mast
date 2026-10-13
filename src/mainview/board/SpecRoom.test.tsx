@@ -1079,8 +1079,8 @@ describe("SpecRoom live turns", () => {
     });
   }
 
-  function scrollTo(scrollTop: number, scrollHeight = 1000) {
-    layOut(scrollTop, scrollHeight);
+  function scrollTo(scrollTop: number, scrollHeight = 1000, clientHeight = 100) {
+    layOut(scrollTop, scrollHeight, clientHeight);
     act(() => timeline().dispatchEvent(new Event("scroll", { bubbles: true })));
   }
 
@@ -1098,16 +1098,31 @@ describe("SpecRoom live turns", () => {
   const frames: FrameRequestCallback[] = [];
   const paint = () => act(() => frames.splice(0).forEach((frame) => frame(0)));
   const timeline = () => container.querySelector<HTMLElement>('[data-testid="room-timeline"]')!;
+  /** What the room asked to hear of its window's size, told when a test resizes it. */
+  const resizes: Array<() => void> = [];
+  const resize = () => act(() => resizes.forEach((told) => told()));
   let requestFrame: typeof globalThis.requestAnimationFrame;
+  let resizeObserver: typeof globalThis.ResizeObserver;
 
   beforeEach(() => {
     frames.length = 0;
+    resizes.length = 0;
     requestFrame = globalThis.requestAnimationFrame;
+    resizeObserver = globalThis.ResizeObserver;
     globalThis.requestAnimationFrame = (frame) => frames.push(frame);
+    globalThis.ResizeObserver = class implements ResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resizes.push(() => callback([], this));
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
   });
 
   afterEach(() => {
     globalThis.requestAnimationFrame = requestFrame;
+    globalThis.ResizeObserver = resizeObserver;
     act(() => presenceStore.noteRuns([]));
   });
 
@@ -1924,10 +1939,9 @@ describe("SpecRoom live turns", () => {
     scrollTo(0, 1400);
 
     stream(fake, turnEnded({ message_id: "message-7" }));
+    layOut(0, 101);
     act(() => fake.receive(reply("Short.")));
     await settle();
-    layOut(0, 101);
-    paint();
 
     stream(fake, live("agent_text_delta", { text: "The next turn.", turn: 8 }));
     expect(container.querySelector('[data-testid="draft-run-7-8"]')?.textContent).toContain(
@@ -1945,10 +1959,9 @@ describe("SpecRoom live turns", () => {
     scrollTo(0, 1400);
 
     stream(fake, turnEnded({ message_id: "message-7" }));
+    layOut(0, 102);
     act(() => fake.receive(reply("Short.")));
     await settle();
-    layOut(0, 102);
-    paint();
 
     stream(fake, live("agent_text_delta", { text: "The next turn.", turn: 8 }));
     expect(container.querySelector('[data-testid="draft-run-7-8"]')).toBeNull();
@@ -1967,13 +1980,95 @@ describe("SpecRoom live turns", () => {
     expect(pill()?.textContent).toBe("1 new");
 
     stream(fake, turnEnded({ message_id: "message-7" }));
+    layOut(0, 100);
     act(() => fake.receive(reply("Short.")));
     await settle();
-    layOut(0, 100);
-    paint();
 
     expect(container.textContent).toContain("Behind the pill");
     expect(pill()).toBeNull();
+  });
+
+  test("a reader who never moved keeps following when a reply shrinks the room and the next turn grows it before that scroll is told", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    paint();
+    stream(fake, delta("A tall turn."));
+    layOut(900, 1400);
+    paint();
+    expect(timeline().scrollTop).toBe(1400);
+
+    stream(fake, turnEnded({ message_id: "message-7" }));
+    layOut(300, 400);
+    act(() => fake.receive(reply("Short.")));
+    await settle();
+    layOut(300, 700);
+    stream(fake, live("agent_text_delta", { text: "The next turn.", turn: 8 }));
+    scrollTo(300, 700);
+    paint();
+
+    expect(timeline().scrollTop).toBe(700);
+    act(() => fake.receive(remoteMessage("message-2", "Landed after")));
+    await settle();
+    expect(container.textContent).toContain("Landed after");
+    expect(pill()).toBeNull();
+  });
+
+  test("a reader the room finds resting at the very end still follows once that scroll is told, after what the pill released has grown the room", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    stream(fake, delta("A tall turn."));
+    scrollTo(400, 1400);
+    act(() => fake.receive(remoteMessage("message-2", "Behind the pill")));
+    await settle();
+    expect(pill()?.textContent).toBe("1 new");
+
+    stream(fake, turnEnded({ message_id: "message-7" }));
+    layOut(300, 400);
+    act(() => fake.receive(reply("Short.")));
+    await settle();
+    expect(container.textContent).toContain("Behind the pill");
+    expect(pill()).toBeNull();
+
+    scrollTo(300, 460);
+    paint();
+    expect(timeline().scrollTop).toBe(460);
+  });
+
+  test("a window that grows taller under a reader who follows has not moved them", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    paint();
+
+    layOut(850, 1000, 150);
+    resize();
+    layOut(850, 1100, 150);
+    stream(fake, delta("Written as the window grew."));
+    scrollTo(850, 1100, 150);
+    paint();
+
+    expect(timeline().scrollTop).toBe(1100);
+  });
+
+  test("a room that returns to the screen takes a reader who follows to the latest", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    scrollTo(900);
+    paint();
+    layOut(0, 0, 0);
+    stream(fake, delta("Written while hidden."));
+    paint();
+
+    layOut(900, 1400);
+    resize();
+    paint();
+
+    expect(timeline().scrollTop).toBe(1400);
   });
 
   test("a room that is not on screen keeps no place: the reader's first move up after it returns is still told", async () => {
