@@ -487,8 +487,9 @@ export function SpecRoom({
    * than its draft leaves them lower than they were. The scroll that tells of it comes a frame
    * later, when the end may have moved again, and would read as the reader moving up. So where
    * a layout leaves them is where their next move is told from, and a reader it leaves resting
-   * at the very end follows. An engine tells a reader's own scroll before anything else runs in
-   * the frame it learns of it, so none of theirs is waiting to be taken for the layout's.
+   * at the very end follows. A move of the reader's own that no scroll has told of yet is taken
+   * with it: an engine tells one within a frame, so at worst a single step made in the instant
+   * before the room draws is undone once.
    */
   useLayoutEffect(() => {
     const element = scroller.current;
