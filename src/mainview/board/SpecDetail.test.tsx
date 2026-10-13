@@ -374,6 +374,22 @@ describe("SpecDetail anti-flicker", () => {
     expect(text()).toContain("rev 2");
   });
 
+  test("a live member's turn events on the app-wide stream reload nothing", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    const loads = fake.getSpecCalls.count;
+
+    for (const type of ["agent_text_delta", "agent_tool_call", "agent_turn_ended"]) {
+      await act(async () => fake.emit({ spec: "s1", type }));
+    }
+    await settle();
+    expect(fake.getSpecCalls.count).toBe(loads);
+
+    await act(async () => fake.emit({ spec: "s1" }));
+    await settle();
+    expect(fake.getSpecCalls.count).toBeGreaterThan(loads);
+  });
+
   test("a review spec offers Re-dispatch and opens the dialog in restart mode", async () => {
     const fake = makeGateway("review");
     await mount(fake.gateway);

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { SailEvent } from "../shared/sail-models";
 import { createDemoGateway } from "./gateway";
 
 describe("project roster", () => {
@@ -130,5 +131,112 @@ describe("spec body edits go through the content resource", () => {
     const result = await gateway.putSpecContent("chorus-billing-export", { body: "x" }, '"stale"');
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error.status).toBe(412);
+  });
+});
+
+describe("the demo's live member", () => {
+  const ROOM = "chorus-billing-export";
+  const LIVE_TYPES = ["agent_text_delta", "agent_tool_call", "agent_turn_ended"];
+
+  /** A demo whose scripted turn waits to be fired, step by step, by the test. */
+  async function demo(agent?: string) {
+    const steps: Array<() => void> = [];
+    const gateway = createDemoGateway((step) => void steps.push(step));
+    if (agent) await gateway.engage(ROOM, { agent });
+    const live: SailEvent[] = [];
+    const wide: SailEvent[] = [];
+    const stream = gateway.openRoomStream(ROOM);
+    stream.onEvent((event) => live.push(event));
+    gateway.onEvent((event) => wide.push(event));
+    return { gateway, steps, live, wide, stream };
+  }
+
+  test("a post in its room streams the reply, posts it as the member, and ends the turn", async () => {
+    const { gateway, steps, live, wide } = await demo("claude-code");
+
+    await gateway.postSpecMessage(ROOM, { body: "Where do we start?" });
+    expect(live).toEqual([]);
+    expect(steps.length).toBeGreaterThan(0);
+    steps.forEach((step) => step());
+
+    expect(live.map((event) => [event.type, event.data?.status].filter(Boolean).join(":"))).toEqual([
+      "agent_text_delta",
+      "agent_tool_call:started",
+      "agent_tool_call:finished",
+      "agent_text_delta",
+      "agent_text_delta",
+      "agent_text_delta",
+      "agent_text_delta",
+      "agent_turn_ended",
+    ]);
+    const principal = `claude-code/demo-live-${ROOM}`;
+    for (const event of live) {
+      expect(event.spec).toBe(ROOM);
+      expect(event.data).toMatchObject({
+        run_id: `demo-live-${ROOM}`,
+        room_id: ROOM,
+        principal,
+        turn: 1,
+      });
+    }
+
+    const written = live
+      .filter((event) => event.type === "agent_text_delta")
+      .map((event) => event.data?.text)
+      .join("");
+    const messages = await gateway.listSpecMessages(ROOM);
+    const reply = messages.ok ? messages.value.messages.at(-1) : undefined;
+    expect(reply).toMatchObject({ author: principal, body: written });
+    expect(live.at(-1)?.data).toMatchObject({ message_id: reply?.id, is_error: false });
+
+    const order = wide.map((event) => event.type);
+    expect(order.lastIndexOf("spec_message_posted")).toBe(order.indexOf("agent_turn_ended") - 1);
+    expect(wide.findLast((event) => event.type === "spec_message_posted")?.agent).toBe(principal);
+  });
+
+  test("nothing live is stored: history holds the message's event and none of the turn's", async () => {
+    const { gateway, steps } = await demo("claude-code");
+    await gateway.postSpecMessage(ROOM, { body: "Where do we start?" });
+    steps.forEach((step) => step());
+
+    const stored = await gateway.specEvents(ROOM, { limit: 500 });
+    const types = stored.ok ? stored.value.events.map((event) => event.type) : [];
+    expect(types.filter((type) => type === "spec_message_posted")).toHaveLength(2);
+    expect(types.filter((type) => LIVE_TYPES.includes(type))).toEqual([]);
+  });
+
+  test("its next reply is the next turn of the same run", async () => {
+    const { gateway, steps, live } = await demo("claude-code");
+    await gateway.postSpecMessage(ROOM, { body: "One" });
+    await gateway.postSpecMessage(ROOM, { body: "Two" });
+    steps.forEach((step) => step());
+
+    expect(new Set(live.map((event) => event.data?.run_id)).size).toBe(1);
+    expect([...new Set(live.map((event) => event.data?.turn))]).toEqual([1, 2]);
+  });
+
+  test("a Codex member is not live, and a room with no member has none: nothing is scripted", async () => {
+    for (const agent of ["codex", undefined]) {
+      const { gateway, steps, live } = await demo(agent);
+      await gateway.postSpecMessage(ROOM, { body: "Anyone?" });
+
+      expect(steps).toEqual([]);
+      expect(live).toEqual([]);
+    }
+  });
+
+  test("a room's stream carries its own room's turn, and nothing once it is closed", async () => {
+    const { gateway, steps, live, stream } = await demo("claude-code");
+    const elsewhere: SailEvent[] = [];
+    gateway.openRoomStream("chorus-invoice-ui").onEvent((event) => elsewhere.push(event));
+
+    await gateway.postSpecMessage(ROOM, { body: "Where do we start?" });
+    steps[0]!();
+    expect(live).toHaveLength(1);
+    expect(elsewhere).toEqual([]);
+
+    stream.stop();
+    steps.slice(1).forEach((step) => step());
+    expect(live).toHaveLength(1);
   });
 });

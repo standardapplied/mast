@@ -1,3 +1,5 @@
+import { fakeRoomStreams } from "./roomStreams";
+
 /**
  * The catalog store's connection lanes, stubbed empty-but-well-formed, for
  * component tests whose fake gateway is scoped to the surface under test.
@@ -29,6 +31,7 @@ export function catalogLaneStubs() {
       error: { status: 404, code: "not_found", message: "no whoami in this fake" },
     }),
     onEvent: () => () => {},
+    openRoomStream: fakeRoomStreams().openRoomStream,
     onConnectionStatus: () => () => {},
   };
 }

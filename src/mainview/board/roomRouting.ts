@@ -1,4 +1,5 @@
 import type { SailEvent } from "../../shared/sail-models";
+import { LIVE_TURN_EVENT_TYPES } from "./liveTurns";
 
 /**
  * Event→fetch routing for the spec room: each live event refreshes only the
@@ -10,13 +11,15 @@ import type { SailEvent } from "../../shared/sail-models";
 
 /** High-volume liveness signals: they feed the presence store (wired app-wide)
  *  and are not timeline rows, so the room ignores them entirely — zero fetches,
- *  zero merges, zero renders during a live run's tool storm. */
+ *  zero merges, zero renders during a live run's tool storm. A live member's turn
+ *  events are drawn from the room's own stream, so on this one they are the same noise. */
 const TELEMETRY_EVENT_TYPES = new Set([
   "agent_tool_started",
   "agent_tool_finished",
   "agent_log_chunk",
   "agent_presence",
   "heartbeat",
+  ...LIVE_TURN_EVENT_TYPES,
 ]);
 
 export function isTelemetryEvent(type: string): boolean {

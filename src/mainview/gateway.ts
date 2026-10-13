@@ -10,6 +10,7 @@ import type {
   SyncStatus,
   DispatchRequest,
   DispatchResponse,
+  EventStreamState,
   FdeListResponse,
   GlobalBoardResponse,
   GlobalSpecContentResponse,
@@ -50,6 +51,7 @@ import type {
 import type { SailResult } from "../shared/types";
 import type { DeckSession, SessionListing } from "./terminal/roomDeck";
 import type { AgentLogLine, AgentLogState } from "./tauri/agentLogStream";
+import { isLiveTurnEvent } from "./board/liveTurns";
 
 /**
  * A live agent-log follow session for one spec+role. The stream owns reconnect
@@ -61,6 +63,17 @@ export type AgentLogHandle = {
   onLine(listener: (line: AgentLogLine) => void): () => void;
   onState(listener: (state: AgentLogState) => void): () => void;
   onError(listener: (message: string) => void): () => void;
+  stop(): void;
+};
+
+/**
+ * One room's live stream: its member's turn as it is written (text deltas, tool steps, the turn's
+ * end). The stream owns reconnect and replays nothing after one, so `onState` is how a reader
+ * learns it may have missed some; `stop()` when the room closes.
+ */
+export type RoomStreamHandle = {
+  onEvent(listener: (event: SailEvent) => void): () => void;
+  onState(listener: (state: EventStreamState) => void): () => void;
   stop(): void;
 };
 
@@ -178,6 +191,8 @@ export type Gateway = {
   logout(): Promise<void>;
   diagnostics(): Promise<{ report: string; logPath: string }>;
   onEvent(listener: (event: SailEvent) => void): () => void;
+  /** Open the room's live stream (GET /v1/events/stream?room=) — sail ≥ 0.47. */
+  openRoomStream(roomId: string): RoomStreamHandle;
   onConnectionStatus(listener: (status: ConnectionStatus) => void): () => void;
 };
 
@@ -228,9 +243,24 @@ function demoSpec(partial: Partial<DemoSpec> & Pick<DemoSpec, "id" | "project" |
   };
 }
 
+const DEMO_REPLY = [
+  "Reading the room ",
+  "and the spec behind it.",
+  "\n\n",
+  "Nothing here is blocked: ",
+  "I would start with the smallest change that proves it.",
+];
+const DEMO_TURN_STEP_MS = 180;
+
 export type DemoGateway = Gateway & { emit(event: SailEvent): void };
 
-export function createDemoGateway(): DemoGateway {
+/**
+ * `schedule` paces the scripted turn a live member streams after a human posts; a test hands in
+ * its own to fire the steps itself.
+ */
+export function createDemoGateway(
+  schedule: (step: () => void, ms: number) => void = (step, ms) => void setTimeout(step, ms),
+): DemoGateway {
   const specs: DemoSpec[] = [
     demoSpec({ id: "chorus-auth-flow", project: "chorus", title: "Passkey auth flow", status: "draft" }),
     demoSpec({
@@ -444,8 +474,74 @@ export function createDemoGateway(): DemoGateway {
   const etagOf = (spec: DemoSpec) => `"${spec.updated_at}"`;
 
   const emit = (event: SailEvent) => {
-    events.push(event);
+    if (!isLiveTurnEvent(event.type)) events.push(event);
     listeners.forEach((l) => l(event));
+  };
+
+  const appendMessage = (
+    spec: DemoSpec,
+    author: string,
+    request: SpecMessagePostRequest,
+  ): SpecMessage => {
+    const message: SpecMessage = {
+      id: crypto.randomUUID(),
+      spec_id: spec.id,
+      author,
+      body: request.body,
+      created_at: new Date().toISOString(),
+      ...(request.reply_to ? { reply_to: request.reply_to } : {}),
+      ...(request.question ? { question: true } : {}),
+    };
+    messages.set(spec.id, [...(messages.get(spec.id) ?? []), message]);
+    emit({
+      v: 1,
+      id: ++eventId,
+      ts: message.created_at,
+      project: spec.project,
+      spec: spec.id,
+      type: "spec_message_posted",
+      agent: author,
+      host: "demo",
+      data: {
+        message_id: message.id,
+        preview: message.body.slice(0, 160),
+        ...(message.question ? { question: true } : {}),
+      },
+    });
+    return message;
+  };
+
+  // A live member is one run for as long as it lives, and its turns count up within it.
+  const liveTurnCounts = new Map<string, number>();
+  const streamLiveTurn = (spec: DemoSpec, agent: string) => {
+    const runId = `demo-live-${spec.id}`;
+    const principal = `${agent}/${runId}`;
+    const turn = (liveTurnCounts.get(spec.id) ?? 0) + 1;
+    liveTurnCounts.set(spec.id, turn);
+    const tell = (type: string, data: Record<string, unknown>) =>
+      emit({
+        v: 1,
+        id: ++eventId,
+        ts: new Date().toISOString(),
+        project: spec.project,
+        spec: spec.id,
+        type,
+        agent,
+        host: "demo",
+        data: { run_id: runId, room_id: spec.id, principal, turn, ...data },
+      });
+    const [opening, ...rest] = DEMO_REPLY;
+    const steps = [
+      () => tell("agent_text_delta", { text: opening }),
+      () => tell("agent_tool_call", { tool: "Read", summary: "README.md", status: "started" }),
+      () => tell("agent_tool_call", { tool: "Read", status: "finished" }),
+      ...rest.map((text) => () => tell("agent_text_delta", { text })),
+      () => {
+        const reply = appendMessage(spec, principal, { body: DEMO_REPLY.join("") });
+        tell("agent_turn_ended", { message_id: reply.id, is_error: false });
+      },
+    ];
+    steps.forEach((step, index) => schedule(step, (index + 1) * DEMO_TURN_STEP_MS));
   };
 
   const snapshotStore = new Map<string, SnapshotView[]>();
@@ -1124,32 +1220,13 @@ export function createDemoGateway(): DemoGateway {
     },
 
     async postSpecMessage(id, request) {
-      if (!find(id)) return notFound(id);
-      const message: SpecMessage = {
-        id: crypto.randomUUID(),
-        spec_id: id,
-        author: "uday",
-        body: request.body,
-        created_at: new Date().toISOString(),
-        ...(request.reply_to ? { reply_to: request.reply_to } : {}),
-        ...(request.question ? { question: true } : {}),
-      };
-      messages.set(id, [...(messages.get(id) ?? []), message]);
-      emit({
-        v: 1,
-        id: ++eventId,
-        ts: message.created_at,
-        project: find(id)!.project,
-        spec: id,
-        type: "spec_message_posted",
-        agent: message.author,
-        host: "demo",
-        data: {
-          message_id: message.id,
-          preview: message.body.slice(0, 160),
-          ...(message.question ? { question: true } : {}),
-        },
-      });
+      const spec = find(id);
+      if (!spec) return notFound(id);
+      const message = appendMessage(spec, "uday", request);
+      // Codex is not a live member: its reply arrives whole, as a woken turn's does.
+      if (spec.engagement && spec.engagement.agent !== "codex") {
+        streamLiveTurn(spec, spec.engagement.agent);
+      }
       return ok({ message });
     },
 
@@ -1261,6 +1338,22 @@ export function createDemoGateway(): DemoGateway {
     onEvent(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+
+    openRoomStream(roomId) {
+      const relays = new Set<(event: SailEvent) => void>();
+      return {
+        onEvent(listener) {
+          const relay = (event: SailEvent) => {
+            if (event.spec === roomId && isLiveTurnEvent(event.type)) listener(event);
+          };
+          relays.add(relay);
+          listeners.add(relay);
+          return () => listeners.delete(relay);
+        },
+        onState: () => () => {},
+        stop: () => relays.forEach((relay) => listeners.delete(relay)),
+      };
     },
 
     onConnectionStatus(listener) {

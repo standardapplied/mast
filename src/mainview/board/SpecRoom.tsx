@@ -25,6 +25,14 @@ import { Tooltip } from "../components/Tooltip";
 import { useToast } from "../components/Toast";
 import { Badge, Button, type BadgeTone } from "../components/ui";
 import type { Gateway } from "../gateway";
+import {
+  liveTurns,
+  NO_LIVE_TURNS,
+  settleLiveTurns,
+  streamGapped,
+  type Draft,
+  type LiveTurns,
+} from "./liveTurns";
 import { presenceStore, type PresenceStore } from "./presenceStore";
 import { Markdown } from "../markdown";
 import { coalesce, isTelemetryEvent, roomRefreshFor } from "./roomRouting";
@@ -193,6 +201,53 @@ function eventDetail(event: SailEvent): string {
     .join(" · ");
 }
 
+function TurnCutShort({ reason }: { reason: string }) {
+  return (
+    <p className="room-turn-cut-short">
+      the agent's turn ended early{reason ? ` · ${reason}` : ""}
+    </p>
+  );
+}
+
+/**
+ * A turn as it is written: the member's row, with the text so far and a line per tool step.
+ * The text is the box's payload drawn as text, never as Markdown; the message it becomes is
+ * what gets rendered.
+ */
+function DraftRow({ draft, label }: { draft: Draft; label: string }) {
+  const cutShort = draft.ended?.isError ? draft.ended : undefined;
+  return (
+    <article
+      className="room-message-group room-draft"
+      data-testid={`draft-${draft.runId}-${draft.turn}`}
+    >
+      <Avatar author={draft.principal} agent />
+      <div className="room-message-content">
+        <header className="room-message-head">
+          <strong>{label}</strong>
+        </header>
+        {draft.text && (
+          <div className={`room-message-body room-draft-text${cutShort ? " is-cut-short" : ""}`}>
+            {draft.text}
+          </div>
+        )}
+        {draft.tools.length > 0 && (
+          <ul className="room-draft-tools">
+            {draft.tools.map((line, index) => (
+              <li key={index} className={line.running ? "is-running" : undefined}>
+                <span>{line.tool}</span>
+                <span className="room-draft-tool-summary">{line.summary}</span>
+                <span className="room-draft-tool-status">{line.running ? "running" : "done"}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {cutShort && <TurnCutShort reason={cutShort.reason} />}
+      </div>
+    </article>
+  );
+}
+
 function FindingRow({ finding }: { finding: Finding }) {
   return (
     <div className="finding-row" data-testid={`finding-${finding.id}`}>
@@ -244,10 +299,13 @@ export function SpecRoom({
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [hasEarlier, setHasEarlier] = useState(false);
   const [draft, setDraft] = useState("");
+  const [live, setLive] = useState<LiveTurns>(NO_LIVE_TURNS);
+  const [following, setFollowing] = useState(true);
   const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
   const [snapshotsProject, setSnapshotsProject] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const sources = useRef<Sources>(EMPTY_SOURCES);
+  const liveNow = useRef<LiveTurns>(NO_LIVE_TURNS);
   const atLatest = useRef(true);
   const posting = useRef(false);
   const deferredMessageEvents = useRef<Set<string>>(new Set());
@@ -255,10 +313,28 @@ export function SpecRoom({
   const loadVersion = useRef(0);
   const { showToast } = useToast();
 
+  /**
+   * Every change to the live turns is settled against the messages the room holds, in the
+   * render that shows them: a draft and the message that replaces it are never both drawn,
+   * and never neither.
+   */
+  const advanceLive = useCallback((step: (state: LiveTurns) => LiveTurns) => {
+    const next = settleLiveTurns(step(liveNow.current), sources.current.messages);
+    if (next === liveNow.current) return;
+    liveNow.current = next;
+    setLive(next);
+  }, []);
+
   const applySources = useCallback((next: Sources, update: TimelineUpdate) => {
     sources.current = next;
     const timeline = assembleTimeline(next);
     setTail((previous) => reconcileTimeline(previous, timeline, update, atLatest.current));
+    advanceLive((state) => state);
+  }, [advanceLive]);
+
+  const follow = useCallback((latest: boolean) => {
+    atLatest.current = latest;
+    setFollowing(latest);
   }, []);
 
   const loadReviewDetails = useCallback(
@@ -355,7 +431,23 @@ export function SpecRoom({
       const element = scroller.current;
       if (element) element.scrollTop = element.scrollHeight;
     });
-  }, [tail.visible.length, typing]);
+  }, [tail.visible.length, typing, live]);
+
+  useEffect(() => {
+    advanceLive(() => NO_LIVE_TURNS);
+    const stream = gateway.openRoomStream(roomId);
+    const offEvent = stream.onEvent((event) => {
+      if (event.spec === roomId) advanceLive((state) => liveTurns(state, event));
+    });
+    const offState = stream.onState((state) => {
+      if (state === "reconnecting") advanceLive(streamGapped);
+    });
+    return () => {
+      offEvent();
+      offState();
+      stream.stop();
+    };
+  }, [advanceLive, gateway, roomId]);
 
   const refreshMessages = useCallback(
     async (live: boolean) => {
@@ -507,6 +599,7 @@ export function SpecRoom({
       if (event.spec !== specId && event.spec !== roomId) return;
       if (isTelemetryEvent(event.type)) return;
       if (event.type === "spec_message_posted") {
+        advanceLive((state) => liveTurns(state, event));
         const messageId =
           typeof event.data?.message_id === "string" ? event.data.message_id : undefined;
         if (messageId && sources.current.messages.some((message) => message.id === messageId)) return;
@@ -532,6 +625,7 @@ export function SpecRoom({
     });
     return off;
   }, [
+    advanceLive,
     applySources,
     fetchNewMessages,
     gateway,
@@ -610,7 +704,7 @@ export function SpecRoom({
   }, [gapFill, gateway]);
 
   const jumpToLatest = useCallback(() => {
-    atLatest.current = true;
+    follow(true);
     setTail((previous) => ({
       visible: [...previous.visible, ...previous.buffered].sort(
         (left, right) =>
@@ -622,12 +716,14 @@ export function SpecRoom({
       const element = scroller.current;
       if (element) element.scrollTop = element.scrollHeight;
     });
-  }, []);
+  }, [follow]);
 
   const onScroll = (event: UIEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
-    atLatest.current =
+    const latest =
       element.scrollHeight - element.scrollTop - element.clientHeight <= SCROLL_EDGE_PX;
+    if (latest && !atLatest.current && tail.buffered.length > 0) return jumpToLatest();
+    follow(latest);
   };
 
   const loadEarlier = async () => {
@@ -641,7 +737,7 @@ export function SpecRoom({
     setLoadingEarlier(false);
     if (!result.ok) return showToast("error", result.error.message);
     setHasEarlier(result.value.messages.length === PAGE_SIZE);
-    atLatest.current = false;
+    follow(false);
     applySources(
       {
         ...sources.current,
@@ -703,7 +799,7 @@ export function SpecRoom({
       delivery: "pending",
     };
     setDraft("");
-    atLatest.current = true;
+    follow(true);
     applySources(
       { ...sources.current, messages: mergeMessages(sources.current.messages, [message]) },
       "replace",
@@ -718,6 +814,8 @@ export function SpecRoom({
   };
 
   const groups = groupTimeline(tail.visible);
+  // A reader away from the latest sees a turn as they see its message: behind the pill.
+  const behindPill = tail.buffered.length + (following ? 0 : live.drafts.length);
 
   return (
     <div className="spec-room">
@@ -787,7 +885,7 @@ export function SpecRoom({
                         {item.messages.map((entry) => (
                           <div
                             key={entry.id}
-                            className={`room-message-body${entry.message.delivery ? ` is-${entry.message.delivery}` : ""}${entry.message.question ? " is-question" : ""}`}
+                            className={`room-message-body${entry.message.delivery ? ` is-${entry.message.delivery}` : ""}${entry.message.question ? " is-question" : ""}${live.cutShort.has(entry.message.id) ? " is-cut-short" : ""}`}
                             data-testid={`room-message-${entry.message.id}`}
                           >
                             {entry.message.question && (
@@ -799,6 +897,9 @@ export function SpecRoom({
                               </span>
                             )}
                             <Markdown source={entry.message.body} />
+                            {live.cutShort.has(entry.message.id) && (
+                              <TurnCutShort reason={live.cutShort.get(entry.message.id) ?? ""} />
+                            )}
                             {entry.message.delivery === "pending" && (
                               <span className="room-message-delivery">
                                 <Spinner size={12} />
@@ -908,15 +1009,25 @@ export function SpecRoom({
               </Fragment>
             );
           })}
-          <TypingRow
-            specId={specId}
-            engagement={engagement}
-            lastAgentReplyAt={lastAgentReplyAt}
-          />
+          {following &&
+            live.drafts.map((entry) => (
+              <DraftRow
+                key={`${entry.runId}:${entry.turn}`}
+                draft={entry}
+                label={authorLabel(entry.principal, sources.current.runs)}
+              />
+            ))}
+          {live.drafts.length === 0 && (
+            <TypingRow
+              specId={specId}
+              engagement={engagement}
+              lastAgentReplyAt={lastAgentReplyAt}
+            />
+          )}
       </div>
-      {tail.buffered.length > 0 && (
+      {behindPill > 0 && (
         <button type="button" className="room-new-pill" onClick={jumpToLatest}>
-          {tail.buffered.length} new
+          {behindPill} new
         </button>
       )}
       {canWrite ? (

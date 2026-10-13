@@ -30,6 +30,11 @@ export type EventStreamOptions = {
   token: string | null;
   project?: string;
   type?: string;
+  /** Narrows the stream to one room's events. */
+  room?: string;
+  /** Replay what a reconnect missed from /v1/events/recent; off for a stream of events the
+   *  server never stores. On unless set false. */
+  backfill?: boolean;
 };
 
 const HEARTBEAT_TIMEOUT_MS = 45_000;
@@ -122,6 +127,7 @@ export class EventStream {
   private url(): string {
     const url = new URL(this.options.server + "/v1/events/stream");
     if (this.options.project) url.searchParams.set("project", this.options.project);
+    if (this.options.room) url.searchParams.set("room", this.options.room);
     if (this.options.type) url.searchParams.set("type", this.options.type);
     return url.toString();
   }
@@ -142,7 +148,7 @@ export class EventStream {
   }
 
   private async backfill(): Promise<void> {
-    if (this.lastSeenId === undefined) return;
+    if (this.options.backfill === false || this.lastSeenId === undefined) return;
     try {
       const recent = await this.deps.recent(BACKFILL_LIMIT);
       const missed = recent.events
