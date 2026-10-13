@@ -36,7 +36,10 @@ export type Draft = {
   tools: ToolLine[];
   /** The stream dropped while this turn was open, so its end may never be told. */
   gapped: boolean;
-  /** The newest message the principal posted while the turn was open. */
+  /**
+   * The newest message the principal posted while the turn was open. A question is never it:
+   * the member asks one mid-turn and goes on writing.
+   */
   posted?: string;
   ended?: { messageId?: string; isError: boolean; reason: string };
 };
@@ -93,7 +96,9 @@ function posted(state: LiveTurns, event: SailEvent): LiveTurns {
   const draft = state.drafts.find(
     (candidate) => !candidate.ended && candidate.principal === event.agent,
   );
-  if (!draft || typeof messageId !== "string" || !messageId) return state;
+  if (!draft || event.data?.question === true || typeof messageId !== "string" || !messageId) {
+    return state;
+  }
   return update(state, draft, { ...draft, posted: messageId });
 }
 

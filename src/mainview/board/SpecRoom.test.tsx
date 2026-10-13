@@ -236,6 +236,9 @@ function makeGateway({
     setStream(stream: string) {
       statusListeners.forEach((listener) => listener({ stream }));
     },
+    store(message: SpecMessage) {
+      messages = [...messages, message];
+    },
     receive(message: SpecMessage) {
       messages = [...messages, message];
       listeners.forEach((listener) =>
@@ -248,7 +251,11 @@ function makeGateway({
           type: "spec_message_posted",
           agent: message.author,
           host: "devbox",
-          data: { message_id: message.id, preview: message.body },
+          data: {
+            message_id: message.id,
+            preview: message.body,
+            ...(message.question ? { question: true } : {}),
+          },
         }),
       );
     },
@@ -1043,6 +1050,11 @@ describe("SpecRoom live turns", () => {
     body,
     created_at,
   });
+  const announced = (id: number, message: SpecMessage): SailEvent => ({
+    ...lifecycleEvent(id, "spec_message_posted"),
+    agent: message.author,
+    data: { message_id: message.id, preview: message.body },
+  });
   const engaged = (agent: string): EngagementView => ({
     agent,
     mode: "full",
@@ -1285,6 +1297,67 @@ describe("SpecRoom live turns", () => {
     expect(draft()).toBeNull();
     expect(container.textContent).toContain("Half a sentence, whole.");
     expect(occurrences("Half a sent")).toBe(1);
+  });
+
+  test("a disconnect that swallows the turn's end and its message's event leaves the recovered event to retire the draft", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    act(() => fake.setStream("connected"));
+    stream(fake, delta("Half a sent"));
+
+    act(() => {
+      fake.roomStreams.setState("s1", "reconnecting");
+      fake.setStream("reconnecting");
+    });
+    const whole = reply("Half a sentence, whole.");
+    fake.store(whole);
+    fake.setHistory([announced(12, whole)]);
+    act(() => fake.setStream("connected"));
+    await settle();
+
+    expect(draft()).toBeNull();
+    expect(container.textContent).toContain("Half a sentence, whole.");
+    expect(occurrences("Half a sent")).toBe(1);
+  });
+
+  test("a recovered event for a reply the room already held leaves the draft of the turn still being written", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    act(() => fake.setStream("connected"));
+    const before = { ...reply("The turn before."), id: "message-6" };
+    act(() => fake.receive(before));
+    await settle();
+    stream(fake, delta("Half a sent"));
+
+    act(() => {
+      fake.roomStreams.setState("s1", "reconnecting");
+      fake.setStream("reconnecting");
+    });
+    fake.setHistory([announced(11, before)]);
+    act(() => fake.setStream("connected"));
+    await settle();
+
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Half a sent … ");
+    expect(occurrences("The turn before.")).toBe(1);
+  });
+
+  test("a question asked mid-turn does not take the draft's place when the stream drops", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    stream(fake, delta("Let me ask."));
+    act(() => fake.receive({ ...reply("Which branch?"), id: "question-1", question: true }));
+    await settle();
+    expect(container.querySelector('[data-testid="room-message-question-1"]')).not.toBeNull();
+
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Let me ask. … ");
+
+    stream(fake, delta("Meanwhile."), turnEnded({ message_id: "message-7" }));
+    act(() => fake.receive(reply("Let me ask. Meanwhile.")));
+    await settle();
+    expect(draft()).toBeNull();
+    expect(container.querySelector('[data-testid="room-message-message-7"]')).not.toBeNull();
   });
 
   test("a turn that ended early is told: a muted bubble and the box's reason, on the draft and on the message it becomes", async () => {

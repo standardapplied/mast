@@ -647,6 +647,9 @@ export function SpecRoom({
         event.id !== undefined && (max === undefined || event.id > max) ? event.id : max,
       undefined,
     );
+    // The watermark trails the message events the live handler took, so the drain tells them
+    // again; a message the room held before the gap says nothing of a turn still being written.
+    const held = new Set<unknown>(sources.current.messages.map((message) => message.id));
     let sawMessage = false;
     let sawLifecycle = false;
     // The conversation spans two lanes since the decouple (see the live handler): the spec's
@@ -672,6 +675,7 @@ export function SpecRoom({
         for (const event of batch) {
           if (event.id !== undefined && (since === undefined || event.id > since)) since = event.id;
           if (event.type === "spec_message_posted") {
+            if (!held.has(event.data?.message_id)) advanceLive((state) => liveTurns(state, event));
             sawMessage = true;
             continue;
           }
@@ -691,7 +695,7 @@ export function SpecRoom({
     // message list, reviews, and runs stay stale until the next live event.
     if (sawMessage) void refreshMessages(true);
     if (sawLifecycle) void refreshReviewsAndRuns(true);
-  }, [applySources, gateway, refreshMessages, refreshReviewsAndRuns, roomId, specId]);
+  }, [advanceLive, applySources, gateway, refreshMessages, refreshReviewsAndRuns, roomId, specId]);
 
   useEffect(() => {
     let previous: string | undefined;

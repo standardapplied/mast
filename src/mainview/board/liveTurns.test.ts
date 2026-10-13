@@ -29,10 +29,14 @@ const toolCall = (status: string, more: Record<string, unknown> = {}) =>
   live("agent_tool_call", { tool: "Read", status, ...more });
 const turnEnded = (more: Record<string, unknown> = {}) =>
   live("agent_turn_ended", { is_error: false, ...more });
-const posted = (messageId: string, author = PRINCIPAL): SailEvent => ({
+const posted = (
+  messageId: string,
+  author = PRINCIPAL,
+  more: Record<string, unknown> = {},
+): SailEvent => ({
   ...live("spec_message_posted"),
   agent: author,
-  data: { message_id: messageId },
+  data: { message_id: messageId, ...more },
 });
 
 const fold = (events: SailEvent[], from: LiveTurns = NO_LIVE_TURNS) =>
@@ -163,6 +167,16 @@ describe("a reconnect loses nothing a reader needs", () => {
     const announced = fold([delta("Half a sent"), posted("m-1")]);
 
     expect(settleLiveTurns(streamGapped(announced), room("m-1")).drafts).toEqual([]);
+  });
+
+  test("a question its principal asked mid-turn is not the turn's end, so a gap keeps the draft", () => {
+    const asking = fold([delta("Let me ask."), posted("question-1", PRINCIPAL, { question: true })]);
+    const gapped = streamGapped(asking);
+
+    expect(settleLiveTurns(gapped, room("question-1")).drafts).toHaveLength(1);
+
+    const answered = liveTurns(gapped, posted("m-1"));
+    expect(settleLiveTurns(answered, room("question-1", "m-1")).drafts).toEqual([]);
   });
 
   test("another author's message never replaces a draft, gap or not", () => {
