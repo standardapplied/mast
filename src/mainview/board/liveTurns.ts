@@ -38,16 +38,14 @@ export type Draft = {
   gapped: boolean;
   /** The box's time on the first event of the turn the room saw; NaN when it was unreadable. */
   firstEventAt: number;
-  /**
-   * The newest message the principal posted while the turn was open. A question is never it:
-   * the member asks one mid-turn and goes on writing.
-   */
-  posted?: string;
   ended?: { messageId?: string; isError: boolean; reason: string };
 };
 
+/** A message the room holds, as far as a draft reads it. */
+export type HeldMessage = { id: string; author: string; question?: boolean; created_at: string };
+
 export type LiveTurns = {
-  /** Oldest first; more than one only while an ended turn still waits for its message. */
+  /** Oldest first; more than one only while a turn that is over still waits for its message. */
   drafts: Draft[];
   /** Messages whose turn ended early, with the box's reason ("" when it gave none). */
   cutShort: ReadonlyMap<string, string>;
@@ -62,12 +60,32 @@ function clip(value: unknown, limit: number): string {
 }
 
 /**
- * The message that takes the draft's place: the one its turn end named, or, when a stream gap
- * may have swallowed that end, the one its principal posted meanwhile.
+ * Whether a message the room holds takes the draft's place. A turn's end names its message. An
+ * end a stream gap may have swallowed is read off the room instead: the draft yields to a reply
+ * its principal wrote since the turn's first event, however and whenever the room came to hold
+ * it. The box that runs the member stamps both times, so an earlier turn's reply is older; a
+ * question is asked mid-turn and is never the reply; a time that cannot be read is no reply.
  */
-function replacementOf(draft: Draft): string | undefined {
-  if (draft.ended) return draft.ended.messageId;
-  return draft.gapped ? draft.posted : undefined;
+function replacedBy(draft: Draft, messages: readonly HeldMessage[]): boolean {
+  if (draft.ended) {
+    const named = draft.ended.messageId;
+    return messages.some((message) => message.id === named);
+  }
+  return (
+    draft.gapped &&
+    messages.some(
+      (message) =>
+        message.author === draft.principal &&
+        !message.question &&
+        Date.parse(message.created_at) >= draft.firstEventAt,
+    )
+  );
+}
+
+/** A draft whose turn is over waits only for a message: the one its end named, or the reply
+ *  of an end a gap may have swallowed. */
+function awaitsMessage(draft: Draft): boolean {
+  return draft.ended ? draft.ended.messageId !== undefined : draft.gapped;
 }
 
 function update(state: LiveTurns, draft: Draft, next: Draft): LiveTurns {
@@ -94,42 +112,10 @@ function withToolCall(draft: Draft, data: Record<string, unknown>): Draft {
 }
 
 /**
- * A message its author posted while a turn of theirs is open may be that turn's reply, however
- * the room came to know of it: by its event, or by a fetch that outran the event. A fetch also
- * brings replies of earlier turns, so only a message written since the turn's first event
- * counts; the box that runs the member stamps both, and a time that cannot be read is no reply.
- * A draft still owed its message stays open beside the turn after it, so the reply goes to the
- * newest turn begun by the time it was written.
- */
-export function messagePosted(
-  state: LiveTurns,
-  message: { id: string; author: string; question?: boolean; created_at: string },
-): LiveTurns {
-  if (message.question || !message.id) return state;
-  const writtenAt = Date.parse(message.created_at);
-  if (Number.isNaN(writtenAt)) return state;
-  const draft = state.drafts.findLast(
-    (candidate) =>
-      !candidate.ended &&
-      candidate.principal === message.author &&
-      candidate.firstEventAt <= writtenAt,
-  );
-  if (!draft || draft.posted === message.id) return state;
-  return update(state, draft, { ...draft, posted: message.id });
-}
-
-/**
- * Folds one event in: the three live types, and `spec_message_posted`, which is how a turn
- * whose end was lost to a stream gap still finds its message. Anything else, and any live event
- * without a run, a turn and a principal, leaves the state as it was.
+ * Folds one live event in. Anything else, and any live event without a run, a turn and a
+ * principal, leaves the state as it was.
  */
 export function liveTurns(state: LiveTurns, event: SailEvent): LiveTurns {
-  if (event.type === "spec_message_posted") {
-    const id = event.data?.message_id;
-    if (typeof id !== "string") return state;
-    const question = event.data?.question === true;
-    return messagePosted(state, { id, author: event.agent, question, created_at: event.ts });
-  }
   if (!isLiveTurnEvent(event.type)) return state;
   const data = event.data ?? {};
   const runId = clip(data.run_id, NAME_LIMIT);
@@ -145,7 +131,7 @@ export function liveTurns(state: LiveTurns, event: SailEvent): LiveTurns {
   if (!known && ending && data.is_error !== true) return state;
 
   // A room has one member and a member one turn at a time, so a turn that begins ends every
-  // draft before it; only one still owed its message stays to be replaced by it.
+  // draft before it; only one that still waits for its message stays to be replaced by it.
   const begun: Draft = {
     runId,
     turn,
@@ -159,10 +145,7 @@ export function liveTurns(state: LiveTurns, event: SailEvent): LiveTurns {
     ? state
     : {
         ...state,
-        drafts: [
-          ...state.drafts.filter((draft) => replacementOf(draft) !== undefined),
-          begun,
-        ],
+        drafts: [...state.drafts.filter(awaitsMessage), begun],
       };
   const draft = known ?? begun;
 
@@ -208,22 +191,15 @@ export function streamGapped(state: LiveTurns): LiveTurns {
 }
 
 /**
- * Drops every draft whose message the room now holds, remembering which of those messages a
- * turn that ended early left behind. Returns the same state when nothing was replaced.
+ * Drops every draft a message the room holds takes the place of, remembering which of those
+ * messages a turn that ended early left behind. Returns the same state when nothing was replaced.
  */
-export function settleLiveTurns(
-  state: LiveTurns,
-  messages: readonly { id: string }[],
-): LiveTurns {
-  const arrived = (draft: Draft) => {
-    const messageId = replacementOf(draft);
-    return messageId !== undefined && messages.some((message) => message.id === messageId);
-  };
-  const replaced = state.drafts.filter(arrived);
+export function settleLiveTurns(state: LiveTurns, messages: readonly HeldMessage[]): LiveTurns {
+  const replaced = state.drafts.filter((draft) => replacedBy(draft, messages));
   if (replaced.length === 0) return state;
   const cutShort = new Map(state.cutShort);
   for (const { ended } of replaced) {
     if (ended?.isError && ended.messageId) cutShort.set(ended.messageId, ended.reason);
   }
-  return { drafts: state.drafts.filter((draft) => !arrived(draft)), cutShort };
+  return { drafts: state.drafts.filter((draft) => !replaced.includes(draft)), cutShort };
 }

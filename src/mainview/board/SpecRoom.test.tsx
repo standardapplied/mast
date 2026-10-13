@@ -1324,7 +1324,7 @@ describe("SpecRoom live turns", () => {
     const fake = makeGateway();
     await mount(fake.gateway);
     act(() => fake.setStream("connected"));
-    const before = { ...reply("The turn before."), id: "message-6" };
+    const before = { ...reply("The turn before.", "2026-07-28T10:01:00Z"), id: "message-6" };
     act(() => fake.receive(before));
     await settle();
     stream(fake, delta("Half a sent"));
@@ -1343,7 +1343,7 @@ describe("SpecRoom live turns", () => {
 
   test("a replayed live event for a reply the room already held leaves the draft of the turn still being written", async () => {
     const fake = makeGateway();
-    const before = { ...reply("The turn before."), id: "message-6" };
+    const before = { ...reply("The turn before.", "2026-07-28T10:01:00Z"), id: "message-6" };
     fake.store(before);
     await mount(fake.gateway);
     expect(container.querySelector('[data-testid="room-message-message-6"]')).not.toBeNull();
@@ -1387,6 +1387,50 @@ describe("SpecRoom live turns", () => {
     await settle();
 
     expect(container.querySelector('[data-testid="room-message-message-7"]')).not.toBeNull();
+    expect(draft()).toBeNull();
+    expect(occurrences("Half a sent")).toBe(1);
+  });
+
+  test("a reply the room's first load brings before its event still takes the place of a draft whose end was lost", async () => {
+    const fake = makeGateway();
+    let releaseMessages!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseMessages = resolve;
+    });
+    const gateway = {
+      ...fake.gateway,
+      listSpecMessages: async (...request: Parameters<Gateway["listSpecMessages"]>) => {
+        await gate;
+        return fake.gateway.listSpecMessages(...request);
+      },
+    };
+    await mount(gateway);
+    stream(fake, delta("Half a sent"));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+    expect(draft()).not.toBeNull();
+
+    const whole = reply("Half a sentence, whole.");
+    fake.store(whole);
+    releaseMessages();
+    await settle();
+    act(() => fake.emit(announced(12, whole)));
+    await settle();
+
+    expect(container.querySelector('[data-testid="room-message-message-7"]')).not.toBeNull();
+    expect(draft()).toBeNull();
+    expect(occurrences("Half a sent")).toBe(1);
+  });
+
+  test("a reply the room held before its turn's stream dropped takes the draft's place at the drop", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    stream(fake, delta("Half a sent"));
+    act(() => fake.receive(reply("Half a sentence, whole.")));
+    await settle();
+    expect(draft()).not.toBeNull();
+
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+
     expect(draft()).toBeNull();
     expect(occurrences("Half a sent")).toBe(1);
   });
@@ -1450,6 +1494,31 @@ describe("SpecRoom live turns", () => {
     expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe(
       "Current turn partial … ",
     );
+  });
+
+  test("a reader who loads earlier messages mid-turn finds the draft behind the pill, and an earlier reply leaves it", async () => {
+    const fake = makeGateway();
+    fake.store({ ...reply("The turn before.", "2026-07-28T09:30:00Z"), id: "msg-000" });
+    for (let i = 1; i <= 100; i++) {
+      fake.store(remoteMessage(`msg-${String(i).padStart(3, "0")}`, `Body ${i}`));
+    }
+    await mount(fake.gateway);
+    stream(fake, delta("Current turn partial"));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+
+    act(() => container.querySelector<HTMLButtonElement>(".room-load-earlier")!.click());
+    await settle();
+
+    expect(fake.calls.messageOptions.at(-1)).toEqual({ before: "msg-001", limit: 100 });
+    expect(container.querySelector('[data-testid="room-message-msg-000"]')).not.toBeNull();
+    expect(draft()).toBeNull();
+    expect(pill()?.textContent).toBe("1 new");
+
+    scrollTo(900);
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe(
+      "Current turn partial … ",
+    );
+    expect(pill()).toBeNull();
   });
 
   test("an earlier turn's reply first loaded mid-turn, after the room's message load failed, leaves the draft", async () => {

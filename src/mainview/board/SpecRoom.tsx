@@ -27,7 +27,6 @@ import { Badge, Button, type BadgeTone } from "../components/ui";
 import type { Gateway } from "../gateway";
 import {
   liveTurns,
-  messagePosted,
   NO_LIVE_TURNS,
   settleLiveTurns,
   streamGapped,
@@ -327,20 +326,14 @@ export function SpecRoom({
   }, []);
 
   /**
-   * Every message enters the room here, so here a live arrival is told to the live turns: a
-   * fetch can bring a reply before its event, and that event is then dropped as one for a
-   * message the room holds.
+   * Every message enters the room here, so here the live turns are settled against them: a
+   * draft yields to its message however the room came to hold it.
    */
   const applySources = useCallback((next: Sources, update: TimelineUpdate) => {
-    const held = new Set(sources.current.messages.map((message) => message.id));
-    const arrived =
-      update === "live"
-        ? next.messages.filter((message) => !message.delivery && !held.has(message.id))
-        : [];
     sources.current = next;
     const timeline = assembleTimeline(next);
     setTail((previous) => reconcileTimeline(previous, timeline, update, atLatest.current));
-    advanceLive((state) => arrived.reduce(messagePosted, state));
+    advanceLive((state) => state);
   }, [advanceLive]);
 
   const follow = useCallback((latest: boolean) => {
@@ -613,7 +606,6 @@ export function SpecRoom({
         const messageId =
           typeof event.data?.message_id === "string" ? event.data.message_id : undefined;
         if (messageId && sources.current.messages.some((message) => message.id === messageId)) return;
-        advanceLive((state) => liveTurns(state, event));
         if (posting.current && messageId) {
           deferredMessageEvents.current.add(messageId);
           return;
@@ -636,7 +628,6 @@ export function SpecRoom({
     });
     return off;
   }, [
-    advanceLive,
     applySources,
     fetchNewMessages,
     gateway,
@@ -658,9 +649,6 @@ export function SpecRoom({
         event.id !== undefined && (max === undefined || event.id > max) ? event.id : max,
       undefined,
     );
-    // The watermark trails the message events the live handler took, so the drain tells them
-    // again; a message the room held before the gap says nothing of a turn still being written.
-    const held = new Set<unknown>(sources.current.messages.map((message) => message.id));
     let sawMessage = false;
     let sawLifecycle = false;
     // The conversation spans two lanes since the decouple (see the live handler): the spec's
@@ -686,7 +674,6 @@ export function SpecRoom({
         for (const event of batch) {
           if (event.id !== undefined && (since === undefined || event.id > since)) since = event.id;
           if (event.type === "spec_message_posted") {
-            if (!held.has(event.data?.message_id)) advanceLive((state) => liveTurns(state, event));
             sawMessage = true;
             continue;
           }
@@ -706,7 +693,7 @@ export function SpecRoom({
     // message list, reviews, and runs stay stale until the next live event.
     if (sawMessage) void refreshMessages(true);
     if (sawLifecycle) void refreshReviewsAndRuns(true);
-  }, [advanceLive, applySources, gateway, refreshMessages, refreshReviewsAndRuns, roomId, specId]);
+  }, [applySources, gateway, refreshMessages, refreshReviewsAndRuns, roomId, specId]);
 
   useEffect(() => {
     let previous: string | undefined;
