@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type {
@@ -1070,14 +1070,18 @@ describe("SpecRoom live turns", () => {
   const occurrences = (text: string) => container.textContent!.split(text).length - 1;
   const pill = () => container.querySelector<HTMLButtonElement>(".room-new-pill");
 
-  function scrollTo(scrollTop: number, scrollHeight = 1000) {
-    const timeline = container.querySelector<HTMLElement>('[data-testid="room-timeline"]')!;
-    Object.defineProperties(timeline, {
+  /** Lays the timeline out, as an engine would, without telling the room of a scroll. */
+  function layOut(scrollTop: number, scrollHeight: number, clientHeight = 100) {
+    Object.defineProperties(timeline(), {
       scrollHeight: { configurable: true, value: scrollHeight },
-      clientHeight: { configurable: true, value: 100 },
+      clientHeight: { configurable: true, value: clientHeight },
       scrollTop: { configurable: true, writable: true, value: scrollTop },
     });
-    act(() => timeline.dispatchEvent(new Event("scroll", { bubbles: true })));
+  }
+
+  function scrollTo(scrollTop: number, scrollHeight = 1000) {
+    layOut(scrollTop, scrollHeight);
+    act(() => timeline().dispatchEvent(new Event("scroll", { bubbles: true })));
   }
 
   /** The member's chat run as the presence store sees it once its turn starts. */
@@ -1090,7 +1094,22 @@ describe("SpecRoom live turns", () => {
     );
   }
 
-  afterEach(() => act(() => presenceStore.noteRuns([])));
+  /** The frames the room asks for, run when a test paints: a frame is where the room keeps the reader's place. */
+  const frames: FrameRequestCallback[] = [];
+  const paint = () => act(() => frames.splice(0).forEach((frame) => frame(0)));
+  const timeline = () => container.querySelector<HTMLElement>('[data-testid="room-timeline"]')!;
+  let requestFrame: typeof globalThis.requestAnimationFrame;
+
+  beforeEach(() => {
+    frames.length = 0;
+    requestFrame = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = (frame) => frames.push(frame);
+  });
+
+  afterEach(() => {
+    globalThis.requestAnimationFrame = requestFrame;
+    act(() => presenceStore.noteRuns([]));
+  });
 
   test("opening a room opens its one stream, and leaving closes it", async () => {
     const fake = makeGateway();
@@ -1697,9 +1716,13 @@ describe("SpecRoom live turns", () => {
     fake.receive(remoteMessage("message-old", "Already visible"));
     await mount(fake.gateway);
     scrollTo(900);
-    scrollTo(0);
+    scrollTo(500);
 
     stream(fake, delta("The full reply."));
+    expect(draft()).toBeNull();
+    expect(pill()?.textContent).toBe("1 new");
+
+    scrollTo(0, 900);
     expect(draft()).toBeNull();
     expect(pill()?.textContent).toBe("1 new");
 
@@ -1847,13 +1870,13 @@ describe("SpecRoom live turns", () => {
     await mount(fake.gateway);
     scrollTo(900);
 
-    scrollTo(700, 800);
+    scrollTo(699, 800);
     act(() => fake.receive(remoteMessage("message-2", "Landed after the room shrank")));
     await settle();
     expect(container.textContent).toContain("Landed after the room shrank");
     expect(pill()).toBeNull();
 
-    scrollTo(680, 800);
+    scrollTo(698, 800);
     act(() => fake.receive(remoteMessage("message-3", "Landed a nudge away")));
     await settle();
     expect(container.textContent).not.toContain("Landed a nudge away");
@@ -1861,31 +1884,139 @@ describe("SpecRoom live turns", () => {
   });
 
   test("a reader at the latest is kept there as the draft grows, and their move up is told from the room's own", async () => {
-    const frames: FrameRequestCallback[] = [];
-    const original = globalThis.requestAnimationFrame;
-    globalThis.requestAnimationFrame = (frame) => frames.push(frame);
-    try {
-      const fake = makeGateway();
-      fake.receive(remoteMessage("message-old", "Already visible"));
-      await mount(fake.gateway);
-      scrollTo(900);
-      const timeline = container.querySelector<HTMLElement>('[data-testid="room-timeline"]')!;
-      frames.length = 0;
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    paint();
 
-      stream(fake, delta("Growing"));
-      Object.defineProperty(timeline, "scrollHeight", { configurable: true, value: 1400 });
-      frames.forEach((frame) => frame(0));
-      expect(frames.length).toBeGreaterThan(0);
-      expect(timeline.scrollTop).toBe(1400);
+    stream(fake, delta("Growing"));
+    layOut(900, 1400);
+    paint();
+    expect(timeline().scrollTop).toBe(1400);
 
-      scrollTo(1100, 1400);
-      act(() => fake.receive(remoteMessage("message-2", "Landed while away")));
-      await settle();
-      expect(container.textContent).not.toContain("Landed while away");
-      expect(pill()?.textContent).toBe("1 new");
-    } finally {
-      globalThis.requestAnimationFrame = original;
-    }
+    scrollTo(1100, 1400);
+    act(() => fake.receive(remoteMessage("message-2", "Landed while away")));
+    await settle();
+    expect(container.textContent).not.toContain("Landed while away");
+    expect(pill()?.textContent).toBe("1 new");
+  });
+
+  test("a reader who moves up before the room's own scroll runs is not pulled back", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    scrollTo(900);
+    paint();
+
+    stream(fake, delta("Growing"));
+    scrollTo(700, 1400);
+    paint();
+
+    expect(timeline().scrollTop).toBe(700);
+  });
+
+  test("a reader left at the very end by what was below them shrinking, with no scroll to tell of it, follows again", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    stream(fake, delta("A tall turn."));
+    scrollTo(0, 1400);
+
+    stream(fake, turnEnded({ message_id: "message-7" }));
+    act(() => fake.receive(reply("Short.")));
+    await settle();
+    layOut(0, 100);
+    paint();
+
+    stream(fake, live("agent_text_delta", { text: "The next turn.", turn: 8 }));
+    expect(container.querySelector('[data-testid="draft-run-7-8"]')?.textContent).toContain(
+      "The next turn.",
+    );
+    expect(pill()).toBeNull();
+  });
+
+  test("a room that is not on screen keeps no place: the reader's first move up after it returns is still told", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    paint();
+
+    layOut(0, 0, 0);
+    stream(fake, delta("Written while hidden."));
+    paint();
+    expect(timeline().scrollTop).toBe(0);
+
+    scrollTo(800, 1400);
+    act(() => fake.receive(remoteMessage("message-2", "Landed while away")));
+    await settle();
+    expect(container.textContent).not.toContain("Landed while away");
+    expect(pill()?.textContent).toBe("1 new");
+  });
+
+  test("moving down brings the reader back once within reach of the latest, not before", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    scrollTo(800, 1400);
+
+    scrollTo(1251, 1400);
+    act(() => fake.receive(remoteMessage("message-2", "Landed just out of reach")));
+    await settle();
+    expect(container.textContent).not.toContain("Landed just out of reach");
+    expect(pill()?.textContent).toBe("1 new");
+
+    scrollTo(1252, 1400);
+    expect(container.textContent).toContain("Landed just out of reach");
+    expect(pill()).toBeNull();
+  });
+
+  test("a reply that takes a draft's place leaves the rest behind the pill, and is drawn in its own time", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    stream(fake, delta("The full reply."));
+    act(() =>
+      fake.receive({ ...remoteMessage("message-9", "Said later"), created_at: "2026-07-28T10:05:00Z" }),
+    );
+    await settle();
+    scrollTo(400, 1400);
+    act(() =>
+      fake.receive({ ...remoteMessage("message-8", "Behind the pill"), created_at: "2026-07-28T10:06:00Z" }),
+    );
+    await settle();
+
+    stream(fake, turnEnded({ message_id: "message-7" }));
+    act(() => fake.receive(reply("The full reply.")));
+    await settle();
+
+    expect(container.textContent).not.toContain("Behind the pill");
+    expect(pill()?.textContent).toBe("1 new");
+    const drawn = [...container.querySelectorAll('[data-testid^="room-message-"]')].map((row) =>
+      row.getAttribute("data-testid"),
+    );
+    expect(drawn).toEqual([
+      "room-message-message-old",
+      "room-message-message-7",
+      "room-message-message-9",
+    ]);
+  });
+
+  test("the typing row is not drawn beside a turn that waits behind the pill", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+    chatTurnStarted();
+    expect(container.querySelector(TYPING)).not.toBeNull();
+    scrollTo(900);
+    scrollTo(0);
+
+    stream(fake, delta("Away."));
+
+    expect(draft()).toBeNull();
+    expect(container.querySelector(TYPING)).toBeNull();
   });
 
   test("only a stream that is reconnecting has dropped anything", async () => {

@@ -316,10 +316,17 @@ describe("a draft has the place a message arriving when it began would have", ()
   });
 
   test("returning to the latest draws every draft that waited", () => {
-    const waiting = away([delta("Away.")]);
+    const waiting = away([
+      delta("Away."),
+      turnEnded({ message_id: "m-1" }),
+      delta("Still away.", { turn: 8 }),
+    ]);
 
     const revealed = revealLiveTurns(waiting);
-    expect(revealed.drafts.map((draft) => [draft.text, draft.behind])).toEqual([["Away.", false]]);
+    expect(revealed.drafts.map((draft) => [draft.text, draft.behind])).toEqual([
+      ["Away.", false],
+      ["Still away.", false],
+    ]);
     expect(revealLiveTurns(revealed)).toBe(revealed);
     expect(revealLiveTurns(NO_LIVE_TURNS)).toBe(NO_LIVE_TURNS);
   });
@@ -330,7 +337,7 @@ describe("a draft has the place a message arriving when it began would have", ()
     expect(takingADraftsPlace(seen, room("m-0", "m-1"))).toEqual(["m-1"]);
 
     const lost = streamGapped(fold([delta("Half a sent")]));
-    expect(takingADraftsPlace(lost, [reply("m-2")])).toEqual(["m-2"]);
+    expect(takingADraftsPlace(lost, [reply("m-2"), reply("m-3")])).toEqual(["m-2"]);
 
     const unseen = away([delta("Unseen."), turnEnded({ message_id: "m-1" })]);
     expect(takingADraftsPlace(unseen, room("m-1"))).toEqual([]);

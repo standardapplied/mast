@@ -545,9 +545,9 @@ export function createDemoGateway(
       () => tell("agent_tool_call", { tool: "Read", status: "finished" }),
       ...rest.map((text) => () => tell("agent_text_delta", { text })),
       () => {
-        liveTurnsOpen.delete(spec.id);
         const reply = appendMessage(spec, principal, { body: DEMO_REPLY.join("") });
         tell("agent_turn_ended", { message_id: reply.id, is_error: false });
+        liveTurnsOpen.delete(spec.id);
         if (liveTurnsOwed.delete(spec.id)) streamLiveTurn(spec);
       },
     ];

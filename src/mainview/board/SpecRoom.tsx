@@ -150,6 +150,10 @@ function reconcileTimeline(
   };
 }
 
+function fromLatest(element: HTMLElement): number {
+  return element.scrollHeight - element.scrollTop - element.clientHeight;
+}
+
 function byOccurrence(left: TimelineItem, right: TimelineItem): number {
   return left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id);
 }
@@ -365,15 +369,25 @@ export function SpecRoom({
     if (latest) advanceLive(revealLiveTurns);
   }, [advanceLive]);
 
-  /** The room's own move to the latest, remembered so the reader's next move is told from it. */
-  const scrollToLatest = useCallback(() => {
+  /**
+   * After what is drawn changes, in the frame that lays it out: a reader who still follows is
+   * taken to the latest, and that move is remembered so their next one is told from it; one who
+   * has left is let be; one left resting at the very end, because what was below them shrank
+   * away without a scroll to tell of it, follows again. A room that is not on screen has no
+   * place to keep.
+   */
+  const keepPlace = useCallback(() => {
     requestAnimationFrame(() => {
       const element = scroller.current;
-      if (!element) return;
-      element.scrollTop = element.scrollHeight;
-      scrolledTo.current = element.scrollTop;
+      if (!element || element.clientHeight === 0) return;
+      if (atLatest.current) {
+        element.scrollTop = element.scrollHeight;
+        scrolledTo.current = element.scrollTop;
+      } else if (fromLatest(element) <= AT_LATEST_PX) {
+        follow(true);
+      }
     });
-  }, []);
+  }, [follow]);
 
   const loadReviewDetails = useCallback(
     async (reviews: ReviewView[]): Promise<ReviewDetailResponse[]> => {
@@ -463,9 +477,7 @@ export function SpecRoom({
     [engagement, specId, presenceVersion, lastAgentReplyAt],
   );
 
-  useEffect(() => {
-    if (atLatest.current) scrollToLatest();
-  }, [scrollToLatest, tail.visible.length, typing, live]);
+  useEffect(keepPlace, [keepPlace, tail.visible.length, typing, live]);
 
   useEffect(() => {
     advanceLive(() => NO_LIVE_TURNS);
@@ -743,8 +755,8 @@ export function SpecRoom({
       visible: [...previous.visible, ...previous.buffered].sort(byOccurrence),
       buffered: [],
     }));
-    scrollToLatest();
-  }, [follow, scrollToLatest]);
+    keepPlace();
+  }, [follow, keepPlace]);
 
   /**
    * A reader follows the latest until they move up, and again once they are back within reach
@@ -757,9 +769,7 @@ export function SpecRoom({
     const element = event.currentTarget;
     const movedUp = element.scrollTop < scrolledTo.current;
     scrolledTo.current = element.scrollTop;
-    const latest =
-      element.scrollHeight - element.scrollTop - element.clientHeight <=
-      (movedUp ? AT_LATEST_PX : SCROLL_EDGE_PX);
+    const latest = fromLatest(element) <= (movedUp ? AT_LATEST_PX : SCROLL_EDGE_PX);
     if (latest && !atLatest.current && tail.buffered.length > 0) return jumpToLatest();
     follow(latest || (atLatest.current && !movedUp));
   };
