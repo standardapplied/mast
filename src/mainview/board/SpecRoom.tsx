@@ -384,17 +384,16 @@ export function SpecRoom({
    * The room has just been laid out anew, by what it drew or by its window, and the engine may
    * have moved the reader to fit: a reply shorter than its draft leaves them lower than they
    * were. The scroll that tells of it comes a frame later, when the end may have moved again,
-   * and would read as the reader moving up. So what a layout did to their place is taken off
-   * here, where it can be measured: from where they were before the room drew, or, when only
-   * the window changed, by their resting at the very end. A reader resting there follows.
+   * and would read as the reader moving up. So where a layout leaves them is where their next
+   * move is told from, and a reader it leaves resting at the very end follows. An engine tells
+   * a reader's own scroll before anything else runs in the frame it learns of it, so none of
+   * theirs is waiting to be mistaken for the layout's.
    */
-  const laidOut = useCallback((placeBefore?: number) => {
+  const laidOut = useCallback(() => {
     const element = scroller.current;
     if (!element || element.clientHeight === 0) return;
-    const resting = fromLatest(element) <= AT_LATEST_PX;
-    if (placeBefore !== undefined) scrolledTo.current += element.scrollTop - placeBefore;
-    else if (resting) scrolledTo.current = Math.min(scrolledTo.current, element.scrollTop);
-    if (resting) follow(true);
+    scrolledTo.current = element.scrollTop;
+    if (fromLatest(element) <= AT_LATEST_PX) follow(true);
   }, [follow]);
 
   /**
@@ -499,8 +498,7 @@ export function SpecRoom({
     [engagement, specId, presenceVersion, lastAgentReplyAt],
   );
 
-  const placeBeforeDrawing = scroller.current?.scrollTop;
-  useLayoutEffect(() => laidOut(placeBeforeDrawing));
+  useLayoutEffect(laidOut);
 
   useEffect(keepPlace, [keepPlace, tail.visible.length, typing, live]);
 
