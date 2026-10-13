@@ -1926,7 +1926,7 @@ describe("SpecRoom live turns", () => {
     stream(fake, turnEnded({ message_id: "message-7" }));
     act(() => fake.receive(reply("Short.")));
     await settle();
-    layOut(0, 100);
+    layOut(0, 101);
     paint();
 
     stream(fake, live("agent_text_delta", { text: "The next turn.", turn: 8 }));
@@ -1934,6 +1934,25 @@ describe("SpecRoom live turns", () => {
       "The next turn.",
     );
     expect(pill()).toBeNull();
+  });
+
+  test("a reader left near the end, but not at it, is still away", async () => {
+    const fake = makeGateway();
+    fake.receive(remoteMessage("message-old", "Already visible"));
+    await mount(fake.gateway);
+    scrollTo(900);
+    stream(fake, delta("A tall turn."));
+    scrollTo(0, 1400);
+
+    stream(fake, turnEnded({ message_id: "message-7" }));
+    act(() => fake.receive(reply("Short.")));
+    await settle();
+    layOut(0, 102);
+    paint();
+
+    stream(fake, live("agent_text_delta", { text: "The next turn.", turn: 8 }));
+    expect(container.querySelector('[data-testid="draft-run-7-8"]')).toBeNull();
+    expect(pill()?.textContent).toBe("1 new");
   });
 
   test("a reader the room finds resting at the very end has nothing left behind the pill", async () => {
@@ -2006,7 +2025,7 @@ describe("SpecRoom live turns", () => {
     await settle();
     scrollTo(400, 1400);
     act(() =>
-      fake.receive({ ...remoteMessage("message-8", "Behind the pill"), created_at: "2026-07-28T10:06:00Z" }),
+      fake.receive({ ...remoteMessage("message-8", "Behind the pill"), created_at: "2026-07-28T10:04:00Z" }),
     );
     await settle();
 
@@ -2016,12 +2035,21 @@ describe("SpecRoom live turns", () => {
 
     expect(container.textContent).not.toContain("Behind the pill");
     expect(pill()?.textContent).toBe("1 new");
-    const drawn = [...container.querySelectorAll('[data-testid^="room-message-"]')].map((row) =>
-      row.getAttribute("data-testid"),
-    );
-    expect(drawn).toEqual([
+    const drawn = () =>
+      [...container.querySelectorAll('[data-testid^="room-message-"]')].map((row) =>
+        row.getAttribute("data-testid"),
+      );
+    expect(drawn()).toEqual([
       "room-message-message-old",
       "room-message-message-7",
+      "room-message-message-9",
+    ]);
+
+    act(() => pill()!.click());
+    expect(drawn()).toEqual([
+      "room-message-message-old",
+      "room-message-message-7",
+      "room-message-message-8",
       "room-message-message-9",
     ]);
   });
