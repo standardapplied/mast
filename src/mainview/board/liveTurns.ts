@@ -9,7 +9,12 @@ import type { SailEvent } from "../../shared/sail-models";
  * Framework-free and pure; the room holds the state and says which messages it has.
  */
 
-export const LIVE_TURN_EVENT_TYPES = ["agent_text_delta", "agent_tool_call", "agent_turn_ended"];
+export const LIVE_TURN_EVENT_TYPES = [
+  "agent_turn_began",
+  "agent_text_delta",
+  "agent_tool_call",
+  "agent_turn_ended",
+];
 
 const LIVE_TURN_EVENTS = new Set(LIVE_TURN_EVENT_TYPES);
 
@@ -90,6 +95,11 @@ function replacementOf(draft: Draft, messages: readonly HeldMessage[]): HeldMess
   );
 }
 
+/** Whether the turn has written anything: a draft that has not stands only for the member working. */
+export function hasWritten(draft: Draft): boolean {
+  return draft.text !== "" || draft.tools.length > 0;
+}
+
 /** A turn that is over leaves a draft only for the message its end named. */
 function awaitsMessage(draft: Draft): boolean {
   return draft.ended?.messageId !== undefined;
@@ -113,8 +123,9 @@ function withToolCall(draft: Draft, data: Record<string, unknown>): Draft {
 
 /**
  * Folds one live event in. Anything else, any live event without a run, a turn and a principal,
- * and one that would open a draft with nothing in it, leaves the state as it was. `readerAway`
- * says where a draft this event opens is placed.
+ * and one that would open a draft with nothing in it, leaves the state as it was: only a turn's
+ * beginning opens an empty draft, which stands for the member working. `readerAway` says where a
+ * draft this event opens is placed.
  */
 export function liveTurns(state: LiveTurns, event: SailEvent, readerAway = false): LiveTurns {
   if (!isLiveTurnEvent(event.type)) return state;
@@ -144,6 +155,7 @@ export function liveTurns(state: LiveTurns, event: SailEvent, readerAway = false
       : [...state.drafts.filter(awaitsMessage), next].slice(-DRAFT_LIMIT),
   });
 
+  if (event.type === "agent_turn_began") return place(draft);
   if (event.type === "agent_text_delta") {
     const text = clip(data.text, TEXT_LIMIT);
     if (!known && text === "") return state;
@@ -168,23 +180,29 @@ export function liveTurns(state: LiveTurns, event: SailEvent, readerAway = false
   });
 }
 
-/** The stream dropped: every open draft keeps what arrived and marks where text went missing. */
+/**
+ * The stream dropped: every open draft keeps what arrived and marks where text went missing. One
+ * that had written nothing has nothing to keep, and whether its member still works is no longer
+ * known, so it goes; the turn's next event draws it again.
+ */
 export function streamGapped(state: LiveTurns): LiveTurns {
   if (!state.drafts.some((draft) => !draft.ended)) return state;
   return {
     ...state,
-    drafts: state.drafts.map((draft) =>
-      draft.ended
-        ? draft
-        : {
-            ...draft,
-            gapped: true,
-            text:
-              draft.text === "" || draft.text.endsWith(GAP_MARK)
-                ? draft.text
-                : draft.text + GAP_MARK,
-          },
-    ),
+    drafts: state.drafts
+      .filter((draft) => draft.ended || hasWritten(draft))
+      .map((draft) =>
+        draft.ended
+          ? draft
+          : {
+              ...draft,
+              gapped: true,
+              text:
+                draft.text === "" || draft.text.endsWith(GAP_MARK)
+                  ? draft.text
+                  : draft.text + GAP_MARK,
+            },
+      ),
   };
 }
 

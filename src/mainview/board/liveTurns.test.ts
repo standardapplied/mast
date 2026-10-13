@@ -25,6 +25,7 @@ function live(type: string, data: Record<string, unknown> = {}): SailEvent {
   };
 }
 
+const turnBegan = (more: Record<string, unknown> = {}) => live("agent_turn_began", more);
 const delta = (text: unknown, more: Record<string, unknown> = {}) =>
   live("agent_text_delta", { text, ...more });
 const toolCall = (status: string, more: Record<string, unknown> = {}) =>
@@ -115,6 +116,64 @@ describe("a turn is drawn once", () => {
       [7, "First."],
       [8, "Second."],
     ]);
+  });
+});
+
+describe("a turn that begins is drawn before anything of it is written", () => {
+  test("a turn's beginning opens its draft with nothing in it", () => {
+    const state = fold([turnBegan()]);
+
+    expect(state.drafts).toHaveLength(1);
+    expect(state.drafts[0]).toMatchObject({ runId: "run-1", turn: 7, text: "", tools: [] });
+  });
+
+  test("what the turn writes fills the draft its beginning opened", () => {
+    const state = fold([turnBegan(), delta("Hello"), turnBegan(), delta(".")]);
+
+    expect(state.drafts.map((draft) => draft.text)).toEqual(["Hello."]);
+  });
+
+  test("a turn that began and ended having said nothing leaves nothing", () => {
+    expect(fold([turnBegan(), turnEnded()]).drafts).toEqual([]);
+  });
+
+  test("a turn that began and named its message waits for it, then yields", () => {
+    const ended = fold([turnBegan(), turnEnded({ message_id: "m-9" })]);
+
+    expect(ended.drafts).toHaveLength(1);
+    expect(settleLiveTurns(ended, room("m-9")).drafts).toEqual([]);
+  });
+
+  test("the next turn's beginning drops an error bubble that named no message", () => {
+    const failed = fold([turnBegan(), turnEnded({ is_error: true, reason: "stall" })]);
+    expect(failed.drafts).toHaveLength(1);
+
+    const next = liveTurns(failed, turnBegan({ turn: 8 }));
+
+    expect(next.drafts.map((draft) => draft.turn)).toEqual([8]);
+  });
+
+  test("a gap drops a draft that had written nothing, and the turn's next event draws it again", () => {
+    const gapped = streamGapped(fold([turnBegan()]));
+    expect(gapped.drafts).toEqual([]);
+
+    expect(liveTurns(gapped, delta("Back.")).drafts.map((draft) => draft.text)).toEqual(["Back."]);
+  });
+
+  test("a gap keeps a draft that wrote only a tool step, and one whose end named its message", () => {
+    const tooled = streamGapped(fold([turnBegan(), toolCall("started", { summary: "README.md" })]));
+    expect(tooled.drafts.map((draft) => draft.gapped)).toEqual([true]);
+
+    const waiting = fold([
+      turnBegan(),
+      turnEnded({ message_id: "m-9" }),
+      delta("Next.", { turn: 8 }),
+    ]);
+    expect(streamGapped(waiting).drafts.map((draft) => draft.turn)).toEqual([7, 8]);
+  });
+
+  test("a turn that began while the reader was away waits behind the pill", () => {
+    expect(liveTurns(NO_LIVE_TURNS, turnBegan(), true).drafts[0]!.behind).toBe(true);
   });
 });
 

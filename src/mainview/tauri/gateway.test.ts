@@ -572,7 +572,7 @@ describe("Tauri gateway room stream wire", () => {
     expect(calls.map((call) => [call.cmd, call.args.path])).toEqual([
       [
         "stream_open",
-        "/v1/events/stream?room=design+talk&type=agent_text_delta%2Cagent_tool_call%2Cagent_turn_ended",
+        "/v1/events/stream?room=design+talk&type=agent_turn_began%2Cagent_text_delta%2Cagent_tool_call%2Cagent_turn_ended",
       ],
     ]);
     const id = calls[0]!.args.id;

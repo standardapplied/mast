@@ -125,7 +125,12 @@ describe("room ordering and unread state", () => {
   });
 
   test("a live member's turn events are not activity: the message they become is", () => {
-    for (const type of ["agent_text_delta", "agent_tool_call", "agent_turn_ended"]) {
+    for (const type of [
+      "agent_turn_began",
+      "agent_text_delta",
+      "agent_tool_call",
+      "agent_turn_ended",
+    ]) {
       expect(isRoomActivityEvent(event(1, "s1", type, "2026-07-28T12:00:00Z"))).toBe(false);
     }
   });

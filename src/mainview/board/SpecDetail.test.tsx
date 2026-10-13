@@ -379,7 +379,12 @@ describe("SpecDetail anti-flicker", () => {
     await mount(fake.gateway);
     const loads = fake.getSpecCalls.count;
 
-    for (const type of ["agent_text_delta", "agent_tool_call", "agent_turn_ended"]) {
+    for (const type of [
+      "agent_turn_began",
+      "agent_text_delta",
+      "agent_tool_call",
+      "agent_turn_ended",
+    ]) {
       await act(async () => fake.emit({ spec: "s1", type }));
     }
     await settle();

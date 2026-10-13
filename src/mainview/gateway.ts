@@ -540,6 +540,7 @@ export function createDemoGateway(
       });
     const [opening, ...rest] = DEMO_REPLY;
     const steps = [
+      () => tell("agent_turn_began", {}),
       () => tell("agent_text_delta", { text: opening }),
       () => tell("agent_tool_call", { tool: "Read", summary: "README.md", status: "started" }),
       () => tell("agent_tool_call", { tool: "Read", status: "finished" }),
