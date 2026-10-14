@@ -813,3 +813,52 @@ describe("CatalogStore reset epoch", () => {
     expect(store.me).toBe("new-user");
   });
 });
+
+describe("a project's member", () => {
+  test("is read once per connection and presets every agent select", async () => {
+    const { gateway, store } = await seeded();
+    let reads = 0;
+    const project = gateway.project.bind(gateway);
+    gateway.project = (name) => {
+      reads++;
+      return project(name);
+    };
+
+    expect(store.projectMember("chorus")).toBeUndefined();
+    store.loadProjectMember("chorus");
+    store.loadProjectMember("chorus");
+    await settle();
+
+    expect(store.projectMember("chorus")).toEqual({ agent: "claude-code", mode: "full" });
+    store.loadProjectMember("chorus");
+    expect(reads).toBe(1);
+  });
+
+  test("a failed read, or a sail that names none, leaves it unknown and asks again", async () => {
+    const { gateway, store } = await seeded();
+    const answers = [
+      { ok: false as const, error: { status: 0, code: "bridge", message: "down" } },
+      { ok: true as const, value: { name: "chorus", container_status: "running" } },
+    ];
+    gateway.project = async () => answers.shift()!;
+
+    store.loadProjectMember("chorus");
+    await settle();
+    expect(store.projectMember("chorus")).toBeUndefined();
+
+    store.loadProjectMember("chorus");
+    await settle();
+    expect(store.projectMember("chorus")).toBeUndefined();
+    expect(answers).toHaveLength(0);
+  });
+
+  test("a sign-in change forgets every member", async () => {
+    const { store } = await seeded();
+    store.loadProjectMember("chorus");
+    await settle();
+
+    store.reset();
+
+    expect(store.projectMember("chorus")).toBeUndefined();
+  });
+});

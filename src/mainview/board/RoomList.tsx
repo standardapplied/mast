@@ -1,4 +1,4 @@
-import type { AgentView, GlobalSpecView } from "../../shared/sail-models";
+import type { AgentView, GlobalSpecView, ProjectMember } from "../../shared/sail-models";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CaretDown, CaretRight, Plus } from "../components/icons";
 import { Dialog } from "../components/Dialog";
@@ -15,8 +15,12 @@ import {
   type RoomView,
 } from "./rooms";
 
+const DEFAULT_AGENT = "claude-code";
+
 export function RoomList({
   rooms,
+  homeRoom,
+  member,
   projects,
   project,
   selectedId,
@@ -33,6 +37,10 @@ export function RoomList({
 }: {
   gateway: Pick<Gateway, "listAgents">;
   rooms: readonly RoomView[];
+  /** The viewer's conversation with the project's agent, listed first under the project. */
+  homeRoom?: RoomView;
+  /** The project's member: the agent a new room's select starts on. */
+  member?: ProjectMember;
   projects: readonly string[];
   project: string;
   selectedId?: string;
@@ -51,7 +59,7 @@ export function RoomList({
   const [newRoom, setNewRoom] = useState(false);
   const [title, setTitle] = useState("");
   const [newProject, setNewProject] = useState(project);
-  const [agent, setAgent] = useState("claude-code");
+  const [agent, setAgent] = useState(DEFAULT_AGENT);
   const [agents, setAgents] = useState<AgentView[]>([]);
   const titleRef = useRef<HTMLInputElement>(null);
 
@@ -75,6 +83,12 @@ export function RoomList({
   useEffect(() => {
     if (newRoom) titleRef.current?.focus();
   }, [newRoom]);
+
+  useEffect(() => {
+    if (newRoom) setAgent(member?.agent ?? DEFAULT_AGENT);
+  }, [newRoom, member?.agent]);
+
+  const listed = homeRoom ? rooms.filter((room) => room !== homeRoom) : rooms;
 
   const closeCreate = () => {
     setNewRoom(false);
@@ -189,7 +203,19 @@ export function RoomList({
       </Dialog>
 
       <div className="room-list-scroll">
-        {sectionRooms(rooms).map(({ section, rooms: grouped }) => (
+        {homeRoom && (
+          <div className="room-section">
+            <RoomRow
+              room={homeRoom}
+              label={project}
+              selected={selectedId === homeRoom.room.id}
+              working={workingIds.has(homeRoom.room.id)}
+              now={now}
+              onSelect={onSelect}
+            />
+          </div>
+        )}
+        {sectionRooms(listed).map(({ section, rooms: grouped }) => (
           <div key={section} className="room-section">
             {section === "archive" ? (
               <button
@@ -212,31 +238,15 @@ export function RoomList({
             )}
             {(section !== "archive" || showArchive) &&
               grouped.map((room) => (
-                <button
-                  type="button"
+                <RoomRow
                   key={room.room.id}
-                  className={`room-row${selectedId === room.room.id ? " is-selected" : ""}`}
-                  onClick={() => onSelect(room)}
-                  data-testid={`room-${room.room.id}`}
-                  aria-current={selectedId === room.room.id ? "page" : undefined}
-                >
-                  <span className={`room-row-id-label${room.unread ? " is-unread" : ""}`}>
-                    {room.room.id}
-                  </span>
-                  {room.needsReply && (
-                    <span
-                      className="room-needs-reply"
-                      data-testid={`needs-reply-${room.room.id}`}
-                      aria-label="Needs your reply"
-                    >
-                      ?
-                    </span>
-                  )}
-                  {workingIds.has(room.room.id) && (
-                    <span className="room-working-dot" aria-label="Agent working" />
-                  )}
-                  <time className="room-row-time">{relativeTime(room.activityAt, now)}</time>
-                </button>
+                  room={room}
+                  label={room.room.id}
+                  selected={selectedId === room.room.id}
+                  working={workingIds.has(room.room.id)}
+                  now={now}
+                  onSelect={onSelect}
+                />
               ))}
             {section === "archive" && showArchive && onPruneArchived && archivedSpecs(grouped).length > 0 && (
               <button
@@ -252,6 +262,45 @@ export function RoomList({
         ))}
       </div>
     </aside>
+  );
+}
+
+function RoomRow({
+  room,
+  label,
+  selected,
+  working,
+  now,
+  onSelect,
+}: {
+  room: RoomView;
+  label: string;
+  selected: boolean;
+  working: boolean;
+  now: number;
+  onSelect: (room: RoomView) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`room-row${selected ? " is-selected" : ""}`}
+      onClick={() => onSelect(room)}
+      data-testid={`room-${room.room.id}`}
+      aria-current={selected ? "page" : undefined}
+    >
+      <span className={`room-row-id-label${room.unread ? " is-unread" : ""}`}>{label}</span>
+      {room.needsReply && (
+        <span
+          className="room-needs-reply"
+          data-testid={`needs-reply-${room.room.id}`}
+          aria-label="Needs your reply"
+        >
+          ?
+        </span>
+      )}
+      {working && <span className="room-working-dot" aria-label="Agent working" />}
+      <time className="room-row-time">{relativeTime(room.activityAt, now)}</time>
+    </button>
   );
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LoadingMark } from "../components/Loading";
 import { Splitter } from "../components/Splitter";
 import { useToast } from "../components/Toast";
@@ -11,12 +11,13 @@ import { ChatRoomPane } from "./ChatRoomPane";
 import { ownedBy, PruneDialog } from "./PruneDialog";
 import { SpecDetail } from "./SpecDetail";
 import {
+  homeRoomOf,
   selectedRoom,
   visibleRooms,
   type RoomView,
   type StorageLike,
 } from "./rooms";
-import { useRooms } from "./useRooms";
+import { useProjectMember, useRooms } from "./useRooms";
 
 const SIDEBAR_KEY = "mast.rooms.sidebar.width";
 const ARCHIVE_KEY = "mast.rooms.archive.open";
@@ -67,22 +68,31 @@ export function RoomsScreen({
     () => visibleRooms(projectRooms, showArchive),
     [projectRooms, showArchive],
   );
+  const homeRoom = homeRoomOf(projectRooms, project, data.me);
+  const member = useProjectMember(project);
 
+  // A room picked for the viewer, not by them, gives way to their home room when whoami
+  // lands after the rooms: the first visit opens the project's conversation either way.
+  const autoPicked = useRef(false);
   useEffect(() => {
     const current = projectRooms.find((room) => room.room.id === selectedId);
-    if (current) {
+    const supersededPick = autoPicked.current && homeRoom !== undefined && current !== homeRoom;
+    if (current && !supersededPick) {
       if (current.unread) open(current);
       return;
     }
     // Remembered selections are honored only within the active filter — a room
     // that has since been archived must not drag the archive into view.
-    const remembered = selectedRoom(storage, project);
-    const next = shownRooms.find((room) => room.room.id === remembered) ?? shownRooms[0];
+    const remembered = current ? undefined : selectedRoom(storage, project);
+    const rememberedRoom = shownRooms.find((room) => room.room.id === remembered);
+    const next = rememberedRoom ?? homeRoom ?? shownRooms[0];
+    autoPicked.current = !rememberedRoom && !homeRoom;
     setSelectedId(next?.room.id);
     if (next) open(next);
-  }, [open, project, projectRooms, selectedId, shownRooms, storage]);
+  }, [homeRoom, open, project, projectRooms, selectedId, shownRooms, storage]);
 
   const select = (room: RoomView) => {
+    autoPicked.current = false;
     setSelectedId(room.room.id);
     open(room);
   };
@@ -96,6 +106,7 @@ export function RoomsScreen({
       return false;
     }
     setProject(result.value.project);
+    autoPicked.current = false;
     setSelectedId(result.value.id);
     if ("engageError" in result && result.engageError) {
       showToast("error", `Created ${result.value.id}, but the agent could not join: ${result.engageError}`);
@@ -117,6 +128,8 @@ export function RoomsScreen({
         <RoomList
           gateway={gateway}
           rooms={projectRooms}
+          homeRoom={homeRoom}
+          member={member}
           projects={data.projects}
           project={project}
           selectedId={selectedId}

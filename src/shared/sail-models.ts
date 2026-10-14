@@ -314,10 +314,19 @@ export type AgentConfigView = {
   specs_dir: string;
 };
 
+/** The engagement a project's home room opens with — `agent.member` with its defaults filled. */
+export type ProjectMember = {
+  agent: string;
+  model?: string;
+  mode: "full" | "read_only";
+};
+
+/** GET /v1/projects/{p}; `member` is absent from a sail before 0.50 and a project with no agent. */
 export type ProjectResponse = {
   name: string;
   container_status: string;
-  agent: AgentConfigView;
+  agent?: AgentConfigView;
+  member?: ProjectMember;
 };
 
 export type ProjectContainerStatus = "running" | "stopped" | "not_created" | "error";

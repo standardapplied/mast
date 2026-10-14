@@ -6,6 +6,7 @@ import type {
   EngageResponse,
   GlobalSpecDetailResponse,
   GlobalSpecView,
+  ProjectMember,
   PruneReport,
   PruneRequest,
   RunView,
@@ -86,6 +87,9 @@ export class CatalogStore {
   private specsSeeded = false;
   private etags = new Map<string, string>();
   private catalogProjects: string[] = [];
+  /** Project → its home room's member; null once read from a definition that names none. */
+  private members = new Map<string, ProjectMember | null>();
+  private membersAsked = new Set<string>();
   private activity = new Map<string, string>();
   private fde: string | undefined;
   private roomsError: SailWireError | null = null;
@@ -166,6 +170,8 @@ export class CatalogStore {
     this.specsSeeded = false;
     this.etags = new Map();
     this.catalogProjects = [];
+    this.members = new Map();
+    this.membersAsked = new Set();
     this.activity = new Map();
     this.fde = undefined;
     this.roomsError = null;
@@ -487,6 +493,29 @@ export class CatalogStore {
   /** Synced project-roster names; surfaces union in their own derivations. */
   projects(): string[] {
     return this.catalogProjects;
+  }
+
+  /** The agent a project's home room opens with, once its definition was read; agent selects
+   *  preset to it. Undefined until then, and for a sail that names no member. */
+  projectMember(project: string): ProjectMember | undefined {
+    return this.members.get(project) ?? undefined;
+  }
+
+  /** Reads a project's member once per connection; a failed read is asked again next time. */
+  loadProjectMember(project: string): void {
+    const gateway = this.gateway;
+    if (!gateway || !project || this.membersAsked.has(project)) return;
+    this.membersAsked.add(project);
+    const epoch = this.epoch;
+    const forget = () => {
+      if (this.epoch === epoch) this.membersAsked.delete(project);
+    };
+    void gateway.project(project).then((result) => {
+      if (this.epoch !== epoch) return;
+      if (!result.ok) return forget();
+      this.members.set(project, result.value.member ?? null);
+      this.emit();
+    }, forget);
   }
 
   /** Room id → newest record-event timestamp, for activity/unread assembly. */

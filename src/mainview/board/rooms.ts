@@ -144,6 +144,21 @@ export function sectionOfRoom(room: RoomView): RoomSection {
   return room.spec ? sectionOf(room.spec.status) : "chats";
 }
 
+/**
+ * The viewer's home room in a project: the standing conversation with the project's agent that
+ * `sail project apply` leaves each FDE, `<project>--<handle>`. Absent until whoami names the
+ * viewer, and on a box whose apply predates home rooms.
+ */
+export function homeRoomOf(
+  rooms: readonly RoomView[],
+  project: string,
+  handle: string | undefined,
+): RoomView | undefined {
+  if (!project || !handle) return undefined;
+  const id = `${project}--${handle}`;
+  return rooms.find((room) => room.room.id === id && room.room.project === project);
+}
+
 export type SectionedRooms = { section: RoomSection; rooms: RoomView[] };
 
 /**

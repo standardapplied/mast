@@ -7,6 +7,7 @@ import type {
 } from "../../shared/sail-models";
 import {
   assembleRooms,
+  homeRoomOf,
   isRoomActivityEvent,
   readRoomWatermarks,
   relativeTime,
@@ -326,5 +327,29 @@ describe("sidebar sections", () => {
   test("empty sections are omitted except the archive anchor", () => {
     const sections = sectionRooms(identityRooms([["sketch", "draft"]]));
     expect(sections.map((section) => section.section)).toEqual(["drafts", "archive"]);
+  });
+});
+
+describe("home rooms", () => {
+  const rooms = assembleRooms(
+    [serverRoom("mast--ada", []), serverRoom("mast--mady", []), serverRoom("s1")],
+    [spec("s1")],
+    [],
+    {},
+  );
+
+  test("the viewer's home room is <project>--<handle>", () => {
+    expect(homeRoomOf(rooms, "mast", "ada")?.room.id).toBe("mast--ada");
+    expect(homeRoomOf(rooms, "mast", "mady")?.room.id).toBe("mast--mady");
+  });
+
+  test("there is none before whoami names the viewer, or where apply made none", () => {
+    expect(homeRoomOf(rooms, "mast", undefined)).toBeUndefined();
+    expect(homeRoomOf(rooms, "mast", "bo")).toBeUndefined();
+    expect(homeRoomOf(rooms, "", "ada")).toBeUndefined();
+  });
+
+  test("a room of that id filed in another project is not the home room", () => {
+    expect(homeRoomOf(rooms, "other", "ada")).toBeUndefined();
   });
 });

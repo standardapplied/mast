@@ -4,11 +4,13 @@ import { createRoot, type Root } from "react-dom/client";
 import type {
   AgentListResponse,
   EngageResponse,
+  ProjectResponse,
   SailEvent,
 } from "../../shared/sail-models";
 import type { SailResult } from "../../shared/types";
 import type { Gateway } from "../gateway";
 import { catalogLaneStubs } from "../../../test/catalogStubs";
+import { catalogStore } from "./catalogStore";
 import { EngageDialog } from "./EngageDialog";
 
 let root: Root;
@@ -54,9 +56,11 @@ const FULL_WITH_SNAPSHOT: SailResult<EngageResponse> = {
 function mount({
   engage = FULL,
   canDispatch = true,
+  project,
 }: {
   engage?: SailResult<EngageResponse>;
   canDispatch?: boolean;
+  project?: () => Promise<SailResult<ProjectResponse>>;
 } = {}) {
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -71,6 +75,7 @@ function mount({
   const gateway = {
     ...catalogLaneStubs(),
     listAgents: async () => AGENTS,
+    ...(project ? { project } : {}),
     engage: async (_id: string, request: Record<string, unknown>) => {
       calls.requests.push(request);
       return engage;
@@ -85,6 +90,7 @@ function mount({
       <EngageDialog
         gateway={gateway}
         specId="s1"
+        project="chorus"
         canDispatch={canDispatch}
         roleKnown
         onClose={() => calls.closed++}
@@ -98,6 +104,7 @@ function mount({
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  catalogStore.reset();
 });
 
 const settle = async () => {
@@ -124,7 +131,48 @@ const engagedEvent = (type: string, data: Record<string, unknown>): SailEvent =>
 const snapshotCheckbox = () =>
   container.querySelector<HTMLElement>('[data-testid="engage-snapshot-field"] [role="checkbox"]');
 
+const CODEX_MEMBER: SailResult<ProjectResponse> = {
+  ok: true,
+  value: {
+    name: "chorus",
+    container_status: "running",
+    member: { agent: "codex", model: "gpt-5-codex", mode: "full" },
+  },
+};
+
 describe("EngageDialog", () => {
+  test("the agent, model and access start on the project's member", async () => {
+    const calls = mount({ project: async () => CODEX_MEMBER });
+    await settle();
+    act(() => go().click());
+    await settle();
+
+    expect(calls.requests[0]).toEqual({ agent: "codex", mode: "full", model: "gpt-5-codex" });
+  });
+
+  test("a member read after the engineer chose leaves their choice standing", async () => {
+    let answer: (result: SailResult<ProjectResponse>) => void = () => {};
+    const calls = mount({ project: () => new Promise((resolve) => (answer = resolve)) });
+    await settle();
+    act(() => toggle("Read only")?.click());
+    answer(CODEX_MEMBER);
+    await settle();
+    act(() => go().click());
+    await settle();
+
+    expect(calls.requests[0]).toEqual({ agent: "claude-code", mode: "read_only" });
+  });
+
+  test("the snapshot checkbox carries no rollback warning when unticked", async () => {
+    mount();
+    await settle();
+
+    const field = container.querySelector('[data-testid="engage-snapshot-field"]');
+    expect(field?.textContent).toBe("Snapshot the container first");
+    act(() => snapshotCheckbox()?.click());
+    expect(field?.textContent).toContain("A rollback point before the agent joins.");
+  });
+
   test("full with no snapshot is the default and settles immediately", async () => {
     const calls = mount();
     await settle();

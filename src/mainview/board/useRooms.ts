@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import type { ProjectMember } from "../../shared/sail-models";
 import type { SailWireError } from "../../shared/types";
 import type { Gateway } from "../gateway";
 import { CatalogStore, catalogStore, connectCatalog } from "./catalogStore";
@@ -62,4 +63,13 @@ export function useRooms(
   );
 
   return { data, refresh, open, create };
+}
+
+/** The agent `project`'s home room opens with, read once per connection from its definition. */
+export function useProjectMember(
+  project: string,
+  store: CatalogStore = catalogStore,
+): ProjectMember | undefined {
+  useEffect(() => store.loadProjectMember(project), [project, store]);
+  return useSyncExternalStore(store.subscribe, () => store.projectMember(project));
 }

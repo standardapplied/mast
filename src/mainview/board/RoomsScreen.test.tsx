@@ -40,7 +40,63 @@ afterEach(() => {
   container.remove();
 });
 
+async function withHomeRoom(gateway: DemoGateway = createDemoGateway()) {
+  const created = await gateway.createRoom({
+    id: "chorus--uday",
+    project: "chorus",
+    title: "chorus",
+  });
+  if (!created.ok) throw new Error(created.error.message);
+  created.value.created_at = created.value.updated_at = "2026-01-01T00:00:00Z";
+  await gateway.engage("chorus--uday", { agent: "claude-code" });
+  return gateway;
+}
+
+const selectedRow = () =>
+  container.querySelector<HTMLElement>('.room-row[aria-current="page"]')?.dataset.testid;
+
 describe("RoomsScreen", () => {
+  test("a project's first visit opens the viewer's conversation with its agent", async () => {
+    await render(await withHomeRoom());
+
+    expect(selectedRow()).toBe("room-chorus--uday");
+    expect(container.querySelector(".room-header-id")?.textContent).toBe("chorus--uday");
+    const first = container.querySelector<HTMLElement>(".room-row");
+    expect(first?.dataset.testid).toBe("room-chorus--uday");
+    expect(first?.querySelector(".room-row-id-label")?.textContent).toBe("chorus");
+  });
+
+  test("a room picked before whoami landed gives way to the home room", async () => {
+    const gateway = await withHomeRoom();
+    const whoami = gateway.whoami;
+    const pending: Array<() => void> = [];
+    const identify = () => pending.splice(0).forEach((answer) => answer());
+    gateway.whoami = () =>
+      new Promise((resolve) => {
+        pending.push(() => void whoami().then(resolve));
+      });
+
+    await render(gateway);
+    expect(selectedRow()).not.toBe("room-chorus--uday");
+
+    await act(async () => identify());
+    await act(async () => {});
+    await act(async () => {});
+
+    expect(selectedRow()).toBe("room-chorus--uday");
+  });
+
+  test("a room the viewer chose last time still wins over the home room", async () => {
+    localStorage.setItem(
+      "mast.rooms.selections",
+      JSON.stringify({ chorus: "chorus-billing-export" }),
+    );
+
+    await render(await withHomeRoom());
+
+    expect(selectedRow()).toBe("room-chorus-billing-export");
+  });
+
   test("keeps details closed by default and opens body, dependencies, and history in the drawer", async () => {
     await render();
 

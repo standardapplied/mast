@@ -439,6 +439,7 @@ export function createTauriGateway(restart: () => Promise<never> = restartPage):
     whoami: () => read("GET", "/v1/whoami"),
     syncStatus: () => read("GET", "/v1/sync"),
     listProjects: () => read("GET", "/v1/projects"),
+    project: (name) => read("GET", `/v1/projects/${encodeURIComponent(name)}`),
     listFdes: () => read("GET", "/v1/fdes"),
     listAgents: () => read("GET", "/v1/agents"),
     engage: (id, request) =>
