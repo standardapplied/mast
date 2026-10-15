@@ -340,7 +340,7 @@ describe("home rooms", () => {
     [
       owned("mast--ada", "ada"),
       owned("mast--mady", "mady"),
-      owned("mast--ada-l-b724b05d", "Ada.L"),
+      owned("mast--ada-l-2a8d4330", "Ada.L"),
       owned("mast--bo", "mady"),
       owned("other--ada", "ada", "other"),
       serverRoom("s1"),
@@ -353,8 +353,8 @@ describe("home rooms", () => {
   test("the viewer's home room is the room sail names for them", () => {
     expect(homeRoomOf(rooms, "mast", "mast--ada", "ada")?.room.id).toBe("mast--ada");
     expect(homeRoomOf(rooms, "mast", "mast--mady", "mady")?.room.id).toBe("mast--mady");
-    expect(homeRoomOf(rooms, "mast", "mast--ada-l-b724b05d", "Ada.L")?.room.id).toBe(
-      "mast--ada-l-b724b05d",
+    expect(homeRoomOf(rooms, "mast", "mast--ada-l-2a8d4330", "Ada.L")?.room.id).toBe(
+      "mast--ada-l-2a8d4330",
     );
   });
 
