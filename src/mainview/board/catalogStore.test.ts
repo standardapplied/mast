@@ -824,13 +824,13 @@ describe("a project's member", () => {
       return project(name);
     };
 
-    expect(store.projectMember("chorus")).toBeUndefined();
+    expect(store.projectDefinition("chorus")?.member).toBeUndefined();
     store.retainProject("chorus");
     store.retainProject("chorus");
     await settle();
 
-    expect(store.projectMember("chorus")).toEqual({ agent: "claude-code", mode: "full" });
-    expect(store.homeRoomId("chorus")).toBe("chorus--uday");
+    expect(store.projectDefinition("chorus")?.member).toEqual({ agent: "claude-code", mode: "full" });
+    expect(store.projectDefinition("chorus")?.home_room).toBe("chorus--uday");
     expect(reads).toBe(1);
   });
 
@@ -852,12 +852,12 @@ describe("a project's member", () => {
 
     const release = store.retainProject("chorus");
     await settle();
-    expect(store.homeRoomId("chorus")).toBeUndefined();
+    expect(store.projectDefinition("chorus")?.home_room).toBeUndefined();
 
     store.refreshAll();
     await settle();
-    expect(store.homeRoomId("chorus")).toBe("chorus--uday");
-    expect(store.projectMember("chorus")).toEqual({ agent: "claude-code", mode: "full" });
+    expect(store.projectDefinition("chorus")?.home_room).toBe("chorus--uday");
+    expect(store.projectDefinition("chorus")?.member).toEqual({ agent: "claude-code", mode: "full" });
     release();
   });
 
@@ -888,7 +888,7 @@ describe("a project's member", () => {
     await settle();
     store.refreshAll();
     await settle();
-    expect(store.projectMember("chorus")).toEqual({
+    expect(store.projectDefinition("chorus")?.member).toEqual({
       agent: "codex",
       model: "gpt-5-codex",
       mode: "full",
@@ -897,7 +897,7 @@ describe("a project's member", () => {
     store.refreshAll();
     await settle();
     expect(answers).toHaveLength(0);
-    expect(store.projectMember("chorus")?.agent).toBe("codex");
+    expect(store.projectDefinition("chorus")?.member?.agent).toBe("codex");
     release();
   });
 
@@ -914,11 +914,11 @@ describe("a project's member", () => {
 
     const release = store.retainProject("chorus");
     await settle();
-    expect(store.homeRoomId("chorus")).toBeUndefined();
+    expect(store.projectDefinition("chorus")?.home_room).toBeUndefined();
 
     store.refreshAll();
     await settle();
-    expect(store.homeRoomId("chorus")).toBe("chorus--uday");
+    expect(store.projectDefinition("chorus")?.home_room).toBe("chorus--uday");
     expect(answers).toHaveLength(0);
     release();
   });
@@ -951,8 +951,8 @@ describe("a project's member", () => {
     store.retainProject("chorus");
     await settle();
 
-    expect(store.projectMember("chorus")).toBeUndefined();
-    expect(store.homeRoomId("chorus")).toBeUndefined();
+    expect(store.projectDefinition("chorus")?.member).toBeUndefined();
+    expect(store.projectDefinition("chorus")?.home_room).toBeUndefined();
   });
 
   test("a sign-in change forgets every member and reads it again for a surface holding it", async () => {
@@ -962,10 +962,10 @@ describe("a project's member", () => {
 
     store.reset();
 
-    expect(store.projectMember("chorus")).toBeUndefined();
-    expect(store.homeRoomId("chorus")).toBeUndefined();
+    expect(store.projectDefinition("chorus")?.member).toBeUndefined();
+    expect(store.projectDefinition("chorus")?.home_room).toBeUndefined();
     store.connect(gateway);
     await settle();
-    expect(store.homeRoomId("chorus")).toBe("chorus--uday");
+    expect(store.projectDefinition("chorus")?.home_room).toBe("chorus--uday");
   });
 });

@@ -9,7 +9,7 @@ import { ToggleButton } from "../components/ToggleButton";
 import { Button } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { catalogStore, connectCatalog } from "./catalogStore";
-import { useProjectMember } from "./useRooms";
+import { useProjectDefinition } from "./useRooms";
 
 /**
  * Add an agent to this room: it joins the conversation and answers every
@@ -52,7 +52,7 @@ export function EngageDialog({
   const bufferRef = useRef<SailEvent[]>([]);
 
   useEffect(() => connectCatalog(gateway), [gateway]);
-  const member = useProjectMember(project);
+  const member = useProjectDefinition(project)?.member;
   const touchedRef = useRef(false);
   const touched = <T,>(set: (value: T) => void) => (value: T) => {
     touchedRef.current = true;

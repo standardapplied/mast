@@ -6,7 +6,6 @@ import type {
   EngageResponse,
   GlobalSpecDetailResponse,
   GlobalSpecView,
-  ProjectMember,
   ProjectResponse,
   PruneReport,
   PruneRequest,
@@ -499,16 +498,10 @@ export class CatalogStore {
     return this.catalogProjects;
   }
 
-  /** The agent a project's home room opens with, once its definition was read; agent selects
-   *  preset to it. Undefined until then, and for a sail that names no member. */
-  projectMember(project: string): ProjectMember | undefined {
-    return this.definitions.get(project)?.member;
-  }
-
-  /** The viewer's home room id in a project, as sail derives it; undefined until read, and from
-   *  a sail before 0.50. */
-  homeRoomId(project: string): string | undefined {
-    return this.definitions.get(project)?.home_room;
+  /** A project's definition as last read: its member and the viewer's home room id, both absent
+   *  from a sail before 0.50. Undefined until the first read succeeds. */
+  projectDefinition(project: string): ProjectResponse | undefined {
+    return this.definitions.get(project);
   }
 
   /**
