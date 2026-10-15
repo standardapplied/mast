@@ -70,6 +70,15 @@ export function useProjectMember(
   project: string,
   store: CatalogStore = catalogStore,
 ): ProjectMember | undefined {
-  useEffect(() => store.loadProjectMember(project), [project, store]);
+  useEffect(() => store.loadProject(project), [project, store]);
   return useSyncExternalStore(store.subscribe, () => store.projectMember(project));
+}
+
+/** The viewer's home room id in `project`, read once per connection. */
+export function useHomeRoomId(
+  project: string,
+  store: CatalogStore = catalogStore,
+): string | undefined {
+  useEffect(() => store.loadProject(project), [project, store]);
+  return useSyncExternalStore(store.subscribe, () => store.homeRoomId(project));
 }

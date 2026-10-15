@@ -62,6 +62,10 @@ function mount(rooms: RoomView[], extra: Partial<Parameters<typeof RoomList>[0]>
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
+  rerender(rooms, extra);
+}
+
+function rerender(rooms: RoomView[], extra: Partial<Parameters<typeof RoomList>[0]> = {}) {
   act(() =>
     root.render(
       <RoomList
@@ -156,4 +160,46 @@ test("a new room's agent starts on the project's member", async () => {
 
   const selects = document.querySelectorAll('[role="dialog"] .select-value');
   expect(selects[selects.length - 1]?.textContent).toBe("Codex CLI");
+});
+
+test("a member or agent list landing after the viewer chose no agent leaves their choice", async () => {
+  const agents = ["claude-code", "codex"].map((name) => ({
+    name,
+    display_name: name === "codex" ? "Codex CLI" : "Claude Code",
+    modes: [],
+  }));
+  let answer: () => void = () => {};
+  const created: Array<string | undefined> = [];
+  const extra = {
+    gateway: {
+      listAgents: () =>
+        new Promise<{ ok: true; value: { agents: typeof agents } }>(
+          (resolve) => (answer = () => resolve({ ok: true, value: { agents } })),
+        ),
+    },
+    onCreate: async (_title: string, _project: string, agent?: string) => {
+      created.push(agent);
+      return true;
+    },
+  };
+  mount([], extra);
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="New room"]')!.click());
+  const triggers = () => document.querySelectorAll<HTMLElement>('[role="dialog"] .select-trigger');
+  act(() => triggers()[triggers().length - 1]!.click());
+  act(() => document.querySelector<HTMLElement>('[data-testid="option-"]')!.click());
+
+  await act(async () => answer());
+  rerender([], { ...extra, member: { agent: "codex", mode: "full" } });
+
+  const values = document.querySelectorAll('[role="dialog"] .select-value');
+  expect(values[values.length - 1]?.textContent).toBe("No agent");
+  const title = document.querySelector<HTMLInputElement>('[aria-label="Room title"]')!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(title, "Notes");
+    title.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    document.querySelector<HTMLFormElement>("#create-room-form")!.requestSubmit();
+  });
+  expect(created).toEqual([undefined]);
 });

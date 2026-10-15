@@ -321,12 +321,14 @@ export type ProjectMember = {
   mode: "full" | "read_only";
 };
 
-/** GET /v1/projects/{p}; `member` is absent from a sail before 0.50 and a project with no agent. */
+/** GET /v1/projects/{p}; `member` and `home_room` (the reader's home room id) are absent from a
+ *  sail before 0.50 and a project with no agent. */
 export type ProjectResponse = {
   name: string;
   container_status: string;
   agent?: AgentConfigView;
   member?: ProjectMember;
+  home_room?: string;
 };
 
 export type ProjectContainerStatus = "running" | "stopped" | "not_created" | "error";

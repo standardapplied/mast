@@ -17,7 +17,7 @@ import {
   type RoomView,
   type StorageLike,
 } from "./rooms";
-import { useProjectMember, useRooms } from "./useRooms";
+import { useHomeRoomId, useProjectMember, useRooms } from "./useRooms";
 
 const SIDEBAR_KEY = "mast.rooms.sidebar.width";
 const ARCHIVE_KEY = "mast.rooms.archive.open";
@@ -68,7 +68,8 @@ export function RoomsScreen({
     () => visibleRooms(projectRooms, showArchive),
     [projectRooms, showArchive],
   );
-  const homeRoom = homeRoomOf(projectRooms, project, data.me);
+  const homeRoomId = useHomeRoomId(project);
+  const homeRoom = homeRoomOf(projectRooms, project, homeRoomId, data.me);
   const member = useProjectMember(project);
 
   // A room picked for the viewer, not by them, gives way to their home room when whoami

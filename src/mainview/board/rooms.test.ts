@@ -331,25 +331,42 @@ describe("sidebar sections", () => {
 });
 
 describe("home rooms", () => {
+  const owned = (id: string, assignee: string, project = "mast"): ServerRoomView => ({
+    ...serverRoom(id, []),
+    project,
+    assignee,
+  });
   const rooms = assembleRooms(
-    [serverRoom("mast--ada", []), serverRoom("mast--mady", []), serverRoom("s1")],
+    [
+      owned("mast--ada", "ada"),
+      owned("mast--mady", "mady"),
+      owned("mast--ada-l-b724b05d", "Ada.L"),
+      owned("mast--bo", "mady"),
+      owned("other--ada", "ada", "other"),
+      serverRoom("s1"),
+    ],
     [spec("s1")],
     [],
     {},
   );
 
-  test("the viewer's home room is <project>--<handle>", () => {
-    expect(homeRoomOf(rooms, "mast", "ada")?.room.id).toBe("mast--ada");
-    expect(homeRoomOf(rooms, "mast", "mady")?.room.id).toBe("mast--mady");
+  test("the viewer's home room is the room sail names for them", () => {
+    expect(homeRoomOf(rooms, "mast", "mast--ada", "ada")?.room.id).toBe("mast--ada");
+    expect(homeRoomOf(rooms, "mast", "mast--mady", "mady")?.room.id).toBe("mast--mady");
+    expect(homeRoomOf(rooms, "mast", "mast--ada-l-b724b05d", "Ada.L")?.room.id).toBe(
+      "mast--ada-l-b724b05d",
+    );
   });
 
-  test("there is none before whoami names the viewer, or where apply made none", () => {
-    expect(homeRoomOf(rooms, "mast", undefined)).toBeUndefined();
-    expect(homeRoomOf(rooms, "mast", "bo")).toBeUndefined();
-    expect(homeRoomOf(rooms, "", "ada")).toBeUndefined();
+  test("there is none before sail and whoami name it, or where apply made none", () => {
+    expect(homeRoomOf(rooms, "mast", "mast--ada", undefined)).toBeUndefined();
+    expect(homeRoomOf(rooms, "mast", undefined, "ada")).toBeUndefined();
+    expect(homeRoomOf(rooms, "mast", "mast--cy", "cy")).toBeUndefined();
+    expect(homeRoomOf(rooms, "", "mast--ada", "ada")).toBeUndefined();
   });
 
-  test("a room of that id filed in another project is not the home room", () => {
-    expect(homeRoomOf(rooms, "other", "ada")).toBeUndefined();
+  test("a room someone else holds under the id, or filed in another project, is not it", () => {
+    expect(homeRoomOf(rooms, "mast", "mast--bo", "bo")).toBeUndefined();
+    expect(homeRoomOf(rooms, "mast", "other--ada", "ada")).toBeUndefined();
   });
 });

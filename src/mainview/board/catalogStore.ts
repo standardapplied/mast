@@ -7,6 +7,7 @@ import type {
   GlobalSpecDetailResponse,
   GlobalSpecView,
   ProjectMember,
+  ProjectResponse,
   PruneReport,
   PruneRequest,
   RunView,
@@ -87,9 +88,9 @@ export class CatalogStore {
   private specsSeeded = false;
   private etags = new Map<string, string>();
   private catalogProjects: string[] = [];
-  /** Project → its home room's member; null once read from a definition that names none. */
-  private members = new Map<string, ProjectMember | null>();
-  private membersAsked = new Set<string>();
+  /** Project → GET /v1/projects/{p}: its member and the viewer's home room id. */
+  private definitions = new Map<string, ProjectResponse>();
+  private definitionsAsked = new Set<string>();
   private activity = new Map<string, string>();
   private fde: string | undefined;
   private roomsError: SailWireError | null = null;
@@ -170,8 +171,8 @@ export class CatalogStore {
     this.specsSeeded = false;
     this.etags = new Map();
     this.catalogProjects = [];
-    this.members = new Map();
-    this.membersAsked = new Set();
+    this.definitions = new Map();
+    this.definitionsAsked = new Set();
     this.activity = new Map();
     this.fde = undefined;
     this.roomsError = null;
@@ -498,22 +499,28 @@ export class CatalogStore {
   /** The agent a project's home room opens with, once its definition was read; agent selects
    *  preset to it. Undefined until then, and for a sail that names no member. */
   projectMember(project: string): ProjectMember | undefined {
-    return this.members.get(project) ?? undefined;
+    return this.definitions.get(project)?.member;
   }
 
-  /** Reads a project's member once per connection; a failed read is asked again next time. */
-  loadProjectMember(project: string): void {
+  /** The viewer's home room id in a project, as sail derives it; undefined until read, and from
+   *  a sail before 0.50. */
+  homeRoomId(project: string): string | undefined {
+    return this.definitions.get(project)?.home_room;
+  }
+
+  /** Reads a project once per connection; a failed read is asked again next time. */
+  loadProject(project: string): void {
     const gateway = this.gateway;
-    if (!gateway || !project || this.membersAsked.has(project)) return;
-    this.membersAsked.add(project);
+    if (!gateway || !project || this.definitionsAsked.has(project)) return;
+    this.definitionsAsked.add(project);
     const epoch = this.epoch;
     const forget = () => {
-      if (this.epoch === epoch) this.membersAsked.delete(project);
+      if (this.epoch === epoch) this.definitionsAsked.delete(project);
     };
     void gateway.project(project).then((result) => {
       if (this.epoch !== epoch) return;
       if (!result.ok) return forget();
-      this.members.set(project, result.value.member ?? null);
+      this.definitions.set(project, result.value);
       this.emit();
     }, forget);
   }

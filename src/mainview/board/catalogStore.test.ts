@@ -825,12 +825,13 @@ describe("a project's member", () => {
     };
 
     expect(store.projectMember("chorus")).toBeUndefined();
-    store.loadProjectMember("chorus");
-    store.loadProjectMember("chorus");
+    store.loadProject("chorus");
+    store.loadProject("chorus");
     await settle();
 
     expect(store.projectMember("chorus")).toEqual({ agent: "claude-code", mode: "full" });
-    store.loadProjectMember("chorus");
+    expect(store.homeRoomId("chorus")).toBe("chorus--uday");
+    store.loadProject("chorus");
     expect(reads).toBe(1);
   });
 
@@ -842,23 +843,25 @@ describe("a project's member", () => {
     ];
     gateway.project = async () => answers.shift()!;
 
-    store.loadProjectMember("chorus");
+    store.loadProject("chorus");
     await settle();
     expect(store.projectMember("chorus")).toBeUndefined();
 
-    store.loadProjectMember("chorus");
+    store.loadProject("chorus");
     await settle();
     expect(store.projectMember("chorus")).toBeUndefined();
+    expect(store.homeRoomId("chorus")).toBeUndefined();
     expect(answers).toHaveLength(0);
   });
 
   test("a sign-in change forgets every member", async () => {
     const { store } = await seeded();
-    store.loadProjectMember("chorus");
+    store.loadProject("chorus");
     await settle();
 
     store.reset();
 
     expect(store.projectMember("chorus")).toBeUndefined();
+    expect(store.homeRoomId("chorus")).toBeUndefined();
   });
 });

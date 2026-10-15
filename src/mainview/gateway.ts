@@ -603,6 +603,7 @@ export function createDemoGateway(
         id: request.id,
         project: request.project,
         title: request.title,
+        assignee: "uday",
         members: [],
         spec_ids: [],
         created_at: now,
@@ -804,6 +805,7 @@ export function createDemoGateway(
         name,
         container_status: "running",
         member: { agent: "claude-code", mode: "full" as const },
+        home_room: `${name}--uday`,
       });
     },
 

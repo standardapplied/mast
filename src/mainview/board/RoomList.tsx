@@ -62,6 +62,8 @@ export function RoomList({
   const [agent, setAgent] = useState(DEFAULT_AGENT);
   const [agents, setAgents] = useState<AgentView[]>([]);
   const titleRef = useRef<HTMLInputElement>(null);
+  // Late defaults (the member, the agent list) preset the select only until the viewer picks.
+  const agentChosen = useRef(false);
 
   useEffect(() => {
     if (!newRoom) return;
@@ -69,7 +71,9 @@ export function RoomList({
     void gateway.listAgents().then((result) => {
       if (cancelled || !result.ok) return;
       setAgents(result.value.agents);
-      setAgent((current) => current || result.value.agents[0]?.name || "");
+      if (!agentChosen.current) {
+        setAgent((current) => current || result.value.agents[0]?.name || "");
+      }
     });
     return () => {
       cancelled = true;
@@ -85,8 +89,17 @@ export function RoomList({
   }, [newRoom]);
 
   useEffect(() => {
-    if (newRoom) setAgent(member?.agent ?? DEFAULT_AGENT);
+    if (!newRoom) {
+      agentChosen.current = false;
+      return;
+    }
+    if (!agentChosen.current) setAgent(member?.agent ?? DEFAULT_AGENT);
   }, [newRoom, member?.agent]);
+
+  const chooseAgent = (value: string) => {
+    agentChosen.current = true;
+    setAgent(value);
+  };
 
   const listed = homeRoom ? rooms.filter((room) => room !== homeRoom) : rooms;
 
@@ -191,7 +204,7 @@ export function RoomList({
                 label: candidate.display_name,
               })),
             ]}
-            onChange={setAgent}
+            onChange={chooseAgent}
             placeholder="Agent"
             aria-label="Agent"
           />
