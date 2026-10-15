@@ -815,7 +815,7 @@ describe("CatalogStore reset epoch", () => {
 });
 
 describe("a project's member", () => {
-  test("is read once per connection and presets every agent select", async () => {
+  test("holds share one read in flight and presets every agent select", async () => {
     const { gateway, store } = await seeded();
     let reads = 0;
     const project = gateway.project.bind(gateway);
@@ -831,10 +831,74 @@ describe("a project's member", () => {
 
     expect(store.projectMember("chorus")).toEqual({ agent: "claude-code", mode: "full" });
     expect(store.homeRoomId("chorus")).toBe("chorus--uday");
-    store.retainProject("chorus");
+    expect(reads).toBe(1);
+  });
+
+  test("a sail upgraded under a held project is read again at the next reconcile", async () => {
+    const { gateway, store } = await seeded();
+    const answers = [
+      { ok: true as const, value: { name: "chorus", container_status: "running" } },
+      {
+        ok: true as const,
+        value: {
+          name: "chorus",
+          container_status: "running",
+          member: { agent: "claude-code", mode: "full" as const },
+          home_room: "chorus--uday",
+        },
+      },
+    ];
+    gateway.project = async () => answers.shift()!;
+
+    const release = store.retainProject("chorus");
+    await settle();
+    expect(store.homeRoomId("chorus")).toBeUndefined();
+
     store.refreshAll();
     await settle();
-    expect(reads).toBe(1);
+    expect(store.homeRoomId("chorus")).toBe("chorus--uday");
+    expect(store.projectMember("chorus")).toEqual({ agent: "claude-code", mode: "full" });
+    release();
+  });
+
+  test("a changed member presets the next dialog, and a failed read keeps the last answer", async () => {
+    const { gateway, store } = await seeded();
+    const answers = [
+      {
+        ok: true as const,
+        value: {
+          name: "chorus",
+          container_status: "running",
+          member: { agent: "claude-code", mode: "full" as const },
+        },
+      },
+      {
+        ok: true as const,
+        value: {
+          name: "chorus",
+          container_status: "running",
+          member: { agent: "codex", model: "gpt-5-codex", mode: "full" as const },
+        },
+      },
+      { ok: false as const, error: { status: 503, code: "unavailable", message: "down" } },
+    ];
+    gateway.project = async () => answers.shift()!;
+
+    const release = store.retainProject("chorus");
+    await settle();
+    store.refreshAll();
+    await settle();
+    expect(store.projectMember("chorus")).toEqual({
+      agent: "codex",
+      model: "gpt-5-codex",
+      mode: "full",
+    });
+
+    store.refreshAll();
+    await settle();
+    expect(answers).toHaveLength(0);
+    expect(store.projectMember("chorus")?.agent).toBe("codex");
+    release();
   });
 
   test("a failed read is asked again at the next reconcile while a surface holds it", async () => {

@@ -90,7 +90,7 @@ export class CatalogStore {
   private catalogProjects: string[] = [];
   /** Project → GET /v1/projects/{p}: its member and the viewer's home room id. */
   private definitions = new Map<string, ProjectResponse>();
-  private definitionsAsked = new Set<string>();
+  private definitionsInFlight = new Set<string>();
   /** Projects a mounted surface reads; interest, like run holds, outlives a reset. */
   private projectHolds = new Map<string, number>();
   private activity = new Map<string, string>();
@@ -174,7 +174,7 @@ export class CatalogStore {
     this.etags = new Map();
     this.catalogProjects = [];
     this.definitions = new Map();
-    this.definitionsAsked = new Set();
+    this.definitionsInFlight = new Set();
     this.activity = new Map();
     this.fde = undefined;
     this.roomsError = null;
@@ -512,8 +512,9 @@ export class CatalogStore {
   }
 
   /**
-   * Declares interest in a project's definition: reads it once per connection, asks again at
-   * every reconcile point until a read lands, and returns the release.
+   * Declares interest in a project's definition: reads it now and again at every reconcile point
+   * while held, one read in flight at a time, keeping the last answer through a failed read, and
+   * returns the release.
    */
   retainProject(project: string): () => void {
     this.projectHolds.set(project, (this.projectHolds.get(project) ?? 0) + 1);
@@ -530,15 +531,16 @@ export class CatalogStore {
 
   private loadProject(project: string): void {
     const gateway = this.gateway;
-    if (!gateway || !project || this.definitionsAsked.has(project)) return;
-    this.definitionsAsked.add(project);
+    if (!gateway || !project || this.definitionsInFlight.has(project)) return;
+    this.definitionsInFlight.add(project);
     const epoch = this.epoch;
     const forget = () => {
-      if (this.epoch === epoch) this.definitionsAsked.delete(project);
+      if (this.epoch === epoch) this.definitionsInFlight.delete(project);
     };
     void gateway.project(project).then((result) => {
       if (this.epoch !== epoch) return;
-      if (!result.ok) return forget();
+      forget();
+      if (!result.ok) return;
       this.definitions.set(project, result.value);
       this.emit();
     }, forget);
