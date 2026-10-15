@@ -22,6 +22,10 @@ export function catalogLaneStubs() {
     listRuns: async () => ({ ok: true as const, value: { runs: [] } }),
     listSpecs: async () => ({ ok: true as const, value: { specs: [], total: 0 } }),
     listProjects: async () => ({ ok: true as const, value: { projects: [] } }),
+    project: async (name: string) => ({
+      ok: false as const,
+      error: { status: 404, code: "project_not_found", message: `no '${name}' in this fake` },
+    }),
     recentEvents: async () => ({
       ok: true as const,
       value: { limit: 0, returned: 0, events: [] },

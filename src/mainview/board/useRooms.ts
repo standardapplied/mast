@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import type { ProjectResponse } from "../../shared/sail-models";
 import type { SailWireError } from "../../shared/types";
 import type { Gateway } from "../gateway";
 import { CatalogStore, catalogStore, connectCatalog } from "./catalogStore";
@@ -62,4 +63,14 @@ export function useRooms(
   );
 
   return { data, refresh, open, create };
+}
+
+/** `project`'s definition (its member, the viewer's home room id), read again at every refresh
+ *  while mounted. */
+export function useProjectDefinition(
+  project: string,
+  store: CatalogStore = catalogStore,
+): ProjectResponse | undefined {
+  useEffect(() => store.retainProject(project), [project, store]);
+  return useSyncExternalStore(store.subscribe, () => store.projectDefinition(project));
 }

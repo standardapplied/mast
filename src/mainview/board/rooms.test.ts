@@ -7,6 +7,7 @@ import type {
 } from "../../shared/sail-models";
 import {
   assembleRooms,
+  homeRoomOf,
   isRoomActivityEvent,
   readRoomWatermarks,
   relativeTime,
@@ -326,5 +327,45 @@ describe("sidebar sections", () => {
   test("empty sections are omitted except the archive anchor", () => {
     const sections = sectionRooms(identityRooms([["sketch", "draft"]]));
     expect(sections.map((section) => section.section)).toEqual(["drafts", "archive"]);
+  });
+});
+
+describe("home rooms", () => {
+  const owned = (id: string, assignee: string, project = "mast"): ServerRoomView => ({
+    ...serverRoom(id, []),
+    project,
+    assignee,
+  });
+  const FOLDED = "home--fd45de032f77790f31aec046582e77e14e398a0b955c5d816a015bf7c2eb5b70";
+  const rooms = assembleRooms(
+    [
+      owned("mast--ada", "ada"),
+      owned("mast--mady", "mady"),
+      owned(FOLDED, "Ada.L"),
+      owned("mast--bo", "mady"),
+      owned("other--ada", "ada", "other"),
+      serverRoom("s1"),
+    ],
+    [spec("s1")],
+    [],
+    {},
+  );
+
+  test("the viewer's home room is the room sail names for them", () => {
+    expect(homeRoomOf(rooms, "mast", "mast--ada", "ada")?.room.id).toBe("mast--ada");
+    expect(homeRoomOf(rooms, "mast", "mast--mady", "mady")?.room.id).toBe("mast--mady");
+    expect(homeRoomOf(rooms, "mast", FOLDED, "Ada.L")?.room.id).toBe(FOLDED);
+  });
+
+  test("there is none before sail and whoami name it, or where apply made none", () => {
+    expect(homeRoomOf(rooms, "mast", "mast--ada", undefined)).toBeUndefined();
+    expect(homeRoomOf(rooms, "mast", undefined, "ada")).toBeUndefined();
+    expect(homeRoomOf(rooms, "mast", "mast--cy", "cy")).toBeUndefined();
+    expect(homeRoomOf(rooms, "", "mast--ada", "ada")).toBeUndefined();
+  });
+
+  test("a room someone else holds under the id, or filed in another project, is not it", () => {
+    expect(homeRoomOf(rooms, "mast", "mast--bo", "bo")).toBeUndefined();
+    expect(homeRoomOf(rooms, "mast", "other--ada", "ada")).toBeUndefined();
   });
 });

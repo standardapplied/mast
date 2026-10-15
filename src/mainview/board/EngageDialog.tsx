@@ -9,6 +9,7 @@ import { ToggleButton } from "../components/ToggleButton";
 import { Button } from "../components/ui";
 import type { Gateway } from "../gateway";
 import { catalogStore, connectCatalog } from "./catalogStore";
+import { useProjectDefinition } from "./useRooms";
 
 /**
  * Add an agent to this room: it joins the conversation and answers every
@@ -18,11 +19,13 @@ import { catalogStore, connectCatalog } from "./catalogStore";
  * engagement takes effect only after it completes, so the dialog shows the
  * pending state and settles on `spec_engaged` / `spec_engage_failed`. Read only
  * is the explicit narrow choice, greyed with the server's own reason where the
- * harness cannot enforce it.
+ * harness cannot enforce it. The agent, model and access start on the project's member
+ * until the engineer changes one of them.
  */
 export function EngageDialog({
   gateway,
   specId,
+  project,
   canDispatch,
   roleKnown,
   onClose,
@@ -30,6 +33,7 @@ export function EngageDialog({
 }: {
   gateway: Gateway;
   specId: string;
+  project: string;
   canDispatch: boolean;
   roleKnown: boolean;
   onClose: () => void;
@@ -48,6 +52,19 @@ export function EngageDialog({
   const bufferRef = useRef<SailEvent[]>([]);
 
   useEffect(() => connectCatalog(gateway), [gateway]);
+  const member = useProjectDefinition(project)?.member;
+  const touchedRef = useRef(false);
+  const touched = <T,>(set: (value: T) => void) => (value: T) => {
+    touchedRef.current = true;
+    set(value);
+  };
+
+  useEffect(() => {
+    if (!member || touchedRef.current) return;
+    setAgent(member.agent);
+    setModel(member.model ?? "");
+    setReadOnly(member.mode === "read_only");
+  }, [member]);
 
   useEffect(() => {
     let cancelled = false;
@@ -191,7 +208,7 @@ export function EngageDialog({
             <Input
               label="Agent"
               value={agent}
-              onChange={(event) => setAgent(event.target.value)}
+              onChange={(event) => touched(setAgent)(event.target.value)}
               placeholder="claude-code or codex"
               data-testid="engage-agent-input"
             />
@@ -199,7 +216,7 @@ export function EngageDialog({
             <Select
               label="Agent"
               value={agent}
-              onChange={(value) => setAgent(value)}
+              onChange={touched(setAgent)}
               options={options}
               placeholder="Choose an agent"
             />
@@ -208,7 +225,7 @@ export function EngageDialog({
           <Input
             label="Model (optional)"
             value={model}
-            onChange={(event) => setModel(event.target.value)}
+            onChange={(event) => touched(setModel)(event.target.value)}
             placeholder="agent default"
             data-testid="engage-model"
           />
@@ -217,7 +234,7 @@ export function EngageDialog({
             <span className="field-label">Access</span>
             <ToggleButton
               value={readOnly ? "read_only" : "full"}
-              onChange={(value) => setReadOnly(value === "read_only")}
+              onChange={(value) => touched(setReadOnly)(value === "read_only")}
               options={[
                 { value: "full", label: "Full" },
                 { value: "read_only", label: "Read only" },
@@ -237,11 +254,12 @@ export function EngageDialog({
                 onChange={setSnapshot}
                 label="Snapshot the container first"
               />
-              <p className="dispatch-hint">
-                {snapshot
-                  ? "A rollback point before the agent joins. On the default storage this is a slow full copy."
-                  : "The agent joins immediately. There is no rollback point, so undo any damage by hand."}
-              </p>
+              {snapshot && (
+                <p className="dispatch-hint">
+                  A rollback point before the agent joins. On the default storage this is a slow
+                  full copy.
+                </p>
+              )}
             </div>
           )}
 

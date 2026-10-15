@@ -23,6 +23,7 @@ import type {
   RoomsListResponse,
   ServerRoomView,
   ProjectListResponse,
+  ProjectResponse,
   PruneReport,
   PruneRequest,
   RecentEventsResponse,
@@ -144,6 +145,8 @@ export type Gateway = {
   whoami(): Promise<SailResult<WhoAmI>>;
   /** The full synced project roster — every catalogued project with its local container state. */
   listProjects(): Promise<SailResult<ProjectListResponse>>;
+  /** One project with its home room's member (GET /v1/projects/{p}) — `member` since sail 0.50. */
+  project(name: string): Promise<SailResult<ProjectResponse>>;
   /** The org's FDE roster — the assignee candidates for a spec. */
   listFdes(): Promise<SailResult<FdeListResponse>>;
   /** The installable agents and their member-mode support (GET /v1/agents) — sail ≥ 0.23. */
@@ -600,6 +603,7 @@ export function createDemoGateway(
         id: request.id,
         project: request.project,
         title: request.title,
+        assignee: "uday",
         members: [],
         spec_ids: [],
         created_at: now,
@@ -793,6 +797,15 @@ export function createDemoGateway(
           { name: "nautilus", container_status: "not_created" as const },
           { name: "sail-mast", container_status: "stopped" as const },
         ],
+      });
+    },
+
+    async project(name) {
+      return ok({
+        name,
+        container_status: "running",
+        member: { agent: "claude-code", mode: "full" as const },
+        home_room: `${name}--uday`,
       });
     },
 

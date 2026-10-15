@@ -6,6 +6,7 @@ import type {
   EngageResponse,
   GlobalSpecDetailResponse,
   GlobalSpecView,
+  ProjectResponse,
   PruneReport,
   PruneRequest,
   RunView,
@@ -86,6 +87,11 @@ export class CatalogStore {
   private specsSeeded = false;
   private etags = new Map<string, string>();
   private catalogProjects: string[] = [];
+  /** Project → GET /v1/projects/{p}: its member and the viewer's home room id. */
+  private definitions = new Map<string, ProjectResponse>();
+  private definitionsInFlight = new Set<string>();
+  /** Projects a mounted surface reads; interest, like run holds, outlives a reset. */
+  private projectHolds = new Map<string, number>();
   private activity = new Map<string, string>();
   private fde: string | undefined;
   private roomsError: SailWireError | null = null;
@@ -166,6 +172,8 @@ export class CatalogStore {
     this.specsSeeded = false;
     this.etags = new Map();
     this.catalogProjects = [];
+    this.definitions = new Map();
+    this.definitionsInFlight = new Set();
     this.activity = new Map();
     this.fde = undefined;
     this.roomsError = null;
@@ -193,6 +201,7 @@ export class CatalogStore {
   refreshAll(): void {
     this.worldRefresher();
     for (const specId of this.runHolds.keys()) this.kickRuns(specId);
+    for (const project of this.projectHolds.keys()) this.loadProject(project);
     const gateway = this.gateway;
     if (!gateway) return;
     const epoch = this.epoch;
@@ -487,6 +496,47 @@ export class CatalogStore {
   /** Synced project-roster names; surfaces union in their own derivations. */
   projects(): string[] {
     return this.catalogProjects;
+  }
+
+  /** A project's definition as last read: its member and the viewer's home room id, both absent
+   *  from a sail before 0.50. Undefined until the first read succeeds. */
+  projectDefinition(project: string): ProjectResponse | undefined {
+    return this.definitions.get(project);
+  }
+
+  /**
+   * Declares interest in a project's definition: reads it now and again at every reconcile point
+   * while held, one read in flight at a time, keeping the last answer through a failed read, and
+   * returns the release.
+   */
+  retainProject(project: string): () => void {
+    this.projectHolds.set(project, (this.projectHolds.get(project) ?? 0) + 1);
+    this.loadProject(project);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const holds = (this.projectHolds.get(project) ?? 1) - 1;
+      if (holds > 0) return void this.projectHolds.set(project, holds);
+      this.projectHolds.delete(project);
+    };
+  }
+
+  private loadProject(project: string): void {
+    const gateway = this.gateway;
+    if (!gateway || !project || this.definitionsInFlight.has(project)) return;
+    this.definitionsInFlight.add(project);
+    const epoch = this.epoch;
+    const forget = () => {
+      if (this.epoch === epoch) this.definitionsInFlight.delete(project);
+    };
+    void gateway.project(project).then((result) => {
+      if (this.epoch !== epoch) return;
+      forget();
+      if (!result.ok) return;
+      this.definitions.set(project, result.value);
+      this.emit();
+    }, forget);
   }
 
   /** Room id → newest record-event timestamp, for activity/unread assembly. */

@@ -857,6 +857,7 @@ export function SpecDetail({
         <EngageDialog
           gateway={gateway}
           specId={spec.id}
+          project={spec.project}
           canDispatch={role.canDispatch}
           roleKnown={role.known}
           onClose={() => setEngageOpen(false)}
