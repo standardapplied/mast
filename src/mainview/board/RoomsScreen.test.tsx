@@ -55,6 +55,12 @@ async function withHomeRoom(gateway: DemoGateway = createDemoGateway()) {
 const selectedRow = () =>
   container.querySelector<HTMLElement>('.room-row[aria-current="page"]')?.dataset.testid;
 
+const homeRow = () => {
+  const first = container.querySelector(".room-list-scroll > .room-section");
+  if (!first || first.querySelector(".room-section-head")) return undefined;
+  return first.querySelector<HTMLElement>(".room-row")?.dataset.testid;
+};
+
 describe("RoomsScreen", () => {
   test("a project's first visit opens the viewer's conversation with its agent", async () => {
     await render(await withHomeRoom());
@@ -83,6 +89,30 @@ describe("RoomsScreen", () => {
     await act(async () => {});
     await act(async () => {});
 
+    expect(selectedRow()).toBe("room-chorus--uday");
+  });
+
+  test("a project read that failed is asked again on the next refresh", async () => {
+    const gateway = await withHomeRoom();
+    const project = gateway.project;
+    let down = true;
+    gateway.project = (name) =>
+      down
+        ? Promise.resolve({
+            ok: false as const,
+            error: { status: 503, code: "unavailable", message: "down" },
+          })
+        : project(name);
+
+    await render(gateway);
+    expect(homeRow()).toBeUndefined();
+
+    down = false;
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    await act(async () => {});
+    await act(async () => {});
+
+    expect(homeRow()).toBe("room-chorus--uday");
     expect(selectedRow()).toBe("room-chorus--uday");
   });
 

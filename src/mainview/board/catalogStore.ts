@@ -91,6 +91,8 @@ export class CatalogStore {
   /** Project → GET /v1/projects/{p}: its member and the viewer's home room id. */
   private definitions = new Map<string, ProjectResponse>();
   private definitionsAsked = new Set<string>();
+  /** Projects a mounted surface reads; interest, like run holds, outlives a reset. */
+  private projectHolds = new Map<string, number>();
   private activity = new Map<string, string>();
   private fde: string | undefined;
   private roomsError: SailWireError | null = null;
@@ -200,6 +202,7 @@ export class CatalogStore {
   refreshAll(): void {
     this.worldRefresher();
     for (const specId of this.runHolds.keys()) this.kickRuns(specId);
+    for (const project of this.projectHolds.keys()) this.loadProject(project);
     const gateway = this.gateway;
     if (!gateway) return;
     const epoch = this.epoch;
@@ -508,8 +511,24 @@ export class CatalogStore {
     return this.definitions.get(project)?.home_room;
   }
 
-  /** Reads a project once per connection; a failed read is asked again next time. */
-  loadProject(project: string): void {
+  /**
+   * Declares interest in a project's definition: reads it once per connection, asks again at
+   * every reconcile point until a read lands, and returns the release.
+   */
+  retainProject(project: string): () => void {
+    this.projectHolds.set(project, (this.projectHolds.get(project) ?? 0) + 1);
+    this.loadProject(project);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const holds = (this.projectHolds.get(project) ?? 1) - 1;
+      if (holds > 0) return void this.projectHolds.set(project, holds);
+      this.projectHolds.delete(project);
+    };
+  }
+
+  private loadProject(project: string): void {
     const gateway = this.gateway;
     if (!gateway || !project || this.definitionsAsked.has(project)) return;
     this.definitionsAsked.add(project);

@@ -70,7 +70,7 @@ export function useProjectMember(
   project: string,
   store: CatalogStore = catalogStore,
 ): ProjectMember | undefined {
-  useEffect(() => store.loadProject(project), [project, store]);
+  useEffect(() => store.retainProject(project), [project, store]);
   return useSyncExternalStore(store.subscribe, () => store.projectMember(project));
 }
 
@@ -79,6 +79,6 @@ export function useHomeRoomId(
   project: string,
   store: CatalogStore = catalogStore,
 ): string | undefined {
-  useEffect(() => store.loadProject(project), [project, store]);
+  useEffect(() => store.retainProject(project), [project, store]);
   return useSyncExternalStore(store.subscribe, () => store.homeRoomId(project));
 }

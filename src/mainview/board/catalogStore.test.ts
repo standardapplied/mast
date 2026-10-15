@@ -825,43 +825,83 @@ describe("a project's member", () => {
     };
 
     expect(store.projectMember("chorus")).toBeUndefined();
-    store.loadProject("chorus");
-    store.loadProject("chorus");
+    store.retainProject("chorus");
+    store.retainProject("chorus");
     await settle();
 
     expect(store.projectMember("chorus")).toEqual({ agent: "claude-code", mode: "full" });
     expect(store.homeRoomId("chorus")).toBe("chorus--uday");
-    store.loadProject("chorus");
+    store.retainProject("chorus");
+    store.refreshAll();
+    await settle();
     expect(reads).toBe(1);
   });
 
-  test("a failed read, or a sail that names none, leaves it unknown and asks again", async () => {
+  test("a failed read is asked again at the next reconcile while a surface holds it", async () => {
     const { gateway, store } = await seeded();
     const answers = [
-      { ok: false as const, error: { status: 0, code: "bridge", message: "down" } },
-      { ok: true as const, value: { name: "chorus", container_status: "running" } },
+      { ok: false as const, error: { status: 503, code: "unavailable", message: "down" } },
+      {
+        ok: true as const,
+        value: { name: "chorus", container_status: "running", home_room: "chorus--uday" },
+      },
     ];
     gateway.project = async () => answers.shift()!;
 
-    store.loadProject("chorus");
+    const release = store.retainProject("chorus");
     await settle();
-    expect(store.projectMember("chorus")).toBeUndefined();
-
-    store.loadProject("chorus");
-    await settle();
-    expect(store.projectMember("chorus")).toBeUndefined();
     expect(store.homeRoomId("chorus")).toBeUndefined();
+
+    store.refreshAll();
+    await settle();
+    expect(store.homeRoomId("chorus")).toBe("chorus--uday");
     expect(answers).toHaveLength(0);
+    release();
   });
 
-  test("a sign-in change forgets every member", async () => {
-    const { store } = await seeded();
-    store.loadProject("chorus");
+  test("a released project is not asked again", async () => {
+    const { gateway, store } = await seeded();
+    let reads = 0;
+    gateway.project = async () => {
+      reads++;
+      return { ok: false as const, error: { status: 0, code: "bridge", message: "down" } };
+    };
+
+    const release = store.retainProject("chorus");
+    await settle();
+    release();
+    release();
+    store.refreshAll();
+    await settle();
+
+    expect(reads).toBe(1);
+  });
+
+  test("a sail that names no member leaves it unknown", async () => {
+    const { gateway, store } = await seeded();
+    gateway.project = async () => ({
+      ok: true as const,
+      value: { name: "chorus", container_status: "running" },
+    });
+
+    store.retainProject("chorus");
+    await settle();
+
+    expect(store.projectMember("chorus")).toBeUndefined();
+    expect(store.homeRoomId("chorus")).toBeUndefined();
+  });
+
+  test("a sign-in change forgets every member and reads it again for a surface holding it", async () => {
+    const { gateway, store } = await seeded();
+    store.retainProject("chorus");
     await settle();
 
     store.reset();
 
     expect(store.projectMember("chorus")).toBeUndefined();
     expect(store.homeRoomId("chorus")).toBeUndefined();
+    store.connect(gateway);
+    await settle();
+    expect(store.homeRoomId("chorus")).toBe("chorus--uday");
   });
 });

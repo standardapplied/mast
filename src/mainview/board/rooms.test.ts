@@ -336,11 +336,12 @@ describe("home rooms", () => {
     project,
     assignee,
   });
+  const FOLDED = "home--fd45de032f77790f31aec046582e77e14e398a0b955c5d816a015bf7c2eb5b70";
   const rooms = assembleRooms(
     [
       owned("mast--ada", "ada"),
       owned("mast--mady", "mady"),
-      owned("mast--ada-l-2a8d4330", "Ada.L"),
+      owned(FOLDED, "Ada.L"),
       owned("mast--bo", "mady"),
       owned("other--ada", "ada", "other"),
       serverRoom("s1"),
@@ -353,9 +354,7 @@ describe("home rooms", () => {
   test("the viewer's home room is the room sail names for them", () => {
     expect(homeRoomOf(rooms, "mast", "mast--ada", "ada")?.room.id).toBe("mast--ada");
     expect(homeRoomOf(rooms, "mast", "mast--mady", "mady")?.room.id).toBe("mast--mady");
-    expect(homeRoomOf(rooms, "mast", "mast--ada-l-2a8d4330", "Ada.L")?.room.id).toBe(
-      "mast--ada-l-2a8d4330",
-    );
+    expect(homeRoomOf(rooms, "mast", FOLDED, "Ada.L")?.room.id).toBe(FOLDED);
   });
 
   test("there is none before sail and whoami name it, or where apply made none", () => {
