@@ -538,6 +538,57 @@ describe("SessionTerminalPane at the channel edge", () => {
     expect(statuses.filter((s) => s.kind === "up")).toHaveLength(0);
   });
 
+  test("five failed reattaches in a row park the pane with the reason; Retry starts a fresh run", async () => {
+    services.link.listing = { hostBootId: "boot-1", sessions: [{ name: "mast-app", live: true }] };
+    await act(async () => {
+      render();
+    });
+    let attachment: FakeAttachment | null = null;
+    await act(async () => {
+      attachment = await services.link.opened();
+    });
+    const drop = async () => {
+      await act(async () => {
+        attachment!.lanes.onExit({ class: "transport", reason: "host could not serve that request" });
+      });
+      await settle();
+    };
+    for (const delay of [500, 1000, 2000, 4000, 8000]) {
+      await drop();
+      expect(status()).toEqual({ kind: "down", reason: "host could not serve that request" });
+      const next = services.link.nextOpen();
+      act(() => services.timers.advance(delay));
+      await act(async () => {
+        attachment = await next;
+      });
+      await settle();
+    }
+    await drop();
+    expect(status()).toEqual({
+      kind: "failed",
+      reason: "host could not serve that request — gave up after 5 attempts",
+    });
+    const opensBefore = services.link.opens.length;
+    act(() => services.timers.advance(60_000));
+    await settle();
+    expect(services.link.opens.length, "nothing retries on its own any more").toBe(opensBefore);
+
+    const retry = [...container.querySelectorAll("button")].find((b) => b.textContent === "Retry");
+    expect(retry).toBeDefined();
+    const next = services.link.nextOpen();
+    await act(async () => retry!.click());
+    await act(async () => {
+      attachment = await next;
+    });
+    await settle();
+    expect(status()).toEqual({ kind: "up" });
+    await drop();
+    expect(status(), "the click bought a fresh run of attempts").toEqual({
+      kind: "down",
+      reason: "host could not serve that request",
+    });
+  });
+
   test("facts streamed before the open resolves are this attach's own and survive it", async () => {
     const release = services.link.holdOpens();
     await act(async () => {

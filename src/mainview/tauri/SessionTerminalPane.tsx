@@ -17,12 +17,13 @@ import {
   type EndedDisposition,
   type HostListing,
   laneFault,
+  MAX_AUTO_RETRIES,
+  toSessionEnd,
   Reconnector,
   resolveTransportEnd,
   type SessionEnd,
   type SessionMeta,
   type SessionStatus,
-  toSessionEnd,
 } from "../terminal/connection";
 import {
   TERMINAL_FONT_FAMILY as FONT_FAMILY,
@@ -294,7 +295,7 @@ export const SessionTerminalPane = forwardRef<
   statusRef.current = status;
   const [epoch, setEpoch] = useState(0);
   const reconnector = useRef(new Reconnector());
-  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const retryTimer = useRef<unknown>(null);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   const onTitleRef = useRef(onTitle);
@@ -385,12 +386,17 @@ export const SessionTerminalPane = forwardRef<
   );
 
   /** Tears the current attach down and dials again, painting the "reconnecting" state. */
+  const clearRetry = useCallback(() => {
+    if (retryTimer.current !== null) timers.clear(retryTimer.current);
+    retryTimer.current = null;
+  }, [timers]);
+
   const reattach = useCallback(() => {
-    clearTimeout(retryTimer.current);
+    clearRetry();
     setRefusal(null);
     setStatus({ kind: "connecting", retrying: true });
     setEpoch((e) => e + 1);
-  }, []);
+  }, [clearRetry]);
 
   /**
    * The refused chip's verb: attach again asking for write. The host hands the token over when
@@ -489,7 +495,7 @@ export const SessionTerminalPane = forwardRef<
   // The retry timer must survive effect re-runs and die with the pane; so must the bell flash.
   useEffect(
     () => () => {
-      clearTimeout(retryTimer.current);
+      clearRetry();
       clearTimeout(bellTimer.current);
     },
     [],
@@ -613,9 +619,13 @@ export const SessionTerminalPane = forwardRef<
         return;
       }
       const delay = reconnector.current.lost();
+      clearRetry();
+      if (delay === null) {
+        setStatus({ kind: "failed", reason: `${end.reason} — gave up after ${MAX_AUTO_RETRIES} attempts` });
+        return;
+      }
       setStatus({ kind: "down", reason: end.reason });
-      clearTimeout(retryTimer.current);
-      retryTimer.current = setTimeout(reattach, delay);
+      retryTimer.current = timers.set(reattach, delay);
     };
 
     /**
@@ -1008,7 +1018,7 @@ export const SessionTerminalPane = forwardRef<
       if (halted || ended) return;
       // A re-run of this effect (a prop change) can attach while a retry timer still pends;
       // landing here settles the connection, so a stale timer must not force another remount.
-      clearTimeout(retryTimer.current);
+      clearRetry();
       reconnector.current.opened();
       setStatus({ kind: "up" });
 

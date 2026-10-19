@@ -7,6 +7,7 @@ import {
   MAX_REASON_CHARS,
   isUnwell,
   NOT_RUNNING,
+  MAX_AUTO_RETRIES,
   Reconnector,
   resolveTransportEnd,
   type SessionEnd,
@@ -48,21 +49,14 @@ describe("toSessionEnd", () => {
 describe("Reconnector", () => {
   const at = (t: { ms: number }) => new Reconnector(() => t.ms);
 
-  test("backs off exponentially across consecutive failures", () => {
-    const clock = { ms: 0 };
-    const r = at(clock);
-    expect(r.lost()).toBe(500);
-    expect(r.lost()).toBe(1000);
-    expect(r.lost()).toBe(2000);
-    expect(r.lost()).toBe(4000);
-    expect(r.lost()).toBe(8000);
-    expect(r.lost()).toBe(15000);
-  });
-
-  test("caps the delay instead of growing forever", () => {
+  test("backs off exponentially, gives up after five attempts, and a manual reset arms five more", () => {
     const r = at({ ms: 0 });
-    for (let i = 0; i < 20; i++) r.lost();
-    expect(r.lost()).toBe(15000);
+    const delays = Array.from({ length: MAX_AUTO_RETRIES }, () => r.lost());
+    expect(delays).toEqual([500, 1000, 2000, 4000, 8000]);
+    expect(r.lost(), "the sixth drop in a row stops the ladder").toBeNull();
+    expect(r.lost()).toBeNull();
+    r.reset();
+    expect(r.lost()).toBe(500);
   });
 
   test("a stable connection resets the ladder; a flapping one does not", () => {
