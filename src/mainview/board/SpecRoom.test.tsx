@@ -643,6 +643,24 @@ describe("SpecRoom", () => {
     expect(container.querySelector(".room-beginning")).not.toBeNull();
   });
 
+  test("a room shown in place of one whose history failed starts with no error of its own", async () => {
+    const fake = makeGateway();
+    fake.refuseMessages(true);
+    await mount(fake.gateway);
+    expect(container.querySelector('[data-testid="room-history-error"]')).not.toBeNull();
+
+    fake.refuseMessages(false);
+    act(() =>
+      root.render(
+        <ToastProvider>
+          <SpecRoom gateway={fake.gateway} specId="s2" roomId="s2" canWrite currentUser="uday" />
+        </ToastProvider>,
+      ),
+    );
+
+    expect(container.querySelector('[data-testid="room-history-error"]')).toBeNull();
+  });
+
   test("history that failed to load is read again when the window takes focus, and on reconnect", async () => {
     const fake = makeGateway();
     fake.store(remoteMessage("message-2", "An old word."));
@@ -1091,7 +1109,7 @@ describe("SpecRoom", () => {
 });
 
 describe("SpecRoom live turns", () => {
-  const PRINCIPAL = "claude-code/run-7";
+  const PRINCIPAL = "claude/run-7";
   const DRAFT = '[data-testid="draft-run-7-7"]';
 
   const live = (type: string, data: Record<string, unknown> = {}, room = "s1"): SailEvent => ({
@@ -1260,7 +1278,7 @@ describe("SpecRoom live turns", () => {
     stream(fake, delta(", "), delta("room."));
     expect(container.querySelectorAll('[data-testid^="draft-"]').length).toBe(1);
     expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Hello, room.");
-    expect(draft()?.querySelector(".room-message-head strong")?.textContent).toBe("claude-code");
+    expect(draft()?.querySelector(".room-message-head strong")?.textContent).toBe("claude");
     expect(draft()?.querySelector(".room-avatar.is-agent")?.getAttribute("aria-label")).toBe(
       `${PRINCIPAL}, agent`,
     );
@@ -1490,6 +1508,46 @@ describe("SpecRoom live turns", () => {
     expect(label(container.querySelector('[data-testid^="message-group-"]'))).toBe("Codex CLI");
   });
 
+  test("a failure is told in the harness's name alone, the run's owner staying on the row's head", async () => {
+    const fake = makeGateway({ runs: [{ ...memberRun("claude-code", "Claude Code"), owner: "pyam" }] });
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+
+    act(() => fake.receive({ ...reply("Not logged in"), author: "claude/run-7", error: true }));
+    await settle();
+
+    expect(label(container.querySelector('[data-testid^="message-group-"]'))).toBe(
+      "Claude Code (for pyam)",
+    );
+    expect(
+      container.querySelector('[data-testid="room-message-message-7"] .room-turn-failed')
+        ?.textContent,
+    ).toBe("Claude Code couldn't answer");
+  });
+
+  test("a principal of another agent than the engaged one keeps its own name until its run is read", async () => {
+    const fake = makeGateway({ runs: [] });
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("codex"));
+
+    act(() => fake.receive({ ...reply("Fixed."), author: "claude/fix-9" }));
+    await settle();
+
+    expect(label(container.querySelector('[data-testid^="message-group-"]'))).toBe("claude");
+  });
+
+  test("a failed turn's line comes before its words, live as after its message lands", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+
+    stream(fake, live("agent_turn_began"), delta("Half a thought"));
+    stream(fake, turnEnded({ is_error: true, reason: "out of memory" }));
+
+    const parts = [...(draft()?.querySelectorAll(".room-turn-failed, .room-draft-text") ?? [])];
+    expect(parts.map((part) => part.className.split(" ")[0])).toEqual([
+      "room-turn-failed",
+      "room-message-body",
+    ]);
+  });
+
   test("a failed turn reads as failed in the agent's own words, live and after a reload", async () => {
     const fake = makeGateway({ runs: [memberRun("claude-code", "Claude Code")] });
     await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
@@ -1505,7 +1563,8 @@ describe("SpecRoom live turns", () => {
     await settle();
 
     const shown = () => container.querySelector('[data-testid="room-message-message-7"]');
-    expect(shown()?.classList.contains("is-failed")).toBe(true);
+    expect(shown()?.classList.contains("is-error")).toBe(true);
+    expect(shown()?.classList.contains("is-failed")).toBe(false);
     expect(shown()?.querySelector(".room-turn-failed")?.textContent).toBe(
       "Claude Code couldn't answer",
     );
@@ -1570,7 +1629,7 @@ describe("SpecRoom live turns", () => {
     act(() => fake.receive({ ...reply("Fine."), id: "message-8" }));
     await settle();
     const answer = container.querySelector('[data-testid="room-message-message-8"]');
-    expect(answer?.classList.contains("is-failed")).toBe(false);
+    expect(answer?.classList.contains("is-error")).toBe(false);
     expect(container.querySelector(".room-turn-failed")).toBeNull();
   });
 
@@ -1678,7 +1737,7 @@ describe("SpecRoom live turns", () => {
       ...live("agent_text_delta", {
         text: "A new member.",
         run_id: "run-8",
-        principal: "claude-code/run-8",
+        principal: "claude/run-8",
         turn: 1,
       }),
       ts: "2026-07-28T10:05:00Z",

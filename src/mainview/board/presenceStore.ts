@@ -142,8 +142,8 @@ export class PresenceStore {
   }
 
   /**
-   * A launch is presence: the pill must light when the run starts, not seconds later at its first tool call. Seeds a working entry
-   * keyed by the run, with the role sail stamps on the event (absent on
+   * A launch is presence: the pill must light when the run starts, not seconds later at its
+   * first tool call. Seeds a working entry keyed by the run, with the role sail stamps on the event (absent on
    * pre-0.28.1 servers, when the entry works but reads as the headline lane).
    */
   private noteStarted(specId: string, event: SailEvent): void {

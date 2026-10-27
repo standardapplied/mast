@@ -214,18 +214,25 @@ function dateTime(value: string): string {
 }
 
 /**
- * Who wrote as `author`: a run's agent by the name its harness goes by, found by the principal
- * the run speaks as. A principal whose run the room has not read yet is the engaged member's,
- * the one agent that speaks in a room as it works; a human is their handle.
+ * The name `author` goes by: a run's agent by its harness's name, found by the principal the run
+ * speaks as; a human by their handle. A principal whose run the room has not read yet is named by
+ * the engaged member when it is of that agent's family (sail's principal is the agent's name cut
+ * at its first dash), and by its family otherwise.
  */
-function authorLabel(author: string, runs: RunView[], engagement?: EngagementView): string {
+function nameOf(author: string, runs: RunView[], engagement?: EngagementView): string {
   const run = runs.find((candidate) => candidate.principal === author);
-  if (run) {
-    const name = run.agent_name ?? run.agent;
-    return run.owner ? `${name} (for ${run.owner})` : name;
-  }
+  if (run) return run.agent_name ?? run.agent;
   if (!author.includes("/")) return author;
-  return engagement ? (engagement.agent_name ?? engagement.agent) : author.split("/")[0]!;
+  const family = author.split("/")[0]!;
+  const engaged = engagement && engagement.agent.split("-")[0] === family;
+  return engaged ? (engagement.agent_name ?? engagement.agent) : family;
+}
+
+/** Who wrote as `author`, with the FDE a run works for. */
+function authorLabel(author: string, runs: RunView[], engagement?: EngagementView): string {
+  const owner = runs.find((candidate) => candidate.principal === author)?.owner;
+  const name = nameOf(author, runs, engagement);
+  return owner ? `${name} (for ${owner})` : name;
 }
 
 function eventDetail(event: SailEvent): string {
@@ -292,7 +299,7 @@ function TypingDots({ name }: { name: string }) {
  * leaves that in doubt. The text is the box's payload drawn as text, never as Markdown; the
  * message it becomes is what gets rendered.
  */
-function DraftRow({ draft, label }: { draft: Draft; label: string }) {
+function DraftRow({ draft, label, name }: { draft: Draft; label: string; name: string }) {
   const failed = draft.ended?.isError ? draft.ended : undefined;
   return (
     <article
@@ -304,8 +311,9 @@ function DraftRow({ draft, label }: { draft: Draft; label: string }) {
         <header className="room-message-head">
           <strong>{label}</strong>
         </header>
+        {failed && <TurnFailed name={name} reason={failed.reason} />}
         {draft.text && (
-          <div className={`room-message-body room-draft-text${failed ? " is-failed" : ""}`}>
+          <div className={`room-message-body room-draft-text${failed ? " is-error" : ""}`}>
             {draft.text}
           </div>
         )}
@@ -320,8 +328,7 @@ function DraftRow({ draft, label }: { draft: Draft; label: string }) {
             ))}
           </ul>
         )}
-        {!draft.ended && !draft.gapped && <TypingDots name={label} />}
-        {failed && <TurnFailed name={label} reason={failed.reason} />}
+        {!draft.ended && !draft.gapped && <TypingDots name={name} />}
       </div>
     </article>
   );
@@ -570,6 +577,7 @@ export function SpecRoom({
     advanceLive(() => NO_LIVE_TURNS);
     setRepliesUnseen(0);
     setFailureReasons(new Map());
+    setHistoryFailed(null);
     const stream = gateway.openRoomStream(roomId);
     const offEvent = stream.onEvent((event) => {
       if (event.spec !== roomId) return;
@@ -1035,7 +1043,7 @@ export function SpecRoom({
                         {item.messages.map((entry) => (
                           <div
                             key={entry.id}
-                            className={`room-message-body${entry.message.delivery ? ` is-${entry.message.delivery}` : ""}${entry.message.question ? " is-question" : ""}${entry.message.error ? " is-failed" : ""}`}
+                            className={`room-message-body${entry.message.delivery ? ` is-${entry.message.delivery}` : ""}${entry.message.question ? " is-question" : ""}${entry.message.error ? " is-error" : ""}`}
                             data-testid={`room-message-${entry.message.id}`}
                           >
                             {entry.message.question && (
@@ -1048,7 +1056,7 @@ export function SpecRoom({
                             )}
                             {entry.message.error && (
                               <TurnFailed
-                                name={label}
+                                name={nameOf(item.author, sources.current.runs, engagement)}
                                 reason={failureReasons.get(entry.message.id)}
                               />
                             )}
@@ -1169,6 +1177,7 @@ export function SpecRoom({
                 key={`${entry.runId}:${entry.turn}`}
                 draft={entry}
                 label={authorLabel(entry.principal, sources.current.runs, engagement)}
+                name={nameOf(entry.principal, sources.current.runs, engagement)}
               />
             ))}
       </div>

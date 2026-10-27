@@ -38,7 +38,7 @@ const room: ServerRoomView = {
   updated_at: "2026-07-01T08:00:00Z",
 };
 
-async function render(requests: RoomTerminalRequest[]) {
+async function render(requests: RoomTerminalRequest[], shown: ServerRoomView = room) {
   const gateway = createDemoGateway();
   sessionStore.reset();
   sessionStore.connect(gateway, "test-box");
@@ -47,7 +47,7 @@ async function render(requests: RoomTerminalRequest[]) {
       <ToastProvider>
         <ChatRoomPane
           gateway={gateway}
-          room={room}
+          room={shown}
           onOpenTerminal={(request) => requests.push(request)}
         />
       </ToastProvider>,
@@ -56,6 +56,26 @@ async function render(requests: RoomTerminalRequest[]) {
   await flush();
   return gateway;
 }
+
+describe("ChatRoomPane header", () => {
+  test("a conversation's header names no member and never says it is thinking", async () => {
+    const engaged: ServerRoomView = {
+      ...room,
+      members: [
+        {
+          agent: "claude-code",
+          agent_name: "Claude Code",
+          mode: "full",
+          engaged_at: "2026-06-30T10:00:00Z",
+        },
+      ],
+    };
+    await render([], engaged);
+
+    expect(container.querySelector(".roster-chip")).toBeNull();
+    expect(container.textContent).not.toContain("thinking");
+  });
+});
 
 describe("ChatRoomPane terminal entries", () => {
   test("the deck cards surface in the header and navigate focused on the session", async () => {
