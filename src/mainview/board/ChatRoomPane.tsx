@@ -8,7 +8,6 @@ import { Button } from "../components/ui";
 import type { RoomTerminalRequest } from "../terminal/roomDeck";
 import { statusLabel } from "./lifecycle";
 import { openTerminalMenu, RoomDeckStrip } from "./RoomDeck";
-import { RosterChip } from "./RosterChip";
 import { SpecRoom } from "./SpecRoom";
 import type { Gateway } from "../gateway";
 import { catalogStore, connectCatalog } from "./catalogStore";
@@ -60,6 +59,7 @@ export function ChatRoomPane({
   const member = room.members[0];
   const engagement: EngagementView | undefined = member && {
     agent: member.agent,
+    ...(member.agent_name ? { agent_name: member.agent_name } : {}),
     mode: member.mode,
     ...(member.model ? { model: member.model } : {}),
     engaged_at: member.engaged_at,
@@ -86,7 +86,6 @@ export function ChatRoomPane({
                 roomId={room.id}
                 onSelect={(name) => openTerminal({ focus: name })}
               />
-              {engagement && <RosterChip specId={room.id} engagement={engagement} />}
               <Button
                 variant="ghost"
                 onClick={(event) => {

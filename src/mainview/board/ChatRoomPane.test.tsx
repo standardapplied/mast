@@ -132,8 +132,8 @@ describe("ChatRoomPane live turns", () => {
     expect(draft()?.querySelector(".room-draft-tools")?.textContent).toBe("Readnotes.mdrunning");
 
     await act(async () => gateway.emit(live("agent_turn_ended", { is_error: true, reason: "idle" })));
-    expect(draft()?.querySelector(".room-turn-cut-short")?.textContent).toBe(
-      "the agent's turn ended early · idle",
+    expect(draft()?.querySelector(".room-turn-failed")?.textContent).toBe(
+      "claude couldn't answer · idle",
     );
   });
 });

@@ -163,12 +163,10 @@ describe("two concurrent runs", () => {
       }),
     ]);
     expect(store.presenceOf("spec-a", T0)?.role).toBe("build");
-    expect(store.chatPresenceOf("spec-a", T0)?.role).toBe("room");
 
     store.noteEvent(
       event({ type: "agent_session_stopped", data: { run_id: "chat-1", run_role: "room" } }),
     );
-    expect(store.chatPresenceOf("spec-a", T0)).toBeNull();
     expect(store.presenceOf("spec-a", T0)?.role).toBe("build");
 
     store.noteEvent(event({ type: "agent_session_completed", data: { run_id: "build-1" } }));
@@ -189,7 +187,7 @@ describe("two concurrent runs", () => {
     expect(store.presenceOf("spec-a", T0)).toBeNull();
   });
 
-  test("chatPresenceOf sees room-full turns and ignores working lanes", () => {
+  test("a room-full run is the headline of a spec with no working lane", () => {
     const store = new PresenceStore();
     store.noteRuns([
       run({
@@ -200,9 +198,8 @@ describe("two concurrent runs", () => {
         last_activity_at: new Date(T0).toISOString(),
       }),
     ]);
-    expect(store.chatPresenceOf("spec-a", T0)?.state).toBe("working");
     expect(store.presenceOf("spec-a", T0)?.role).toBe("room-full");
-    expect(store.chatPresenceOf("spec-b", T0)).toBeNull();
+    expect(store.presenceOf("spec-b", T0)).toBeNull();
   });
 });
 

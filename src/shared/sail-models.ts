@@ -46,6 +46,8 @@ export type GlobalSpecView = {
 /** One seated agent member of a room's roster (sail ≥ 0.33). */
 export type RoomMemberView = {
   agent: string;
+  /** What the agent's harness is called ("Claude Code"); sail ≥ 0.59. */
+  agent_name?: string;
   mode: "full" | "read_only";
   model?: string;
   engaged_at: string;
@@ -95,6 +97,8 @@ export type RoomDeletedResponse = {
 /** A room's engaged agent: who is in the room, with what access, since when. */
 export type EngagementView = {
   agent: string;
+  /** What the agent's harness is called ("Claude Code"); sail ≥ 0.59. */
+  agent_name?: string;
   mode: "full" | "read_only";
   model?: string;
   engaged_at: string;
@@ -221,6 +225,8 @@ export type RunView = {
   /** The review a reviewer or fix run serves; absent on every other lane. */
   review_id?: string;
   agent: string;
+  /** What the agent's harness is called ("Claude Code"); sail ≥ 0.59. */
+  agent_name?: string;
   branch?: string;
   pid?: number;
   status: string;
@@ -497,6 +503,8 @@ export type SpecMessage = {
   reply_to?: string;
   /** Marked as a question needing a reply; absent unless true. */
   question?: boolean;
+  /** What a live member's failed turn left, in its own words; absent unless true (sail ≥ 0.59). */
+  error?: boolean;
 };
 
 export type SpecMessageListResponse = {
