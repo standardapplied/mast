@@ -35,9 +35,6 @@ export type SpecPresence = {
   lastActivityAt: number | null;
   /** The live run's role when known ("build", "review", …); undefined from bare progress events. */
   role?: string;
-  /** Epoch ms the run started, when known — lets the room tell whether an agent
-   *  message belongs to this turn (reply landed, stop showing "typing"). */
-  startedAt?: number | null;
 };
 
 /** Chat lanes: an engaged agent's turn or a wake, either mode. */
@@ -48,7 +45,6 @@ export function chatLaneRole(role: string | undefined): boolean {
 type Entry = {
   lastActivityAt: number | null;
   role?: string;
-  startedAt?: number | null;
   /** A server-declared quiet overrides the local clock until activity resumes —
    *  the server judged staleness against its own stamp, ours may be skewed. */
   quiet: boolean;
@@ -104,7 +100,6 @@ export class PresenceStore {
       bySpec.set(run.id, {
         lastActivityAt: stamp,
         role: run.role,
-        startedAt: parseTs(run.started_at),
         quiet: run.presence === "quiet",
       });
       this.entries.set(run.spec_id, bySpec);
@@ -147,9 +142,8 @@ export class PresenceStore {
   }
 
   /**
-   * A launch is presence: the pill and the typing indicator must light when the
-   * run starts, not seconds later at its first tool call. Seeds a working entry
-   * keyed by the run, with the role sail stamps on the event (absent on
+   * A launch is presence: the pill must light when the run starts, not seconds later at its
+   * first tool call. Seeds a working entry keyed by the run, with the role sail stamps on the event (absent on
    * pre-0.28.1 servers, when the entry works but reads as the headline lane).
    */
   private noteStarted(specId: string, event: SailEvent): void {
@@ -159,7 +153,6 @@ export class PresenceStore {
     bySpec.set(this.runKey(event), {
       lastActivityAt: at,
       role,
-      startedAt: at,
       quiet: false,
     });
     this.entries.set(specId, bySpec);
@@ -179,7 +172,6 @@ export class PresenceStore {
       bySpec.set(key, {
         lastActivityAt: at,
         role: entry?.role,
-        startedAt: entry?.startedAt,
         quiet: false,
       });
       this.entries.set(specId, bySpec);
@@ -200,7 +192,6 @@ export class PresenceStore {
     bySpec.set(key, {
       lastActivityAt: at,
       role,
-      startedAt: entry?.startedAt,
       quiet: state === "quiet",
     });
     this.entries.set(specId, bySpec);
@@ -213,7 +204,6 @@ export class PresenceStore {
         state: "quiet",
         lastActivityAt: entry.lastActivityAt,
         role: entry.role,
-        startedAt: entry.startedAt,
       };
     }
     if (entry.lastActivityAt === null) return null;
@@ -221,7 +211,6 @@ export class PresenceStore {
       state: now - entry.lastActivityAt > PRESENCE_THRESHOLD_MS ? "quiet" : "working",
       lastActivityAt: entry.lastActivityAt,
       role: entry.role,
-      startedAt: entry.startedAt,
     };
   }
 
@@ -240,18 +229,6 @@ export class PresenceStore {
       chat = chat ?? presence;
     }
     return chat;
-  }
-
-  /** The engaged agent's own presence: the chat-lane entry, when one is live. */
-  chatPresenceOf(specId: string, now: number): SpecPresence | null {
-    const bySpec = this.entries.get(specId);
-    if (!bySpec) return null;
-    for (const entry of bySpec.values()) {
-      if (!chatLaneRole(entry.role)) continue;
-      const presence = this.presence(entry, now);
-      if (presence) return presence;
-    }
-    return null;
   }
 }
 

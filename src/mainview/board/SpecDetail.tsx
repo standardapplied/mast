@@ -458,10 +458,9 @@ export function SpecDetail({
       eyebrow={spec.id}
       presence={
         spec.engagement ? (
-          // A seated member owns the room's liveness: the roster chip already
-          // says who's here and whether they're thinking. The generic
-          // run-presence pill is for the other case — a dispatched agent
-          // working autonomously with nobody engaged in the room.
+          // A seated member is named by the roster chip, and its turns show
+          // in the timeline. The generic run-presence pill is for the other
+          // case — a dispatched agent working with nobody engaged in the room.
           <RosterChip
             specId={specId}
             engagement={spec.engagement}

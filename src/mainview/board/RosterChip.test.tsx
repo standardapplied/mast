@@ -1,48 +1,24 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { RunView } from "../../shared/sail-models";
-import { PresenceStore } from "./presenceStore";
+import type { EngagementView } from "../../shared/sail-models";
 import { RosterChip } from "./RosterChip";
 
 let root: Root;
 let container: HTMLElement;
 
-const NOW = Date.parse("2026-08-18T12:00:00Z");
+const ENGAGED: EngagementView = {
+  agent: "claude-code",
+  agent_name: "Claude Code",
+  mode: "full",
+  engaged_at: "2026-08-18T11:00:00Z",
+};
 
-function chatRun(status: string): RunView {
-  return {
-    id: "chat-1",
-    project: "acme",
-    spec_id: "s1",
-    node: "n",
-    role: "room-full",
-    agent: "claude-code",
-    status,
-    started_at: "2026-08-18T11:59:00Z",
-    last_activity_at: new Date(NOW).toISOString(),
-  };
-}
-
-function mount(engaged: boolean, store: PresenceStore, onDismiss?: () => void) {
+function mount(engagement: EngagementView | undefined, onDismiss?: () => void) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  act(() =>
-    root.render(
-      <RosterChip
-        specId="s1"
-        engagement={
-          engaged
-            ? { agent: "claude-code", mode: "full", engaged_at: "2026-08-18T11:00:00Z" }
-            : undefined
-        }
-        onDismiss={onDismiss}
-        store={store}
-        now={() => NOW}
-      />,
-    ),
-  );
+  act(() => root.render(<RosterChip specId="s1" engagement={engagement} onDismiss={onDismiss} />));
 }
 
 afterEach(() => {
@@ -52,29 +28,27 @@ afterEach(() => {
 
 describe("RosterChip", () => {
   test("renders nothing when nobody is engaged", () => {
-    mount(false, new PresenceStore());
+    mount(undefined);
     expect(container.querySelector('[data-testid="roster-s1"]')).toBeNull();
   });
 
-  test("an engaged agent with no live chat turn is in the room", () => {
-    mount(true, new PresenceStore());
-    const chip = container.querySelector('[data-testid="roster-s1"]');
-    expect(chip?.textContent).toContain("claude-code");
-    expect(chip?.textContent).toContain("in the room");
+  test("names the agent by its harness and its access, and never says it is working", () => {
+    mount(ENGAGED);
+    expect(container.querySelector('[data-testid="roster-s1"]')?.textContent).toBe(
+      "Claude Code · full",
+    );
   });
 
-  test("a live chat turn reads as thinking", () => {
-    const store = new PresenceStore();
-    store.noteRuns([chatRun("running")]);
-    mount(true, store);
-    expect(container.querySelector('[data-testid="roster-s1"]')?.textContent).toContain(
-      "thinking…",
+  test("an older box that sends no harness name is named by its agent", () => {
+    mount({ ...ENGAGED, agent_name: undefined, mode: "read_only" });
+    expect(container.querySelector('[data-testid="roster-s1"]')?.textContent).toBe(
+      "claude-code · read only",
     );
   });
 
   test("remove fires the callback", () => {
     let dismissed = 0;
-    mount(true, new PresenceStore(), () => dismissed++);
+    mount(ENGAGED, () => dismissed++);
     act(() =>
       container.querySelector<HTMLButtonElement>('[data-testid="roster-remove-s1"]')?.click(),
     );

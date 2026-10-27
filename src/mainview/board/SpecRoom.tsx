@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type KeyboardEvent,
   type UIEvent,
 } from "react";
@@ -37,7 +36,6 @@ import {
   type Draft,
   type LiveTurns,
 } from "./liveTurns";
-import { presenceStore, type PresenceStore } from "./presenceStore";
 import { Markdown } from "../markdown";
 import { coalesce, isTelemetryEvent, roomRefreshFor } from "./roomRouting";
 import { SnapshotsPanel } from "./SnapshotsPanel";
@@ -56,6 +54,8 @@ import {
 const PAGE_SIZE = 100;
 const SCROLL_EDGE_PX = 48;
 const AT_LATEST_PX = 1;
+const REASON_LIMIT = 240;
+const FAILURE_LIMIT = 32;
 
 const SEVERITY_TONE: Record<Finding["severity"], BadgeTone> = {
   CRITICAL: "error",
@@ -213,10 +213,26 @@ function dateTime(value: string): string {
   }).format(parsed);
 }
 
-function authorLabel(author: string, runs: RunView[]): string {
+/**
+ * The name `author` goes by: a run's agent by its harness's name, found by the principal the run
+ * speaks as; a human by their handle. A principal whose run the room has not read yet is named by
+ * the engaged member when it is of that agent's family (sail's principal is the agent's name cut
+ * at its first dash), and by its family otherwise.
+ */
+function nameOf(author: string, runs: RunView[], engagement?: EngagementView): string {
   const run = runs.find((candidate) => candidate.principal === author);
-  if (run) return run.owner ? `${run.agent} (for ${run.owner})` : run.agent;
-  return author.includes("/") ? author.split("/")[0]! : author;
+  if (run) return run.agent_name ?? run.agent;
+  if (!author.includes("/")) return author;
+  const family = author.split("/")[0]!;
+  const engaged = engagement && engagement.agent.split("-")[0] === family;
+  return engaged ? (engagement.agent_name ?? engagement.agent) : family;
+}
+
+/** Who wrote as `author`, with the FDE a run works for. */
+function authorLabel(author: string, runs: RunView[], engagement?: EngagementView): string {
+  const owner = runs.find((candidate) => candidate.principal === author)?.owner;
+  const name = nameOf(author, runs, engagement);
+  return owner ? `${name} (for ${owner})` : name;
 }
 
 function eventDetail(event: SailEvent): string {
@@ -234,12 +250,37 @@ function eventDetail(event: SailEvent): string {
     .join(" · ");
 }
 
-function TurnCutShort({ reason }: { reason: string }) {
+/** What a failed turn is told as: by what happened, in the agent's name, and why when told. */
+function TurnFailed({ name, reason }: { name: string; reason?: string }) {
   return (
-    <p className="room-turn-cut-short">
-      the agent's turn ended early{reason ? ` · ${reason}` : ""}
+    <p className="room-turn-failed">
+      {name} couldn't answer{reason ? ` · ${reason}` : ""}
     </p>
   );
+}
+
+/** A failed turn's end as the box told it: the message it became and why, when it said both. */
+function failureOf(event: SailEvent): { messageId: string; reason: string } | undefined {
+  if (event.type !== "agent_turn_ended" && event.type !== "agent_turn_state") return undefined;
+  const data = event.data ?? {};
+  const { message_id: messageId, reason } = data;
+  if (data.is_error !== true || typeof messageId !== "string" || typeof reason !== "string") {
+    return undefined;
+  }
+  return messageId && reason ? { messageId, reason: reason.slice(0, REASON_LIMIT) } : undefined;
+}
+
+/**
+ * The reason a failed message is told with outlives its draft; only the newest are kept, as a
+ * reason is told only on the stream and a room reopened reads the synced flag alone.
+ */
+function withFailure(
+  reasons: ReadonlyMap<string, string>,
+  failure: { messageId: string; reason: string },
+): ReadonlyMap<string, string> {
+  if (reasons.get(failure.messageId) === failure.reason) return reasons;
+  const kept = [...reasons].filter(([id]) => id !== failure.messageId).slice(1 - FAILURE_LIMIT);
+  return new Map([...kept, [failure.messageId, failure.reason]]);
 }
 
 function TypingDots({ name }: { name: string }) {
@@ -258,8 +299,8 @@ function TypingDots({ name }: { name: string }) {
  * leaves that in doubt. The text is the box's payload drawn as text, never as Markdown; the
  * message it becomes is what gets rendered.
  */
-function DraftRow({ draft, label }: { draft: Draft; label: string }) {
-  const cutShort = draft.ended?.isError ? draft.ended : undefined;
+function DraftRow({ draft, label, name }: { draft: Draft; label: string; name: string }) {
+  const failed = draft.ended?.isError ? draft.ended : undefined;
   return (
     <article
       className="room-message-group room-draft"
@@ -270,8 +311,9 @@ function DraftRow({ draft, label }: { draft: Draft; label: string }) {
         <header className="room-message-head">
           <strong>{label}</strong>
         </header>
+        {failed && <TurnFailed name={name} reason={failed.reason} />}
         {draft.text && (
-          <div className={`room-message-body room-draft-text${cutShort ? " is-cut-short" : ""}`}>
+          <div className={`room-message-body room-draft-text${failed ? " is-error" : ""}`}>
             {draft.text}
           </div>
         )}
@@ -286,8 +328,7 @@ function DraftRow({ draft, label }: { draft: Draft; label: string }) {
             ))}
           </ul>
         )}
-        {!draft.ended && !draft.gapped && <TypingDots name={label} />}
-        {cutShort && <TurnCutShort reason={cutShort.reason} />}
+        {!draft.ended && !draft.gapped && <TypingDots name={name} />}
       </div>
     </article>
   );
@@ -333,7 +374,7 @@ export function SpecRoom({
   specTitle?: string;
   canWrite: boolean;
   currentUser?: string;
-  /** The room's standing agent, when one is engaged; drives the typing indicator. */
+  /** The room's standing agent, when one is engaged: what its turns are labelled before its run is read. */
   engagement?: EngagementView;
 }) {
   const [tail, setTail] = useState<BufferedTail<TimelineItem>>({
@@ -343,8 +384,10 @@ export function SpecRoom({
   const [loading, setLoading] = useState(true);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [hasEarlier, setHasEarlier] = useState(false);
+  const [historyFailed, setHistoryFailed] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [live, setLive] = useState<LiveTurns>(NO_LIVE_TURNS);
+  const [failureReasons, setFailureReasons] = useState<ReadonlyMap<string, string>>(new Map());
   const [repliesUnseen, setRepliesUnseen] = useState(0);
   const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
   const [snapshotsProject, setSnapshotsProject] = useState<string | null>(null);
@@ -358,6 +401,7 @@ export function SpecRoom({
   const deferredMessageEvents = useRef<Set<string>>(new Set());
   const expectedMessageEvents = useRef<Set<string>>(new Set());
   const loadVersion = useRef(0);
+  const historyUnread = useRef(false);
   const { showToast } = useToast();
 
   /**
@@ -444,11 +488,24 @@ export function SpecRoom({
       : null;
   }, [gateway, specId, roomId]);
 
+  /**
+   * The runs a reader of this room can meet: the spec's, and the members' of its home room,
+   * which carry no spec. A failed read of either leaves the room's runs as they were.
+   */
+  const loadRuns = useCallback(async (): Promise<RunView[] | null> => {
+    const reads = await Promise.all(
+      [...new Set([specId, roomId])].map((id) => gateway.listRuns(id)),
+    );
+    if (!reads.every((read) => read.ok)) return null;
+    const runs = reads.flatMap((read) => (read.ok ? read.value.runs : []));
+    return [...new Map(runs.map((run) => [run.id, run])).values()];
+  }, [gateway, specId, roomId]);
+
   const loadRoom = useCallback(async (version: number) => {
     const [messages, events, runs] = await Promise.all([
       gateway.listSpecMessages(roomId, { limit: PAGE_SIZE }),
       loadEvents(),
-      gateway.listRuns(specId),
+      loadRuns(),
     ]);
     if (version !== loadVersion.current) return;
     const base: Sources = {
@@ -457,10 +514,12 @@ export function SpecRoom({
         : sources.current.messages,
       events: events ? mergeEvents(events, sources.current.events) : sources.current.events,
       reviews: sources.current.reviews,
-      runs: runs.ok ? runs.value.runs : sources.current.runs,
+      runs: runs ?? sources.current.runs,
       decisions: sources.current.decisions,
     };
     setHasEarlier(messages.ok && messages.value.messages.length === PAGE_SIZE);
+    historyUnread.current = !messages.ok;
+    setHistoryFailed(messages.ok ? null : messages.error.message);
     applySources(base, "replace");
     setLoading(false);
 
@@ -471,7 +530,7 @@ export function SpecRoom({
       if (version !== loadVersion.current) return;
       applySources({ ...sources.current, reviews: details }, "replace");
     }
-  }, [applySources, gateway, loadEvents, loadReviewDetails, specId]);
+  }, [applySources, gateway, loadEvents, loadReviewDetails, loadRuns, specId]);
 
   useEffect(() => {
     const version = ++loadVersion.current;
@@ -484,28 +543,16 @@ export function SpecRoom({
     };
   }, [loadRoom]);
 
-  const lastAgentReplyAt = useMemo(() => {
-    if (!engagement) return null;
-    const prefix = engagement.agent + "/";
-    let newest: number | null = null;
-    for (const item of [...tail.visible, ...tail.buffered]) {
-      if (item.kind !== "message" || !item.message.author.startsWith(prefix)) continue;
-      const at = Date.parse(item.occurredAt);
-      if (!Number.isNaN(at) && (newest === null || at > newest)) newest = at;
-    }
-    return newest;
-  }, [engagement, tail]);
+  /** History that failed to load is read again: the reader's Retry, a refocus, a reconnect. */
+  const readHistoryAgain = useCallback(() => {
+    void loadRoom(++loadVersion.current);
+  }, [loadRoom]);
 
-  const presenceVersion = useSyncExternalStore(
-    (onChange) => presenceStore.subscribe(onChange),
-    () => presenceStore.version,
-  );
-  const typing = useMemo(
-    () =>
-      engagement !== undefined &&
-      typingVisible(presenceStore.chatPresenceOf(specId, Date.now()), lastAgentReplyAt),
-    [engagement, specId, presenceVersion, lastAgentReplyAt],
-  );
+  useEffect(() => {
+    if (!historyFailed) return;
+    window.addEventListener("focus", readHistoryAgain);
+    return () => window.removeEventListener("focus", readHistoryAgain);
+  }, [historyFailed, readHistoryAgain]);
 
   /**
    * The room has just drawn, and the engine may have moved the reader to fit: a reply shorter
@@ -524,16 +571,19 @@ export function SpecRoom({
     if (fromLatest(element) <= AT_LATEST_PX) follow(true);
   });
 
-  useEffect(keepPlace, [keepPlace, tail.visible.length, typing, live]);
+  useEffect(keepPlace, [keepPlace, tail.visible.length, live]);
 
   useEffect(() => {
     advanceLive(() => NO_LIVE_TURNS);
     setRepliesUnseen(0);
+    setFailureReasons(new Map());
+    setHistoryFailed(null);
     const stream = gateway.openRoomStream(roomId);
     const offEvent = stream.onEvent((event) => {
-      if (event.spec === roomId) {
-        advanceLive((state) => liveTurns(state, event, !atLatest.current));
-      }
+      if (event.spec !== roomId) return;
+      const failure = failureOf(event);
+      if (failure) setFailureReasons((reasons) => withFailure(reasons, failure));
+      advanceLive((state) => liveTurns(state, event, !atLatest.current));
     });
     const offState = stream.onState((state) => {
       if (state === "reconnecting") advanceLive(streamGapped);
@@ -613,11 +663,11 @@ export function SpecRoom({
 
   const refreshRuns = useCallback(
     async (live: boolean) => {
-      const runs = await gateway.listRuns(specId);
-      if (!runs.ok) return;
-      applySources({ ...sources.current, runs: runs.value.runs }, live ? "live" : "replace");
+      const runs = await loadRuns();
+      if (!runs) return;
+      applySources({ ...sources.current, runs }, live ? "live" : "replace");
     },
-    [applySources, gateway, specId],
+    [applySources, loadRuns],
   );
 
   const refreshReviews = useCallback(
@@ -654,7 +704,7 @@ export function SpecRoom({
     async (live: boolean) => {
       const [reviews, runs] = await Promise.all([
         gateway.specReviews(specId),
-        gateway.listRuns(specId),
+        loadRuns(),
       ]);
       const details = reviews.ok
         ? await loadReviewDetails(reviews.value.reviews)
@@ -663,12 +713,12 @@ export function SpecRoom({
         {
           ...sources.current,
           reviews: details,
-          runs: runs.ok ? runs.value.runs : sources.current.runs,
+          runs: runs ?? sources.current.runs,
         },
         live ? "live" : "replace",
       );
     },
-    [applySources, gateway, loadReviewDetails, specId],
+    [applySources, gateway, loadReviewDetails, loadRuns, specId],
   );
 
   useEffect(() => {
@@ -793,9 +843,11 @@ export function SpecRoom({
       const reconnected =
         previous !== undefined && previous !== "connected" && status.stream === "connected";
       previous = status.stream;
-      if (reconnected) void gapFill();
+      if (!reconnected) return;
+      if (historyUnread.current) readHistoryAgain();
+      else void gapFill();
     });
-  }, [gapFill, gateway]);
+  }, [gapFill, gateway, readHistoryAgain]);
 
   const jumpToLatest = useCallback(() => {
     follow(true);
@@ -851,12 +903,16 @@ export function SpecRoom({
   };
 
   const submitMessage = async (message: RoomMessage) => {
-    replaceMessage(message.id, { ...message, delivery: "pending", error: undefined });
+    replaceMessage(message.id, { ...message, delivery: "pending", deliveryError: undefined });
     posting.current = true;
     const result = await gateway.postSpecMessage(roomId, { body: message.body });
     posting.current = false;
     if (!result.ok) {
-      const failed = { ...message, delivery: "failed" as const, error: result.error.message };
+      const failed = {
+        ...message,
+        delivery: "failed" as const,
+        deliveryError: result.error.message,
+      };
       replaceMessage(message.id, failed);
       showToast("error", result.error.message);
       deferredMessageEvents.current.clear();
@@ -933,7 +989,15 @@ export function SpecRoom({
               <LoadingMark label="Loading room" />
             </div>
           )}
-          {!loading && !hasEarlier && (
+          {historyFailed && (
+            <div className="room-history-error" role="alert" data-testid="room-history-error">
+              <span>Couldn't load this room's history: {historyFailed}</span>
+              <Button variant="ghost" onClick={readHistoryAgain}>
+                Retry
+              </Button>
+            </div>
+          )}
+          {!loading && !hasEarlier && !historyFailed && (
             <div className="room-beginning">
               <div className="room-beginning-badge">
                 <Logo size={26} />
@@ -961,6 +1025,7 @@ export function SpecRoom({
                 (candidate) => candidate.principal === item.author,
               );
               const isAgent = !!run || item.author.includes("/");
+              const label = authorLabel(item.author, sources.current.runs, engagement);
               return (
                 <Fragment key={item.id}>
                   {separator}
@@ -971,14 +1036,14 @@ export function SpecRoom({
                     <Avatar author={item.author} agent={isAgent} />
                     <div className="room-message-content">
                       <header className="room-message-head">
-                        <strong>{authorLabel(item.author, sources.current.runs)}</strong>
+                        <strong>{label}</strong>
                         <time dateTime={item.occurredAt}>{dateTime(item.occurredAt)}</time>
                       </header>
                       <div className="room-message-bodies">
                         {item.messages.map((entry) => (
                           <div
                             key={entry.id}
-                            className={`room-message-body${entry.message.delivery ? ` is-${entry.message.delivery}` : ""}${entry.message.question ? " is-question" : ""}${live.cutShort.has(entry.message.id) ? " is-cut-short" : ""}`}
+                            className={`room-message-body${entry.message.delivery ? ` is-${entry.message.delivery}` : ""}${entry.message.question ? " is-question" : ""}${entry.message.error ? " is-error" : ""}`}
                             data-testid={`room-message-${entry.message.id}`}
                           >
                             {entry.message.question && (
@@ -989,10 +1054,13 @@ export function SpecRoom({
                                 Question
                               </span>
                             )}
-                            <Markdown source={entry.message.body} />
-                            {live.cutShort.has(entry.message.id) && (
-                              <TurnCutShort reason={live.cutShort.get(entry.message.id) ?? ""} />
+                            {entry.message.error && (
+                              <TurnFailed
+                                name={nameOf(item.author, sources.current.runs, engagement)}
+                                reason={failureReasons.get(entry.message.id)}
+                              />
                             )}
+                            <Markdown source={entry.message.body} />
                             {entry.message.delivery === "pending" && (
                               <span className="room-message-delivery">
                                 <Spinner size={12} />
@@ -1001,7 +1069,7 @@ export function SpecRoom({
                             )}
                             {entry.message.delivery === "failed" && (
                               <div className="room-message-error">
-                                <span>{entry.message.error}</span>
+                                <span>{entry.message.deliveryError}</span>
                                 <Button
                                   variant="ghost"
                                   onClick={() => void submitMessage(entry.message)}
@@ -1108,16 +1176,10 @@ export function SpecRoom({
               <DraftRow
                 key={`${entry.runId}:${entry.turn}`}
                 draft={entry}
-                label={authorLabel(entry.principal, sources.current.runs)}
+                label={authorLabel(entry.principal, sources.current.runs, engagement)}
+                name={nameOf(entry.principal, sources.current.runs, engagement)}
               />
             ))}
-          {live.drafts.length === 0 && (
-            <TypingRow
-              specId={specId}
-              engagement={engagement}
-              lastAgentReplyAt={lastAgentReplyAt}
-            />
-          )}
       </div>
       {behindPill > 0 && (
         <button type="button" className="room-new-pill" onClick={jumpToLatest}>
@@ -1166,59 +1228,5 @@ export function SpecRoom({
         />
       )}
     </div>
-  );
-}
-
-/**
- * The iMessage-style typing indicator: the engaged agent's avatar and pulsing
- * dots as the last row of the conversation while its chat turn runs. "Typing"
- * means composing something you haven't seen yet, so the dots disappear the
- * moment the agent's reply lands for this turn and stay gone through the
- * turn's tail (the stop-gate checks and teardown that would otherwise read as
- * "more is coming"). Derived from the presence store's chat-lane entry plus
- * the newest agent message; the stop event clears the rest.
- */
-export function typingVisible(
-  presence: { startedAt?: number | null } | null,
-  lastAgentReplyAt: number | null,
-): boolean {
-  if (!presence) return false;
-  if (lastAgentReplyAt === null) return true;
-  const startedAt = presence.startedAt ?? null;
-  if (startedAt === null) return true;
-  return lastAgentReplyAt < startedAt;
-}
-
-function TypingRow({
-  specId,
-  engagement,
-  lastAgentReplyAt,
-  store = presenceStore,
-}: {
-  specId: string;
-  engagement?: EngagementView;
-  /** Epoch ms of the engaged agent's newest room message, or null. */
-  lastAgentReplyAt: number | null;
-  store?: PresenceStore;
-}) {
-  const version = useSyncExternalStore(
-    (onChange) => store.subscribe(onChange),
-    () => store.version,
-  );
-  const thinking = useMemo(
-    () => typingVisible(store.chatPresenceOf(specId, Date.now()), lastAgentReplyAt),
-    [store, specId, version, lastAgentReplyAt],
-  );
-  if (!engagement || !thinking) return null;
-  return (
-    <article className="room-message-group room-typing" data-testid={`typing-${specId}`}>
-      <Avatar author={engagement.agent + "/"} agent />
-      <div className="room-message-content">
-        <header className="room-message-head">
-          <strong>{engagement.agent}</strong>
-        </header>
-        <TypingDots name={engagement.agent} />
-      </div>
-    </article>
   );
 }

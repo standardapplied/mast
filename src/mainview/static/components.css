@@ -3504,13 +3504,18 @@ button.room-section-head:hover {
   font: 9px var(--font-mono);
 }
 
-.room-message-error {
+.room-message-error,
+.room-history-error {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   color: var(--error);
   font-size: 12px;
+}
+
+.room-history-error {
+  margin: 16px 0;
 }
 
 .room-system-row {
@@ -5366,12 +5371,6 @@ button.room-section-head:hover {
 
 /* ── Room typing indicator: the engaged agent's chat turn is live ── */
 
-.room-typing .room-message-content {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
 .typing-dots {
   display: inline-flex;
   gap: 5px;
@@ -5450,14 +5449,14 @@ button.room-section-head:hover {
   color: var(--primary);
 }
 
-.room-message-body.is-cut-short,
-.room-message-body.is-cut-short .markdown {
+.room-message-body.is-error,
+.room-message-body.is-error .markdown {
   color: var(--muted-foreground);
 }
 
-.room-turn-cut-short {
+.room-turn-failed {
   margin: 0;
-  color: var(--muted-foreground);
+  color: var(--error);
   font: 11px var(--font-mono);
 }
 .context-menu-label .term-pane-dot {

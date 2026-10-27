@@ -4,13 +4,13 @@ import { createRoot, type Root } from "react-dom/client";
 import type {
   EngagementView,
   ReviewView,
+  RunView,
   SailEvent,
   SpecMessage,
 } from "../../shared/sail-models";
 import { fakeRoomStreams } from "../../../test/roomStreams";
 import { ToastProvider } from "../components/Toast";
 import type { Gateway } from "../gateway";
-import { presenceStore } from "./presenceStore";
 import { SpecRoom } from "./SpecRoom";
 
 let root: Root;
@@ -46,6 +46,19 @@ const remoteMessage = (id: string, body: string): SpecMessage => ({
   created_at: "2026-07-28T10:02:00Z",
 });
 
+const CODEX_BUILD: RunView = {
+  id: "run-1",
+  project: "mast",
+  spec_id: "s1",
+  node: "devbox",
+  role: "build",
+  agent: "codex",
+  status: "running",
+  started_at: "2026-07-28T10:00:00Z",
+  principal: "codex/run-1",
+  owner: "uday",
+};
+
 function makeGateway({
   withReview = false,
   reviewStatus = review.status,
@@ -55,6 +68,8 @@ function makeGateway({
   specEvents = [],
   specEventsError = false,
   globalEvents = [],
+  runs = [CODEX_BUILD],
+  roomRuns = [],
 }: {
   withReview?: boolean;
   reviewStatus?: string;
@@ -64,8 +79,12 @@ function makeGateway({
   specEvents?: SailEvent[];
   specEventsError?: boolean;
   globalEvents?: SailEvent[];
+  runs?: RunView[];
+  /** The runs listed under any other conversation than the spec `s1`: a home room's members. */
+  roomRuns?: RunView[];
 } = {}) {
   let messages: SpecMessage[] = [];
+  let messagesRefused = false;
   let history = specEvents;
   const listeners = new Set<(event: SailEvent) => void>();
   const statusListeners = new Set<(status: { stream: string }) => void>();
@@ -90,6 +109,12 @@ function makeGateway({
     ) => {
       calls.messages++;
       calls.messageOptions.push(options);
+      if (messagesRefused) {
+        return {
+          ok: false as const,
+          error: { status: 503, code: "unavailable", message: "box unreachable" },
+        };
+      }
       let page: SpecMessage[];
       if (options.after) {
         page = messages.slice(messages.findIndex((message) => message.id === options.after) + 1);
@@ -194,27 +219,11 @@ function makeGateway({
         },
       };
     },
-    listRuns: async () => {
+    listRuns: async (conversation: string) => {
       calls.runs++;
       return {
         ok: true as const,
-        value: {
-          spec: "s1",
-          runs: [
-            {
-              id: "run-1",
-              project: "mast",
-              spec_id: "s1",
-              node: "devbox",
-              role: "build" as const,
-              agent: "codex",
-              status: "running",
-              started_at: "2026-07-28T10:00:00Z",
-              principal: "codex/run-1",
-              owner: "uday",
-            },
-          ],
-        },
+        value: { spec: conversation, runs: conversation === "s1" ? runs : roomRuns },
       };
     },
     onEvent: (listener: (event: SailEvent) => void) => {
@@ -232,6 +241,9 @@ function makeGateway({
     roomStreams,
     setHistory(events: SailEvent[]) {
       history = events;
+    },
+    refuseMessages(refused: boolean) {
+      messagesRefused = refused;
     },
     setStream(stream: string) {
       statusListeners.forEach((listener) => listener({ stream }));
@@ -607,6 +619,75 @@ describe("SpecRoom", () => {
       "an empty room invites the first message with guidance text",
     ).toContain("land here as the work moves");
     expect(beginning?.querySelector(".room-beginning-id")?.textContent).toBe("s1");
+  });
+
+  test("history that fails to load says so with a Retry, never the room's beginning", async () => {
+    const fake = makeGateway();
+    fake.store(remoteMessage("message-2", "An old word."));
+    fake.refuseMessages(true);
+    await mount(fake.gateway, "in_progress", "Bulk capture campaign");
+
+    const failure = () => container.querySelector('[data-testid="room-history-error"]');
+    expect(failure()?.textContent).toBe("Couldn't load this room's history: box unreachableRetry");
+    expect(container.querySelector(".room-beginning")).toBeNull();
+
+    act(() => [...failure()!.querySelectorAll("button")].at(-1)!.click());
+    await settle();
+    expect(failure()?.textContent).toContain("box unreachable");
+
+    fake.refuseMessages(false);
+    act(() => [...failure()!.querySelectorAll("button")].at(-1)!.click());
+    await settle();
+    expect(failure()).toBeNull();
+    expect(container.textContent).toContain("An old word.");
+    expect(container.querySelector(".room-beginning")).not.toBeNull();
+  });
+
+  test("a room shown in place of one whose history failed starts with no error of its own", async () => {
+    const fake = makeGateway();
+    fake.refuseMessages(true);
+    await mount(fake.gateway);
+    expect(container.querySelector('[data-testid="room-history-error"]')).not.toBeNull();
+
+    fake.refuseMessages(false);
+    act(() =>
+      root.render(
+        <ToastProvider>
+          <SpecRoom gateway={fake.gateway} specId="s2" roomId="s2" canWrite currentUser="uday" />
+        </ToastProvider>,
+      ),
+    );
+
+    expect(container.querySelector('[data-testid="room-history-error"]')).toBeNull();
+  });
+
+  test("history that failed to load is read again when the window takes focus, and on reconnect", async () => {
+    const fake = makeGateway();
+    fake.store(remoteMessage("message-2", "An old word."));
+    fake.refuseMessages(true);
+    await mount(fake.gateway);
+    const failure = () => container.querySelector('[data-testid="room-history-error"]');
+
+    act(() => window.dispatchEvent(new Event("focus")));
+    await settle();
+    expect(failure()).not.toBeNull();
+
+    fake.refuseMessages(false);
+    act(() => window.dispatchEvent(new Event("focus")));
+    await settle();
+    expect(failure()).toBeNull();
+    expect(container.textContent).toContain("An old word.");
+
+    act(() => root.unmount());
+    container.remove();
+    fake.refuseMessages(true);
+    await mount(fake.gateway);
+    act(() => fake.setStream("reconnecting"));
+    fake.refuseMessages(false);
+    act(() => fake.setStream("connected"));
+    await settle();
+    expect(failure()).toBeNull();
+    expect(container.textContent).toContain("An old word.");
   });
 
   test("the beginning marker persists at the top after the first message", async () => {
@@ -1028,9 +1109,8 @@ describe("SpecRoom", () => {
 });
 
 describe("SpecRoom live turns", () => {
-  const PRINCIPAL = "claude-code/run-7";
+  const PRINCIPAL = "claude/run-7";
   const DRAFT = '[data-testid="draft-run-7-7"]';
-  const TYPING = '[data-testid="typing-s1"]';
 
   const live = (type: string, data: Record<string, unknown> = {}, room = "s1"): SailEvent => ({
     v: 1,
@@ -1059,6 +1139,7 @@ describe("SpecRoom live turns", () => {
   });
   const engaged = (agent: string): EngagementView => ({
     agent,
+    agent_name: agent === "codex" ? "Codex CLI" : "Claude Code",
     mode: "full",
     engaged_at: "2026-07-28T09:00:00Z",
   });
@@ -1105,16 +1186,6 @@ describe("SpecRoom live turns", () => {
     });
   }
 
-  /** The member's chat run as the presence store sees it once its turn starts. */
-  function chatTurnStarted() {
-    act(() =>
-      presenceStore.noteEvent({
-        ...live("agent_session_started", { run_role: "room-full" }),
-        ts: new Date().toISOString(),
-      }),
-    );
-  }
-
   /** The frames the room asks for, run when a test paints: a frame is where the room keeps the reader's place. */
   const frames: FrameRequestCallback[] = [];
   const paint = () => act(() => frames.splice(0).forEach((frame) => frame(0)));
@@ -1129,7 +1200,6 @@ describe("SpecRoom live turns", () => {
 
   afterEach(() => {
     globalThis.requestAnimationFrame = requestFrame;
-    act(() => presenceStore.noteRuns([]));
   });
 
   test("opening a room opens its one stream, and leaving closes it", async () => {
@@ -1208,21 +1278,9 @@ describe("SpecRoom live turns", () => {
     stream(fake, delta(", "), delta("room."));
     expect(container.querySelectorAll('[data-testid^="draft-"]').length).toBe(1);
     expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Hello, room.");
-    expect(draft()?.querySelector(".room-message-head strong")?.textContent).toBe("claude-code");
+    expect(draft()?.querySelector(".room-message-head strong")?.textContent).toBe("claude");
     expect(draft()?.querySelector(".room-avatar.is-agent")?.getAttribute("aria-label")).toBe(
       `${PRINCIPAL}, agent`,
-    );
-  });
-
-  test("the draft is named by the event's principal, not by the room's engagement", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway, undefined, undefined, undefined, engaged("codex"));
-
-    stream(fake, live("agent_text_delta", { text: "Hi", principal: "claude/room-run-7" }));
-
-    expect(draft()?.querySelector(".room-message-head strong")?.textContent).toBe("claude");
-    expect(draft()?.querySelector(".room-avatar")?.getAttribute("aria-label")).toBe(
-      "claude/room-run-7, agent",
     );
   });
 
@@ -1313,53 +1371,6 @@ describe("SpecRoom live turns", () => {
     expect(seen.every((count) => count === 1)).toBe(true);
   });
 
-  test("the typing row shows from the human's send until the first delta, then yields to the draft", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
-
-    enterMessage("Where do we start?");
-    await settle();
-    chatTurnStarted();
-    expect(container.querySelector(TYPING)).not.toBeNull();
-
-    stream(fake, delta("Here"));
-    expect(container.querySelector(TYPING)).toBeNull();
-    expect(draft()).not.toBeNull();
-  });
-
-  test("on a later turn of the same run the member is shown working from the turn's beginning to its end", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
-    chatTurnStarted();
-    stream(fake, delta("First answer."), turnEnded({ message_id: "message-7" }));
-    act(() => fake.receive(reply("First answer.", new Date(Date.now() + 60_000).toISOString())));
-    await settle();
-    expect(container.querySelector(TYPING)).toBeNull();
-
-    enterMessage("And then?");
-    await settle();
-    const next = () => container.querySelector<HTMLElement>('[data-testid="draft-run-7-8"]');
-    expect(next()).toBeNull();
-
-    stream(fake, live("agent_turn_began", { turn: 8 }));
-    expect(next()?.querySelector(".typing-dots")?.getAttribute("aria-label")).toBe(
-      "claude-code is typing",
-    );
-    expect(container.querySelectorAll(".typing-dots")).toHaveLength(1);
-
-    stream(
-      fake,
-      live("agent_text_delta", { text: "Then this.", turn: 8 }),
-      live("agent_tool_call", { tool: "Read", summary: "README.md", status: "started", turn: 8 }),
-    );
-    expect(next()?.querySelector(".room-draft-text")?.textContent).toBe("Then this.");
-    expect(next()?.querySelector(".typing-dots")).not.toBeNull();
-
-    stream(fake, live("agent_turn_ended", { is_error: false, message_id: "message-8", turn: 8 }));
-    expect(next()?.querySelector(".room-draft-text")?.textContent).toBe("Then this.");
-    expect(next()?.querySelector(".typing-dots")).toBeNull();
-  });
-
   test("a turn that begins and ends having said nothing leaves no dots behind", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);
@@ -1370,6 +1381,256 @@ describe("SpecRoom live turns", () => {
     stream(fake, turnEnded());
     expect(draft()).toBeNull();
     expect(container.querySelector(".typing-dots")).toBeNull();
+  });
+
+  const memberRun = (agent: string, agent_name: string, id = "run-7"): RunView => ({
+    id,
+    project: "mast",
+    node: "devbox",
+    role: "room-full",
+    agent,
+    agent_name,
+    status: "running",
+    started_at: "2026-07-28T10:00:00Z",
+    principal: `${agent === "codex" ? "codex" : "claude"}/${id}`,
+  });
+  const dots = () => container.querySelectorAll(".typing-dots");
+  const label = (row: Element | null) => row?.querySelector(".room-message-head strong")?.textContent;
+
+  test("a member is shown working once, from its turn's beginning to its end, and never between turns", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+
+    enterMessage("hello");
+    await settle();
+    expect(dots()).toHaveLength(0);
+
+    stream(fake, live("agent_turn_began"));
+    expect(dots()).toHaveLength(1);
+    expect(draft()?.querySelector(".typing-dots")).not.toBeNull();
+
+    stream(fake, delta("Hi."), turnEnded({ message_id: "message-7" }));
+    expect(dots()).toHaveLength(0);
+    act(() => fake.receive(reply("Hi.")));
+    await settle();
+    expect(draft()).toBeNull();
+    expect(dots()).toHaveLength(0);
+
+    for (const turn of [8, 9]) {
+      stream(fake, live("agent_turn_began", { turn }));
+      expect(dots()).toHaveLength(1);
+      stream(fake, live("agent_turn_ended", { is_error: false, turn }));
+      expect(dots()).toHaveLength(0);
+    }
+    expect(container.querySelector(".roster-chip, .presence-chip")).toBeNull();
+  });
+
+  test("a room opened mid-turn shows the member working, and the draft fills from the next delta", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+
+    stream(fake, live("agent_turn_state", { open: true }));
+    expect(draft()?.querySelector(".typing-dots")).not.toBeNull();
+
+    stream(fake, delta("Picking up."));
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Picking up.");
+  });
+
+  test("a stream that drops across a turn's end is told the message, and the draft yields to it", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    stream(fake, delta("Half a sent"));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+    act(() => fake.receive(reply("Half a sentence, whole.")));
+    await settle();
+    expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Half a sent … ");
+
+    act(() => fake.roomStreams.setState("s1", "connected"));
+    stream(fake, live("agent_turn_state", { open: false, message_id: "message-7", is_error: false }));
+    await settle();
+
+    expect(draft()).toBeNull();
+    expect(occurrences("Half a sentence, whole.")).toBe(1);
+  });
+
+  test("a frame naming a turn that ended blank, or no member at all, leaves no draft", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+    stream(fake, delta("Half a sent"));
+    act(() => fake.roomStreams.setState("s1", "reconnecting"));
+
+    stream(fake, { ...live("agent_turn_state"), data: { open: false } });
+
+    expect(draft()).toBeNull();
+  });
+
+  test("an agent is named by its harness on its replies and its working row, whatever its principal's prefix", async () => {
+    const fake = makeGateway({ runs: [memberRun("claude-code", "Claude Code")] });
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+    act(() => fake.receive({ ...reply("Hello."), author: "claude/run-7" }));
+    await settle();
+
+    const replyRow = container.querySelector('[data-testid^="message-group-"]');
+    expect(label(replyRow)).toBe("Claude Code");
+
+    stream(fake, live("agent_turn_began", { turn: 8, principal: "claude/run-7" }));
+    const working = container.querySelector('[data-testid="draft-run-7-8"]');
+    expect(label(working)).toBe("Claude Code");
+    expect(working?.querySelector(".typing-dots")?.getAttribute("aria-label")).toBe(
+      "Claude Code is typing",
+    );
+  });
+
+  test("a turn whose run the room has not read yet is named by the engaged member's harness", async () => {
+    const fake = makeGateway({ runs: [] });
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+
+    stream(fake, live("agent_turn_began", { principal: "claude/run-7" }));
+
+    expect(label(draft())).toBe("Claude Code");
+  });
+
+  test("a Codex member is named Codex CLI and behaves the same", async () => {
+    const fake = makeGateway({ runs: [memberRun("codex", "Codex CLI")] });
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("codex"));
+    const said = (more: Record<string, unknown>) => ({ principal: "codex/run-7", ...more });
+
+    stream(fake, live("agent_turn_began", said({})), live("agent_text_delta", said({ text: "Done." })));
+    expect(label(draft())).toBe("Codex CLI");
+    expect(dots()).toHaveLength(1);
+
+    stream(fake, live("agent_turn_ended", said({ is_error: false, message_id: "message-7" })));
+    act(() => fake.receive({ ...reply("Done."), author: "codex/run-7" }));
+    await settle();
+
+    expect(draft()).toBeNull();
+    expect(dots()).toHaveLength(0);
+    expect(label(container.querySelector('[data-testid^="message-group-"]'))).toBe("Codex CLI");
+  });
+
+  test("a failure is told in the harness's name alone, the run's owner staying on the row's head", async () => {
+    const fake = makeGateway({ runs: [{ ...memberRun("claude-code", "Claude Code"), owner: "pyam" }] });
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+
+    act(() => fake.receive({ ...reply("Not logged in"), author: "claude/run-7", error: true }));
+    await settle();
+
+    expect(label(container.querySelector('[data-testid^="message-group-"]'))).toBe(
+      "Claude Code (for pyam)",
+    );
+    expect(
+      container.querySelector('[data-testid="room-message-message-7"] .room-turn-failed')
+        ?.textContent,
+    ).toBe("Claude Code couldn't answer");
+  });
+
+  test("a principal of another agent than the engaged one keeps its own name until its run is read", async () => {
+    const fake = makeGateway({ runs: [] });
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("codex"));
+
+    act(() => fake.receive({ ...reply("Fixed."), author: "claude/fix-9" }));
+    await settle();
+
+    expect(label(container.querySelector('[data-testid^="message-group-"]'))).toBe("claude");
+  });
+
+  test("a failed turn's line comes before its words, live as after its message lands", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+
+    stream(fake, live("agent_turn_began"), delta("Half a thought"));
+    stream(fake, turnEnded({ is_error: true, reason: "out of memory" }));
+
+    const parts = [...(draft()?.querySelectorAll(".room-turn-failed, .room-draft-text") ?? [])];
+    expect(parts.map((part) => part.className.split(" ")[0])).toEqual([
+      "room-turn-failed",
+      "room-message-body",
+    ]);
+  });
+
+  test("a failed turn reads as failed in the agent's own words, live and after a reload", async () => {
+    const fake = makeGateway({ runs: [memberRun("claude-code", "Claude Code")] });
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+    const failed: SpecMessage = {
+      ...reply("Not logged in · Please run /login"),
+      author: "claude/run-7",
+      error: true,
+    };
+
+    stream(fake, live("agent_turn_began", { principal: "claude/run-7" }));
+    stream(fake, turnEnded({ principal: "claude/run-7", is_error: true, message_id: "message-7" }));
+    act(() => fake.receive(failed));
+    await settle();
+
+    const shown = () => container.querySelector('[data-testid="room-message-message-7"]');
+    expect(shown()?.classList.contains("is-error")).toBe(true);
+    expect(shown()?.classList.contains("is-failed")).toBe(false);
+    expect(shown()?.querySelector(".room-turn-failed")?.textContent).toBe(
+      "Claude Code couldn't answer",
+    );
+    expect(shown()?.textContent).toContain("Not logged in · Please run /login");
+    expect(container.textContent).not.toContain("success");
+    expect(container.textContent).not.toContain("ended early");
+
+    act(() => root.unmount());
+    container.remove();
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+    expect(shown()?.querySelector(".room-turn-failed")?.textContent).toBe(
+      "Claude Code couldn't answer",
+    );
+  });
+
+  test("a named failure keeps its reason once its message takes the draft's place, whichever arrives first", async () => {
+    const failed: SpecMessage = { ...reply("Stopped after 30 turns."), error: true };
+    const told = () =>
+      container.querySelector('[data-testid="room-message-message-7"] .room-turn-failed')
+        ?.textContent;
+    const ends = turnEnded({ is_error: true, reason: "error_max_turns", message_id: "message-7" });
+
+    const endFirst = makeGateway();
+    await mount(endFirst.gateway, undefined, undefined, undefined, engaged("claude-code"));
+    stream(endFirst, live("agent_turn_began"), ends);
+    act(() => endFirst.receive(failed));
+    await settle();
+    expect(draft()).toBeNull();
+    expect(told()).toBe("Claude Code couldn't answer · error_max_turns");
+
+    act(() => root.unmount());
+    container.remove();
+    const messageFirst = makeGateway();
+    await mount(messageFirst.gateway, undefined, undefined, undefined, engaged("claude-code"));
+    stream(messageFirst, live("agent_turn_began"));
+    act(() => messageFirst.receive(failed));
+    await settle();
+    stream(messageFirst, ends);
+    await settle();
+    expect(draft()).toBeNull();
+    expect(told()).toBe("Claude Code couldn't answer · error_max_turns");
+  });
+
+  test("a spec's room names a reply its home room's member wrote by that member's harness", async () => {
+    const fake = makeGateway({ runs: [], roomRuns: [memberRun("claude-code", "Claude Code")] });
+    fake.store({ ...reply("Earlier answer."), author: "claude/run-7" });
+    await mount(fake.gateway, undefined, undefined, "home-room", engaged("codex"));
+
+    expect(label(container.querySelector('[data-testid^="message-group-"]'))).toBe("Claude Code");
+  });
+
+  test("a failure the box names is told with its reason, and an answer is a plain reply", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
+
+    stream(fake, turnEnded({ is_error: true, reason: "error_max_turns" }));
+    expect(draft()?.querySelector(".room-turn-failed")?.textContent).toBe(
+      "Claude Code couldn't answer · error_max_turns",
+    );
+
+    stream(fake, live("agent_turn_began", { turn: 8 }), live("agent_turn_ended", { turn: 8, message_id: "message-8", is_error: false }));
+    act(() => fake.receive({ ...reply("Fine."), id: "message-8" }));
+    await settle();
+    const answer = container.querySelector('[data-testid="room-message-message-8"]');
+    expect(answer?.classList.contains("is-error")).toBe(false);
+    expect(container.querySelector(".room-turn-failed")).toBeNull();
   });
 
   test("a stream that drops says nothing of a member working until the turn is heard from again", async () => {
@@ -1390,28 +1651,16 @@ describe("SpecRoom live turns", () => {
     expect(draft()?.querySelector(".typing-dots")).not.toBeNull();
   });
 
-  test("the typing row yields to a turn's beginning: the member is shown working once, not twice", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
-    chatTurnStarted();
-    expect(container.querySelector(TYPING)).not.toBeNull();
-
-    stream(fake, live("agent_turn_began"));
-
-    expect(container.querySelector(TYPING)).toBeNull();
-    expect(container.querySelectorAll(".typing-dots")).toHaveLength(1);
-    expect(draft()?.querySelector(".typing-dots")).not.toBeNull();
-  });
-
   test("a turn that failed before it wrote anything says so, with no dots", async () => {
     const fake = makeGateway();
-    await mount(fake.gateway);
+    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
 
     stream(fake, live("agent_turn_began"), turnEnded({ is_error: true, reason: "out of memory" }));
 
     expect(draft()?.querySelector(".typing-dots")).toBeNull();
-    expect(draft()?.textContent).toContain("the agent's turn ended early");
-    expect(draft()?.textContent).toContain("out of memory");
+    expect(draft()?.querySelector(".room-turn-failed")?.textContent).toBe(
+      "Claude Code couldn't answer · out of memory",
+    );
   });
 
   test("a stream that drops mid-turn keeps the draft with a marker, and the final message still replaces it", async () => {
@@ -1435,41 +1684,6 @@ describe("SpecRoom live turns", () => {
     expect(draft()).toBeNull();
     expect(container.textContent).toContain("Half a sentence, whole, and the rest.");
     expect(container.textContent).not.toContain("…");
-  });
-
-  test("a drop that swallows the turn's end leaves the posted message to replace the draft", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway);
-    stream(fake, delta("Half a sent"));
-    act(() => fake.roomStreams.setState("s1", "reconnecting"));
-
-    act(() => fake.receive(reply("Half a sentence, whole.")));
-    await settle();
-
-    expect(draft()).toBeNull();
-    expect(container.textContent).toContain("Half a sentence, whole.");
-    expect(occurrences("Half a sent")).toBe(1);
-  });
-
-  test("a disconnect that swallows the turn's end and its message's event leaves the recovered event to retire the draft", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway);
-    act(() => fake.setStream("connected"));
-    stream(fake, delta("Half a sent"));
-
-    act(() => {
-      fake.roomStreams.setState("s1", "reconnecting");
-      fake.setStream("reconnecting");
-    });
-    const whole = reply("Half a sentence, whole.");
-    fake.store(whole);
-    fake.setHistory([announced(12, whole)]);
-    act(() => fake.setStream("connected"));
-    await settle();
-
-    expect(draft()).toBeNull();
-    expect(container.textContent).toContain("Half a sentence, whole.");
-    expect(occurrences("Half a sent")).toBe(1);
   });
 
   test("a recovered event for a reply the room already held leaves the draft of the turn still being written", async () => {
@@ -1511,122 +1725,6 @@ describe("SpecRoom live turns", () => {
     expect(occurrences("The turn before.")).toBe(1);
   });
 
-  test("a reply fetched before its event arrives still takes the place of a draft whose end was lost", async () => {
-    const fake = makeGateway();
-    let releaseMessages!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      releaseMessages = resolve;
-    });
-    let gated = false;
-    const gateway = {
-      ...fake.gateway,
-      listSpecMessages: async (...request: Parameters<Gateway["listSpecMessages"]>) => {
-        if (gated) await gate;
-        return fake.gateway.listSpecMessages(...request);
-      },
-    };
-    await mount(gateway);
-    stream(fake, delta("Half a sent"));
-    act(() => fake.roomStreams.setState("s1", "reconnecting"));
-
-    gated = true;
-    act(() => fake.receive({ ...reply("Any news?"), id: "message-6", author: "priya" }));
-    const whole = reply("Half a sentence, whole.");
-    fake.store(whole);
-    releaseMessages();
-    await settle();
-    act(() => fake.emit(announced(12, whole)));
-    await settle();
-
-    expect(container.querySelector('[data-testid="room-message-message-7"]')).not.toBeNull();
-    expect(draft()).toBeNull();
-    expect(occurrences("Half a sent")).toBe(1);
-  });
-
-  test("a reply the room's first load brings before its event still takes the place of a draft whose end was lost", async () => {
-    const fake = makeGateway();
-    let releaseMessages!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      releaseMessages = resolve;
-    });
-    const gateway = {
-      ...fake.gateway,
-      listSpecMessages: async (...request: Parameters<Gateway["listSpecMessages"]>) => {
-        await gate;
-        return fake.gateway.listSpecMessages(...request);
-      },
-    };
-    await mount(gateway);
-    stream(fake, delta("Half a sent"));
-    act(() => fake.roomStreams.setState("s1", "reconnecting"));
-    expect(draft()).not.toBeNull();
-
-    const whole = reply("Half a sentence, whole.");
-    fake.store(whole);
-    releaseMessages();
-    await settle();
-    act(() => fake.emit(announced(12, whole)));
-    await settle();
-
-    expect(container.querySelector('[data-testid="room-message-message-7"]')).not.toBeNull();
-    expect(draft()).toBeNull();
-    expect(occurrences("Half a sent")).toBe(1);
-  });
-
-  test("a reply the room held before its turn's stream dropped takes the draft's place at the drop", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway);
-    stream(fake, delta("Half a sent"));
-    act(() => fake.receive(reply("Half a sentence, whole.")));
-    await settle();
-    expect(draft()).not.toBeNull();
-
-    act(() => fake.roomStreams.setState("s1", "reconnecting"));
-
-    expect(draft()).toBeNull();
-    expect(occurrences("Half a sent")).toBe(1);
-  });
-
-  test("two turns whose ends were both lost end with both replies and no draft, one fetch bringing both", async () => {
-    const fake = makeGateway();
-    let releaseMessages!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      releaseMessages = resolve;
-    });
-    let gated = false;
-    const gateway = {
-      ...fake.gateway,
-      listSpecMessages: async (...request: Parameters<Gateway["listSpecMessages"]>) => {
-        if (gated) await gate;
-        return fake.gateway.listSpecMessages(...request);
-      },
-    };
-    await mount(gateway);
-    stream(fake, delta("Seventh, half"));
-    act(() => fake.roomStreams.setState("s1", "reconnecting"));
-
-    gated = true;
-    act(() => fake.receive(reply("Seventh, whole.")));
-    act(() => fake.roomStreams.setState("s1", "connected"));
-    stream(fake, {
-      ...live("agent_text_delta", { text: "Eighth, half", turn: 8 }),
-      ts: "2026-07-28T10:03:00Z",
-    });
-    act(() => fake.roomStreams.setState("s1", "reconnecting"));
-    act(() =>
-      fake.receive({ ...reply("Eighth, whole.", "2026-07-28T10:03:30Z"), id: "message-8" }),
-    );
-    expect(
-      [...container.querySelectorAll<HTMLElement>(".room-draft")].map((row) => row.dataset.testid),
-    ).toEqual(["draft-run-7-8"]);
-    releaseMessages();
-    await settle();
-
-    expect(container.querySelector('[data-testid="room-message-message-7"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="room-message-message-8"]')).not.toBeNull();
-    expect(container.querySelectorAll(".room-draft")).toHaveLength(0);
-  });
-
   test("a member that dies with its box mid-turn leaves a draft only until the next member's turn begins", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);
@@ -1639,7 +1737,7 @@ describe("SpecRoom live turns", () => {
       ...live("agent_text_delta", {
         text: "A new member.",
         run_id: "run-8",
-        principal: "claude-code/run-8",
+        principal: "claude/run-8",
         turn: 1,
       }),
       ts: "2026-07-28T10:05:00Z",
@@ -1767,62 +1865,6 @@ describe("SpecRoom live turns", () => {
     await settle();
     expect(draft()).toBeNull();
     expect(container.querySelector('[data-testid="room-message-message-7"]')).not.toBeNull();
-  });
-
-  test("a turn that ended early is told: a muted bubble and the box's reason, on the draft and on the message it becomes", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway);
-    stream(
-      fake,
-      delta("Partial"),
-      turnEnded({ is_error: true, reason: "max_duration reached", message_id: "message-7" }),
-    );
-
-    expect(draft()?.querySelector(".room-draft-text")?.classList.contains("is-cut-short")).toBe(true);
-    expect(draft()?.querySelector(".room-turn-cut-short")?.textContent).toBe(
-      "the agent's turn ended early · max_duration reached",
-    );
-
-    act(() => fake.receive(reply("Partial")));
-    await settle();
-
-    expect(draft()).toBeNull();
-    const message = container.querySelector('[data-testid="room-message-message-7"]')!;
-    expect(message.classList.contains("is-cut-short")).toBe(true);
-    expect(message.querySelector(".room-turn-cut-short")?.textContent).toBe(
-      "the agent's turn ended early · max_duration reached",
-    );
-    expect(occurrences("the agent's turn ended early")).toBe(1);
-  });
-
-  test("an error turn with no reason and no message is still told, by the sentence alone", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway);
-
-    stream(fake, turnEnded({ is_error: true }));
-
-    expect(draft()?.querySelector(".room-turn-cut-short")?.textContent).toBe(
-      "the agent's turn ended early",
-    );
-  });
-
-  test("a Codex member streams nothing: the typing row and the re-fetch behave as before", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway, undefined, undefined, undefined, engaged("codex"));
-    chatTurnStarted();
-    expect(container.querySelector(TYPING)).not.toBeNull();
-
-    act(() =>
-      fake.receive({
-        ...remoteMessage("message-2", "Whole, at once."),
-        created_at: new Date(Date.now() + 60_000).toISOString(),
-      }),
-    );
-    await settle();
-
-    expect(container.textContent).toContain("Whole, at once.");
-    expect(container.querySelector(TYPING)).toBeNull();
-    expect(container.querySelector('[data-testid^="draft-"]')).toBeNull();
   });
 
   test("a live event on the app-wide stream refreshes nothing and draws nothing", async () => {
@@ -2338,20 +2380,6 @@ describe("SpecRoom live turns", () => {
       "room-message-message-8",
       "room-message-message-9",
     ]);
-  });
-
-  test("the typing row is not drawn beside a turn that waits behind the pill", async () => {
-    const fake = makeGateway();
-    await mount(fake.gateway, undefined, undefined, undefined, engaged("claude-code"));
-    chatTurnStarted();
-    expect(container.querySelector(TYPING)).not.toBeNull();
-    scrollTo(900);
-    scrollTo(0);
-
-    stream(fake, delta("Away."));
-
-    expect(draft()).toBeNull();
-    expect(container.querySelector(TYPING)).toBeNull();
   });
 
   test("only a stream that is reconnecting has dropped anything", async () => {

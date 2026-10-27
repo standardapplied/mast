@@ -11,7 +11,7 @@ export type MessageDelivery = "pending" | "failed";
 
 export type RoomMessage = SpecMessage & {
   delivery?: MessageDelivery;
-  error?: string;
+  deliveryError?: string;
 };
 
 export type TimelineDecision = {

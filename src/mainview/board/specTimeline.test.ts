@@ -243,7 +243,7 @@ describe("message grouping", () => {
         {
           ...message("pending:2", "2026-07-28T10:02:00Z"),
           delivery: "failed",
-          error: "refused",
+          deliveryError: "refused",
         },
       ],
       events: [],
