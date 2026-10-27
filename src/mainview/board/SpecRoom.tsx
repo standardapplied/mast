@@ -54,6 +54,8 @@ import {
 const PAGE_SIZE = 100;
 const SCROLL_EDGE_PX = 48;
 const AT_LATEST_PX = 1;
+const REASON_LIMIT = 240;
+const FAILURE_LIMIT = 32;
 
 const SEVERITY_TONE: Record<Finding["severity"], BadgeTone> = {
   CRITICAL: "error",
@@ -250,6 +252,30 @@ function TurnFailed({ name, reason }: { name: string; reason?: string }) {
   );
 }
 
+/** A failed turn's end as the box told it: the message it became and why, when it said both. */
+function failureOf(event: SailEvent): { messageId: string; reason: string } | undefined {
+  if (event.type !== "agent_turn_ended" && event.type !== "agent_turn_state") return undefined;
+  const data = event.data ?? {};
+  const { message_id: messageId, reason } = data;
+  if (data.is_error !== true || typeof messageId !== "string" || typeof reason !== "string") {
+    return undefined;
+  }
+  return messageId && reason ? { messageId, reason: reason.slice(0, REASON_LIMIT) } : undefined;
+}
+
+/**
+ * The reason a failed message is told with outlives its draft; only the newest are kept, as a
+ * reason is told only on the stream and a room reopened reads the synced flag alone.
+ */
+function withFailure(
+  reasons: ReadonlyMap<string, string>,
+  failure: { messageId: string; reason: string },
+): ReadonlyMap<string, string> {
+  if (reasons.get(failure.messageId) === failure.reason) return reasons;
+  const kept = [...reasons].filter(([id]) => id !== failure.messageId).slice(1 - FAILURE_LIMIT);
+  return new Map([...kept, [failure.messageId, failure.reason]]);
+}
+
 function TypingDots({ name }: { name: string }) {
   return (
     <span className="typing-dots" aria-label={name + " is typing"}>
@@ -354,6 +380,7 @@ export function SpecRoom({
   const [historyFailed, setHistoryFailed] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [live, setLive] = useState<LiveTurns>(NO_LIVE_TURNS);
+  const [failureReasons, setFailureReasons] = useState<ReadonlyMap<string, string>>(new Map());
   const [repliesUnseen, setRepliesUnseen] = useState(0);
   const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
   const [snapshotsProject, setSnapshotsProject] = useState<string | null>(null);
@@ -454,11 +481,24 @@ export function SpecRoom({
       : null;
   }, [gateway, specId, roomId]);
 
+  /**
+   * The runs a reader of this room can meet: the spec's, and the members' of its home room,
+   * which carry no spec. A failed read of either leaves the room's runs as they were.
+   */
+  const loadRuns = useCallback(async (): Promise<RunView[] | null> => {
+    const reads = await Promise.all(
+      [...new Set([specId, roomId])].map((id) => gateway.listRuns(id)),
+    );
+    if (!reads.every((read) => read.ok)) return null;
+    const runs = reads.flatMap((read) => (read.ok ? read.value.runs : []));
+    return [...new Map(runs.map((run) => [run.id, run])).values()];
+  }, [gateway, specId, roomId]);
+
   const loadRoom = useCallback(async (version: number) => {
     const [messages, events, runs] = await Promise.all([
       gateway.listSpecMessages(roomId, { limit: PAGE_SIZE }),
       loadEvents(),
-      gateway.listRuns(specId),
+      loadRuns(),
     ]);
     if (version !== loadVersion.current) return;
     const base: Sources = {
@@ -467,7 +507,7 @@ export function SpecRoom({
         : sources.current.messages,
       events: events ? mergeEvents(events, sources.current.events) : sources.current.events,
       reviews: sources.current.reviews,
-      runs: runs.ok ? runs.value.runs : sources.current.runs,
+      runs: runs ?? sources.current.runs,
       decisions: sources.current.decisions,
     };
     setHasEarlier(messages.ok && messages.value.messages.length === PAGE_SIZE);
@@ -483,7 +523,7 @@ export function SpecRoom({
       if (version !== loadVersion.current) return;
       applySources({ ...sources.current, reviews: details }, "replace");
     }
-  }, [applySources, gateway, loadEvents, loadReviewDetails, specId]);
+  }, [applySources, gateway, loadEvents, loadReviewDetails, loadRuns, specId]);
 
   useEffect(() => {
     const version = ++loadVersion.current;
@@ -529,11 +569,13 @@ export function SpecRoom({
   useEffect(() => {
     advanceLive(() => NO_LIVE_TURNS);
     setRepliesUnseen(0);
+    setFailureReasons(new Map());
     const stream = gateway.openRoomStream(roomId);
     const offEvent = stream.onEvent((event) => {
-      if (event.spec === roomId) {
-        advanceLive((state) => liveTurns(state, event, !atLatest.current));
-      }
+      if (event.spec !== roomId) return;
+      const failure = failureOf(event);
+      if (failure) setFailureReasons((reasons) => withFailure(reasons, failure));
+      advanceLive((state) => liveTurns(state, event, !atLatest.current));
     });
     const offState = stream.onState((state) => {
       if (state === "reconnecting") advanceLive(streamGapped);
@@ -613,11 +655,11 @@ export function SpecRoom({
 
   const refreshRuns = useCallback(
     async (live: boolean) => {
-      const runs = await gateway.listRuns(specId);
-      if (!runs.ok) return;
-      applySources({ ...sources.current, runs: runs.value.runs }, live ? "live" : "replace");
+      const runs = await loadRuns();
+      if (!runs) return;
+      applySources({ ...sources.current, runs }, live ? "live" : "replace");
     },
-    [applySources, gateway, specId],
+    [applySources, loadRuns],
   );
 
   const refreshReviews = useCallback(
@@ -654,7 +696,7 @@ export function SpecRoom({
     async (live: boolean) => {
       const [reviews, runs] = await Promise.all([
         gateway.specReviews(specId),
-        gateway.listRuns(specId),
+        loadRuns(),
       ]);
       const details = reviews.ok
         ? await loadReviewDetails(reviews.value.reviews)
@@ -663,12 +705,12 @@ export function SpecRoom({
         {
           ...sources.current,
           reviews: details,
-          runs: runs.ok ? runs.value.runs : sources.current.runs,
+          runs: runs ?? sources.current.runs,
         },
         live ? "live" : "replace",
       );
     },
-    [applySources, gateway, loadReviewDetails, specId],
+    [applySources, gateway, loadReviewDetails, loadRuns, specId],
   );
 
   useEffect(() => {
@@ -1004,7 +1046,12 @@ export function SpecRoom({
                                 Question
                               </span>
                             )}
-                            {entry.message.error && <TurnFailed name={label} />}
+                            {entry.message.error && (
+                              <TurnFailed
+                                name={label}
+                                reason={failureReasons.get(entry.message.id)}
+                              />
+                            )}
                             <Markdown source={entry.message.body} />
                             {entry.message.delivery === "pending" && (
                               <span className="room-message-delivery">

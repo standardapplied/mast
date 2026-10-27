@@ -69,6 +69,7 @@ function makeGateway({
   specEventsError = false,
   globalEvents = [],
   runs = [CODEX_BUILD],
+  roomRuns = [],
 }: {
   withReview?: boolean;
   reviewStatus?: string;
@@ -79,6 +80,8 @@ function makeGateway({
   specEventsError?: boolean;
   globalEvents?: SailEvent[];
   runs?: RunView[];
+  /** The runs listed under any other conversation than the spec `s1`: a home room's members. */
+  roomRuns?: RunView[];
 } = {}) {
   let messages: SpecMessage[] = [];
   let messagesRefused = false;
@@ -216,11 +219,11 @@ function makeGateway({
         },
       };
     },
-    listRuns: async () => {
+    listRuns: async (conversation: string) => {
       calls.runs++;
       return {
         ok: true as const,
-        value: { spec: "s1", runs },
+        value: { spec: conversation, runs: conversation === "s1" ? runs : roomRuns },
       };
     },
     onEvent: (listener: (event: SailEvent) => void) => {
@@ -1516,6 +1519,42 @@ describe("SpecRoom live turns", () => {
     expect(shown()?.querySelector(".room-turn-failed")?.textContent).toBe(
       "Claude Code couldn't answer",
     );
+  });
+
+  test("a named failure keeps its reason once its message takes the draft's place, whichever arrives first", async () => {
+    const failed: SpecMessage = { ...reply("Stopped after 30 turns."), error: true };
+    const told = () =>
+      container.querySelector('[data-testid="room-message-message-7"] .room-turn-failed')
+        ?.textContent;
+    const ends = turnEnded({ is_error: true, reason: "error_max_turns", message_id: "message-7" });
+
+    const endFirst = makeGateway();
+    await mount(endFirst.gateway, undefined, undefined, undefined, engaged("claude-code"));
+    stream(endFirst, live("agent_turn_began"), ends);
+    act(() => endFirst.receive(failed));
+    await settle();
+    expect(draft()).toBeNull();
+    expect(told()).toBe("Claude Code couldn't answer · error_max_turns");
+
+    act(() => root.unmount());
+    container.remove();
+    const messageFirst = makeGateway();
+    await mount(messageFirst.gateway, undefined, undefined, undefined, engaged("claude-code"));
+    stream(messageFirst, live("agent_turn_began"));
+    act(() => messageFirst.receive(failed));
+    await settle();
+    stream(messageFirst, ends);
+    await settle();
+    expect(draft()).toBeNull();
+    expect(told()).toBe("Claude Code couldn't answer · error_max_turns");
+  });
+
+  test("a spec's room names a reply its home room's member wrote by that member's harness", async () => {
+    const fake = makeGateway({ runs: [], roomRuns: [memberRun("claude-code", "Claude Code")] });
+    fake.store({ ...reply("Earlier answer."), author: "claude/run-7" });
+    await mount(fake.gateway, undefined, undefined, "home-room", engaged("codex"));
+
+    expect(label(container.querySelector('[data-testid^="message-group-"]'))).toBe("Claude Code");
   });
 
   test("a failure the box names is told with its reason, and an answer is a plain reply", async () => {
