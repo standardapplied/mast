@@ -35,7 +35,7 @@ describe("portal", () => {
   });
 
   test("an address exists only for a forwarded port", () => {
-    expect(localAddress({ ...web, localPort: 5433 })).toBe("localhost:5433");
+    expect(localAddress({ ...web, localPort: 5433 })).toBe("127.0.0.1:5433");
     expect(localAddress({ ...web, localPort: null })).toBeNull();
   });
 

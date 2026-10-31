@@ -16,8 +16,9 @@ use crate::forward::{Connect, Duplex};
 use crate::pairing;
 use crate::ssh::{Backend, Error};
 
-/// How long a serve asks the box to wait, under the core's per-request limit.
-const SERVE_WAIT_SECONDS: u32 = 15;
+/// How long a serve asks the box to wait, well under the core's per-request limit: the sheet
+/// looks again until the stack settles.
+const SERVE_WAIT_SECONDS: u32 = 5;
 
 /// One declared port of the project, and the Mac's end of it when it is forwarded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -74,8 +75,8 @@ pub async fn refresh(backend: &Arc<Backend>, project: &str) -> Result<PortalView
 pub async fn stop(backend: &Arc<Backend>, project: &str) -> Result<PortalView, Error> {
     let path = pairing::project_path(project, "serve")?;
     let answer = backend.sail_request("DELETE", &path, None, None).await?;
-    backend.forwards().close(project).await;
     let body = pairing::answered(&answer, "to stop the project's processes")?;
+    backend.forwards().close(project).await;
     Ok(read(project, &body, &Default::default()))
 }
 
@@ -150,8 +151,8 @@ fn read(project: &str, body: &Value, forwarded: &HashMap<u16, u16>) -> PortalVie
     let url = ports
         .iter()
         .find(|port| port.kind == "process" && port.local_port.is_some())
-        .map(|port| format!("http://localhost:{}", port.local_port.unwrap()));
-    let settled = ports.iter().all(|port| port.state != "starting");
+        .map(|port| format!("http://127.0.0.1:{}", port.local_port.unwrap()));
+    let settled = ports.iter().all(|port| port.state != "starting" && port.state != "timeout");
     PortalView {
         project: project.to_string(),
         ports,
@@ -194,7 +195,7 @@ mod tests {
             &HashMap::from([(5432, 5432), (3000, 3001)]),
         );
 
-        assert_eq!(view.url.as_deref(), Some("http://localhost:3001"));
+        assert_eq!(view.url.as_deref(), Some("http://127.0.0.1:3001"));
         assert!(view.settled);
         assert_eq!(
             view.ports[2],
@@ -209,6 +210,13 @@ mod tests {
             }
         );
         assert_eq!(view.ports[1].local_port, Some(3001));
+    }
+
+    #[test]
+    fn a_port_the_box_stopped_waiting_for_is_looked_at_again() {
+        let slow = json!({"ports": [{"name": "web", "port": 8080, "kind": "process", "state": "timeout"}]});
+
+        assert!(!read("acme", &slow, &HashMap::new()).settled);
     }
 
     #[test]

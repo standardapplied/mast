@@ -574,7 +574,7 @@ export function createDemoGateway(
     return {
       project,
       settled: up,
-      url: up ? "http://localhost:3001" : null,
+      url: up ? "http://127.0.0.1:3001" : null,
       ports: [
         { name: "web", port: 3000, kind: "process", state: up ? "listening" : "starting", exitCode: null, detail: null, localPort: up ? 3001 : null },
         { name: "postgres", port: 5432, kind: "service", state: "listening", exitCode: null, detail: null, localPort: 5432 },

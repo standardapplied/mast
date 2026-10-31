@@ -24,41 +24,41 @@ import {
  * service shows the address a client on this Mac reaches it at. A refusal (a stopped
  * container, a read-only session) is the box's own sentence.
  */
+/** Runs {@code run} after {@code ms}, returning what cancels it: the sheet's own timer. */
+const afterDelay = (run: () => void, ms: number) => {
+  const timer = setTimeout(run, ms);
+  return () => clearTimeout(timer);
+};
+
 export function PortalPanel({
   gateway,
   project,
   openUrl,
   copyText,
-  schedule = (run, ms) => {
-    const timer = setTimeout(run, ms);
-    return () => clearTimeout(timer);
-  },
+  schedule = afterDelay,
   onClose,
 }: {
   gateway: Gateway;
   project: string;
-  openUrl: (url: string) => void;
-  copyText: (text: string) => void;
+  openUrl: (url: string) => Promise<void>;
+  copyText: (text: string) => Promise<void>;
   schedule?: (run: () => void, ms: number) => () => void;
   onClose: () => void;
 }) {
   const [view, setView] = useState<PortalView | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
+  const [copied, setCopied] = useState<{ key: string; failed: boolean } | null>(null);
   const opened = useRef(false);
   const looks = useRef(0);
+  const callbacks = useRef({ openUrl, schedule });
+  callbacks.current = { openUrl, schedule };
 
-  const take = useCallback(
-    (next: PortalView) => {
-      setView(next);
-      if (next.url && !opened.current) {
-        opened.current = true;
-        openUrl(next.url);
-      }
-    },
-    [openUrl],
-  );
+  const open = useCallback((url: string) => {
+    callbacks.current.openUrl(url).catch((e: unknown) => {
+      setRefusal(`The browser could not be opened at ${url}: ${e instanceof Error ? e.message : String(e)}`);
+    });
+  }, []);
 
   useEffect(() => {
     let cancel = () => {};
@@ -70,10 +70,17 @@ export function PortalPanel({
         setRefusal(refusalDetail(result.error));
         return;
       }
-      take(result.value);
+      setView(result.value);
+      if (result.value.url && !opened.current) {
+        opened.current = true;
+        open(result.value.url);
+      }
       if (!result.value.settled && looks.current < SETTLE_LOOKS) {
         looks.current += 1;
-        cancel = schedule(() => void look(() => gateway.portalRefresh(project)), SETTLE_EVERY_MS);
+        cancel = callbacks.current.schedule(
+          () => void look(() => gateway.portalRefresh(project)),
+          SETTLE_EVERY_MS,
+        );
       }
     };
     void look(() => gateway.portalOpen(project));
@@ -81,7 +88,7 @@ export function PortalPanel({
       live = false;
       cancel();
     };
-  }, [gateway, project, schedule, take]);
+  }, [gateway, project, open]);
 
   const stop = async () => {
     setStopping(true);
@@ -97,8 +104,10 @@ export function PortalPanel({
   };
 
   const copy = (key: string, text: string) => {
-    copyText(text);
-    setCopied(key);
+    copyText(text).then(
+      () => setCopied({ key, failed: false }),
+      () => setCopied({ key, failed: true }),
+    );
   };
 
   return (
@@ -123,7 +132,7 @@ export function PortalPanel({
                   port={port}
                   copied={copied}
                   onCopy={copy}
-                  onOpen={openUrl}
+                  onOpen={open}
                 />
               ))}
             </div>
@@ -140,7 +149,7 @@ export function PortalPanel({
                 {stopping ? "Stopping…" : "Stop processes"}
               </Button>
               {view.url && (
-                <Button onClick={() => openUrl(view.url!)} data-testid="portal-open">
+                <Button onClick={() => open(view.url!)} data-testid="portal-open">
                   Open in browser
                 </Button>
               )}
@@ -161,11 +170,13 @@ function PortRow({
 }: {
   project: string;
   port: PortalPort;
-  copied: string | null;
+  copied: { key: string; failed: boolean } | null;
   onCopy: (key: string, text: string) => void;
   onOpen: (url: string) => void;
 }) {
   const key = `${port.kind}:${port.name}:${port.port}`;
+  const copyLabel = (idle: string) =>
+    copied?.key !== key ? idle : copied.failed ? "Copy failed" : "Copied";
   const address = localAddress(port);
   const failed = port.state === "exited" || port.state === "timeout";
   return (
@@ -185,7 +196,7 @@ function PortRow({
       <span className="portal-row__action">
         {failed ? (
           <Button variant="ghost" onClick={() => onCopy(key, failureLine(project, port))}>
-            {copied === key ? "Copied" : "Copy"}
+            {copyLabel("Copy")}
           </Button>
         ) : port.state !== "listening" || address === null ? (
           <span className="portal-row__state">{stateLabel(port)}</span>
@@ -195,7 +206,7 @@ function PortRow({
           </Button>
         ) : (
           <Button variant="ghost" onClick={() => onCopy(key, address)}>
-            {copied === key ? "Copied" : "Copy address"}
+            {copyLabel("Copy address")}
           </Button>
         )}
       </span>

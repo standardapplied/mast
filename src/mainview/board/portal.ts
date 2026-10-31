@@ -58,7 +58,7 @@ export function failureLine(project: string, port: PortalPort): string {
 
 /** The address a service port is reached at from this Mac. */
 export function localAddress(port: PortalPort): string | null {
-  return port.localPort === null ? null : `localhost:${port.localPort}`;
+  return port.localPort === null ? null : `127.0.0.1:${port.localPort}`;
 }
 
 /** The sentence over the rows: what happened, or what to do when nothing listens. */

@@ -39,7 +39,7 @@ const SETTLED = view(
       localPort: null,
     }),
   ],
-  { url: "http://localhost:3001" },
+  { url: "http://127.0.0.1:3001" },
 );
 
 const STARTING = view(
@@ -81,8 +81,12 @@ function harness(answers: { open: SailResult<PortalView>; refresh?: SailResult<P
       <PortalPanel
         gateway={gateway}
         project="acme"
-        openUrl={(url) => opened.push(url)}
-        copyText={(text) => copied.push(text)}
+        openUrl={async (url) => {
+          opened.push(url);
+        }}
+        copyText={async (text) => {
+          copied.push(text);
+        }}
         schedule={(run) => {
           scheduled.push(run);
           return () => {};
@@ -114,9 +118,9 @@ describe("PortalPanel", () => {
     await settle();
 
     expect(h.calls.open).toBe(1);
-    expect(h.opened).toEqual(["http://localhost:3001"]);
+    expect(h.opened).toEqual(["http://127.0.0.1:3001"]);
     expect(find("portal-headline")?.textContent).toBe(
-      "Opened http://localhost:3001 in your browser. The ports stay forwarded while Mast is connected.",
+      "Opened http://127.0.0.1:3001 in your browser. The ports stay forwarded while Mast is connected.",
     );
     expect(find("portal-port-web")?.textContent).toContain("3000 → 3001");
     expect(h.scheduled).toHaveLength(0);
@@ -130,7 +134,7 @@ describe("PortalPanel", () => {
       "exited 1: Error: Cannot find module 'bullmq'",
     );
     const copy = find("portal-port-worker")?.querySelector("button");
-    act(() => copy!.click());
+    await act(async () => copy!.click());
 
     expect(h.copied).toEqual(["acme worker 8080 exited 1: Error: Cannot find module 'bullmq'"]);
     expect(copy?.textContent).toBe("Copied");
@@ -140,9 +144,9 @@ describe("PortalPanel", () => {
     const h = harness({ open: { ok: true, value: SETTLED } });
     await settle();
 
-    act(() => button("Copy address")!.click());
+    await act(async () => button("Copy address")!.click());
 
-    expect(h.copied).toEqual(["localhost:5432"]);
+    expect(h.copied).toEqual(["127.0.0.1:5432"]);
   });
 
   test("a port still starting is looked at again until it settles, then the browser opens", async () => {
@@ -150,7 +154,7 @@ describe("PortalPanel", () => {
       open: { ok: true, value: STARTING },
       refresh: [
         { ok: true, value: STARTING },
-        { ok: true, value: view([port({ name: "web", port: 3000 })], { url: "http://localhost:3000" }) },
+        { ok: true, value: view([port({ name: "web", port: 3000 })], { url: "http://127.0.0.1:3000" }) },
       ],
     });
     await settle();
@@ -163,7 +167,7 @@ describe("PortalPanel", () => {
     await settle();
 
     expect(h.calls.refresh).toBe(2);
-    expect(h.opened).toEqual(["http://localhost:3000"]);
+    expect(h.opened).toEqual(["http://127.0.0.1:3000"]);
     expect(h.scheduled).toHaveLength(0);
   });
 
@@ -180,7 +184,9 @@ describe("PortalPanel", () => {
     });
     await settle();
 
-    expect(find("portal-refusal")?.textContent).toContain("Project 'acme' is stopped.");
+    expect(find("portal-refusal")?.textContent).toBe(
+      "Project 'acme' is stopped. Start it with sail project start acme.",
+    );
   });
 
   test("stop stops the processes and the rows say so", async () => {
@@ -202,5 +208,67 @@ describe("PortalPanel", () => {
     expect(find("portal-headline")?.textContent).toBe(
       "No service or process declares a port: add `port` to a process in the project's definition.",
     );
+  });
+
+  test("re-rendering the sheet with new callbacks and no schedule serves the project once", async () => {
+    let opens = 0;
+    const gateway = {
+      portalOpen: async () => {
+        opens += 1;
+        return { ok: true as const, value: SETTLED };
+      },
+    } as unknown as Gateway;
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const render = () =>
+      root.render(
+        <PortalPanel
+          gateway={gateway}
+          project="acme"
+          openUrl={async () => {}}
+          copyText={async () => {}}
+          onClose={() => {}}
+        />,
+      );
+    act(render);
+    await settle();
+    act(render);
+    act(render);
+    await settle();
+
+    expect(opens).toBe(1);
+  });
+
+  test("a clipboard or browser that refuses says so where it was asked", async () => {
+    const gateway = {
+      portalOpen: async () => ({ ok: true as const, value: SETTLED }),
+    } as unknown as Gateway;
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root.render(
+        <PortalPanel
+          gateway={gateway}
+          project="acme"
+          openUrl={async () => {
+            throw new Error("no browser");
+          }}
+          copyText={async () => {
+            throw new Error("denied");
+          }}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    await settle();
+
+    expect(find("portal-refusal")?.textContent).toBe(
+      "The browser could not be opened at http://127.0.0.1:3001: no browser",
+    );
+    await act(async () => button("Copy address")!.click());
+    await settle();
+    expect(button("Copy failed")).toBeDefined();
   });
 });

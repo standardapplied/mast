@@ -131,10 +131,14 @@ async fn bind_from(port: u16) -> Result<TcpListener, Refused> {
     Err(Refused::NoFreePort { port })
 }
 
+/// Accepts connections until aborted. Each connection's pipe is a task of this one's set, so
+/// closing or retiring the forward ends the connections it carries too.
 async fn accept(listener: TcpListener, port: u16, connect: Connect) {
+    let mut connections = tokio::task::JoinSet::new();
     while let Ok((mut socket, _)) = listener.accept().await {
+        while connections.try_join_next().is_some() {}
         let connect = connect.clone();
-        tokio::spawn(async move {
+        connections.spawn(async move {
             if let Ok(mut stream) = connect(port).await {
                 let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
             }
@@ -242,6 +246,24 @@ mod tests {
             "the port is free again"
         );
         assert_eq!(forwards.of("acme").await, HashMap::new());
+    }
+
+    #[tokio::test]
+    async fn closing_a_forward_ends_the_connections_it_carries() {
+        let (_, connect) = echo().await;
+        let forwards = Forwards::new();
+        let port = free_port().await;
+        let local = forwards.open("acme", port, connect).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", local)).await.unwrap();
+        client.write_all(b"hi").await.unwrap();
+        let mut heard = [0u8; 2];
+        client.read_exact(&mut heard).await.unwrap();
+
+        forwards.close("acme").await;
+
+        let mut rest = [0u8; 1];
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(5), client.read(&mut rest)).await;
+        assert!(matches!(ended, Ok(Ok(0)) | Ok(Err(_))), "the connection ended: {ended:?}");
     }
 
     #[tokio::test]

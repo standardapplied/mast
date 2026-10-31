@@ -281,8 +281,8 @@ export function TerminalWorkspace({
         <PortalPanel
           gateway={gateway}
           project={portalFor}
-          openUrl={(url) => void invoke("open_url", { url }).catch(() => {})}
-          copyText={(text) => void navigator.clipboard?.writeText(text).catch(() => {})}
+          openUrl={(url) => invoke("open_url", { url })}
+          copyText={(text) => navigator.clipboard.writeText(text)}
           onClose={() => setPortalFor(null)}
         />
       )}
