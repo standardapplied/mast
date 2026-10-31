@@ -1123,7 +1123,9 @@ impl Backend {
             };
             match opened {
                 Ok(channel) => return Ok(channel),
-                Err(refused @ russh::Error::ChannelOpenFailure(_)) => return Err(refused.into()),
+                Err(refused @ russh::Error::ChannelOpenFailure(_)) if port.is_some() => {
+                    return Err(refused.into())
+                }
                 Err(e) => {
                     self.containers.lock().await.remove(target);
                     last = Some(e);

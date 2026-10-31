@@ -282,7 +282,7 @@ export function TerminalWorkspace({
           gateway={gateway}
           project={portalFor}
           openUrl={(url) => invoke("open_url", { url })}
-          copyText={(text) => navigator.clipboard.writeText(text)}
+          copyText={(text) => Promise.resolve().then(() => navigator.clipboard.writeText(text))}
           onClose={() => setPortalFor(null)}
         />
       )}
