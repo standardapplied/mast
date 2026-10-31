@@ -28,6 +28,15 @@ containers with nothing else on the Mac, refusing any box whose SSH host key is 
 the code named. "Forget this box" in the user menu deletes those files; the box keeps its side
 of the pairing until its owner runs `sail fde unpair`.
 
+### Opening the project's app
+
+The globe in a project terminal's tab tools is the **Portal**. It asks the box to bring the
+project's services and processes up (`sail project serve`), forwards every port that listens
+to `127.0.0.1` on this Mac over the connection Mast already holds, and opens the first app in
+your browser. A port the Mac already uses is forwarded from the next free one above it. A
+process that failed shows the line that says why, with Copy. Nothing is installed on the Mac,
+and the forwards close when Mast quits.
+
 ### Without a connect code
 
 When `~/.sail/mast.yaml` is absent, Mast falls back to the configuration the `sail` CLI
