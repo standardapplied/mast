@@ -324,6 +324,9 @@ pub struct Backend {
     /// client-chosen id. The sender signals the pump task to stop when the
     /// webview closes the stream.
     streams: Registry<mpsc::Sender<()>>,
+    /// The portal's forwards: listeners on this Mac's loopback, each piping its connections over
+    /// a container's session to a port inside it.
+    forwards: crate::forward::Forwards,
 }
 
 static GENERATIONS: AtomicU64 = AtomicU64::new(1);
@@ -592,6 +595,7 @@ impl Backend {
             openings: Openings::default(),
             home: Mutex::new(None),
             streams: Registry::default(),
+            forwards: crate::forward::Forwards::new(),
         }
     }
 
@@ -1100,15 +1104,28 @@ impl Backend {
     /// Open a channel on a container's session, redialing once if the cached
     /// session has died (container restart / idle drop).
     async fn container_channel(&self, target: &str) -> Result<Channel<Msg>, Error> {
+        self.container_open(target, None).await
+    }
+
+    /// Open a channel to `port` on the container's own loopback, over its session: a process
+    /// bound to 127.0.0.1 inside is reached as one bound to every address.
+    pub(crate) async fn container_port(&self, target: &str, port: u16) -> Result<Channel<Msg>, Error> {
+        self.container_open(target, Some(port)).await
+    }
+
+    async fn container_open(&self, target: &str, port: Option<u16>) -> Result<Channel<Msg>, Error> {
         let mut last = None;
-        for attempt in 0..2 {
+        for _attempt in 0..2 {
             let session = self.container_session(target).await?;
-            match session.handle.channel_open_session().await {
+            let opened = match port {
+                None => session.handle.channel_open_session().await,
+                Some(port) => session.handle.channel_open_direct_tcpip("localhost", port as u32, "127.0.0.1", 0).await,
+            };
+            match opened {
                 Ok(channel) => return Ok(channel),
                 Err(e) => {
                     self.containers.lock().await.remove(target);
                     last = Some(e);
-                    let _ = attempt;
                 }
             }
         }
@@ -1824,6 +1841,12 @@ impl Backend {
     pub async fn retire(&self) {
         self.sessions.retire().await;
         self.streams.retire().await;
+        self.forwards.retire().await;
+    }
+
+    /// The portal's forwards, which this backend closes when it is retired.
+    pub(crate) fn forwards(&self) -> &crate::forward::Forwards {
+        &self.forwards
     }
 
 }

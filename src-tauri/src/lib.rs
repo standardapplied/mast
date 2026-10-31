@@ -2,8 +2,10 @@
 //! reaches the control plane and the container terminals. One `run()` serves
 //! desktop (main.rs) and mobile (the `mobile_entry_point`).
 
+mod forward;
 mod login;
 mod pairing;
+mod portal;
 mod pty;
 #[cfg(test)]
 mod pty_probe;
@@ -228,6 +230,24 @@ fn url_scheme(url: &str) -> Option<&str> {
     let valid = first.is_ascii_alphabetic()
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
     valid.then_some(scheme)
+}
+
+/// Brings a project's stack up, forwards every port that listens, and names the address to open.
+#[tauri::command]
+async fn portal_open(state: Bound<'_>, project: String) -> Result<portal::PortalView, String> {
+    portal::open(&state.backend().await?, &project).await.map_err(String::from)
+}
+
+/// Where a project's ports stand now, forwarding any that came to listen since.
+#[tauri::command]
+async fn portal_refresh(state: Bound<'_>, project: String) -> Result<portal::PortalView, String> {
+    portal::refresh(&state.backend().await?, &project).await.map_err(String::from)
+}
+
+/// Stops a project's processes and closes its forwards.
+#[tauri::command]
+async fn portal_stop(state: Bound<'_>, project: String) -> Result<portal::PortalView, String> {
+    portal::stop(&state.backend().await?, &project).await.map_err(String::from)
 }
 
 #[tauri::command]
@@ -731,6 +751,9 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             sail_request,
+            portal_open,
+            portal_refresh,
+            portal_stop,
             connection_status,
             connect_code_preview,
             pair,

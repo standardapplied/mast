@@ -50,6 +50,7 @@ import type {
   WhoAmI,
 } from "../shared/sail-models";
 import type { SailResult } from "../shared/types";
+import type { PortalView } from "./board/portal";
 import type { DeckSession, SessionListing } from "./terminal/roomDeck";
 import type { AgentLogLine, AgentLogState } from "./tauri/agentLogStream";
 import { isLiveTurnEvent } from "./board/liveTurns";
@@ -168,6 +169,12 @@ export type Gateway = {
   restoreSnapshot(project: string, name: string): Promise<SailResult<SnapshotActionResponse>>;
   /** Accept an async delete; completion arrives as the snapshot_deleted event. */
   deleteSnapshot(project: string, name: string): Promise<SailResult<SnapshotActionResponse>>;
+  /** Bring the project's stack up and forward every port that listens to this Mac — sail ≥ 0.59. */
+  portalOpen(project: string): Promise<SailResult<PortalView>>;
+  /** Where the project's ports stand now, forwarding any that came to listen since. */
+  portalRefresh(project: string): Promise<SailResult<PortalView>>;
+  /** Stop the project's processes and close its forwards; its services keep running. */
+  portalStop(project: string): Promise<SailResult<PortalView>>;
   /** A `tail -n` snapshot of the spec's newest run log, for instant content on open. */
   agentLogSnapshot(
     specId: string,
@@ -559,6 +566,23 @@ export function createDemoGateway(
   };
 
   const snapshotStore = new Map<string, SnapshotView[]>();
+  const portalLooks = new Map<string, number>();
+  /** The demo project's stack, a look after the portal opened it: the web app listens on the
+   *  second, from a port the Mac already used, and the worker has exited. */
+  const demoPortal = (project: string, looks: number): PortalView => {
+    const up = looks >= 1;
+    return {
+      project,
+      settled: up,
+      url: up ? "http://localhost:3001" : null,
+      ports: [
+        { name: "web", port: 3000, kind: "process", state: up ? "listening" : "starting", exitCode: null, detail: null, localPort: up ? 3001 : null },
+        { name: "postgres", port: 5432, kind: "service", state: "listening", exitCode: null, detail: null, localPort: 5432 },
+        { name: "worker", port: 8080, kind: "process", state: up ? "exited" : "starting", exitCode: up ? 1 : null, detail: up ? "Error: Cannot find module 'bullmq'" : null, localPort: null },
+      ],
+    };
+  };
+
   const demoSnapshots = (project: string): SnapshotView[] => {
     let list = snapshotStore.get(project);
     if (!list) {
@@ -1123,6 +1147,22 @@ export function createDemoGateway(
         data: { label: name },
       });
       return ok({ project, name, action: "delete", status: "accepted" });
+    },
+
+    async portalOpen(project) {
+      portalLooks.set(project, 0);
+      return ok(demoPortal(project, 0));
+    },
+
+    async portalRefresh(project) {
+      const looks = (portalLooks.get(project) ?? 0) + 1;
+      portalLooks.set(project, looks);
+      return ok(demoPortal(project, looks));
+    },
+
+    async portalStop(project) {
+      portalLooks.delete(project);
+      return ok({ ...demoPortal(project, 2), url: null, ports: demoPortal(project, 2).ports.map((port) => ({ ...port, state: port.kind === "service" ? port.state : "stopped", localPort: null, exitCode: null, detail: null })) });
     },
 
     async agentLogSnapshot(_specId, role, tail) {

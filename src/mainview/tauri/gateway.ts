@@ -18,6 +18,7 @@ import { EventStream, type EventStreamDeps, type StreamResponse } from "../../sh
 import { LIVE_TURN_EVENT_TYPES } from "../board/liveTurns";
 import { formatRecentErrors, logError } from "../errorLog";
 import type { AgentLogHandle, Gateway } from "../gateway";
+import type { PortalView } from "../board/portal";
 import type { SessionListing } from "../terminal/roomDeck";
 import { AgentLogStream, latestRun, TerminalLogError } from "./agentLogStream";
 import { bindPage, invoke, restartPage } from "./core";
@@ -278,6 +279,16 @@ function tauriAgentLog(specId: string, role: AgentLogRole, since: number): Agent
 /**
  * `restart` ends the page (see {@link restartPage}); a test hands in its own to see it asked for.
  */
+/** A portal command of the core, its refusal read as the box's own sentence. */
+async function portal(cmd: string, project: string): Promise<SailResult<PortalView>> {
+  try {
+    return { ok: true, value: await invoke<PortalView>(cmd, { project }) };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: { status: 0, code: "portal", message } };
+  }
+}
+
 export function createTauriGateway(restart: () => Promise<never> = restartPage): Gateway {
   const recent = async (limit: number): Promise<RecentEventsResponse> => {
     const result = await read<RecentEventsResponse>("GET", `/v1/events/recent?limit=${limit}`);
@@ -462,6 +473,9 @@ export function createTauriGateway(restart: () => Promise<never> = restartPage):
         "DELETE",
         `/v1/projects/${encodeURIComponent(project)}/snapshots/${encodeURIComponent(name)}`,
       ),
+    portalOpen: (project) => portal("portal_open", project),
+    portalRefresh: (project) => portal("portal_refresh", project),
+    portalStop: (project) => portal("portal_stop", project),
     agentLogSnapshot: async (specId, role, tail) => {
       const run = await latestSpecRun(specId, role);
       if (!run) {
