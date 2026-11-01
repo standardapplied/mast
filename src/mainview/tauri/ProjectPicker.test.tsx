@@ -73,7 +73,7 @@ describe("ProjectPicker", () => {
       "node · devbox",
     ]);
     expect(metaOf("chorus")).toBe("running");
-    expect(metaOf("nautilus")).toBe("not created");
+    expect(metaOf("nautilus")).toBe("not created on this box");
     expect(metaOf("sail-mast")).toBe("stopped");
   });
 
@@ -158,5 +158,97 @@ describe("ProjectPicker", () => {
     );
     cancel!.click();
     expect(cancelled).toBe(true);
+  });
+
+  test("a project with no container here names the command that makes one, copies it and opens its definition", async () => {
+    const copied: string[] = [];
+    const edited: string[] = [];
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root.render(
+        <ProjectPicker
+          sources={fakeSources()}
+          copyText={async (text) => {
+            copied.push(text);
+          }}
+          onEditDefinition={(project) => edited.push(project)}
+          onPick={() => {}}
+        />,
+      ),
+    );
+    await flush();
+
+    const apply = container.querySelector('[data-testid="picker-apply-nautilus"]')!;
+    expect(apply.querySelector("code")?.textContent).toBe("sail project apply nautilus");
+    expect(container.querySelector('[data-testid="picker-apply-chorus"]')).toBeNull();
+    expect(container.querySelector('[data-testid="picker-new-project"]')).toBeNull();
+    const buttonIn = (label: string) => [...apply.querySelectorAll("button")].find((b) => b.textContent === label)!;
+    act(() => buttonIn("Copy").click());
+    await flush();
+    expect(copied).toEqual(["sail project apply nautilus"]);
+    expect(buttonIn("Copied")).toBeDefined();
+    act(() => buttonIn("Edit definition").click());
+    expect(edited).toEqual(["nautilus"]);
+  });
+
+  test("a copy the clipboard refuses says so", async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root.render(
+        <ProjectPicker sources={fakeSources()} copyText={() => Promise.reject(new Error("denied"))} onPick={() => {}} />,
+      ),
+    );
+    await flush();
+
+    const apply = container.querySelector('[data-testid="picker-apply-nautilus"]')!;
+    act(() => [...apply.querySelectorAll("button")].find((b) => b.textContent === "Copy")!.click());
+    await flush();
+
+    expect(apply.textContent).toContain("Copy failed");
+  });
+
+  test("New project creates it in the catalog and shows it with the command that makes its container", async () => {
+    const projects: ProjectListResponse["projects"] = [{ name: "chorus", container_status: "running" }];
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root.render(
+        <ProjectPicker
+          sources={fakeSources({ listProjects: async () => catalog([...projects]) })}
+          gateway={{
+            createProject: async (definition) => {
+              projects.push({ name: definition.name, container_status: "not_created" });
+              return {
+                ok: true,
+                value: { name: definition.name, definition, tags: {} as never, updated_by: "uday", updated_at: "2026-10-30T09:00:00Z" },
+              };
+            },
+          }}
+          onPick={() => {}}
+        />,
+      ),
+    );
+    await flush();
+
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="picker-new-project"]')!.click());
+    await flush();
+    const name = document.getElementById("new-project-name") as HTMLInputElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "acme-web");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => document.querySelector<HTMLButtonElement>('[data-testid="new-project-create"]')!.click());
+    await flush();
+
+    expect(document.querySelector('[data-testid="new-project-form"]')).toBeNull();
+    expect(metaOf("acme-web")).toBe("not created on this box");
+    expect(container.querySelector('[data-testid="picker-apply-acme-web"]')?.textContent).toContain(
+      "Created in the catalog. Its container is made on the box that will run it:sail project apply acme-web",
+    );
   });
 });

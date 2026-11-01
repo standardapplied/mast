@@ -17,6 +17,34 @@ describe("project roster", () => {
   });
 });
 
+describe("project definitions", () => {
+  test("the demo gateway creates a project, lists it as not created, and writes its sections over their tags", async () => {
+    const gateway = createDemoGateway();
+
+    const created = await gateway.createProject({ name: "acme-web", image: "ubuntu/24.04" });
+    expect(created.ok).toBe(true);
+    const listed = await gateway.listProjects();
+    expect(listed.ok && listed.value.projects.find((p) => p.name === "acme-web")).toEqual({
+      name: "acme-web",
+      container_status: "not_created",
+    });
+
+    const read = await gateway.projectDefinition("acme-web");
+    if (!read.ok) throw new Error("unread");
+    const written = await gateway.writeProjectSection("acme-web", "image", "debian/12", read.value.tags.image);
+    expect(written.ok && written.value.definition.image).toBe("debian/12");
+    const stale = await gateway.writeProjectSection("acme-web", "image", "x/1", read.value.tags.image);
+    expect(stale.ok ? null : stale.error.code).toBe("precondition_failed");
+    const unset = await gateway.writeProjectSection("acme-web", "image", null, '"debian/12"');
+    expect(unset.ok && "image" in unset.value.definition).toBe(false);
+
+    const ghost = await gateway.writeProjectSection("ghost", "image", "x/1", "null");
+    expect(ghost.ok ? null : ghost.error.code).toBe("project_not_found");
+    const missing = await gateway.projectDefinition("ghost");
+    expect(missing.ok ? null : missing.error.message).toBe("Project 'ghost' was not found.");
+  });
+});
+
 describe("FDE roster", () => {
   test("the demo gateway serves the org's FDEs with handles and display names", async () => {
     const result = await createDemoGateway().listFdes();

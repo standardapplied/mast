@@ -41,6 +41,22 @@ export function Camera(props: IconProps) {
   );
 }
 
+export function Sliders(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 6h10" />
+      <path d="M18 6h2" />
+      <path d="M16 4v4" />
+      <path d="M4 12h3" />
+      <path d="M11 12h9" />
+      <path d="M9 10v4" />
+      <path d="M4 18h12" />
+      <path d="M20 18h0" />
+      <path d="M18 16v4" />
+    </svg>
+  );
+}
+
 export function Globe(props: IconProps) {
   return (
     <svg {...base(props)}>

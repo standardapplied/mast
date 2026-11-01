@@ -10,6 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { RoomsInventory } from "../board/RoomDeck";
 import { coalesce } from "../board/roomRouting";
+import { DefinitionPanel } from "../board/DefinitionPanel";
 import { PortalPanel } from "../board/PortalPanel";
 import { SnapshotsPanel } from "../board/SnapshotsPanel";
 import { cx } from "../components/cx";
@@ -18,7 +19,7 @@ import { isUnwell, type SessionStatus, statusEqual } from "../terminal/connectio
 import { roomGroups, type RoomTerminalRequest } from "../terminal/roomDeck";
 import { sessionStore } from "../terminal/sessionStore";
 import { IconButton } from "../components/IconButton";
-import { Camera, Globe } from "../components/icons";
+import { Camera, Globe, Sliders } from "../components/icons";
 import { invoke } from "./core";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
@@ -101,6 +102,8 @@ export function TerminalWorkspace({
   const [adding, setAdding] = useState(false);
   const [snapshotsFor, setSnapshotsFor] = useState<string | null>(null);
   const [portalFor, setPortalFor] = useState<string | null>(null);
+  const [definitionFor, setDefinitionFor] = useState<string | null>(null);
+  const copyText = (text: string) => Promise.resolve().then(() => navigator.clipboard.writeText(text));
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
   const paneRefs = useRef(new Map<string, TerminalHandle>());
 
@@ -234,6 +237,11 @@ export function TerminalWorkspace({
               />
             )}
             {gateway && activeTarget && !adding && (
+              <IconButton label="Definition" onClick={() => setDefinitionFor(activeTarget)}>
+                <Sliders size={15} />
+              </IconButton>
+            )}
+            {gateway && activeTarget && !adding && (
               <IconButton label="Portal" onClick={() => setPortalFor(activeTarget)}>
                 <Globe size={15} />
               </IconButton>
@@ -272,6 +280,9 @@ export function TerminalWorkspace({
         {showPicker && (
           <ProjectPicker
             sources={sources}
+            gateway={gateway}
+            copyText={copyText}
+            onEditDefinition={gateway ? setDefinitionFor : undefined}
             onPick={open}
             onCancel={tabs.length > 0 ? () => setAdding(false) : undefined}
           />
@@ -282,9 +293,12 @@ export function TerminalWorkspace({
           gateway={gateway}
           project={portalFor}
           openUrl={(url) => invoke("open_url", { url })}
-          copyText={(text) => Promise.resolve().then(() => navigator.clipboard.writeText(text))}
+          copyText={copyText}
           onClose={() => setPortalFor(null)}
         />
+      )}
+      {gateway && definitionFor && (
+        <DefinitionPanel gateway={gateway} project={definitionFor} onClose={() => setDefinitionFor(null)} />
       )}
       {gateway && snapshotsFor && (
         <SnapshotsPanel

@@ -53,7 +53,12 @@ export function mergeRoster(projects: ProjectListItem[], targets: string[]): Pro
 export function rowMeta(row: ProjectRow): string {
   if (row.status === undefined) return "project container";
   if (row.status === "running" && !row.connectable) return "running · no ssh route";
-  return row.status === "not_created" ? "not created" : row.status;
+  return row.status === "not_created" ? "not created on this box" : row.status;
+}
+
+/** The command that makes a catalogued project's container on the box that runs it. */
+export function applyCommand(project: string): string {
+  return `sail project apply ${project}`;
 }
 
 /** Why a row can't open a terminal (tooltip on disabled rows). */
@@ -65,7 +70,7 @@ export function rowHint(row: ProjectRow): string | undefined {
     case "stopped":
       return "The container is stopped — start it to open a terminal.";
     case "not_created":
-      return "Catalogued on the project roster, but no container exists on this box.";
+      return `In the catalog, with no container on this box. Make one with: ${applyCommand(row.name)}`;
     case "error":
       return "The container is in an error state.";
     default:
