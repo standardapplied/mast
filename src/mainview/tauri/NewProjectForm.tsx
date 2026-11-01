@@ -4,16 +4,15 @@ import { cx } from "../components/cx";
 import { Dialog } from "../components/Dialog";
 import { Plus } from "../components/icons";
 import { Button } from "../components/ui";
+import type { CatalogStore } from "../board/catalogStore";
+import { LabeledInput, RepoRows } from "../board/DefinitionFields";
 import {
   NEW_PROJECT,
   newProjectDocument,
   RUNTIME_CHOICES,
   SERVICE_PRESETS,
   type NewProject,
-} from "../board/definition";
-import { LabeledInput, RepoRows } from "../board/DefinitionFields";
-import { readRepos, type RepoForm } from "../board/definitionForms";
-import type { Gateway } from "../gateway";
+} from "../board/definitionForms";
 import { refusalDetail } from "../board/snapshots";
 
 /**
@@ -22,18 +21,20 @@ import { refusalDetail } from "../board/snapshots";
  * refuses comes back inline as sail's own sentence, and the form keeps every field as typed.
  */
 export function NewProjectForm({
-  gateway,
+  catalog,
   onCreated,
   onClose,
 }: {
-  gateway: Pick<Gateway, "createProject">;
+  catalog: Pick<CatalogStore, "createProject">;
   onCreated: (created: ProjectDefinitionResponse) => void;
   onClose: () => void;
 }) {
   const [form, setForm] = useState<NewProject>(NEW_PROJECT);
-  const [repos, setRepos] = useState<RepoForm[]>([]);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const typed = JSON.stringify({ ...form, runtimes: [...form.runtimes] }) !==
+    JSON.stringify({ ...NEW_PROJECT, runtimes: [] });
   const edit = (patch: Partial<NewProject>) => setForm((prev) => ({ ...prev, ...patch }));
 
   const toggleRuntime = (key: (typeof RUNTIME_CHOICES)[number]["key"]) => {
@@ -50,14 +51,14 @@ export function NewProjectForm({
   };
 
   const create = async () => {
-    const read = readRepos(repos, undefined);
-    if (!read.ok) {
-      setRefusal(read.message);
+    const document = newProjectDocument(form);
+    if (!document.ok) {
+      setRefusal(document.message);
       return;
     }
     setCreating(true);
     setRefusal(null);
-    const result = await gateway.createProject(newProjectDocument({ ...form, repos: read.value ?? [] }));
+    const result = await catalog.createProject(document.value);
     setCreating(false);
     if (result.ok) onCreated(result.value);
     else setRefusal(refusalDetail(result.error));
@@ -67,6 +68,11 @@ export function NewProjectForm({
     <Dialog
       isOpen
       onClose={onClose}
+      onBeforeClose={() => {
+        if (!typed || creating) return !creating;
+        setLeaving(true);
+        return false;
+      }}
       title="New project"
       size="lg"
       footer={
@@ -92,6 +98,17 @@ export function NewProjectForm({
           Saved to the catalog, so every box on the team sees it. Processes, packages and the agent
           are set on the project once it exists.
         </p>
+        {leaving && (
+          <div className="def-banner" role="alert" data-testid="new-project-leaving">
+            <span>Nothing is created yet, and closing drops what you typed.</span>
+            <Button variant="ghost" onClick={() => setLeaving(false)}>
+              Keep editing
+            </Button>
+            <Button variant="ghost" onClick={onClose}>
+              Discard and close
+            </Button>
+          </div>
+        )}
         {refusal && (
           <p className="dispatch-block" role="alert" data-testid="new-project-refusal">
             {refusal}
@@ -128,7 +145,7 @@ export function NewProjectForm({
             ))}
           </div>
         </div>
-        <RepoRows rows={repos} onChange={setRepos} />
+        <RepoRows rows={form.repos} onChange={(repos) => edit({ repos })} />
         <div className="def-group">
           <span className="def-group__label">Services</span>
           <div className="def-chips">

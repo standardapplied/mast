@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   modelOf,
+  NEW_PROJECT,
+  newProjectDocument,
+  SERVICE_PRESETS,
   processesForm,
   readModel,
   readProcesses,
@@ -29,17 +32,19 @@ describe("each form reads back as the value it was made from", () => {
   test("repos, a path left blank taking the URL's last part and a held forge kept", () => {
     const held = [{ url: "https://git.acme.dev/web.git", path: "web", forge: "github" }];
 
-    expect(readRepos(reposForm(held), held)).toEqual({ ok: true, value: held });
+    expect(readRepos(reposForm(held))).toEqual({ ok: true, value: held });
+    expect(
+      readRepos(reposForm(held).map((row) => ({ ...row, url: "https://git.acme.dev/web2.git" }))),
+    ).toEqual({ ok: true, value: [{ ...held[0]!, url: "https://git.acme.dev/web2.git" }] });
     expect(
       readRepos(
         [
-          { url: " https://github.com/acme/api.git ", path: "", branch: " main " },
-          { url: "", path: "", branch: "" },
+          { url: " https://github.com/acme/api.git ", path: "", branch: " main ", forge: "" },
+          { url: "", path: "", branch: "", forge: "" },
         ],
-        held,
       ),
     ).toEqual({ ok: true, value: [{ url: "https://github.com/acme/api.git", path: "api", branch: "main" }] });
-    expect(readRepos([], undefined)).toEqual({ ok: true, value: null });
+    expect(readRepos([])).toEqual({ ok: true, value: null });
   });
 
   test("services and processes, blank rows dropped", () => {
@@ -81,7 +86,8 @@ describe("a field a form cannot hold is refused naming it as sail does", () => {
   test.each([
     [readResources({ cpu: "four", memory: "", disk: "" }), "resources.cpu must be a whole number."],
     [readRuntimes({ jdk: "26.1", node: "", maven: "" }), "runtimes.jdk must be a whole number."],
-    [readRepos([{ url: "", path: "web", branch: "" }], undefined), "repos[].url is required."],
+    [readRepos([{ url: "", path: "web", branch: "", forge: "" }]), "repos[].url is required."],
+    [readResources({ cpu: "0", memory: "", disk: "" }), "resources.cpu must be at least 1."],
     [
       readServices([{ name: "", image: "x", ports: "", environment: [], volumes: [], command: "" }]),
       "services needs a name for every service.",
@@ -130,20 +136,70 @@ describe("a section's editor", () => {
   });
 
   test("reads back every section, naming the field or the JSON line it stops on", () => {
-    expect(readModel("resources", { cpu: "x", memory: "", disk: "" }, undefined)).toEqual({
+    expect(readModel("resources", { cpu: "x", memory: "", disk: "" })).toEqual({
       ok: false,
       message: "resources.cpu must be a whole number.",
       line: null,
     });
-    expect(readModel("runtimes", { jdk: "", node: "24", maven: "" }, undefined)).toEqual({ ok: true, value: { node: "24" } });
-    expect(readModel("repos", [], undefined)).toEqual({ ok: true, value: null });
-    expect(readModel("services", [], undefined)).toEqual({ ok: true, value: null });
-    expect(readModel("processes", [], undefined)).toEqual({ ok: true, value: null });
-    expect(readModel("agent", '{"type": "codex"}', undefined)).toEqual({ ok: true, value: { type: "codex" } });
-    expect(readModel("packages", '[\n  "jq",\n]', undefined)).toEqual({
+    expect(readModel("runtimes", { jdk: "", node: "24", maven: "" })).toEqual({ ok: true, value: { node: "24" } });
+    expect(readModel("repos", [])).toEqual({ ok: true, value: null });
+    expect(readModel("services", [])).toEqual({ ok: true, value: null });
+    expect(readModel("processes", [])).toEqual({ ok: true, value: null });
+    expect(readModel("agent", '{"type": "codex"}')).toEqual({ ok: true, value: { type: "codex" } });
+    expect(readModel("packages", '[\n  "jq",\n]')).toEqual({
       ok: false,
       message: "Line 3: This is not JSON.",
       line: 3,
     });
+  });
+});
+
+describe("a new project", () => {
+  test("is what sail project create writes for the same answers", () => {
+    expect(newProjectDocument({ ...NEW_PROJECT, name: " acme-web " })).toEqual({
+      ok: true,
+      value: {
+        name: "acme-web",
+        image: "ubuntu/24.04",
+        resources: { cpu: 2, memory: "8GB", disk: "50GB" },
+        agent: { type: "claude-code", auto_branch: true, branch_prefix: "agent/", auto_snapshot: true },
+      },
+    });
+    expect(
+      newProjectDocument({
+        ...NEW_PROJECT,
+        name: "acme-web",
+        description: " Storefront ",
+        runtimes: new Set(["maven", "jdk"]),
+        repos: [{ url: "https://github.com/acme/web.git", path: "", branch: "", forge: "" }],
+        services: { redis: SERVICE_PRESETS[1]!.service },
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+      name: "acme-web",
+      description: "Storefront",
+      image: "ubuntu/24.04",
+      resources: { cpu: 2, memory: "8GB", disk: "50GB" },
+      runtimes: { jdk: 26, maven: "3.9.14" },
+      repos: [{ url: "https://github.com/acme/web.git", path: "web" }],
+      services: { redis: { image: "redis:7", ports: [6379] } },
+      agent: { type: "claude-code", auto_branch: true, branch_prefix: "agent/", auto_snapshot: true },
+      },
+    });
+  });
+
+  test("resources it cannot hold are refused before anything is sent", () => {
+    expect(newProjectDocument({ ...NEW_PROJECT, name: "a", cpu: "" })).toEqual({
+      ok: false,
+      message: "resources needs cpu, memory and disk.",
+    });
+    expect(newProjectDocument({ ...NEW_PROJECT, name: "a", cpu: "2.5" })).toEqual({
+      ok: false,
+      message: "resources.cpu must be a whole number.",
+    });
+    expect(
+      newProjectDocument({ ...NEW_PROJECT, name: "a", repos: [{ url: "", path: "x", branch: "", forge: "" }] }),
+    ).toEqual({ ok: false, message: "repos[].url is required." });
   });
 });

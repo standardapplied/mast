@@ -1,16 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
-  changed,
   jsonText,
-  NEW_PROJECT,
-  newProjectDocument,
   PANEL_SECTIONS,
   portsFrom,
   readJson,
   refusedLine,
   repoPath,
   SECTIONS,
-  SERVICE_PRESETS,
   syntaxLine,
 } from "./definition";
 
@@ -56,6 +52,21 @@ describe("a JSON section", () => {
     expect(syntaxLine('{"a": 1}\n\nextra')).toBe(3);
     expect(syntaxLine("{")).toBe(1);
     expect(syntaxLine("01")).toBe(1);
+    expect(syntaxLine('{\n  "a": "tab\there"\n}')).toBe(2);
+    expect(syntaxLine('{\n  "a": "\\q"\n}')).toBe(2);
+    expect(syntaxLine('{"a": "\\u12g4"}')).toBe(1);
+    expect(syntaxLine('{"a": "\\u00e9 \\n \\" \\\\"}')).toBe(0);
+  });
+
+  test("a refusal names its element by index and is placed on that element's field", () => {
+    const stages =
+      '{\n  "stages": [\n    {\n      "name": "review",\n      "brief": "One."\n    },\n    {\n      "name": "lint",\n      "brief": ""\n    }\n  ]\n}';
+
+    expect(refusedLine(stages, "pipeline", "pipeline.stages[1].brief must not be empty.")).toBe(9);
+    expect(refusedLine(stages, "pipeline", "pipeline.stages[0].brief must not be empty.")).toBe(5);
+    expect(refusedLine(stages, "pipeline", "pipeline.stages[].name is required.")).toBe(4);
+    expect(refusedLine('{\n  "x-1": {\n    "B2": 3\n  }\n}', "agent", "agent.x-1.B2 is wrong.")).toBe(3);
+    expect(refusedLine("not json", "agent", "agent.type is wrong.")).toBeNull();
   });
 
   test("a refusal is placed on the line that keys the field it names", () => {
@@ -63,7 +74,9 @@ describe("a JSON section", () => {
 
     expect(refusedLine(text, "agent", "agent.guardrails.max_duration '90' is not a duration.")).toBe(4);
     expect(refusedLine(text, "agent", "guardrails.max_duration '90' is not a duration.")).toBe(4);
-    expect(refusedLine('[\n  {"name": "lint", "gate": "x"}\n]', "pipeline", "pipeline.stages[0].gate 'x' is not a gate.")).toBe(2);
+    expect(
+      refusedLine('{\n  "stages": [\n    {"name": "lint", "gate": "x"}\n  ]\n}', "pipeline", "pipeline.stages[0].gate 'x' is not a gate."),
+    ).toBe(3);
     expect(refusedLine(text, "agent", "agent.member must be a block of keys.")).toBeNull();
     expect(refusedLine(text, "agent", "The agent section of 'acme' changed since you read it.")).toBeNull();
     expect(refusedLine(text, "agent", "agent is not valid")).toBeNull();
@@ -72,42 +85,9 @@ describe("a JSON section", () => {
     ).toBeNull();
   });
 
-  test("is changed when its value differs from the box's, unset and null alike", () => {
-    expect(changed({ a: 1 }, { a: 1 })).toBe(false);
-    expect(changed(null, undefined)).toBe(false);
-    expect(changed({ a: 2 }, { a: 1 })).toBe(true);
-  });
 });
 
-describe("a new project", () => {
-  test("is what sail project create writes for the same answers", () => {
-    expect(newProjectDocument({ ...NEW_PROJECT, name: " acme-web " })).toEqual({
-      name: "acme-web",
-      image: "ubuntu/24.04",
-      resources: { cpu: 2, memory: "8GB", disk: "50GB" },
-      agent: { type: "claude-code", auto_branch: true, branch_prefix: "agent/", auto_snapshot: true },
-    });
-    expect(
-      newProjectDocument({
-        ...NEW_PROJECT,
-        name: "acme-web",
-        description: " Storefront ",
-        runtimes: new Set(["maven", "jdk"]),
-        repos: [{ url: "https://github.com/acme/web.git", path: "web" }],
-        services: { redis: SERVICE_PRESETS[1]!.service },
-      }),
-    ).toEqual({
-      name: "acme-web",
-      description: "Storefront",
-      image: "ubuntu/24.04",
-      resources: { cpu: 2, memory: "8GB", disk: "50GB" },
-      runtimes: { jdk: 26, maven: "3.9.14" },
-      repos: [{ url: "https://github.com/acme/web.git", path: "web" }],
-      services: { redis: { image: "redis:7", ports: [6379] } },
-      agent: { type: "claude-code", auto_branch: true, branch_prefix: "agent/", auto_snapshot: true },
-    });
-  });
-
+describe("a repo path and ports", () => {
   test("a repo's path defaults to its URL's last part, and ports are whole numbers", () => {
     expect(repoPath("https://github.com/acme/web.git")).toBe("web");
     expect(repoPath("https://github.com/acme/web/")).toBe("web");

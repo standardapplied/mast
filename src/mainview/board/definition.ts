@@ -82,15 +82,19 @@ export function readJson(text: string): JsonRead {
   try {
     return { ok: true, value: JSON.parse(text) };
   } catch {
-    return { ok: false, line: syntaxLine(text), message: "This is not JSON." };
+    return { ok: false, line: syntaxLine(text) || text.split("\n").length, message: "This is not JSON." };
   }
 }
 
+type Scan = { error: number | null; lines: Map<string, number> };
+
 /**
- * The line of the first character that stops {@code text} being one JSON value: the webview's
- * own parser names no position, so a small scanner finds it.
+ * Walks {@code text} as JSON, as strictly as `JSON.parse` reads it: where it first stops being one
+ * value, and the line each value starts on by its path (`stages[1].brief`). The webview's own
+ * parser names no position, so this one does.
  */
-export function syntaxLine(text: string): number {
+function scan(text: string): Scan {
+  const lines = new Map<string, number>();
   let at = 0;
   const space = () => {
     while (at < text.length && " \t\n\r".includes(text[at]!)) at++;
@@ -99,29 +103,36 @@ export function syntaxLine(text: string): number {
     if (text.startsWith(word, at)) at += word.length;
     else throw at;
   };
-  const string = () => {
-    at++;
+  const string = (): string => {
+    const start = at++;
     while (at < text.length && text[at] !== '"') {
-      if (text[at] === "\n") throw at;
-      at += text[at] === "\\" ? 2 : 1;
+      if (text.charCodeAt(at) < 0x20) throw at;
+      if (text[at] === "\\") {
+        const escape = text[at + 1];
+        if (escape === "u" && /^[0-9a-fA-F]{4}$/.test(text.slice(at + 2, at + 6))) at += 6;
+        else if (escape !== undefined && '"\\/bfnrt'.includes(escape)) at += 2;
+        else throw at;
+      } else {
+        at++;
+      }
     }
     if (at >= text.length) throw at;
-    at++;
+    return JSON.parse(text.slice(start, ++at)) as string;
   };
   const number = () => {
     const match = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/.exec(text.slice(at));
     if (!match) throw at;
     at += match[0].length;
   };
-  const items = (close: string, item: () => void) => {
+  const items = (close: string, item: (index: number) => void) => {
     at++;
     space();
     if (text[at] === close) {
       at++;
       return;
     }
-    for (;;) {
-      item();
+    for (let index = 0; ; index++) {
+      item(index);
       space();
       if (text[at] === ",") {
         at++;
@@ -134,20 +145,21 @@ export function syntaxLine(text: string): number {
       throw at;
     }
   };
-  const value = (): void => {
+  const value = (path: string): void => {
     space();
+    if (path) lines.set(path, lineOf(text, at));
     const next = text[at];
     if (next === "{") {
       items("}", () => {
         space();
         if (text[at] !== '"') throw at;
-        string();
+        const key = string();
         space();
         if (text[at] !== ":") throw at;
         at++;
-        value();
+        value(path ? `${path}.${key}` : key);
       });
-    } else if (next === "[") items("]", value);
+    } else if (next === "[") items("]", (index) => value(`${path}[${index}]`));
     else if (next === '"') string();
     else if (next === "t") literal("true");
     else if (next === "f") literal("false");
@@ -155,13 +167,18 @@ export function syntaxLine(text: string): number {
     else number();
   };
   try {
-    value();
+    value("");
     space();
     if (at < text.length) throw at;
-    return 0;
+    return { error: null, lines };
   } catch (failedAt) {
-    return lineOf(text, Math.min(failedAt as number, text.length));
+    return { error: lineOf(text, Math.min(failedAt as number, text.length)), lines };
   }
+}
+
+/** The line of the first character that stops {@code text} being one JSON value; 0 when none. */
+export function syntaxLine(text: string): number {
+  return scan(text).error ?? 0;
 }
 
 function lineOf(text: string, index: number): number {
@@ -170,96 +187,22 @@ function lineOf(text: string, index: number): number {
 
 /**
  * The line of {@code text}, the JSON of {@code section}, that the field a refusal names sits on:
- * sail starts each refusal with the field's path (`agent.guardrails.max_duration ...`), and the
- * line is the first that keys its last part. Null when the refusal names no field it holds.
+ * sail starts each refusal with the field's path (`pipeline.stages[1].brief ...`). A path naming
+ * an element by index is found exactly; one naming none (`repos[].url`) at its first element.
+ * Null when the refusal names no field the text holds.
  */
-export function refusedLine(text: string, section: DefinitionSection, refusal: string): number | null {
-  const path = /^([a-z_]+(?:\[\d*\])?(?:\.[a-z_]+(?:\[\d*\])?)*)\b/.exec(refusal)?.[1];
+export function refusedLine(
+  text: string,
+  section: DefinitionSection,
+  refusal: string,
+): number | null {
+  const path = /^([\w-]+(?:\[\d*\])?(?:\.[\w-]+(?:\[\d*\])?)*)(?=[\s,:]|\.?$|\. )/.exec(refusal)?.[1];
   if (!path) return null;
-  const parts = path.split(".").map((part) => part.replace(/\[\d*\]$/, ""));
-  if (parts[0] === section) parts.shift();
-  const key = parts.at(-1);
-  if (!key) return null;
-  const keyed = new RegExp(`"${key}"\\s*:`);
-  const index = text.split("\n").findIndex((line) => keyed.test(line));
-  return index < 0 ? null : index + 1;
-}
-
-/** Whether a section's draft differs from what the box holds. */
-export function changed(draft: unknown, held: unknown): boolean {
-  return JSON.stringify(draft ?? null) !== JSON.stringify(held ?? null);
-}
-
-/** The service presets the New project form offers, as `sail project create --service` gives them. */
-export const SERVICE_PRESETS: readonly { name: string; label: string; service: DefinitionService }[] = [
-  {
-    name: "postgres",
-    label: "postgres:16 · 5432",
-    service: {
-      image: "postgres:16",
-      ports: [5432],
-      environment: { POSTGRES_DB: "app", POSTGRES_USER: "dev", POSTGRES_PASSWORD: "dev" },
-      volumes: ["pgdata:/var/lib/postgresql/data"],
-    },
-  },
-  { name: "redis", label: "redis:7 · 6379", service: { image: "redis:7", ports: [6379] } },
-];
-
-/** The runtimes the New project form offers, each a toggle. */
-export const RUNTIME_CHOICES = [
-  { key: "jdk", label: "JDK 26", value: 26 },
-  { key: "node", label: "Node 24", value: "24" },
-  { key: "maven", label: "Maven 3.9.14", value: "3.9.14" },
-] as const;
-
-export type NewProject = {
-  name: string;
-  description: string;
-  image: string;
-  cpu: string;
-  memory: string;
-  disk: string;
-  runtimes: ReadonlySet<(typeof RUNTIME_CHOICES)[number]["key"]>;
-  repos: DefinitionRepo[];
-  services: Record<string, DefinitionService>;
-};
-
-export const NEW_PROJECT: NewProject = {
-  name: "",
-  description: "",
-  image: "ubuntu/24.04",
-  cpu: "2",
-  memory: "8GB",
-  disk: "50GB",
-  runtimes: new Set(),
-  repos: [],
-  services: {},
-};
-
-/**
- * The definition the New project form creates: what `sail project create` writes for the same
- * answers, its agent the default one. Sail checks it whole; a value it refuses comes back as
- * its own sentence.
- */
-export function newProjectDocument(form: NewProject): ProjectDefinitionDocument {
-  const document: ProjectDefinitionDocument = {
-    name: form.name.trim(),
-    image: form.image,
-    resources: { cpu: Number(form.cpu), memory: form.memory.trim(), disk: form.disk.trim() },
-    agent: { type: "claude-code", auto_branch: true, branch_prefix: "agent/", auto_snapshot: true },
-  };
-  if (form.description.trim()) document.description = form.description.trim();
-  if (form.runtimes.size > 0) {
-    document.runtimes = Object.fromEntries(
-      RUNTIME_CHOICES.filter((choice) => form.runtimes.has(choice.key)).map((choice) => [
-        choice.key,
-        choice.value,
-      ]),
-    );
-  }
-  if (form.repos.length > 0) document.repos = form.repos;
-  if (Object.keys(form.services).length > 0) document.services = form.services;
-  return document;
+  const within = path.startsWith(`${section}.`)
+    ? path.slice(section.length + 1)
+    : path;
+  const lines = scan(text).lines;
+  return lines.get(within) ?? lines.get(within.replace(/\[\]/g, "[0]")) ?? null;
 }
 
 /** A repo's path when none is typed: the last part of its URL, without `.git`. */

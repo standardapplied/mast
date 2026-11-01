@@ -10,6 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { RoomsInventory } from "../board/RoomDeck";
 import { coalesce } from "../board/roomRouting";
+import { catalogStore } from "../board/catalogStore";
 import { DefinitionPanel } from "../board/DefinitionPanel";
 import { PortalPanel } from "../board/PortalPanel";
 import { SnapshotsPanel } from "../board/SnapshotsPanel";
@@ -280,7 +281,7 @@ export function TerminalWorkspace({
         {showPicker && (
           <ProjectPicker
             sources={sources}
-            gateway={gateway}
+            catalog={gateway ? catalogStore : undefined}
             copyText={copyText}
             onEditDefinition={gateway ? setDefinitionFor : undefined}
             onPick={open}
@@ -298,7 +299,11 @@ export function TerminalWorkspace({
         />
       )}
       {gateway && definitionFor && (
-        <DefinitionPanel gateway={gateway} project={definitionFor} onClose={() => setDefinitionFor(null)} />
+        <DefinitionPanel
+          catalog={catalogStore}
+          project={definitionFor}
+          onClose={() => setDefinitionFor(null)}
+        />
       )}
       {gateway && snapshotsFor && (
         <SnapshotsPanel

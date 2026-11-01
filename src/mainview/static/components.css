@@ -6372,7 +6372,8 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   line-height: inherit;
   white-space: pre;
   overflow-x: auto;
-  resize: vertical;
+  overflow-y: hidden;
+  resize: none;
   outline: none;
 }
 
@@ -6407,4 +6408,13 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   flex: 1;
   font-size: 12px;
   color: var(--muted-foreground);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

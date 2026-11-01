@@ -19,8 +19,8 @@ function harness() {
   act(() =>
     root.render(
       <NewProjectForm
-        gateway={{
-          createProject: async (definition) => {
+        catalog={{
+          createProject: async (definition: ProjectDefinitionDocument) => {
             sent.push(definition);
             return catalog.create(definition);
           },
@@ -129,5 +129,22 @@ describe("NewProjectForm", () => {
     expect(h.sent).toEqual([]);
     await click(button("Cancel"));
     expect(h.closed).toEqual([1]);
+  });
+
+  test("closing with something typed asks first; closing an untouched form closes", async () => {
+    const h = harness();
+    await click(document.querySelector<HTMLButtonElement>('[aria-label="Close"]')!);
+    expect(h.closed).toEqual([1]);
+
+    type(field("new-project-name"), "acme");
+    await click(document.querySelector<HTMLButtonElement>('[aria-label="Close"]')!);
+    expect(find("new-project-leaving")?.textContent).toContain("closing drops what you typed");
+    await click(button("Keep editing"));
+    expect(find("new-project-leaving")).toBeNull();
+    expect(field("new-project-name").value).toBe("acme");
+
+    await click(document.querySelector<HTMLButtonElement>('[aria-label="Close"]')!);
+    await click(button("Discard and close"));
+    expect(h.closed).toEqual([1, 1]);
   });
 });

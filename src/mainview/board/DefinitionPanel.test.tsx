@@ -3,7 +3,6 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { DefinitionSection } from "../../shared/sail-models";
 import type { SailResult } from "../../shared/types";
-import type { Gateway } from "../gateway";
 import { DefinitionPanel } from "./DefinitionPanel";
 import { createDemoDefinitions, type DemoDefinitions } from "./definitionDemo";
 
@@ -17,9 +16,10 @@ function harness(
     refuse?: SailResult<never>;
     failRead?: boolean;
     failRereadAfterConflict?: boolean;
+    hold?: boolean;
   } = {},
 ) {
-  const catalog: DemoDefinitions = createDemoDefinitions([
+  const demo: DemoDefinitions = createDemoDefinitions([
     {
       name: "acme",
       image: "ubuntu/24.04",
@@ -29,35 +29,37 @@ function harness(
     },
   ]);
   const writes: Writes = [];
+  const held: (() => void)[] = [];
   let reads = 0;
   const closed: number[] = [];
-  const gateway = {
-    projectDefinition: async (project: string) => {
+  const catalog = {
+    readDefinition: async (project: string) => {
       reads += 1;
       if (options.failRead || (options.failRereadAfterConflict && reads > 1)) {
         return { ok: false as const, error: { status: 503, code: "unavailable", message: "The box is not answering." } };
       }
-      return catalog.get(project);
+      return demo.get(project);
     },
-    writeProjectSection: async (project: string, section: DefinitionSection, value: unknown, tag: string) => {
+    writeSection: async (project: string, section: DefinitionSection, value: unknown, tag: string) => {
       writes.push({ section, value, tag });
-      return options.refuse ?? catalog.write(project, section, value, tag);
+      if (options.hold) await new Promise<void>((release) => held.push(release));
+      return options.refuse ?? demo.write(project, section, value, tag);
     },
-  } as unknown as Gateway;
+  };
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
   act(() =>
     root.render(
       <DefinitionPanel
-        gateway={gateway}
+        catalog={catalog}
         project="acme"
         now={() => Date.parse("2026-10-30T09:40:00Z")}
         onClose={() => closed.push(1)}
       />,
     ),
   );
-  return { catalog, writes, closed, reads: () => reads };
+  return { catalog: demo, writes, closed, reads: () => reads, release: () => held.shift()!() };
 }
 
 const settle = async () => {
@@ -82,7 +84,11 @@ const click = async (element: HTMLElement) => {
   act(() => element.click());
   await settle();
 };
-const section = async (label: string) => click(button(label));
+const navItem = (label: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>(".def-nav__item")].find(
+    (b) => b.textContent?.replace(", unsaved", "") === label,
+  )!;
+const section = async (label: string) => click(navItem(label));
 
 afterEach(() => {
   act(() => root.unmount());
@@ -217,6 +223,7 @@ describe("DefinitionPanel", () => {
     await section("Resources");
     expect(field("def-cpu").value).toBe("6");
     expect(document.querySelectorAll(".def-nav__dot")).toHaveLength(1);
+    expect(navItem("Resources").textContent).toBe("Resources, unsaved");
   });
 
   test("closing with unsaved edits asks first, and Discard and close closes", async () => {
@@ -394,5 +401,77 @@ describe("DefinitionPanel", () => {
     expect(find("def-conflict")?.textContent).toContain("Resources changed since you opened it.");
     const held = h.catalog.get("acme");
     expect(held.ok && held.value.definition.resources).toEqual({ cpu: 16, memory: "64GB", disk: "1TB" });
+  });
+
+  test("an edit typed while its section saves stays, over the version the save made", async () => {
+    const h = harness({ hold: true });
+    await settle();
+
+    type(field("def-cpu"), "4");
+    act(() => button("Save resources").click());
+    type(field("def-cpu"), "6");
+    h.release();
+    await settle();
+
+    expect(field("def-cpu").value).toBe("6");
+    expect(document.querySelector(".def-footer__note")?.textContent).toBe("Unsaved changes in Resources");
+    act(() => button("Save resources").click());
+    h.release();
+    await settle();
+    expect(find("def-conflict")).toBeNull();
+    const kept = h.catalog.get("acme");
+    expect(kept.ok && kept.value.definition.resources?.cpu).toBe(6);
+  });
+
+  test("a conflict outlives another section's save and saves over exactly the version it showed", async () => {
+    const h = harness();
+    await settle();
+    type(field("def-cpu"), "4");
+    h.catalog.touch("acme", "resources", { cpu: 8, memory: "8GB", disk: "50GB" });
+    await click(button("Save resources"));
+    expect(find("def-conflict")).not.toBeNull();
+
+    h.catalog.touch("acme", "resources", { cpu: 16, memory: "8GB", disk: "50GB" });
+    await section("Runtimes");
+    type(field("def-node"), "24");
+    await click(button("Save runtimes"));
+    await section("Resources");
+    expect(find("def-conflict")?.textContent).toContain("Resources changed since you opened it.");
+    await click(button("Show theirs"));
+    expect(field("Theirs · Resources JSON").value).toContain('"cpu": 8');
+
+    await click(button("Save mine over it"));
+
+    expect(find("def-conflict")?.textContent).toContain("Resources changed since you opened it.");
+    const still = h.catalog.get("acme");
+    expect(still.ok && still.value.definition.resources?.cpu).toBe(16);
+  });
+
+  test("a refusal stays on its section when another section saves", async () => {
+    harness();
+    await settle();
+    await section("Agent");
+    type(field("Agent JSON"), "{");
+    await click(button("Save agent"));
+    await section("Runtimes");
+    type(field("def-node"), "24");
+    await click(button("Save runtimes"));
+    await section("Agent");
+
+    expect(find("def-refusal")?.textContent).toBe("Line 1: This is not JSON.");
+    expect(field("Agent JSON").getAttribute("aria-invalid")).toBe("true");
+    expect(field("Agent JSON").getAttribute("aria-describedby")).toBe("def-refusal");
+  });
+
+  test("the warning about closing goes once nothing is left unsaved", async () => {
+    harness();
+    await settle();
+    type(field("def-cpu"), "6");
+    await click(document.querySelector<HTMLButtonElement>('[aria-label="Close"]')!);
+    expect(find("def-leaving")).not.toBeNull();
+
+    await click(button("Save resources"));
+
+    expect(find("def-leaving")).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import type {
   DefinitionRuntimes,
   DefinitionSection,
   DefinitionService,
+  ProjectDefinitionDocument,
 } from "../../shared/sail-models";
 import { jsonText, portsFrom, readJson, repoPath } from "./definition";
 
@@ -17,7 +18,7 @@ import { jsonText, portsFrom, readJson, repoPath } from "./definition";
 export type Pair = { key: string; value: string };
 export type ResourcesForm = { cpu: string; memory: string; disk: string };
 export type RuntimesForm = { jdk: string; node: string; maven: string };
-export type RepoForm = { url: string; path: string; branch: string };
+export type RepoForm = { url: string; path: string; branch: string; forge: string };
 export type ServiceForm = {
   name: string;
   image: string;
@@ -50,6 +51,7 @@ export function resourcesForm(value: DefinitionResources | undefined): Resources
 
 export function readResources(form: ResourcesForm): FormRead<DefinitionResources> {
   if (form.cpu.trim() && !wholeNumber(form.cpu)) return refused("resources.cpu must be a whole number.");
+  if (form.cpu.trim() && Number(form.cpu) < 1) return refused("resources.cpu must be at least 1.");
   return {
     ok: true,
     value: set({
@@ -77,21 +79,25 @@ export function readRuntimes(form: RuntimesForm): FormRead<DefinitionRuntimes> {
 }
 
 export function reposForm(value: DefinitionRepo[] | undefined): RepoForm[] {
-  return (value ?? []).map((repo) => ({ url: repo.url, path: repo.path, branch: text(repo.branch) }));
+  return (value ?? []).map((repo) => ({
+    url: repo.url,
+    path: repo.path,
+    branch: text(repo.branch),
+    forge: text(repo.forge),
+  }));
 }
 
-export function readRepos(forms: RepoForm[], held: DefinitionRepo[] | undefined): FormRead<DefinitionRepo[]> {
+export function readRepos(forms: RepoForm[]): FormRead<DefinitionRepo[]> {
   const kept = forms.filter((form) => form.url.trim() || form.path.trim() || form.branch.trim());
   const repos: DefinitionRepo[] = [];
   for (const form of kept) {
     if (!form.url.trim()) return refused("repos[].url is required.");
     const url = form.url.trim();
-    const forge = held?.find((repo) => repo.url === url)?.forge;
     repos.push({
       url,
       path: form.path.trim() || repoPath(url),
       ...(form.branch.trim() ? { branch: form.branch.trim() } : {}),
-      ...(forge ? { forge } : {}),
+      ...(form.forge ? { forge: form.forge } : {}),
     });
   }
   return { ok: true, value: repos.length ? repos : null };
@@ -181,10 +187,9 @@ export function modelOf(section: DefinitionSection, value: unknown): unknown {
 
 /**
  * The value a section's editor holds, or why it holds none: a field it cannot be, or JSON that
- * is not, with the line it stops on. {@code held} is the section as the box holds it, whose
- * repo forges a form keeps.
+ * is not, with the line it stops on.
  */
-export function readModel(section: DefinitionSection, model: unknown, held: unknown): SectionRead {
+export function readModel(section: DefinitionSection, model: unknown): SectionRead {
   const form = (read: FormRead<unknown>): SectionRead =>
     read.ok ? read : { ok: false, message: read.message, line: null };
   switch (section) {
@@ -193,7 +198,7 @@ export function readModel(section: DefinitionSection, model: unknown, held: unkn
     case "runtimes":
       return form(readRuntimes(model as RuntimesForm));
     case "repos":
-      return form(readRepos(model as RepoForm[], held as DefinitionRepo[] | undefined));
+      return form(readRepos(model as RepoForm[]));
     case "services":
       return form(readServices(model as ServiceForm[]));
     case "processes":
@@ -203,4 +208,85 @@ export function readModel(section: DefinitionSection, model: unknown, held: unkn
       return read.ok ? read : { ok: false, message: `Line ${read.line}: ${read.message}`, line: read.line };
     }
   }
+}
+
+/** The service presets the New project form offers, as `sail project create --service` gives them. */
+export const SERVICE_PRESETS: readonly { name: string; label: string; service: DefinitionService }[] = [
+  {
+    name: "postgres",
+    label: "postgres:16 · 5432",
+    service: {
+      image: "postgres:16",
+      ports: [5432],
+      environment: { POSTGRES_DB: "app", POSTGRES_USER: "dev", POSTGRES_PASSWORD: "dev" },
+      volumes: ["pgdata:/var/lib/postgresql/data"],
+    },
+  },
+  { name: "redis", label: "redis:7 · 6379", service: { image: "redis:7", ports: [6379] } },
+];
+
+/** The runtimes the New project form offers, each a toggle. */
+export const RUNTIME_CHOICES = [
+  { key: "jdk", label: "JDK 26", value: 26 },
+  { key: "node", label: "Node 24", value: "24" },
+  { key: "maven", label: "Maven 3.9.14", value: "3.9.14" },
+] as const;
+
+export type NewProject = {
+  name: string;
+  description: string;
+  image: string;
+  cpu: string;
+  memory: string;
+  disk: string;
+  runtimes: ReadonlySet<(typeof RUNTIME_CHOICES)[number]["key"]>;
+  repos: RepoForm[];
+  services: Record<string, DefinitionService>;
+};
+
+export const NEW_PROJECT: NewProject = {
+  name: "",
+  description: "",
+  image: "ubuntu/24.04",
+  cpu: "2",
+  memory: "8GB",
+  disk: "50GB",
+  runtimes: new Set(),
+  repos: [],
+  services: {},
+};
+
+/**
+ * The definition the New project form creates: what `sail project create` writes for the same
+ * answers, its agent the default one; or the field it cannot be. Sail checks the rest whole, and a
+ * value it refuses comes back as its own sentence.
+ */
+export function newProjectDocument(
+  form: NewProject,
+): { ok: true; value: ProjectDefinitionDocument } | { ok: false; message: string } {
+  const resources = readResources(form);
+  if (!resources.ok) return resources;
+  if (!resources.value?.cpu || !resources.value.memory || !resources.value.disk) {
+    return { ok: false, message: "resources needs cpu, memory and disk." };
+  }
+  const repos = readRepos(form.repos);
+  if (!repos.ok) return repos;
+  const document: ProjectDefinitionDocument = {
+    name: form.name.trim(),
+    image: form.image.trim(),
+    resources: resources.value,
+    agent: { type: "claude-code", auto_branch: true, branch_prefix: "agent/", auto_snapshot: true },
+  };
+  if (form.description.trim()) document.description = form.description.trim();
+  if (form.runtimes.size > 0) {
+    document.runtimes = Object.fromEntries(
+      RUNTIME_CHOICES.filter((choice) => form.runtimes.has(choice.key)).map((choice) => [
+        choice.key,
+        choice.value,
+      ]),
+    );
+  }
+  if (repos.value) document.repos = repos.value;
+  if (Object.keys(form.services).length > 0) document.services = form.services;
+  return { ok: true, value: document };
 }

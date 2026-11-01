@@ -4,9 +4,17 @@ import { cx } from "../components/cx";
 import { Dialog } from "../components/Dialog";
 import { LoadingMark } from "../components/Loading";
 import { Button } from "../components/ui";
-import type { Gateway } from "../gateway";
+import type { CatalogStore } from "./catalogStore";
 import { jsonText, PANEL_SECTIONS, refusedLine } from "./definition";
-import { JsonEditor, LabeledInput, PairRows, RepoRows, TextRows } from "./DefinitionFields";
+import {
+  JsonEditor,
+  LabeledInput,
+  PairRows,
+  replaced,
+  RepoRows,
+  TextRows,
+  without,
+} from "./DefinitionFields";
 import {
   modelOf,
   readModel,
@@ -28,16 +36,24 @@ import { refusalDetail } from "./snapshots";
  */
 
 type Draft = { model: unknown; tag: string };
-type Refusal = { section: DefinitionSection; message: string; line: number | null };
-type Conflict = { section: DefinitionSection; showing: boolean };
+type Refusal = { message: string; line: number | null };
+/** A section refused for having moved: the version it moved to, shown and saved over as is. */
+type Conflict = { theirs: { value: unknown; tag: string }; showing: boolean };
+type BySection<T> = Partial<Record<DefinitionSection, T>>;
+
+const omit = <T,>(map: BySection<T>, key: DefinitionSection): BySection<T> => {
+  const { [key]: _gone, ...rest } = map;
+  return rest as BySection<T>;
+};
+const sameModel = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 export function DefinitionPanel({
-  gateway,
+  catalog,
   project,
   now = Date.now,
   onClose,
 }: {
-  gateway: Pick<Gateway, "projectDefinition" | "writeProjectSection">;
+  catalog: Pick<CatalogStore, "readDefinition" | "writeSection">;
   project: string;
   now?: () => number;
   onClose: () => void;
@@ -45,15 +61,15 @@ export function DefinitionPanel({
   const [held, setHeld] = useState<ProjectDefinitionResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [active, setActive] = useState<DefinitionSection>("resources");
-  const [drafts, setDrafts] = useState<Partial<Record<DefinitionSection, Draft>>>({});
-  const [refusal, setRefusal] = useState<Refusal | null>(null);
-  const [conflict, setConflict] = useState<Conflict | null>(null);
+  const [drafts, setDrafts] = useState<BySection<Draft>>({});
+  const [refusals, setRefusals] = useState<BySection<Refusal>>({});
+  const [conflicts, setConflicts] = useState<BySection<Conflict>>({});
   const [saving, setSaving] = useState(false);
   const [leaving, setLeaving] = useState(false);
 
   useEffect(() => {
     let live = true;
-    void gateway.projectDefinition(project).then((result) => {
+    void catalog.readDefinition(project).then((result) => {
       if (!live) return;
       if (result.ok) setHeld(result.value);
       else setLoadError(refusalDetail(result.error));
@@ -61,68 +77,79 @@ export function DefinitionPanel({
     return () => {
       live = false;
     };
-  }, [gateway, project]);
+  }, [catalog, project]);
 
   const section = PANEL_SECTIONS.find((s) => s.key === active)!;
   const heldValue = (key: DefinitionSection) => held?.definition[key];
   const draftOf = (key: DefinitionSection): Draft =>
     drafts[key] ?? { model: modelOf(key, heldValue(key)), tag: held!.tags[key] };
   const dirty = (key: DefinitionSection) =>
-    drafts[key] !== undefined &&
-    JSON.stringify(drafts[key]!.model) !== JSON.stringify(modelOf(key, heldValue(key)));
+    drafts[key] !== undefined && !sameModel(drafts[key]!.model, modelOf(key, heldValue(key)));
   const unsaved = PANEL_SECTIONS.filter((s) => dirty(s.key));
 
   const edit = (model: unknown) =>
     setDrafts((prev) => ({ ...prev, [active]: { model, tag: prev[active]?.tag ?? held!.tags[active] } }));
-  const forget = (key: DefinitionSection) =>
-    setDrafts(({ [key]: _gone, ...rest }) => rest as Partial<Record<DefinitionSection, Draft>>);
+  const refuse = (key: DefinitionSection, refusal: Refusal) =>
+    setRefusals((prev) => ({ ...prev, [key]: refusal }));
 
+  /**
+   * Writes {@code key}'s draft over {@code over}, or over the tag the draft was read at. An edit
+   * typed while the write was in flight stays, now over the version the write made.
+   */
   const save = async (key: DefinitionSection, over?: string) => {
     const draft = draftOf(key);
-    const read = readModel(key, draft.model, heldValue(key));
+    const read = readModel(key, draft.model);
     if (!read.ok) {
-      setRefusal({ section: key, message: read.message, line: read.line });
+      refuse(key, { message: read.message, line: read.line });
       return;
     }
     setSaving(true);
-    setRefusal(null);
-    const result = await gateway.writeProjectSection(project, key, read.value, over ?? draft.tag);
+    setRefusals((prev) => omit(prev, key));
+    const result = await catalog.writeSection(project, key, read.value, over ?? draft.tag);
     if (result.ok) {
       setSaving(false);
       setHeld(result.value);
-      forget(key);
-      setConflict(null);
+      setDrafts((prev) =>
+        prev[key] && !sameModel(prev[key]!.model, draft.model)
+          ? { ...prev, [key]: { model: prev[key]!.model, tag: result.value.tags[key] } }
+          : omit(prev, key),
+      );
+      setConflicts((prev) => omit(prev, key));
       return;
     }
     if (result.error.code === "precondition_failed") {
-      const theirs = await gateway.projectDefinition(project);
+      const theirs = await catalog.readDefinition(project);
       setSaving(false);
       if (theirs.ok) {
         setHeld(theirs.value);
-        setConflict({ section: key, showing: false });
+        setConflicts((prev) => ({
+          ...prev,
+          [key]: {
+            theirs: { value: theirs.value.definition[key], tag: theirs.value.tags[key] },
+            showing: false,
+          },
+        }));
       } else {
-        setRefusal({ section: key, message: refusalDetail(theirs.error), line: null });
+        refuse(key, { message: refusalDetail(theirs.error), line: null });
       }
       return;
     }
     setSaving(false);
-    setRefusal({
-      section: key,
+    const json = PANEL_SECTIONS.find((s) => s.key === key)!.editor === "json";
+    refuse(key, {
       message: refusalDetail(result.error),
-      line: section.editor === "json" ? refusedLine(draft.model as string, key, result.error.message) : null,
+      line: json ? refusedLine(draft.model as string, key, result.error.message) : null,
     });
   };
 
   const discard = () => {
-    forget(active);
-    if (refusal?.section === active) setRefusal(null);
-    if (conflict?.section === active) setConflict(null);
+    setDrafts((prev) => omit(prev, active));
+    setRefusals((prev) => omit(prev, active));
+    setConflicts((prev) => omit(prev, active));
   };
 
-  const here = <T extends { section: DefinitionSection }>(state: T | null) =>
-    state?.section === active ? state : null;
-  const shownRefusal = here(refusal);
-  const shownConflict = here(conflict);
+  const shownRefusal = refusals[active];
+  const shownConflict = conflicts[active];
 
   const footer = held && (
     <div className="def-footer">
@@ -168,7 +195,7 @@ export function DefinitionPanel({
               Last changed{held.updated_by ? ` by ${held.updated_by}` : ""} ·{" "}
               {relativeTime(held.updated_at, now())}
             </p>
-            {leaving && (
+            {leaving && unsaved.length > 0 && (
               <div className="def-banner" role="alert" data-testid="def-leaving">
                 <span>
                   Unsaved changes in {unsaved.map((s) => s.label).join(", ")}. Nothing of them is
@@ -193,7 +220,11 @@ export function DefinitionPanel({
                     onClick={() => setActive(s.key)}
                   >
                     {s.label}
-                    {dirty(s.key) && <span className="def-nav__dot" aria-label="unsaved" />}
+                    {dirty(s.key) && (
+                      <span className="def-nav__dot">
+                        <span className="sr-only">, unsaved</span>
+                      </span>
+                    )}
                   </button>
                 ))}
               </nav>
@@ -210,27 +241,41 @@ export function DefinitionPanel({
                     </span>
                     <Button
                       variant="ghost"
-                      onClick={() => setConflict({ ...shownConflict, showing: !shownConflict.showing })}
+                      onClick={() =>
+                        setConflicts((prev) => ({
+                          ...prev,
+                          [active]: { ...shownConflict, showing: !shownConflict.showing },
+                        }))
+                      }
                     >
                       {shownConflict.showing ? "Back to my edit" : "Show theirs"}
                     </Button>
-                    <Button variant="ghost" disabled={saving} onClick={() => void save(active, held.tags[active])}>
+                    <Button
+                      variant="ghost"
+                      disabled={saving}
+                      onClick={() => void save(active, shownConflict.theirs.tag)}
+                    >
                       Save mine over it
                     </Button>
                   </div>
                 )}
                 {shownConflict?.showing ? (
-                  <JsonEditor label={`Theirs · ${section.label}`} text={jsonText(heldValue(active))} readOnly />
+                  <JsonEditor
+                    label={`Theirs · ${section.label}`}
+                    text={jsonText(shownConflict.theirs.value)}
+                    readOnly
+                  />
                 ) : (
                   <SectionEditor
                     section={active}
                     model={draftOf(active).model}
                     errorLine={shownRefusal?.line ?? null}
+                    errorId={shownRefusal ? "def-refusal" : undefined}
                     onChange={edit}
                   />
                 )}
                 {shownRefusal && (
-                  <p className="def-error" role="alert" data-testid="def-refusal">
+                  <p id="def-refusal" className="def-error" role="alert" data-testid="def-refusal">
                     {shownRefusal.message}
                   </p>
                 )}
@@ -247,11 +292,13 @@ function SectionEditor({
   section,
   model,
   errorLine,
+  errorId,
   onChange,
 }: {
   section: DefinitionSection;
   model: unknown;
   errorLine: number | null;
+  errorId?: string;
   onChange: (model: unknown) => void;
 }) {
   switch (section) {
@@ -287,6 +334,7 @@ function SectionEditor({
           label={PANEL_SECTIONS.find((s) => s.key === section)!.label}
           text={model as string}
           errorLine={errorLine}
+          errorId={errorId}
           onChange={onChange}
         />
       );
@@ -294,14 +342,14 @@ function SectionEditor({
 }
 
 function ServiceCards({ rows, onChange }: { rows: ServiceForm[]; onChange: (rows: ServiceForm[]) => void }) {
-  const put = (index: number, row: ServiceForm) => onChange(rows.map((r, i) => (i === index ? row : r)));
+  const put = (index: number, row: ServiceForm) => onChange(replaced(rows, index, row));
   return (
     <div className="def-cards">
       {rows.map((row, index) => (
         <div className="def-card" key={index} data-testid={`def-service-${index}`}>
           <div className="def-card__head">
             <LabeledInput id={`def-service-${index}-name`} label="Name" value={row.name} onChange={(name) => put(index, { ...row, name })} />
-            <Button variant="ghost" onClick={() => onChange(rows.filter((_, i) => i !== index))}>
+            <Button variant="ghost" onClick={() => onChange(without(rows, index))}>
               Remove
             </Button>
           </div>
@@ -339,14 +387,14 @@ function ServiceCards({ rows, onChange }: { rows: ServiceForm[]; onChange: (rows
 }
 
 function ProcessCards({ rows, onChange }: { rows: ProcessForm[]; onChange: (rows: ProcessForm[]) => void }) {
-  const put = (index: number, row: ProcessForm) => onChange(rows.map((r, i) => (i === index ? row : r)));
+  const put = (index: number, row: ProcessForm) => onChange(replaced(rows, index, row));
   return (
     <div className="def-cards">
       {rows.map((row, index) => (
         <div className="def-card" key={index} data-testid={`def-process-${index}`}>
           <div className="def-card__head">
             <LabeledInput id={`def-process-${index}-name`} label="Name" value={row.name} onChange={(name) => put(index, { ...row, name })} />
-            <Button variant="ghost" onClick={() => onChange(rows.filter((_, i) => i !== index))}>
+            <Button variant="ghost" onClick={() => onChange(without(rows, index))}>
               Remove
             </Button>
           </div>

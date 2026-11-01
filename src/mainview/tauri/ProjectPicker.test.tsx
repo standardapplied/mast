@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { ProjectListResponse } from "../../shared/sail-models";
+import type { ProjectDefinitionDocument, ProjectListResponse } from "../../shared/sail-models";
 import type { SailResult } from "../../shared/types";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
@@ -220,8 +220,8 @@ describe("ProjectPicker", () => {
       root.render(
         <ProjectPicker
           sources={fakeSources({ listProjects: async () => catalog([...projects]) })}
-          gateway={{
-            createProject: async (definition) => {
+          catalog={{
+            createProject: async (definition: ProjectDefinitionDocument) => {
               projects.push({ name: definition.name, container_status: "not_created" });
               return {
                 ok: true,

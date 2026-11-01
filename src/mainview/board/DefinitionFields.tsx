@@ -9,8 +9,11 @@ import type { Pair, RepoForm } from "./definitionForms";
  * values, a repo's URL, path and branch, and a section's JSON with its line numbers.
  */
 
-const replaced = <T,>(rows: T[], index: number, row: T) => rows.map((r, i) => (i === index ? row : r));
-const without = <T,>(rows: T[], index: number) => rows.filter((_, i) => i !== index);
+/** {@code rows} with the row at {@code index} replaced by {@code row}. */
+export const replaced = <T,>(rows: T[], index: number, row: T) =>
+  rows.map((r, i) => (i === index ? row : r));
+/** {@code rows} without the row at {@code index}. */
+export const without = <T,>(rows: T[], index: number) => rows.filter((_, i) => i !== index);
 
 export function PairRows({
   label,
@@ -117,7 +120,7 @@ export function RepoRows({ rows, onChange }: { rows: RepoForm[]; onChange: (rows
           <RemoveRow label={`Remove ${row.url || "repo"}`} onRemove={() => onChange(without(rows, index))} />
         </div>
       ))}
-      <AddRow label="Repo" onAdd={() => onChange([...rows, { url: "", path: "", branch: "" }])} />
+      <AddRow label="Repo" onAdd={() => onChange([...rows, { url: "", path: "", branch: "", forge: "" }])} />
     </div>
   );
 }
@@ -128,12 +131,14 @@ export function JsonEditor({
   text,
   onChange,
   errorLine,
+  errorId,
   readOnly = false,
 }: {
   label: string;
   text: string;
   onChange?: (text: string) => void;
   errorLine?: number | null;
+  errorId?: string;
   readOnly?: boolean;
 }) {
   const lines = Math.max(text.split("\n").length, 1);
@@ -151,6 +156,8 @@ export function JsonEditor({
         <textarea
           className="def-json__text"
           aria-label={`${label} JSON`}
+          aria-invalid={errorId ? true : undefined}
+          aria-describedby={errorId}
           spellCheck={false}
           rows={Math.max(lines, 8)}
           value={text}

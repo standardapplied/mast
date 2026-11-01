@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { cx } from "../components/cx";
 import { CaretRight, Plus } from "../components/icons";
 import { Button } from "../components/ui";
-import type { Gateway } from "../gateway";
+import type { CatalogStore } from "../board/catalogStore";
 import { NewProjectForm } from "./NewProjectForm";
 import { applyCommand, loadRoster, rowHint, rowMeta, type Roster, type RosterSources } from "./projectRoster";
 
@@ -16,14 +16,14 @@ import { applyCommand, loadRoster, rowHint, rowMeta, type Roster, type RosterSou
  */
 export function ProjectPicker({
   sources,
-  gateway,
+  catalog,
   copyText,
   onEditDefinition,
   onPick,
   onCancel,
 }: {
   sources: RosterSources;
-  gateway?: Pick<Gateway, "createProject">;
+  catalog?: Pick<CatalogStore, "createProject">;
   copyText?: (text: string) => Promise<void>;
   onEditDefinition?: (project: string) => void;
   onPick: (target: string | undefined, label: string) => void;
@@ -106,7 +106,7 @@ export function ProjectPicker({
               <CaretRight size={16} />
             </button>
           </li>
-          {gateway && (
+          {catalog && (
             <li>
               <button
                 className="term-picker__item term-picker__item--new"
@@ -138,9 +138,9 @@ export function ProjectPicker({
           </div>
         )}
       </div>
-      {gateway && creating && (
+      {catalog && creating && (
         <NewProjectForm
-          gateway={gateway}
+          catalog={catalog}
           onClose={() => setCreating(false)}
           onCreated={(project) => {
             setCreating(false);
