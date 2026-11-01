@@ -186,6 +186,8 @@ mod tests {
         heard
     }
 
+    /// A port that was free a moment ago. Another test's socket may take it before a forward
+    /// binds it, so a forward's local port is asserted within its range, never equal to it.
     async fn free_port() -> u16 {
         let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
         probe.local_addr().unwrap().port()
@@ -199,7 +201,10 @@ mod tests {
 
         let local = forwards.open("acme", port, connect).await.unwrap();
 
-        assert_eq!(local, port);
+        assert!(
+            (port..=port + PORTS_TRIED).contains(&local),
+            "{local} is the asked {port} or one above it"
+        );
         assert_eq!(round_trip(local, b"hello").await, b"hello");
         assert_eq!(round_trip(local, b"again").await, b"again");
     }
@@ -242,8 +247,8 @@ mod tests {
         tokio::task::yield_now().await;
 
         assert!(
-            TcpListener::bind(("127.0.0.1", local)).await.is_ok(),
-            "the port is free again"
+            TcpStream::connect(("127.0.0.1", local)).await.is_err(),
+            "nothing listens on {local}"
         );
         assert_eq!(forwards.of("acme").await, HashMap::new());
     }
@@ -276,7 +281,10 @@ mod tests {
         forwards.retire().await;
         tokio::task::yield_now().await;
 
-        assert!(TcpListener::bind(("127.0.0.1", local)).await.is_ok());
+        assert!(
+            TcpStream::connect(("127.0.0.1", local)).await.is_err(),
+            "nothing listens on {local}"
+        );
         assert_eq!(
             forwards.open("acme", port, connect).await,
             Err(Refused::Retired)
