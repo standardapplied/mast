@@ -362,4 +362,37 @@ describe("DefinitionPanel", () => {
       processes: { web: { command: "npm run dev", workdir: "web" } },
     });
   });
+
+  test("a saved section saves again over its new version", async () => {
+    const h = harness();
+    await settle();
+
+    type(field("def-cpu"), "4");
+    await click(button("Save resources"));
+    type(field("def-cpu"), "6");
+    await click(button("Save resources"));
+
+    expect(find("def-conflict")).toBeNull();
+    const held = h.catalog.get("acme");
+    expect(held.ok && held.value.definition.resources).toEqual({ cpu: 6, memory: "8GB", disk: "50GB" });
+  });
+
+  test("a section is written only over the version its own edit read, whatever another section's conflict refreshed", async () => {
+    const h = harness();
+    await settle();
+    type(field("def-cpu"), "4");
+    await section("Services");
+    type(field("def-service-0-image"), "redis:8");
+    h.catalog.touch("acme", "services", { redis: { image: "valkey:8" } });
+    h.catalog.touch("acme", "resources", { cpu: 16, memory: "64GB", disk: "1TB" });
+
+    await click(button("Save services"));
+    expect(find("def-conflict")).not.toBeNull();
+    await section("Resources");
+    await click(button("Save resources"));
+
+    expect(find("def-conflict")?.textContent).toContain("Resources changed since you opened it.");
+    const held = h.catalog.get("acme");
+    expect(held.ok && held.value.definition.resources).toEqual({ cpu: 16, memory: "64GB", disk: "1TB" });
+  });
 });

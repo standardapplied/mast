@@ -67,6 +67,9 @@ describe("a JSON section", () => {
     expect(refusedLine(text, "agent", "agent.member must be a block of keys.")).toBeNull();
     expect(refusedLine(text, "agent", "The agent section of 'acme' changed since you read it.")).toBeNull();
     expect(refusedLine(text, "agent", "agent is not valid")).toBeNull();
+    expect(
+      refusedLine('{\n  "member": {\n    "agent": "codex"\n  }\n}', "agent", "agent must be a block of keys."),
+    ).toBeNull();
   });
 
   test("is changed when its value differs from the box's, unset and null alike", () => {
