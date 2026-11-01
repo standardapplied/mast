@@ -10,6 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { RoomsInventory } from "../board/RoomDeck";
 import { coalesce } from "../board/roomRouting";
+import { PortalPanel } from "../board/PortalPanel";
 import { SnapshotsPanel } from "../board/SnapshotsPanel";
 import { cx } from "../components/cx";
 import type { Gateway } from "../gateway";
@@ -17,7 +18,8 @@ import { isUnwell, type SessionStatus, statusEqual } from "../terminal/connectio
 import { roomGroups, type RoomTerminalRequest } from "../terminal/roomDeck";
 import { sessionStore } from "../terminal/sessionStore";
 import { IconButton } from "../components/IconButton";
-import { Camera } from "../components/icons";
+import { Camera, Globe } from "../components/icons";
+import { invoke } from "./core";
 import { ProjectPicker } from "./ProjectPicker";
 import type { RosterSources } from "./projectRoster";
 import type { TerminalHandle } from "./SessionTerminalPane";
@@ -98,6 +100,7 @@ export function TerminalWorkspace({
   const [panes, setPanes] = useState<Record<string, readonly string[]>>({});
   const [adding, setAdding] = useState(false);
   const [snapshotsFor, setSnapshotsFor] = useState<string | null>(null);
+  const [portalFor, setPortalFor] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
   const paneRefs = useRef(new Map<string, TerminalHandle>());
 
@@ -231,6 +234,11 @@ export function TerminalWorkspace({
               />
             )}
             {gateway && activeTarget && !adding && (
+              <IconButton label="Portal" onClick={() => setPortalFor(activeTarget)}>
+                <Globe size={15} />
+              </IconButton>
+            )}
+            {gateway && activeTarget && !adding && (
               <IconButton label="Snapshots" onClick={() => setSnapshotsFor(activeTarget)}>
                 <Camera size={15} />
               </IconButton>
@@ -269,6 +277,15 @@ export function TerminalWorkspace({
           />
         )}
       </div>
+      {gateway && portalFor && (
+        <PortalPanel
+          gateway={gateway}
+          project={portalFor}
+          openUrl={(url) => invoke("open_url", { url })}
+          copyText={(text) => Promise.resolve().then(() => navigator.clipboard.writeText(text))}
+          onClose={() => setPortalFor(null)}
+        />
+      )}
       {gateway && snapshotsFor && (
         <SnapshotsPanel
           gateway={gateway}

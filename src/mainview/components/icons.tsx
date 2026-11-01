@@ -41,6 +41,16 @@ export function Camera(props: IconProps) {
   );
 }
 
+export function Globe(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z" />
+      <path d="M3 12h18" />
+      <path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z" />
+    </svg>
+  );
+}
+
 export function ArrowUp(props: IconProps) {
   return (
     <svg {...base(props)}>

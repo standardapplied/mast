@@ -388,7 +388,7 @@ fn api_error(body: &str) -> Option<String> {
 }
 
 /// A 2xx JSON body, or the box's own sentence for why not.
-fn answered(response: &SailResponse, asked: &str) -> Result<Value, Error> {
+pub(crate) fn answered(response: &SailResponse, asked: &str) -> Result<Value, Error> {
     if !(200..300).contains(&response.status) {
         return Err(Error::Refused(api_error(&response.body).unwrap_or_else(|| {
             format!("The box answered HTTP {} when asked for {asked}.", response.status)
@@ -410,8 +410,13 @@ pub fn project_names(response: &SailResponse) -> Result<Vec<String>, Error> {
 /// The request that asks the box where a project's container is. The project is named by the
 /// webview and lands in a hand-built request line, so anything but a plain name is refused.
 pub fn connect_path(project: &str) -> Result<String, Error> {
+    project_path(project, "connect")
+}
+
+/// The request for `resource` of a project, the project checked as `connect_path` checks it.
+pub fn project_path(project: &str, resource: &str) -> Result<String, Error> {
     if is_name(project) {
-        Ok(format!("/v1/projects/{project}/connect"))
+        Ok(format!("/v1/projects/{project}/{resource}"))
     } else {
         Err(Error::Refused(format!("'{project}' is not a project name.")))
     }

@@ -6005,3 +6005,99 @@ body[data-chrome="overlay"][data-fullscreen="true"] .topbar__inset {
   gap: 12px;
   margin-bottom: 12px;
 }
+
+/* The portal sheet: one row per declared port, its state dot, what it is, its port, its action. */
+.portal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.portal-panel__headline {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.portal-panel__rows {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.portal-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 110px 110px;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--grid-line);
+}
+
+.portal-row__dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--subtle-foreground);
+  box-sizing: border-box;
+}
+
+.portal-row[data-state="listening"] .portal-row__dot {
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.portal-row[data-state="exited"] .portal-row__dot,
+.portal-row[data-state="timeout"] .portal-row__dot {
+  background: var(--error);
+  border-color: var(--error);
+}
+
+.portal-row__what {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.portal-row__kind {
+  color: var(--subtle-foreground);
+  font-size: 12px;
+}
+
+.portal-row__detail {
+  color: var(--error);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.portal-row__port {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted-foreground);
+  padding-top: 2px;
+}
+
+.portal-row__action {
+  justify-self: end;
+}
+
+.portal-row__state {
+  color: var(--subtle-foreground);
+  font-size: 12px;
+}
+
+.portal-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.portal-panel__hint {
+  flex: 1 1 200px;
+  color: var(--subtle-foreground);
+  font-size: 12px;
+}
