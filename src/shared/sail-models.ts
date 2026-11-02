@@ -353,6 +353,63 @@ export type ProjectListResponse = {
   projects: ProjectListItem[];
 };
 
+/** A project definition's sections, each a key of its document (sail ≥ 0.59). */
+export type DefinitionSection =
+  | "description"
+  | "image"
+  | "resources"
+  | "runtimes"
+  | "repos"
+  | "services"
+  | "processes"
+  | "packages"
+  | "agent"
+  | "pipeline";
+
+export type DefinitionResources = { cpu?: number; memory?: string; disk?: string };
+export type DefinitionRuntimes = { jdk?: number; node?: string; maven?: string };
+export type DefinitionRepo = { url: string; path: string; branch?: string; forge?: string };
+export type DefinitionService = {
+  image: string;
+  ports?: number[];
+  environment?: Record<string, string>;
+  command?: string;
+  volumes?: string[];
+};
+export type DefinitionProcess = {
+  command: string;
+  workdir?: string;
+  port?: number;
+  env?: Record<string, string>;
+};
+
+/** A project's definition document: its name and each section it sets. */
+export type ProjectDefinitionDocument = {
+  name: string;
+  description?: string;
+  image?: string;
+  resources?: DefinitionResources;
+  runtimes?: DefinitionRuntimes;
+  repos?: DefinitionRepo[];
+  services?: Record<string, DefinitionService>;
+  processes?: Record<string, DefinitionProcess>;
+  packages?: string[];
+  agent?: Record<string, unknown>;
+  pipeline?: Record<string, unknown>;
+};
+
+/**
+ * GET /v1/projects/{p}/definition, and what a create or a section write answers: the document
+ * and each section's tag, the `If-Match` a write of that section names.
+ */
+export type ProjectDefinitionResponse = {
+  name: string;
+  definition: ProjectDefinitionDocument;
+  tags: Record<DefinitionSection, string>;
+  updated_by: string | null;
+  updated_at: string;
+};
+
 /** POST /v1/projects/{p}/dispatch — the server reads snake_case keys only. */
 export type DispatchRequest = {
   spec_id?: string;

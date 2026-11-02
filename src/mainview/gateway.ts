@@ -22,6 +22,9 @@ import type {
   RoomDeletedResponse,
   RoomsListResponse,
   ServerRoomView,
+  DefinitionSection,
+  ProjectDefinitionDocument,
+  ProjectDefinitionResponse,
   ProjectListResponse,
   ProjectResponse,
   PruneReport,
@@ -50,6 +53,7 @@ import type {
   WhoAmI,
 } from "../shared/sail-models";
 import type { SailResult } from "../shared/types";
+import { createDemoDefinitions } from "./board/definitionDemo";
 import type { PortalView } from "./board/portal";
 import type { DeckSession, SessionListing } from "./terminal/roomDeck";
 import type { AgentLogLine, AgentLogState } from "./tauri/agentLogStream";
@@ -148,6 +152,20 @@ export type Gateway = {
   listProjects(): Promise<SailResult<ProjectListResponse>>;
   /** One project with its home room's member (GET /v1/projects/{p}) — `member` since sail 0.50. */
   project(name: string): Promise<SailResult<ProjectResponse>>;
+  /** A project's definition with each section's tag (GET /v1/projects/{p}/definition) — sail ≥ 0.59. */
+  projectDefinition(project: string): Promise<SailResult<ProjectDefinitionResponse>>;
+  /** Create a project in the catalog (POST /v1/projects); a taken name is a `conflict`. */
+  createProject(definition: ProjectDefinitionDocument): Promise<SailResult<ProjectDefinitionResponse>>;
+  /**
+   * Write one section over the tag it was read at (PUT /v1/projects/{p}/definition/{section});
+   * `null` unsets it, and a section changed since is a `precondition_failed`.
+   */
+  writeProjectSection(
+    project: string,
+    section: DefinitionSection,
+    value: unknown,
+    tag: string,
+  ): Promise<SailResult<ProjectDefinitionResponse>>;
   /** The org's FDE roster — the assignee candidates for a spec. */
   listFdes(): Promise<SailResult<FdeListResponse>>;
   /** The installable agents and their member-mode support (GET /v1/agents) — sail ≥ 0.23. */
@@ -475,6 +493,7 @@ export function createDemoGateway(
     }),
   );
 
+  const definitions = createDemoDefinitions(DEMO_DEFINITIONS);
   const ok = <T>(value: T, etag?: string): SailResult<T> => ({ ok: true, value, etag });
   const notFound = <T>(id: string): SailResult<T> => ({
     ok: false,
@@ -815,13 +834,28 @@ export function createDemoGateway(
     },
 
     async listProjects() {
+      const live = new Map([
+        ["chorus", "running" as const],
+        ["sail-mast", "stopped" as const],
+      ]);
       return ok({
-        projects: [
-          { name: "chorus", container_status: "running" as const },
-          { name: "nautilus", container_status: "not_created" as const },
-          { name: "sail-mast", container_status: "stopped" as const },
-        ],
+        projects: definitions
+          .names()
+          .sort()
+          .map((name) => ({ name, container_status: live.get(name) ?? ("not_created" as const) })),
       });
+    },
+
+    async projectDefinition(project) {
+      return definitions.get(project);
+    },
+
+    async createProject(definition) {
+      return definitions.create(definition);
+    },
+
+    async writeProjectSection(project, section, value, tag) {
+      return definitions.write(project, section, value, tag);
     },
 
     async project(name) {
@@ -1425,6 +1459,42 @@ export function createDemoGateway(
     emit,
   };
 }
+
+const DEMO_DEFINITIONS: ProjectDefinitionDocument[] = [
+  {
+    name: "chorus",
+    description: "Billing and ledger platform",
+    image: "ubuntu/24.04",
+    resources: { cpu: 4, memory: "12GB", disk: "150GB" },
+    runtimes: { jdk: 26, maven: "3.9.14" },
+    repos: [{ url: "https://github.com/acme/chorus.git", path: "chorus", branch: "main" }],
+    services: {
+      postgres: {
+        image: "postgres:16",
+        ports: [5432],
+        environment: { POSTGRES_DB: "app", POSTGRES_USER: "dev", POSTGRES_PASSWORD: "dev" },
+        volumes: ["pgdata:/var/lib/postgresql/data"],
+      },
+      redis: { image: "redis:7", ports: [6379] },
+    },
+    processes: { api: { command: "mvn spring-boot:run", workdir: "chorus", port: 8080 } },
+    agent: {
+      type: "claude-code",
+      auto_branch: true,
+      branch_prefix: "agent/",
+      auto_snapshot: true,
+      install: ["claude-code", "codex"],
+      guardrails: { max_duration: "4h", max_idle: "20m", action: "snapshot-and-stop" },
+    },
+  },
+  { name: "nautilus", image: "ubuntu/24.04", resources: { cpu: 2, memory: "8GB", disk: "50GB" } },
+  {
+    name: "sail-mast",
+    image: "ubuntu/24.04",
+    resources: { cpu: 4, memory: "16GB", disk: "100GB" },
+    runtimes: { node: "24" },
+  },
+];
 
 function demoDispatch(dispatched: boolean, reason = ""): DispatchResponse {
   return { name: "demo", dispatched, reason, branch_created: dispatched };

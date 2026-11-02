@@ -451,6 +451,15 @@ export function createTauriGateway(restart: () => Promise<never> = restartPage):
     syncStatus: () => read("GET", "/v1/sync"),
     listProjects: () => read("GET", "/v1/projects"),
     project: (name) => read("GET", `/v1/projects/${encodeURIComponent(name)}`),
+    projectDefinition: (project) =>
+      read("GET", `/v1/projects/${encodeURIComponent(project)}/definition`),
+    createProject: (definition) => read("POST", "/v1/projects", { body: definition }),
+    writeProjectSection: (project, section, value, tag) =>
+      read(
+        "PUT",
+        `/v1/projects/${encodeURIComponent(project)}/definition/${encodeURIComponent(section)}`,
+        { body: { value }, ifMatch: tag },
+      ),
     listFdes: () => read("GET", "/v1/fdes"),
     listAgents: () => read("GET", "/v1/agents"),
     engage: (id, request) =>

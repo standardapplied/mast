@@ -1,4 +1,5 @@
 import type {
+  DefinitionSection,
   DispatchRequest,
   DispatchResponse,
   DisengageResponse,
@@ -8,6 +9,8 @@ import type {
   GlobalSpecView,
   ProjectResponse,
   PruneReport,
+  ProjectDefinitionDocument,
+  ProjectDefinitionResponse,
   PruneRequest,
   RunView,
   SailEvent,
@@ -709,6 +712,43 @@ export class CatalogStore {
     return result;
   }
 
+  /** A project's definition document with each section's tag, read fresh from the box. */
+  async readDefinition(project: string): Promise<SailResult<ProjectDefinitionResponse>> {
+    const gateway = this.gateway;
+    if (!gateway) return disconnected();
+    return gateway.projectDefinition(project);
+  }
+
+  /** Create a project in the catalog; the ack re-lists the roster so every surface sees it. */
+  async createProject(
+    definition: ProjectDefinitionDocument,
+  ): Promise<SailResult<ProjectDefinitionResponse>> {
+    const gateway = this.gateway;
+    if (!gateway) return disconnected();
+    const epoch = this.epoch;
+    const result = await gateway.createProject(definition);
+    if (result.ok && this.epoch === epoch) this.worldRefresher();
+    return result;
+  }
+
+  /**
+   * Write one section over the tag it was read at; the ack re-reads the project, whose member
+   * the agent section names.
+   */
+  async writeSection(
+    project: string,
+    section: DefinitionSection,
+    value: unknown,
+    tag: string,
+  ): Promise<SailResult<ProjectDefinitionResponse>> {
+    const gateway = this.gateway;
+    if (!gateway) return disconnected();
+    const epoch = this.epoch;
+    const result = await gateway.writeProjectSection(project, section, value, tag);
+    if (result.ok && this.epoch === epoch) this.loadProject(project);
+    return result;
+  }
+
   /** Seat an agent in a room; the ack refetches the room and its spec. */
   async engage(roomId: string, request: EngageRequest): Promise<SailResult<EngageResponse>> {
     const gateway = this.gateway;
@@ -789,6 +829,10 @@ export class CatalogStore {
 }
 
 /** The app-wide instance; wired in App and adopted by the selector hooks. */
+function disconnected<T>(): SailResult<T> {
+  return { ok: false, error: { status: 0, code: "bridge", message: "no gateway connected" } };
+}
+
 export const catalogStore = new CatalogStore();
 
 /** Ensures `store` is wired to `gateway`; idempotent, so App and every

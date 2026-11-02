@@ -70,7 +70,7 @@ describe("rowMeta", () => {
   test("statuses render as labels", () => {
     expect(rowMeta(row({ status: "running", connectable: true }))).toBe("running");
     expect(rowMeta(row({ status: "stopped" }))).toBe("stopped");
-    expect(rowMeta(row({ status: "not_created" }))).toBe("not created");
+    expect(rowMeta(row({ status: "not_created" }))).toBe("not created on this box");
     expect(rowMeta(row({ status: "error" }))).toBe("error");
   });
 

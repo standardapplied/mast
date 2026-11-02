@@ -969,3 +969,43 @@ describe("a project's member", () => {
     expect(store.projectDefinition("chorus")?.home_room).toBe("chorus--uday");
   });
 });
+
+describe("project definitions", () => {
+  test("a create puts the project on the roster and a section write re-reads its member", async () => {
+    const { gateway, store } = await seededQuiet();
+    let reads = 0;
+    const project = gateway.project.bind(gateway);
+    gateway.project = async (name) => {
+      reads += 1;
+      return project(name);
+    };
+    expect(store.projects()).not.toContain("acme-web");
+
+    const created = await store.createProject({ name: "acme-web", image: "ubuntu/24.04" });
+    await settle();
+    await settle();
+
+    expect(created.ok).toBe(true);
+    expect(store.projects()).toContain("acme-web");
+    const read = await store.readDefinition("acme-web");
+    if (!read.ok) throw new Error("unread");
+    const written = await store.writeSection("acme-web", "image", "debian/12", read.value.tags.image);
+    await settle();
+    expect(written.ok && written.value.definition.image).toBe("debian/12");
+    expect(reads).toBe(1);
+
+    const refused = await store.writeSection("acme-web", "image", "x/1", read.value.tags.image);
+    await settle();
+    expect(refused.ok ? null : refused.error.code).toBe("precondition_failed");
+    expect(reads).toBe(1);
+  });
+
+  test("with no box connected every definition call says so", async () => {
+    const store = new CatalogStore();
+    const unwired = { ok: false as const, error: { status: 0, code: "bridge", message: "no gateway connected" } };
+
+    expect(await store.readDefinition("acme")).toEqual(unwired);
+    expect(await store.createProject({ name: "acme" })).toEqual(unwired);
+    expect(await store.writeSection("acme", "image", "x", "t")).toEqual(unwired);
+  });
+});
