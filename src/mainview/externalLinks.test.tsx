@@ -56,6 +56,17 @@ test("a middle click opens the link outside too; a right click is the context me
   expect(opened).toEqual(["https://bun.com"]);
 });
 
+test("both entries route the page's links outside, before anything renders", async () => {
+  for (const [entry, opener] of [
+    ["index.tauri.tsx", "openLinksOutside(window, tauriTerminalServices.link.openUrl);"],
+    ["index.demo.tsx", 'openLinksOutside(window, async (url) => void window.open(url, "_blank", "noopener"));'],
+  ] as const) {
+    const source = await Bun.file(new URL(`./${entry}`, import.meta.url).pathname).text();
+    expect(source, entry).toContain(opener);
+    expect(source.indexOf(opener), entry).toBeLessThan(source.indexOf("createRoot(container)"));
+  }
+});
+
 test("a click beside a link is the page's own", () => {
   const click = new MouseEvent("click", { bubbles: true, cancelable: true });
   container.querySelector("p")!.dispatchEvent(click);

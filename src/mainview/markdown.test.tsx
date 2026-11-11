@@ -144,6 +144,16 @@ describe("Markdown keeps what was typed", () => {
     expect(container.querySelector("pre code")?.textContent).toBe("code\n``` and after");
   });
 
+  test("a one-line fence after a line of text stays in that paragraph", () => {
+    render(<Markdown source={"see\n```x = 1``` here"} message />);
+    expect(container.querySelector(".markdown")?.innerHTML).toBe("<p>see<br><code>x = 1</code> here</p>");
+  });
+
+  test("blank lines before and after a message are not drawn", () => {
+    render(<Markdown source={"\n\nhi\n\n\n"} message />);
+    expect(container.querySelector(".markdown")?.innerHTML).toBe("<p>hi</p>");
+  });
+
   test("a line of backticks that opens no fence is text", () => {
     render(<Markdown source={"```!! not a fence\nnext"} message />);
     expect(container.querySelector("figure")).toBeNull();
@@ -202,6 +212,11 @@ describe("Markdown keeps what was typed", () => {
     const url = "https://en.wikipedia.org/wiki/Foo_(bar)";
     render(`see ${url}, or [Foo](${url}).`);
     expect([...container.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([url, url]);
+  });
+
+  test("a bare URL keeps parentheses in its middle", () => {
+    render("see https://x.com/a_(b)_c now");
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("https://x.com/a_(b)_c");
   });
 
   test("a bare URL's last character is not the sentence's punctuation", () => {

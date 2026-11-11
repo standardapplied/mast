@@ -2433,8 +2433,10 @@ describe("SpecRoom parses only what changed", () => {
     const fake = makeGateway({ runs: [] });
     for (let index = 0; index < 500; index++) fake.store(said(index));
     const parses = spyOn(markdown, "markdownBlocks");
+    const renders = spyOn(markdown.Markdown as unknown as { type: () => unknown }, "type");
     await mount(fake.gateway);
     expect(parses).toHaveBeenCalledTimes(100);
+    expect(renders, "each drawn message renders through the memo").toHaveBeenCalledTimes(100);
 
     for (let page = 0; page < 4; page++) {
       act(() => container.querySelector<HTMLButtonElement>(".room-load-earlier")!.click());
@@ -2443,6 +2445,7 @@ describe("SpecRoom parses only what changed", () => {
     expect(container.querySelectorAll('[data-testid^="room-message-"]').length).toBe(500);
     expect(parses, "an earlier page parses its own messages, and no message twice").toHaveBeenCalledTimes(500);
     parses.mockClear();
+    renders.mockClear();
 
     act(() =>
       fake.roomStreams.emit("s1", {
@@ -2459,6 +2462,7 @@ describe("SpecRoom parses only what changed", () => {
     await settle();
     expect(container.querySelector(".room-new-pill")?.textContent, "the delta was drawn").toBe("1 new");
     expect(parses, "a delta is drawn as text: no message parses again").toHaveBeenCalledTimes(0);
+    expect(renders, "nor does any drawn message render again").toHaveBeenCalledTimes(0);
 
     fake.receive(said(501));
     await settle();
@@ -2471,5 +2475,6 @@ describe("SpecRoom parses only what changed", () => {
     expect(container.querySelector('[data-testid="room-message-message-1"]')).not.toBeNull();
     expect(parses, "a send parses once; its ack, the same text, parses nothing").toHaveBeenCalledTimes(2);
     parses.mockRestore();
+    renders.mockRestore();
   });
 });

@@ -1031,7 +1031,10 @@ describe("App tells you when a teammate writes", () => {
         value: {
           spec_id: roomId,
           total: 1,
-          messages: [{ id: `m-${id}`, spec_id: roomId, author: "bob", body, created_at: "2026-11-11T10:00:00Z" }],
+          messages: [
+            { id: "m-older", spec_id: roomId, author: "bob", body: "earlier", created_at: "2026-11-11T09:00:00Z" },
+            { id: `m-${id}`, spec_id: roomId, author: "bob", body, created_at: "2026-11-11T10:00:00Z" },
+          ],
         },
       };
     };
@@ -1047,6 +1050,15 @@ describe("App tells you when a teammate writes", () => {
       ok: false as const,
       error: { status: 503, code: "unavailable", message: "box unreachable" },
     });
+    await post(posted("bob", `${"y".repeat(154)} @uday`));
+
+    expect(toasts()).toEqual(["bob wrote · Invoice review UI"]);
+  });
+
+  test("a clipped preview whose read throws is still decided, from the preview", async () => {
+    gateway.listSpecMessages = async () => {
+      throw new Error("bridge down");
+    };
     await post(posted("bob", `${"y".repeat(154)} @uday`));
 
     expect(toasts()).toEqual(["bob wrote · Invoice review UI"]);
