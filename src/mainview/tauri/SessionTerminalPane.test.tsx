@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import {
   emptyBoxGateway,
   type FakeAttachment,
+  type FakeRenderer,
   type FakeTerminalServices,
   fakeTerminalServices,
   layOutElements,
@@ -1261,5 +1262,91 @@ describe("SessionTerminalPane find", () => {
     expect(bar()).toBeNull();
     expect(document.activeElement).toBe(host());
     expect(renderer.matches.at(-1), "closing drops the highlights").toEqual([]);
+  });
+});
+
+describe("SessionTerminalPane on a frame clock", () => {
+  const FRAME_MS = 1000 / 60;
+  const browser = { request: globalThis.requestAnimationFrame, cancel: globalThis.cancelAnimationFrame };
+  let callbacks = new Map<number, FrameRequestCallback>();
+  let requested = 0;
+  let now = 0;
+  let held = false;
+
+  beforeEach(() => {
+    callbacks = new Map();
+    held = false;
+    globalThis.requestAnimationFrame = (callback) => {
+      if (!held) return browser.request(callback);
+      callbacks.set(++requested, callback);
+      return requested;
+    };
+    globalThis.cancelAnimationFrame = (handle) => {
+      if (!callbacks.delete(handle)) browser.cancel(handle);
+    };
+  });
+
+  afterEach(() => {
+    globalThis.requestAnimationFrame = browser.request;
+    globalThis.cancelAnimationFrame = browser.cancel;
+  });
+
+  /** The browser's next frame boundary: every callback requested before it runs, once. */
+  const nextFrame = () =>
+    act(async () => {
+      const due = callbacks;
+      callbacks = new Map();
+      now += FRAME_MS;
+      due.forEach((callback) => callback(now));
+    });
+
+  const screenRow = (renderer: FakeRenderer, y: number) => {
+    const row = renderer.applied.at(-1)?.rows.find((r) => r.y === y);
+    return row?.cells.map((c) => c.text).join("").trimEnd() ?? null;
+  };
+
+  /**
+   * A pane attached on the browser's own frames (its size settles over them), then moved onto the
+   * hand-stepped clock, painted, and gone idle.
+   */
+  async function idlePane() {
+    const { attachment } = await mount();
+    held = true;
+    await act(() => new Promise((resolve) => browser.request(resolve)));
+    const renderer = services.renderers[0]!;
+    await nextFrame();
+    const drawn = renderer.draws;
+    await nextFrame();
+    expect(renderer.draws, "an idle frame draws nothing").toBe(drawn);
+    return { attachment, renderer };
+  }
+
+  test("an echo delivered to an idle pane is drawn in the first frame after it lands", async () => {
+    const { attachment, renderer } = await idlePane();
+    const drawn = renderer.draws;
+    await act(async () => keyEvent("keydown", { key: "a", code: "KeyA" }));
+    expect(lastWrite()).toBe("a");
+    await act(async () => attachment.lanes.onData(bytes("a")));
+    expect(renderer.draws, "the browser's frame boundary is the only wait").toBe(drawn);
+    await nextFrame();
+    expect(renderer.draws).toBe(drawn + 1);
+    expect(screenRow(renderer, 0)).toBe("a");
+  });
+
+  test("a replay that lands as one large batch is drawn in one frame, in order, with the live bytes after it", async () => {
+    const { attachment, renderer } = await idlePane();
+    const drawn = renderer.draws;
+    let snapshot = "";
+    for (let i = 0; i < 20_000; i++) snapshot += `replayed ${i}\r\n`;
+    await act(async () => {
+      attachment.lanes.onData(frame(1, 1));
+      attachment.lanes.onData(bytes(snapshot));
+      attachment.lanes.onData(frame(2));
+      attachment.lanes.onData(bytes("live"));
+    });
+    await nextFrame();
+    expect(renderer.draws).toBe(drawn + 1);
+    const rows = Array.from({ length: 24 }, (_, y) => screenRow(renderer, y));
+    expect(rows.slice(-3)).toEqual(["replayed 19998", "replayed 19999", "live"]);
   });
 });
