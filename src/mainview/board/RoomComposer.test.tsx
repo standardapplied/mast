@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { ServerRoomView } from "../../shared/sail-models";
+import type { FdeView, ServerRoomView } from "../../shared/sail-models";
 import { catalogLaneStubs } from "../../../test/catalogStubs";
 import type { Gateway } from "../gateway";
 import { catalogStore } from "./catalogStore";
@@ -24,27 +24,30 @@ const room: ServerRoomView = {
   updated_at: "2026-11-01T00:00:00Z",
 };
 
-const gateway = {
-  ...catalogLaneStubs(),
-  listRooms: async () => ({ ok: true as const, value: { rooms: [room], count: 1 } }),
-  listFdes: async () => ({
-    ok: true as const,
-    value: {
-      fdes: [
-        { handle: "ada", display_name: "Ada Lovelace", role: "member" },
-        { handle: "bob", role: "member" },
-        { handle: "uday", display_name: "Uday", role: "admin" },
-      ],
-    },
-  }),
-} as unknown as Gateway;
+const PEOPLE: FdeView[] = [
+  { handle: "ada", display_name: "Ada Lovelace", role: "member" },
+  { handle: "bob", role: "member" },
+  { handle: "uday", display_name: "Uday", role: "admin" },
+];
 
-async function mount(roomId = "design") {
+function gatewayWith(fdes: FdeView[]): Gateway {
+  return {
+    ...catalogLaneStubs(),
+    whoami: async () => ({
+      ok: true as const,
+      value: { name: "uday", fde: "uday", role: "admin", capabilities: ["read", "write"] },
+    }),
+    listRooms: async () => ({ ok: true as const, value: { rooms: [room], count: 1 } }),
+    listFdes: async () => ({ ok: true as const, value: { fdes } }),
+  } as unknown as Gateway;
+}
+
+async function mount(roomId = "design", wrap = (composer: ReactNode) => composer) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
   act(() =>
-    root.render(<RoomComposer roomId={roomId} me="uday" onSend={(body) => sent.push(body)} />),
+    root.render(wrap(<RoomComposer roomId={roomId} onSend={(body) => sent.push(body)} />)),
   );
   await act(async () => {});
 }
@@ -72,7 +75,7 @@ function press(key: string, init: KeyboardEventInit = {}) {
 beforeEach(() => {
   sent = [];
   roomDrafts.reset();
-  catalogStore.connect(gateway);
+  catalogStore.connect(gatewayWith(PEOPLE));
 });
 
 afterEach(() => {
@@ -153,6 +156,101 @@ describe("RoomComposer mentions", () => {
     expect(sent).toEqual(["@b"]);
   });
 
+  test("Enter or Tab that confirms an IME composition neither inserts nor sends", async () => {
+    await mount();
+    type("@b");
+    expect(press("Enter", { isComposing: true }).defaultPrevented).toBe(false);
+    expect(press("Tab", { keyCode: 229 } as KeyboardEventInit).defaultPrevented).toBe(false);
+    expect(composer().value).toBe("@b");
+    expect(listbox()).not.toBeNull();
+
+    type("今日は");
+    press("Enter", { isComposing: true });
+    expect(sent).toEqual([]);
+  });
+
+  test("the keyboard's choice is kept in view", async () => {
+    await mount();
+    type("@");
+    const shown: string[] = [];
+    const scrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      shown.push(this.textContent ?? "");
+    };
+    press("ArrowDown");
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+
+    expect(shown).toEqual(["bob@bob"]);
+  });
+
+  test("the row under the pointer is the choice, so one row is lit", async () => {
+    await mount();
+    type("@");
+    const claude = [...document.querySelectorAll<HTMLElement>('[role="option"]')][2]!;
+    act(() => {
+      claude.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body }));
+    });
+
+    expect([...document.querySelectorAll('[aria-selected="true"]')].map((row) => row.textContent)).toEqual([
+      "Claude Code@agent",
+    ]);
+    expect(document.querySelectorAll(".option.is-active").length).toBe(1);
+    press("Enter");
+    expect(composer().value).toBe("@agent ");
+  });
+
+  test("at most five are offered", async () => {
+    catalogStore.connect(
+      gatewayWith(["a1", "a2", "a3", "a4", "a5", "a6"].map((handle) => ({ handle, role: "member" }))),
+    );
+    await mount();
+    type("@a");
+
+    expect(options().length).toBe(5);
+  });
+
+  test("a handle with dots or dashes is offered as it is typed", async () => {
+    catalogStore.connect(
+      gatewayWith([
+        { handle: "bob.smith", role: "member" },
+        { handle: "a-b", role: "member" },
+      ]),
+    );
+    await mount();
+    type("@bob.s");
+    expect(options()).toEqual(["bob.smith@bob.smith"]);
+    type("@a-b");
+    expect(options()).toEqual(["a-b@a-b"]);
+  });
+
+  test("a name matches from the start of a word, not inside one", async () => {
+    await mount();
+    type("@ov");
+
+    expect(listbox()).toBeNull();
+  });
+
+  test("typing after Escape opens the list again, as a picker's search does", async () => {
+    await mount();
+    type("@b");
+    press("Escape");
+    type("@bo");
+
+    expect(options()).toEqual(["bob@bob"]);
+  });
+
+  test("the Escape that closes the list goes no further", async () => {
+    const escapes: string[] = [];
+    await mount("design", (composer) => (
+      <div onKeyDown={(event) => event.key === "Escape" && escapes.push("outer")}>{composer}</div>
+    ));
+    type("@b");
+    press("Escape");
+    expect(escapes).toEqual([]);
+    press("Escape");
+    expect(escapes).toEqual(["outer"]);
+  });
+
   test("leaving the composer closes the list", async () => {
     await mount();
     type("@b");
@@ -179,6 +277,19 @@ describe("RoomComposer drafts", () => {
     expect(sent).toEqual(["first line"]);
     expect(composer().value).toBe("");
     expect(roomDrafts.draft("design")).toBe("");
+  });
+
+  test("what is typed stays on screen when storage refuses to keep it", async () => {
+    roomDrafts.connect({
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException("quota", "QuotaExceededError");
+      },
+    });
+    await mount();
+    type("hello");
+
+    expect(composer().value).toBe("hello");
   });
 
   test("a blank draft does not send", async () => {

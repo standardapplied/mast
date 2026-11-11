@@ -17,7 +17,7 @@ import { catalogStore } from "./catalogStore";
 import { AGENT_MENTION, insertMention, mentionQuery } from "./mentions";
 import { roomDrafts } from "./roomDrafts";
 
-const OFFERED = 8;
+const OFFERED = 5;
 
 type Mentionable = { handle: string; name: string };
 
@@ -49,11 +49,9 @@ function matches(candidate: Mentionable, query: string): boolean {
  */
 export function RoomComposer({
   roomId,
-  me,
   onSend,
 }: {
   roomId: string;
-  me?: string;
   onSend: (body: string) => void;
 }) {
   const draft = useSyncExternalStore(roomDrafts.subscribe, () => roomDrafts.draft(roomId));
@@ -66,6 +64,7 @@ export function RoomComposer({
   const textarea = useRef<HTMLTextAreaElement>(null);
   const composer = useRef<HTMLDivElement>(null);
   const listId = useId();
+  const me = catalogStore.me;
 
   const roster = catalogStore.people();
   const candidates = mentionables(
@@ -79,7 +78,8 @@ export function RoomComposer({
       ? candidates.filter((candidate) => matches(candidate, query.query)).slice(0, OFFERED)
       : [];
   const open = query !== null && offered.length > 0;
-  const active = open && choice.query === query.query ? choice.index % offered.length : 0;
+  const typed = query?.query ?? "";
+  const active = open && choice.query === typed ? choice.index % offered.length : 0;
   const optionId = (index: number) => `${listId}-${index}`;
 
   useLayoutEffect(() => {
@@ -87,6 +87,10 @@ export function RoomComposer({
     textarea.current.setSelectionRange(placeCaret.current, placeCaret.current);
     placeCaret.current = null;
   });
+
+  useLayoutEffect(() => {
+    if (open) document.getElementById(optionId(active))?.scrollIntoView({ block: "nearest" });
+  }, [open, active, typed]);
 
   const write = (text: string, at: number) => {
     roomDrafts.keep(roomId, text);
@@ -109,12 +113,13 @@ export function RoomComposer({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (open) {
       const step =
         event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? offered.length - 1 : null;
       if (step !== null) {
         event.preventDefault();
-        return setChoice({ query: query.query, index: (active + step) % offered.length });
+        return setChoice({ query: typed, index: (active + step) % offered.length });
       }
       if (event.key === "Enter" || event.key === "Tab") {
         event.preventDefault();
@@ -152,7 +157,12 @@ export function RoomComposer({
         onKeyDown={onKeyDown}
       />
       <DropdownPanel triggerRef={composer} isOpen={open}>
-        <div className="option-list" role="listbox" id={listId} aria-label="Mention someone">
+        <div
+          className="option-list mention-options"
+          role="listbox"
+          id={listId}
+          aria-label="Mention someone"
+        >
           {offered.map((candidate, index) => (
             <div
               key={index}
@@ -161,6 +171,7 @@ export function RoomComposer({
               aria-selected={index === active}
               className={cx("option", index === active && "is-active")}
               onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setChoice({ query: typed, index })}
               onClick={() => insert(candidate)}
             >
               <span className="option-body">

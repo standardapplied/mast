@@ -390,6 +390,10 @@
   background: var(--surface-hover);
 }
 
+.mention-options .option:hover:not(.is-active) {
+  background: none;
+}
+
 .option.is-selected {
   background: var(--foreground);
   color: var(--background);

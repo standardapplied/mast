@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type UIEvent,
 } from "react";
 import type {
@@ -34,6 +35,7 @@ import {
   type LiveTurns,
 } from "./liveTurns";
 import { Markdown } from "../markdown";
+import { catalogStore } from "./catalogStore";
 import { RoomComposer } from "./RoomComposer";
 import { coalesce, isTelemetryEvent, roomRefreshFor } from "./roomRouting";
 import { SnapshotsPanel } from "./SnapshotsPanel";
@@ -361,7 +363,6 @@ export function SpecRoom({
   specStatus,
   specTitle,
   canWrite,
-  currentUser,
   engagement,
 }: {
   gateway: Gateway;
@@ -371,7 +372,6 @@ export function SpecRoom({
   specStatus?: string;
   specTitle?: string;
   canWrite: boolean;
-  currentUser?: string;
   /** The room's standing agent, when one is engaged: what its turns are labelled before its run is read. */
   engagement?: EngagementView;
 }) {
@@ -384,6 +384,7 @@ export function SpecRoom({
   const [hasEarlier, setHasEarlier] = useState(false);
   const [historyFailed, setHistoryFailed] = useState<string | null>(null);
   const [live, setLive] = useState<LiveTurns>(NO_LIVE_TURNS);
+  const me = useSyncExternalStore(catalogStore.subscribe, () => catalogStore.me);
   const [failureReasons, setFailureReasons] = useState<ReadonlyMap<string, string>>(new Map());
   const [repliesUnseen, setRepliesUnseen] = useState(0);
   const [expandedReviews, setExpandedReviews] = useState<Set<string>>(new Set());
@@ -936,7 +937,7 @@ export function SpecRoom({
     const message: RoomMessage = {
       id: `pending:${crypto.randomUUID()}`,
       spec_id: specId,
-      author: currentUser ?? "you",
+      author: me ?? "you",
       body,
       created_at: new Date().toISOString(),
       delivery: "pending",
@@ -1049,7 +1050,7 @@ export function SpecRoom({
                                 reason={failureReasons.get(entry.message.id)}
                               />
                             )}
-                            <Markdown source={entry.message.body} message me={currentUser} />
+                            <Markdown source={entry.message.body} message me={me} />
                             {entry.message.delivery === "pending" && (
                               <span className="room-message-delivery">
                                 <Spinner size={12} />
@@ -1176,7 +1177,7 @@ export function SpecRoom({
         </button>
       )}
       {canWrite ? (
-        <RoomComposer roomId={roomId} me={currentUser} onSend={send} />
+        <RoomComposer roomId={roomId} onSend={send} />
       ) : (
         <p className="room-readonly">
           {["done", "cancelled", "archived"].includes(specStatus ?? "")

@@ -8,10 +8,12 @@ import type {
   SailEvent,
   SpecMessage,
 } from "../../shared/sail-models";
+import { catalogLaneStubs } from "../../../test/catalogStubs";
 import { fakeRoomStreams } from "../../../test/roomStreams";
 import { ToastProvider } from "../components/Toast";
 import type { Gateway } from "../gateway";
 import * as markdown from "../markdown";
+import { catalogStore } from "./catalogStore";
 import { SpecRoom } from "./SpecRoom";
 
 let root: Root;
@@ -305,7 +307,6 @@ async function mount(
           specStatus={specStatus}
           specTitle={specTitle}
           canWrite
-          currentUser="uday"
           engagement={engagement}
         />
       </ToastProvider>,
@@ -329,9 +330,20 @@ function enterMessage(body: string) {
   act(() => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
 }
 
+beforeEach(() => {
+  catalogStore.connect({
+    ...catalogLaneStubs(),
+    whoami: async () => ({
+      ok: true as const,
+      value: { name: "uday", fde: "uday", role: "admin", capabilities: ["read", "write"] },
+    }),
+  } as unknown as Gateway);
+});
+
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  catalogStore.reset();
 });
 
 describe("SpecRoom", () => {
@@ -585,8 +597,7 @@ describe("SpecRoom", () => {
             gateway={fake.gateway}
             specId="s1"
             canWrite
-            currentUser="uday"
-          />
+            />
         </ToastProvider>,
       ),
     );
@@ -668,7 +679,7 @@ describe("SpecRoom", () => {
     act(() =>
       root.render(
         <ToastProvider>
-          <SpecRoom gateway={fake.gateway} specId="s2" roomId="s2" canWrite currentUser="uday" />
+          <SpecRoom gateway={fake.gateway} specId="s2" roomId="s2" canWrite />
         </ToastProvider>,
       ),
     );
@@ -788,8 +799,7 @@ describe("SpecRoom", () => {
             specId="s1"
             specStatus="done"
             canWrite={false}
-            currentUser="uday"
-          />
+            />
         </ToastProvider>,
       ),
     );

@@ -20,6 +20,7 @@ export function catalogLaneStubs() {
       error: { status: 404, code: "spec_not_found", message: `no '${id}' in this fake` },
     }),
     listRuns: async () => ({ ok: true as const, value: { runs: [] } }),
+    listFdes: async () => ({ ok: true as const, value: { fdes: [] } }),
     listSpecs: async () => ({ ok: true as const, value: { specs: [], total: 0 } }),
     listProjects: async () => ({ ok: true as const, value: { projects: [] } }),
     project: async (name: string) => ({

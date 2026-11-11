@@ -506,7 +506,6 @@ export function SpecDetail({
               spec.status !== "cancelled" &&
               spec.status !== "archived"
             }
-            currentUser={role.fde}
           />
         </main>
 
