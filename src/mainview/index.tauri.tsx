@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { CrashScreen } from "./components/CrashScreen";
 import { logError } from "./errorLog";
+import { openLinksOutside } from "./externalLinks";
 import { Styleguide } from "./styleguide";
 import { invoke } from "./tauri/core";
 import { createTauriGateway } from "./tauri/gateway";
@@ -50,6 +51,8 @@ const syncFullscreen = () => {
 };
 syncFullscreen();
 void getCurrentWindow().onResized(syncFullscreen);
+
+openLinksOutside(document, tauriTerminalServices.link.openUrl);
 
 const gateway = createTauriGateway();
 // The bell's transport is the Rust `attention` command; the store is connected where the

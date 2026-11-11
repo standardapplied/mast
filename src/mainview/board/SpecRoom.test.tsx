@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type {
@@ -11,6 +11,7 @@ import type {
 import { fakeRoomStreams } from "../../../test/roomStreams";
 import { ToastProvider } from "../components/Toast";
 import type { Gateway } from "../gateway";
+import * as markdown from "../markdown";
 import { SpecRoom } from "./SpecRoom";
 
 let root: Root;
@@ -2391,5 +2392,51 @@ describe("SpecRoom live turns", () => {
     act(() => fake.roomStreams.setState("s1", "connected"));
 
     expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Whole so far");
+  });
+});
+
+describe("SpecRoom parses only what changed", () => {
+  const at = (second: number) => new Date(Date.UTC(2026, 6, 28, 9, 0, second)).toISOString();
+  const said = (index: number): SpecMessage => ({
+    id: `m-${String(index).padStart(3, "0")}`,
+    spec_id: "s1",
+    author: index % 3 === 0 ? "ravi" : "uday",
+    body: `message **${index}**\nwith \`code\``,
+    created_at: at(index),
+  });
+
+  test("with 500 messages loaded, one streamed delta parses none and one new message parses one", async () => {
+    const fake = makeGateway({ runs: [] });
+    for (let index = 0; index < 500; index++) fake.store(said(index));
+    await mount(fake.gateway);
+    for (let page = 0; page < 4; page++) {
+      act(() => container.querySelector<HTMLButtonElement>(".room-load-earlier")!.click());
+      await settle();
+    }
+    expect(container.querySelectorAll('[data-testid^="room-message-"]').length).toBe(500);
+    const parses = spyOn(markdown, "markdownBlocks");
+
+    act(() =>
+      fake.roomStreams.emit("s1", {
+        v: 1,
+        ts: at(600),
+        project: "mast",
+        spec: "s1",
+        type: "agent_text_delta",
+        agent: "claude-code",
+        host: "devbox",
+        data: { run_id: "run-7", room_id: "s1", principal: "claude/run-7", turn: 7, text: "Half" },
+      }),
+    );
+    await settle();
+    expect(container.querySelector(".room-new-pill")?.textContent, "the delta was drawn").toBe("1 new");
+    expect(parses, "a delta is drawn as text: no message parses again").toHaveBeenCalledTimes(0);
+
+    fake.receive(said(501));
+    await settle();
+    act(() => container.querySelector<HTMLButtonElement>(".room-new-pill")!.click());
+    expect(container.querySelectorAll('[data-testid^="room-message-"]').length).toBe(501);
+    expect(parses, "the new message is the one parse").toHaveBeenCalledTimes(1);
+    parses.mockRestore();
   });
 });

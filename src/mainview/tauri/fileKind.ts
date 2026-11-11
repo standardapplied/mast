@@ -74,6 +74,12 @@ export function languageFor(name: string): string | null {
   return (ext && LANGUAGES[ext]) || null;
 }
 
+/** The language a code fence's tag names: an extension (`ts`) or the language itself (`typescript`). */
+export function languageForFence(tag: string): string | null {
+  const name = tag.toLowerCase();
+  return LANGUAGES[name] ?? (Object.values(LANGUAGES).includes(name) ? name : null);
+}
+
 export function routeFile(name: string, size: number): FileRoute {
   const ext = extension(name);
   if (ext && IMAGE_MIMES[ext]) return { kind: "image", mime: IMAGE_MIMES[ext] };

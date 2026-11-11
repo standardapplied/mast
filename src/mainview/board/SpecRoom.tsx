@@ -1060,7 +1060,7 @@ export function SpecRoom({
                                 reason={failureReasons.get(entry.message.id)}
                               />
                             )}
-                            <Markdown source={entry.message.body} />
+                            <Markdown source={entry.message.body} breaks me={currentUser} />
                             {entry.message.delivery === "pending" && (
                               <span className="room-message-delivery">
                                 <Spinner size={12} />

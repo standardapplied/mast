@@ -107,6 +107,7 @@ export function ChatRoomPane({
           roomId={room.id}
           specTitle={room.title}
           canWrite
+          currentUser={catalogStore.me}
           engagement={engagement}
         />
       </main>
