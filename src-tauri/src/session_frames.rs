@@ -65,14 +65,49 @@ fn json_frame(tag: u8, payload: serde_json::Value) -> Vec<u8> {
 pub const COALESCE_WINDOW: Duration = Duration::from_millis(16);
 pub const COALESCE_CAP: usize = 256 * 1024;
 
-/// Output bytes gathered into one data-channel frame (tag first, then the bytes in arrival order).
+/// One session's lane toward the webview, deciding on the clock it is handed: output is batched
+/// per [`COALESCE_WINDOW`]/[`COALESCE_CAP`] into one frame (tag first, then the bytes in arrival
+/// order); every other event flushes the batch ahead of itself and then travels as its own frame,
+/// so nothing can overtake the bytes that preceded it.
 #[derive(Default)]
-pub struct OutputBatch {
+pub struct Coalescer {
     frame: Vec<u8>,
+    opened_at: Option<Instant>,
 }
 
-impl OutputBatch {
-    pub fn push(&mut self, bytes: &[u8]) {
+impl Coalescer {
+    /// Takes `event` at `now`, sending whatever it releases in channel order.
+    pub fn event(&mut self, event: SessionEvent, now: Instant, send: &mut impl FnMut(Vec<u8>)) {
+        match event {
+            SessionEvent::Output(bytes) => {
+                self.hold(&bytes);
+                if self.frame.len() > COALESCE_CAP {
+                    self.flush(now, send);
+                } else if self.opened_at.is_none() && !self.frame.is_empty() {
+                    self.opened_at = Some(now);
+                }
+            }
+            event => {
+                self.flush(now, send);
+                send(encode(&event));
+            }
+        }
+    }
+
+    /// When the held output falls due; `None` when nothing is held.
+    pub fn due(&self) -> Option<Instant> {
+        self.opened_at.map(|at| at + COALESCE_WINDOW)
+    }
+
+    /// Sends the held output, if any.
+    pub fn flush(&mut self, _now: Instant, send: &mut impl FnMut(Vec<u8>)) {
+        self.opened_at = None;
+        if !self.frame.is_empty() {
+            send(std::mem::take(&mut self.frame));
+        }
+    }
+
+    fn hold(&mut self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
@@ -82,64 +117,24 @@ impl OutputBatch {
         }
         self.frame.extend_from_slice(bytes);
     }
-
-    pub fn is_full(&self) -> bool {
-        self.frame.len() > COALESCE_CAP
-    }
-
-    /// The pending frame, leaving the batch empty; `None` when nothing was gathered.
-    pub fn take(&mut self) -> Option<Vec<u8>> {
-        if self.frame.is_empty() {
-            None
-        } else {
-            Some(std::mem::take(&mut self.frame))
-        }
-    }
 }
 
-/// Drains one session's events toward the webview until the sender side is dropped. Output is
-/// batched per [`COALESCE_WINDOW`]/[`COALESCE_CAP`] into one frame; every other event flushes the
-/// batch ahead of itself and then travels as its own frame, so nothing can overtake the bytes that
-/// preceded it. The final batch is flushed before returning.
+/// Drains one session's events toward the webview until the sender side is dropped, through a
+/// [`Coalescer`] on the real clock. The final batch is flushed before returning.
 pub async fn pump<S>(mut events: mpsc::UnboundedReceiver<SessionEvent>, mut send: S)
 where
     S: FnMut(Vec<u8>),
 {
-    let mut batch = OutputBatch::default();
-    let mut deadline: Option<Instant> = None;
+    let mut lane = Coalescer::default();
     loop {
+        let due = lane.due();
         tokio::select! {
             event = events.recv() => match event {
-                None => {
-                    if let Some(frame) = batch.take() {
-                        send(frame);
-                    }
-                    return;
-                }
-                Some(SessionEvent::Output(bytes)) => {
-                    batch.push(&bytes);
-                    if batch.is_full() {
-                        if let Some(frame) = batch.take() {
-                            send(frame);
-                        }
-                        deadline = None;
-                    } else if deadline.is_none() {
-                        deadline = Some(Instant::now() + COALESCE_WINDOW);
-                    }
-                }
-                Some(event) => {
-                    if let Some(frame) = batch.take() {
-                        send(frame);
-                    }
-                    deadline = None;
-                    send(encode(&event));
-                }
+                Some(event) => lane.event(event, Instant::now(), &mut send),
+                None => return lane.flush(Instant::now(), &mut send),
             },
-            _ = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
-                if let Some(frame) = batch.take() {
-                    send(frame);
-                }
-                deadline = None;
+            _ = sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
+                lane.flush(Instant::now(), &mut send);
             }
         }
     }
@@ -230,13 +225,13 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_batch_has_nothing_to_take() {
-        let mut batch = OutputBatch::default();
-        batch.push(b"");
-        assert_eq!(batch.take(), None);
-        batch.push(b"x");
-        assert_eq!(batch.take(), Some(vec![TAG_BYTES, b'x']));
-        assert_eq!(batch.take(), None);
+    fn an_empty_output_holds_nothing() {
+        let mut lane = Coalescer::default();
+        let mut sent = Vec::new();
+        lane.event(SessionEvent::Output(Vec::new()), Instant::now(), &mut |frame| sent.push(frame));
+        assert_eq!(lane.due(), None);
+        lane.flush(Instant::now(), &mut |frame| sent.push(frame));
+        assert!(sent.is_empty());
     }
 
     #[test]
