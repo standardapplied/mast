@@ -1010,6 +1010,48 @@ describe("App tells you when a teammate writes", () => {
     expect(badges).toEqual([1, null]);
   });
 
+  test("a room seen in a window you are not using keeps its count until the window is used", async () => {
+    windowIs("blur");
+    await post(posted("bob", "the invoice totals are off"));
+    await openRoom(ROOM_B);
+    expect(badges).toEqual([1]);
+
+    windowIs("focus");
+    expect(badges).toEqual([1, null]);
+  });
+
+  test("a mention past the preview's cut is read from the message, and notifies as a mention", async () => {
+    const body = `${"x".repeat(170)} @uday can you check?`;
+    const preview = body.slice(0, 160);
+    const reads: string[] = [];
+    gateway.listSpecMessages = async (roomId) => {
+      reads.push(roomId);
+      return {
+        ok: true as const,
+        value: {
+          spec_id: roomId,
+          total: 1,
+          messages: [{ id: `m-${id}`, spec_id: roomId, author: "bob", body, created_at: "2026-11-11T10:00:00Z" }],
+        },
+      };
+    };
+    await post(posted("bob", preview));
+
+    expect(reads).toEqual([ROOM_B]);
+    expect(toasts()).toEqual(["bob mentioned you · Invoice review UI"]);
+    expect(badges).toEqual([1]);
+  });
+
+  test("a clipped preview whose message cannot be read is decided from the preview", async () => {
+    gateway.listSpecMessages = async () => ({
+      ok: false as const,
+      error: { status: 503, code: "unavailable", message: "box unreachable" },
+    });
+    await post(posted("bob", `${"y".repeat(154)} @uday`));
+
+    expect(toasts()).toEqual(["bob wrote · Invoice review UI"]);
+  });
+
   test("the room you are looking at in a focused window says nothing", async () => {
     await openRoom(ROOM_B);
     await post(posted("bob", "the invoice totals are off"));

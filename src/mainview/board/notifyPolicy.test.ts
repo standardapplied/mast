@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SailEvent } from "../../shared/sail-models";
-import { notification, type NotifyFacts } from "./notifyPolicy";
+import { needsBody, notification, type NotifyFacts } from "./notifyPolicy";
 
 function event(type: string, overrides: Partial<SailEvent> = {}): SailEvent {
   return {
@@ -236,6 +236,48 @@ describe("a teammate's message", () => {
       desktop: true,
     });
     expect(notification(posted("bob", "@udayk can you look?"), facts())?.kind).toBe("message");
+  });
+
+  describe("a preview the box clipped at 160 code points", () => {
+    const clip = (body: string) => [...body.replace(/\s+/g, " ").trim()].slice(0, 160).join("");
+    const late = `${"x".repeat(170)} @uday please look`;
+    const cut = `${"y".repeat(154)} @udaykiran can you look`;
+
+    test("is read whole before deciding, so a mention past the cut is a mention", () => {
+      const event = posted("bob", clip(late));
+      expect(needsBody(event, "uday")).toBe(true);
+      expect(notification(event, facts({ body: late }))?.kind).toBe("mention");
+      expect(notification(event, facts({ body: late }))?.detail).toBe(clip(late));
+    });
+
+    test("is never read for a mention in its last word, which the cut may have shortened", () => {
+      expect(clip(cut).endsWith("@uday")).toBe(true);
+      expect(notification(posted("bob", clip(cut)), facts())?.kind).toBe("message");
+      expect(notification(posted("bob", clip(cut)), facts({ body: cut }))?.kind).toBe("message");
+    });
+
+    test("one the box did not clip is read as it is, to its last word", () => {
+      const event = posted("bob", "can you look, @uday");
+      expect(needsBody(event, "uday")).toBe(false);
+      expect(notification(event, facts())?.kind).toBe("mention");
+    });
+
+    test("is not read for your own message, sail's, or before whoami", () => {
+      const long = clip(late);
+      expect(needsBody(posted("uday", long), "uday")).toBe(false);
+      expect(needsBody(posted("sail", long), "uday")).toBe(false);
+      expect(needsBody(posted("bob", long), undefined)).toBe(false);
+      expect(needsBody(event("agent_failed", { data: { preview: long } }), "uday")).toBe(false);
+    });
+
+    test("counts code points, as the box does", () => {
+      expect(needsBody(posted("bob", "😀".repeat(159)), "uday")).toBe(false);
+      expect(needsBody(posted("bob", "😀".repeat(160)), "uday")).toBe(true);
+    });
+  });
+
+  test("a handle quoted as code mentions no one", () => {
+    expect(notification(posted("bob", "run `sail fde add @uday`"), facts())?.kind).toBe("message");
   });
 
   test("a mention of you in the room you are looking at stays quiet", () => {

@@ -54,6 +54,8 @@ export type NotifyFacts = {
   windowFocused: boolean;
   /** The reader's handle, once whoami has said. */
   me?: string;
+  /** The message's whole body, read when {@link needsBody} says its preview cannot be trusted. */
+  body?: string;
   isEngaged?: (specId: string) => boolean;
   roomTitle?: (roomId: string) => string | undefined;
 };
@@ -64,6 +66,30 @@ function agentAuthor(author: string): boolean {
 }
 
 const SAIL = "sail";
+
+/** The box previews a message as its first 160 code points, whitespace collapsed, unmarked. */
+const PREVIEW_CODE_POINTS = 160;
+
+function previewOf(event: SailEvent): string {
+  return typeof event.data?.preview === "string" ? event.data.preview : "";
+}
+
+function clipped(preview: string): boolean {
+  return [...preview].length >= PREVIEW_CODE_POINTS;
+}
+
+/** Whether a message to `me` may have a mention past its preview's cut: read its body first. */
+export function needsBody(event: SailEvent, me: string | undefined): boolean {
+  if (event.type !== "spec_message_posted" || !me) return false;
+  return event.agent !== me && event.agent !== SAIL && clipped(previewOf(event));
+}
+
+/** What a mention is read in: the whole body when read, else the preview, less the last word of
+ *  one the box cut, which may be the start of a longer handle. */
+function mentionText(preview: string, body: string | undefined): string {
+  if (body !== undefined) return body;
+  return clipped(preview) ? preview.replace(/\S*$/, "") : preview;
+}
 
 const QUIET_LANES = new Set(["room", "room-full", "review", "fix"]);
 
@@ -97,8 +123,8 @@ function paged(
 function personal(event: SailEvent, specId: string, facts: NotifyFacts): Notification | null {
   const { me } = facts;
   if (!me || event.agent === me || event.agent === SAIL) return null;
-  const preview = typeof event.data?.preview === "string" ? event.data.preview : "";
-  const mentioned = mentions(preview, me);
+  const preview = previewOf(event);
+  const mentioned = mentions(mentionText(preview, facts.body), me);
   if (!mentioned && agentAuthor(event.agent)) return null;
   if (facts.windowFocused && facts.onScreen(specId)) return null;
   const who = event.agent.split("/")[0];

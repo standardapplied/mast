@@ -1,8 +1,8 @@
-import { useEffect, useState, type ReactNode, useRef } from "react";
-import type { ConnectionStatus, WhoAmI } from "../shared/sail-models";
+import { useEffect, useState, useSyncExternalStore, type ReactNode, useRef } from "react";
+import type { ConnectionStatus, SailEvent, WhoAmI } from "../shared/sail-models";
 import { BoardScreen } from "./board/BoardScreen";
 import { catalogStore, connectCatalog } from "./board/catalogStore";
-import { notification } from "./board/notifyPolicy";
+import { needsBody, notification } from "./board/notifyPolicy";
 import { connectPresence, presenceStore } from "./board/presenceStore";
 import { roomDrafts } from "./board/roomDrafts";
 import { RoomsScreen } from "./board/RoomsScreen";
@@ -56,6 +56,9 @@ function specIdFromHash(hash: string): string | null {
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
+const logged = (source: string) => (e: unknown) =>
+  logError(source, e instanceof Error ? e.message : String(e));
+
 /** Raises a macOS notification. */
 export type RaiseOsNotification = (title: string, body: string) => Promise<void>;
 
@@ -82,23 +85,30 @@ function conversationOnScreen(focusedId: string | null): string[] {
   return room && room !== focusedId ? [focusedId, room] : [focusedId];
 }
 
+/** The whole body of the message `event` announces, from the newest of its room's messages. */
+async function bodyOf(gateway: Gateway, event: SailEvent): Promise<string | undefined> {
+  const page = await gateway.listSpecMessages(event.spec!, { limit: 20 });
+  if (!page.ok) return undefined;
+  return page.value.messages.find((message) => message.id === event.data?.message_id)?.body;
+}
+
 /**
  * Bridges the event stream to the pure notification policy and carries out what it decides: a
- * toast, an OS notification, a count on the Dock badge. A room on screen in a focused window has
- * been seen, and its count leaves the badge.
+ * toast, an OS notification, a count on the Dock badge. A message whose preview the box clipped is
+ * read whole first, when the policy says a mention may lie past the cut. A room on screen in a
+ * focused window has been seen, and its count leaves the badge.
  */
 function Notifier({
   gateway,
   focusedSpecId,
-  me,
   raiseOsNotification,
 }: {
   gateway: Gateway;
   focusedSpecId: string | null;
-  me?: string;
   raiseOsNotification?: RaiseOsNotification;
 }) {
   const { showToast } = useToast();
+  const me = useSyncExternalStore(catalogStore.subscribe, () => catalogStore.me);
   const windowFocused = useWindowFocused();
   const engaged = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -114,20 +124,26 @@ function Notifier({
       gateway.onEvent((event) => {
         if (event.spec && event.type === "spec_engaged") engaged.current.add(event.spec);
         if (event.spec && event.type === "spec_disengaged") engaged.current.delete(event.spec);
-        const decision = notification(event, {
-          onScreen: (id) => conversationOnScreen(focusedSpecId).includes(id),
-          windowFocused,
-          me,
-          isEngaged: (id) => engaged.current.has(id),
-          roomTitle: (id) => catalogStore.roomOf(id)?.title,
+        const decide = (body?: string) => {
+          const decision = notification(event, {
+            onScreen: (id) => conversationOnScreen(focusedSpecId).includes(id),
+            windowFocused,
+            me,
+            body,
+            isEngaged: (id) => engaged.current.has(id),
+            roomTitle: (id) => catalogStore.roomOf(id)?.title,
+          });
+          if (!decision) return;
+          if (decision.toast) showToast(decision.tone, decision.message);
+          if (!decision.desktop) return;
+          attentionStore.noticeRoom(decision.specId);
+          raiseOsNotification?.(decision.message, decision.detail ?? "").catch(logged("notification"));
+        };
+        if (!needsBody(event, me)) return decide();
+        bodyOf(gateway, event).then(decide, (e: unknown) => {
+          logged("message read")(e);
+          decide();
         });
-        if (!decision) return;
-        if (decision.toast) showToast(decision.tone, decision.message);
-        if (!decision.desktop) return;
-        attentionStore.noticeRoom(decision.specId);
-        raiseOsNotification?.(decision.message, decision.detail ?? "").catch((e: unknown) =>
-          logError("notification", e instanceof Error ? e.message : String(e)),
-        );
       }),
     [gateway, focusedSpecId, windowFocused, me, raiseOsNotification, showToast],
   );
@@ -361,7 +377,6 @@ export function App({
         <Notifier
           gateway={gateway}
           focusedSpecId={focusedSpecId}
-          me={identity?.fde}
           raiseOsNotification={raiseOsNotification}
         />
       )}
