@@ -359,6 +359,20 @@ describe("SpecRoom", () => {
     expect(container.textContent).toContain("codex (for uday)");
   });
 
+  test("a message keeps its line breaks, and a mention of the reader is marked", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+
+    act(() => fake.receive(remoteMessage("message-2", "@uday look at\nthe second line; @ravi too")));
+    await settle();
+
+    const body = container.querySelector('[data-testid="room-message-message-2"] p')!;
+    expect(body.querySelectorAll("br").length).toBe(1);
+    expect([...body.querySelectorAll(".mention-me")].map((mark) => mark.textContent)).toEqual([
+      "@uday",
+    ]);
+  });
+
   test("a live snapshot_created event renders as a system row naming the label", async () => {
     const fake = makeGateway();
     await mount(fake.gateway);

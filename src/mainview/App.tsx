@@ -11,6 +11,7 @@ import { SpecDetail } from "./board/SpecDetail";
 import { ConnectScreen } from "./components/ConnectScreen";
 import { SyncHealthChip, useSyncStatus } from "./components/SyncHealth";
 import { Diagnostics } from "./components/Diagnostics";
+import { logError } from "./errorLog";
 import { cx } from "./components/cx";
 import { Board, Logo, Rooms, Terminal } from "./components/icons";
 import { LoadingMark } from "./components/Loading";
@@ -19,6 +20,7 @@ import { Tooltip } from "./components/Tooltip";
 import { UserMenu } from "./components/UserMenu";
 import type { Gateway } from "./gateway";
 import type { DeckServices, RoomTerminalRequest } from "./terminal/roomDeck";
+import { attentionStore } from "./terminal/attention";
 import { clipboardPolicy } from "./terminal/clipboardPolicy";
 import { terminalFontSize } from "./terminal/fontSize";
 import { latencyChip } from "./terminal/latency";
@@ -54,18 +56,42 @@ function specIdFromHash(hash: string): string | null {
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
+/** Raises a macOS notification. */
+export type RaiseOsNotification = (title: string, body: string) => Promise<void>;
+
+function useWindowFocused(): boolean {
+  const [focused, setFocused] = useState(() => document.hasFocus());
+  useEffect(() => {
+    const focus = () => setFocused(true);
+    const blur = () => setFocused(false);
+    window.addEventListener("focus", focus);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("focus", focus);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
+  return focused;
+}
+
 /**
- * Bridges the event stream to toasts through the pure notification policy:
- * needs-reply and run-endings page the human, the focused room stays quiet.
+ * Bridges the event stream to the pure notification policy and carries out what it decides: a
+ * toast, an OS notification, a count on the Dock badge. A room on screen in a focused window has
+ * been seen, and its count leaves the badge.
  */
 function Notifier({
   gateway,
   focusedSpecId,
+  me,
+  raiseOsNotification,
 }: {
   gateway: Gateway;
   focusedSpecId: string | null;
+  me?: string;
+  raiseOsNotification?: RaiseOsNotification;
 }) {
   const { showToast } = useToast();
+  const windowFocused = useWindowFocused();
   const engaged = useRef<Set<string>>(new Set());
   useEffect(() => {
     void gateway.listSpecs({}).then((result) => {
@@ -80,11 +106,26 @@ function Notifier({
       gateway.onEvent((event) => {
         if (event.spec && event.type === "spec_engaged") engaged.current.add(event.spec);
         if (event.spec && event.type === "spec_disengaged") engaged.current.delete(event.spec);
-        const decision = notification(event, focusedSpecId, (id) => engaged.current.has(id));
-        if (decision) showToast(decision.tone, decision.message);
+        const decision = notification(event, {
+          focusedSpecId,
+          windowFocused,
+          me,
+          isEngaged: (id) => engaged.current.has(id),
+          roomTitle: (id) => catalogStore.roomOf(id)?.title,
+        });
+        if (!decision) return;
+        if (decision.toast) showToast(decision.tone, decision.message);
+        if (!decision.desktop) return;
+        attentionStore.noticeRoom(decision.specId);
+        raiseOsNotification?.(decision.message, decision.detail ?? "").catch((e: unknown) =>
+          logError("notification", e instanceof Error ? e.message : String(e)),
+        );
       }),
-    [gateway, focusedSpecId, showToast],
+    [gateway, focusedSpecId, windowFocused, me, raiseOsNotification, showToast],
   );
+  useEffect(() => {
+    if (windowFocused && focusedSpecId) attentionStore.roomSeen(focusedSpecId);
+  }, [focusedSpecId, windowFocused]);
   return null;
 }
 
@@ -94,6 +135,7 @@ export function App({
   terminal,
   deck,
   updater,
+  raiseOsNotification,
 }: {
   gateway: Gateway;
   theme: ThemeController;
@@ -112,6 +154,9 @@ export function App({
   deck?: DeckServices;
   /** Auto-updater, injected by the Tauri entry (absent on demo/tests). */
   updater?: Updater;
+  /** Unbound in the Tauri entry: the app links no notification API yet, and the toast and the
+   *  Dock badge do not need one. */
+  raiseOsNotification?: RaiseOsNotification;
 }) {
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [everReady, setEverReady] = useState(false);
@@ -303,7 +348,14 @@ export function App({
 
   return (
     <ToastProvider>
-      {ready && <Notifier gateway={gateway} focusedSpecId={focusedSpecId} />}
+      {ready && (
+        <Notifier
+          gateway={gateway}
+          focusedSpecId={focusedSpecId}
+          me={identity?.fde}
+          raiseOsNotification={raiseOsNotification}
+        />
+      )}
       <div className="cockpit">
         {/* One Slack-style chrome band across the whole window: it is the drag surface (double-
             click zooms, via the window's drag-region handler), it insets for the macOS traffic

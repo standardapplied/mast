@@ -10,8 +10,9 @@ import type { AttentionRequest } from "./terminalServices";
  * Ghostty's focus rule: a bell rings only when the ringing pane is not the focused pane or the
  * window is not focused; a focused pane in the frontmost window keeps the flash and nothing more.
  * A muted pane flashes only. A program looping BEL rings at most once per {@link RING_COALESCE_MS}
- * per pane — coalesced, never queued. The badge is the size of the unseen set, none at zero, and
- * is corrected on every change to that set whatever the coalescing says.
+ * per pane — coalesced, never queued. The Dock badge is the whole app's: the size of the unseen
+ * set plus each room message that asked for you while you were not looking (notifyPolicy decides
+ * which), none at zero, corrected on every change to either whatever the coalescing says.
  */
 
 export type BellSetting = "sound+bounce" | "sound" | "bounce" | "flash";
@@ -50,6 +51,7 @@ const isSetting = (value: unknown): value is BellSetting => BELL_SETTINGS.includ
 class AttentionStore {
   private setting: BellSetting = "sound+bounce";
   private unseenSet: ReadonlySet<string> = new Set();
+  private readonly roomMessages = new Map<string, number>();
   private readonly lastRing = new Map<string, number>();
   private storage: Storage | null = null;
   private attention: Attention | null = null;
@@ -97,6 +99,17 @@ class AttentionStore {
     this.drop([session]);
   }
 
+  /** A message in `room` asked for you while you were not looking at it. */
+  noticeRoom(room: string): void {
+    this.roomMessages.set(room, (this.roomMessages.get(room) ?? 0) + 1);
+    this.act({ sound: false, bounce: false });
+  }
+
+  /** `room` is on screen in a focused window: what it asked for is seen. */
+  roomSeen(room: string): void {
+    if (this.roomMessages.delete(room)) this.act({ sound: false, bounce: false });
+  }
+
   /** Panes that no longer exist ring nothing and owe no badge. */
   forget(sessions: readonly string[]): void {
     for (const session of sessions) this.lastRing.delete(session);
@@ -115,6 +128,7 @@ class AttentionStore {
     this.now = Date.now;
     this.setting = "sound+bounce";
     this.unseenSet = new Set();
+    this.roomMessages.clear();
     this.lastRing.clear();
     this.emit();
   }
@@ -133,7 +147,9 @@ class AttentionStore {
   }
 
   private act(ring: Ring): void {
-    const badge = this.unseenSet.size > 0 ? this.unseenSet.size : null;
+    let count = this.unseenSet.size;
+    for (const messages of this.roomMessages.values()) count += messages;
+    const badge = count > 0 ? count : null;
     this.attention?.({ ...ring, badge }).catch((e: unknown) => {
       logError("attention", e instanceof Error ? e.message : String(e));
     });

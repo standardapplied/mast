@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { ConnectCodeCheck, ConnectionStatus } from "../shared/sail-models";
+import type { ConnectCodeCheck, ConnectionStatus, SailEvent } from "../shared/sail-models";
 import { App } from "./App";
 import { catalogStore } from "./board/catalogStore";
 import { roomDrafts } from "./board/roomDrafts";
@@ -923,6 +923,120 @@ describe("App keeps what you were typing", () => {
 
     expect(composer()!.value).toBe("");
     expect(localStorage.getItem("mast.room.drafts")).toBe("{}");
+  });
+});
+
+describe("App tells you when a teammate writes", () => {
+  const ROOM_A = "chorus-auth-flow";
+  const ROOM_B = "chorus-invoice-ui";
+  let raised: { title: string; body: string }[];
+  let badges: (number | null)[];
+  let id = 7000;
+
+  const posted = (agent: string, preview: string): SailEvent => ({
+    v: 1,
+    id: ++id,
+    ts: "2026-11-11T10:00:00Z",
+    project: "chorus",
+    spec: ROOM_B,
+    type: "spec_message_posted",
+    agent,
+    host: "demo",
+    data: { message_id: `m-${id}`, preview },
+  });
+  const toasts = () =>
+    [...container.querySelectorAll(".toast-message")].map((toast) => toast.textContent);
+
+  async function openRoom(roomId: string) {
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>(`[data-testid="room-${roomId}"]`)!.click(),
+    );
+    await flush();
+  }
+
+  async function post(event: SailEvent) {
+    await act(async () => gateway.emit(event));
+    await flush();
+  }
+
+  const windowIs = (focus: "focus" | "blur") => act(() => window.dispatchEvent(new Event(focus)));
+
+  beforeEach(async () => {
+    raised = [];
+    badges = [];
+    attentionStore.connect(localStorage, async (request) => void badges.push(request.badge));
+    gateway = createDemoGateway();
+    const theme = createThemeController(browserThemeDeps(() => {}));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root.render(
+        <App
+          gateway={gateway}
+          theme={theme}
+          raiseOsNotification={async (title, body) => void raised.push({ title, body })}
+        />,
+      ),
+    );
+    await flush();
+    await openRoom(ROOM_A);
+  });
+
+  afterEach(() => {
+    windowIs("focus");
+    act(() => attentionStore.reset());
+  });
+
+  test("in room A of a focused window, bob in room B is a toast naming him and the room", async () => {
+    await post(posted("bob", "the invoice totals are off"));
+
+    expect(toasts()).toEqual(["bob wrote · Invoice review UI"]);
+    expect(raised).toEqual([]);
+    expect(badges).toEqual([]);
+  });
+
+  test("in a window you are not using, bob is an OS notification and a badge of 1, and room B clears it", async () => {
+    windowIs("blur");
+    await post(posted("bob", "the invoice totals are off"));
+
+    expect(raised).toEqual([{ title: "bob wrote · Invoice review UI", body: "the invoice totals are off" }]);
+    expect(badges).toEqual([1]);
+    expect(toasts()).toEqual([]);
+
+    windowIs("focus");
+    expect(badges, "room A on screen has not seen room B").toEqual([1]);
+    await openRoom(ROOM_B);
+    expect(badges).toEqual([1, null]);
+  });
+
+  test("the room you are looking at in a focused window says nothing", async () => {
+    await openRoom(ROOM_B);
+    await post(posted("bob", "the invoice totals are off"));
+
+    expect(toasts()).toEqual([]);
+    expect(raised).toEqual([]);
+    expect(badges).toEqual([]);
+  });
+
+  test("your own message says nothing, focused or not", async () => {
+    await post(posted("uday", "a note"));
+    windowIs("blur");
+    await post(posted("uday", "@uday a note to self"));
+
+    expect(toasts()).toEqual([]);
+    expect(raised).toEqual([]);
+    expect(badges).toEqual([]);
+  });
+
+  test("a mention of you in another room is a toast, an OS notification and a badge", async () => {
+    await post(posted("bob", "@uday can you check the totals?"));
+
+    expect(toasts()).toEqual(["bob mentioned you · Invoice review UI"]);
+    expect(raised).toEqual([
+      { title: "bob mentioned you · Invoice review UI", body: "@uday can you check the totals?" },
+    ]);
+    expect(badges).toEqual([1]);
   });
 });
 
