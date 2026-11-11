@@ -1029,6 +1029,25 @@ describe("App tells you when a teammate writes", () => {
     expect(badges).toEqual([]);
   });
 
+  test("on the Board, a spec born in another room is on screen under that room's id too", async () => {
+    const getSpec = gateway.getSpec.bind(gateway);
+    gateway.getSpec = async (specId) => {
+      const read = await getSpec(specId);
+      return read.ok ? { ...read, value: { spec: { ...read.value.spec, room_id: ROOM_B } } } : read;
+    };
+    await act(async () => {
+      location.hash = `#/spec/${ROOM_A}`;
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await flush();
+    await flush();
+
+    await post(posted("bob", "the invoice totals are off"));
+
+    expect(toasts()).toEqual([]);
+    expect(raised).toEqual([]);
+  });
+
   test("a mention of you in another room is a toast, an OS notification and a badge", async () => {
     await post(posted("bob", "@uday can you check the totals?"));
 

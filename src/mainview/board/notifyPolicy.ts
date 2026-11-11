@@ -48,8 +48,8 @@ export type Notification = {
 };
 
 export type NotifyFacts = {
-  /** The room on screen. */
-  focusedSpecId: string | null;
+  /** Whether `id` names the conversation on screen: a spec's own id, or the room it lives in. */
+  onScreen: (id: string) => boolean;
   /** The window is the one the person is using. */
   windowFocused: boolean;
   /** The reader's handle, once whoami has said. */
@@ -100,7 +100,7 @@ function personal(event: SailEvent, specId: string, facts: NotifyFacts): Notific
   const preview = typeof event.data?.preview === "string" ? event.data.preview : "";
   const mentioned = mentions(preview, me);
   if (!mentioned && agentAuthor(event.agent)) return null;
-  if (facts.windowFocused && specId === facts.focusedSpecId) return null;
+  if (facts.windowFocused && facts.onScreen(specId)) return null;
   const who = event.agent.split("/")[0];
   const where = facts.roomTitle?.(specId) ?? specId;
   return {
@@ -119,7 +119,7 @@ export function notification(event: SailEvent, facts: NotifyFacts): Notification
   if (!specId) return null;
   if (event.type === "spec_message_posted") {
     const decision = personal(event, specId, facts);
-    if (decision || !agentAuthor(event.agent) || specId === facts.focusedSpecId) return decision;
+    if (decision || !agentAuthor(event.agent) || facts.onScreen(specId)) return decision;
     if (event.data?.question === true) {
       return paged("needs-reply", specId, `${specId} needs your reply`);
     }
@@ -127,7 +127,7 @@ export function notification(event: SailEvent, facts: NotifyFacts): Notification
     return paged("agent-reply", specId, `${event.agent.split("/")[0]} replied · ${specId}`);
   }
   const label = RUN_END_LABELS[event.type];
-  if (!label || specId === facts.focusedSpecId || quietStop(event)) return null;
+  if (!label || facts.onScreen(specId) || quietStop(event)) return null;
   const tone = event.type === "agent_failed" ? "error" : "info";
   return paged("run-ended", specId, `${label} · ${specId}`, tone);
 }

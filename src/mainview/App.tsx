@@ -74,6 +74,14 @@ function useWindowFocused(): boolean {
   return focused;
 }
 
+/** The ids the conversation on screen goes by: the focused id, and the room a focused spec lives
+ *  in when it was born in another. */
+function conversationOnScreen(focusedId: string | null): string[] {
+  if (!focusedId) return [];
+  const room = catalogStore.specOf(focusedId)?.room_id;
+  return room && room !== focusedId ? [focusedId, room] : [focusedId];
+}
+
 /**
  * Bridges the event stream to the pure notification policy and carries out what it decides: a
  * toast, an OS notification, a count on the Dock badge. A room on screen in a focused window has
@@ -107,7 +115,7 @@ function Notifier({
         if (event.spec && event.type === "spec_engaged") engaged.current.add(event.spec);
         if (event.spec && event.type === "spec_disengaged") engaged.current.delete(event.spec);
         const decision = notification(event, {
-          focusedSpecId,
+          onScreen: (id) => conversationOnScreen(focusedSpecId).includes(id),
           windowFocused,
           me,
           isEngaged: (id) => engaged.current.has(id),
@@ -124,7 +132,8 @@ function Notifier({
     [gateway, focusedSpecId, windowFocused, me, raiseOsNotification, showToast],
   );
   useEffect(() => {
-    if (windowFocused && focusedSpecId) attentionStore.roomSeen(focusedSpecId);
+    if (!windowFocused) return;
+    for (const id of conversationOnScreen(focusedSpecId)) attentionStore.roomSeen(id);
   }, [focusedSpecId, windowFocused]);
   return null;
 }

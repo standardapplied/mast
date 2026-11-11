@@ -16,9 +16,9 @@ function event(type: string, overrides: Partial<SailEvent> = {}): SailEvent {
   };
 }
 
-/** Today's facts for an agent rule: a focused window looking at `focusedSpecId`. */
-function at(focusedSpecId: string | null, isEngaged?: (specId: string) => boolean): NotifyFacts {
-  return { focusedSpecId, windowFocused: true, isEngaged };
+/** Today's facts for an agent rule: a focused window looking at `focused`. */
+function at(focused: string | null, isEngaged?: (specId: string) => boolean): NotifyFacts {
+  return { onScreen: (id) => id === focused, windowFocused: true, isEngaged };
 }
 
 describe("notification policy", () => {
@@ -172,7 +172,7 @@ describe("a teammate's message", () => {
   const posted = (agent: string, preview = "the build is green") =>
     event("spec_message_posted", { spec: ROOM_B, agent, data: { message_id: "m9", preview } });
   const facts = (overrides: Partial<NotifyFacts> = {}): NotifyFacts => ({
-    focusedSpecId: ROOM_A,
+    onScreen: (id) => id === ROOM_A,
     windowFocused: true,
     me: "uday",
     roomTitle: (id) => titles[id],
@@ -198,9 +198,9 @@ describe("a teammate's message", () => {
   });
 
   test("the room you are looking at stays quiet, until the window is not the one you use", () => {
-    expect(notification(posted("bob"), facts({ focusedSpecId: ROOM_B }))).toBeNull();
+    expect(notification(posted("bob"), facts({ onScreen: (id) => id === ROOM_B }))).toBeNull();
     expect(
-      notification(posted("bob"), facts({ focusedSpecId: ROOM_B, windowFocused: false }))?.desktop,
+      notification(posted("bob"), facts({ onScreen: (id) => id === ROOM_B, windowFocused: false }))?.desktop,
     ).toBe(true);
   });
 
@@ -239,7 +239,7 @@ describe("a teammate's message", () => {
   });
 
   test("a mention of you in the room you are looking at stays quiet", () => {
-    expect(notification(posted("bob", "@uday here"), facts({ focusedSpecId: ROOM_B }))).toBeNull();
+    expect(notification(posted("bob", "@uday here"), facts({ onScreen: (id) => id === ROOM_B }))).toBeNull();
   });
 
   test("an agent that mentions you notifies though its room is not engaged", () => {
