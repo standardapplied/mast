@@ -69,15 +69,19 @@ function extension(name: string): string | null {
   return name.slice(cut + 1).toLowerCase();
 }
 
-export function languageFor(name: string): string | null {
-  const ext = extension(name);
-  return (ext && LANGUAGES[ext]) || null;
+function languageOf(extension: string): string | null {
+  return Object.hasOwn(LANGUAGES, extension) ? LANGUAGES[extension]! : null;
 }
 
-/** The language a code fence's tag names: an extension (`ts`) or the language itself (`typescript`). */
+export function languageFor(name: string): string | null {
+  const ext = extension(name);
+  return ext ? languageOf(ext) : null;
+}
+
+/** The language a code fence's tag names: an extension (`ts`) or the language (`typescript`). */
 export function languageForFence(tag: string): string | null {
   const name = tag.toLowerCase();
-  return LANGUAGES[name] ?? (Object.values(LANGUAGES).includes(name) ? name : null);
+  return languageOf(name) ?? (Object.values(LANGUAGES).includes(name) ? name : null);
 }
 
 export function routeFile(name: string, size: number): FileRoute {
@@ -88,7 +92,7 @@ export function routeFile(name: string, size: number): FileRoute {
   if (ext && BINARY_EXTENSIONS.has(ext)) return { kind: "fallback", reason: "binary" };
   if (size > MAX_TEXT_BYTES) return { kind: "fallback", reason: "too-large" };
   if (ext && TEXT_EXTENSIONS.has(ext)) {
-    const language = LANGUAGES[ext] ?? null;
+    const language = languageOf(ext);
     return { kind: "code", language, markdown: language === "markdown" };
   }
   return { kind: "sniff" };

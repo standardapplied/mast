@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { languageFor, MAX_TEXT_BYTES, routeFile, sniffBinary } from "./fileKind";
+import { languageFor, languageForFence, MAX_TEXT_BYTES, routeFile, sniffBinary } from "./fileKind";
 
 describe("routeFile", () => {
   test("known text extensions route to code with a language", () => {
@@ -67,6 +67,19 @@ describe("languageFor", () => {
     expect(languageFor("a.html")).toBe("html");
     expect(languageFor("a.json")).toBe("json");
     expect(languageFor("a.weird")).toBeNull();
+    expect(languageFor("a.constructor")).toBeNull();
+  });
+});
+
+describe("languageForFence", () => {
+  test("a fence names its language by extension or by name, in any case", () => {
+    expect(languageForFence("ts")).toBe("typescript");
+    expect(languageForFence("TypeScript")).toBe("typescript");
+    expect(languageForFence("java")).toBe("java");
+    expect(languageForFence("yml")).toBe("yaml");
+    expect(languageForFence("cobol")).toBeNull();
+    expect(languageForFence("constructor")).toBeNull();
+    expect(languageForFence("")).toBeNull();
   });
 });
 
