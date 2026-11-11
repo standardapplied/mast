@@ -16,7 +16,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   act(() =>
-    root.render(<Markdown source="Bare https://example.com/x and [a markdown link](https://bun.com)" breaks />),
+    root.render(<Markdown source="Bare https://example.com/x and [a markdown link](https://bun.com)" message />),
   );
 });
 

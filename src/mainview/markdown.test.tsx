@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { Markdown } from "./markdown";
+import { CopyReset, Markdown } from "./markdown";
 import { highlight } from "./tauri/editorSeam";
+
+const componentsCss = await Bun.file(new URL("./static/components.css", import.meta.url).pathname).text();
 
 let root: Root;
 let container: HTMLElement;
@@ -11,8 +13,17 @@ function render(source: string | ReactNode) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
+  rerender(source);
+}
+
+function rerender(source: string | ReactNode) {
   act(() => root.render(typeof source === "string" ? <Markdown source={source} /> : source));
 }
+
+const copyButton = () =>
+  [...container.querySelectorAll<HTMLButtonElement>("figure button")].find((button) =>
+    /^Cop/.test(button.textContent ?? ""),
+  )!;
 
 afterEach(() => {
   act(() => root.unmount());
@@ -58,7 +69,7 @@ describe("Markdown", () => {
 
 describe("Markdown as a message", () => {
   test("a single line break is a line break, in a paragraph, a list item and a quote", () => {
-    render(<Markdown source={"line one\nline two\n\n- item\n  goes on\n\n> said\n> twice"} breaks />);
+    render(<Markdown source={"line one\nline two\n\n- item\n  goes on\n\n> said\n> twice"} message />);
     expect(container.querySelector("p")?.innerHTML).toBe("line one<br>line two");
     expect(container.querySelector("li")?.innerHTML).toBe("item<br>goes on");
     expect(container.querySelector("blockquote")?.innerHTML).toBe("said<br>twice");
@@ -75,10 +86,9 @@ describe("Markdown as a message", () => {
     expect(block.querySelector(".tok-keyword")?.textContent).toBe("class");
     expect(block.querySelector(".tok-comment")?.textContent).toBe('// "two"');
 
-    const copy = container.querySelector<HTMLButtonElement>('button[aria-label="Copy code"]')!;
-    await act(async () => copy.click());
+    await act(async () => copyButton().click());
     expect(await navigator.clipboard.readText()).toBe(code);
-    expect(copy.textContent).toBe("copied");
+    expect(copyButton().textContent).toBe("Copied");
   });
 
   test("a fence in a language the app does not load stays plain text, still with Copy", async () => {
@@ -87,7 +97,7 @@ describe("Markdown as a message", () => {
       await highlight("DISPLAY 'HI'.", "cobol");
     });
     expect(container.querySelector("pre code")?.innerHTML).toBe("DISPLAY 'HI'.");
-    expect(container.querySelector('button[aria-label="Copy code"]')).not.toBeNull();
+    expect(copyButton()).toBeDefined();
   });
 
   test("a bare http(s) URL is a link, its sentence's punctuation is not, and no link opens a window", () => {
@@ -110,14 +120,163 @@ describe("Markdown as a message", () => {
   });
 
   test("with no reader known, no mention is marked", () => {
-    render(<Markdown source="@undefined @uday" breaks />);
+    render(<Markdown source="@undefined @uday" message />);
     expect(container.querySelector(".mention-me")).toBeNull();
   });
 
   test("a mention of you is marked; another handle and an address are not", () => {
-    render(<Markdown source="@uday look, @ravi too; mail uday@example.com" me="uday" breaks />);
+    render(<Markdown source="@uday look, @ravi too; mail uday@example.com" me="uday" message />);
     const marked = [...container.querySelectorAll(".mention-me")].map((node) => node.textContent);
     expect(marked).toEqual(["@uday"]);
     expect(container.textContent).toBe("@uday look, @ravi too; mail uday@example.com");
+  });
+});
+
+describe("Markdown keeps what was typed", () => {
+  test("a fence on one line is inline code, with nothing around it lost", () => {
+    render(<Markdown source={"```const x = 1```"} message />);
+    expect(container.querySelector("p code")?.textContent).toBe("const x = 1");
+    expect(container.textContent).toBe("const x = 1");
+  });
+
+  test("what is typed after a closing fence's backticks is kept", () => {
+    render(<Markdown source={"```\ncode\n``` and after"} message />);
+    expect(container.querySelector("pre code")?.textContent).toBe("code\n``` and after");
+  });
+
+  test("a line of backticks that opens no fence is text", () => {
+    render(<Markdown source={"```!! not a fence\nnext"} message />);
+    expect(container.querySelector("figure")).toBeNull();
+    expect(container.querySelector("p")?.innerHTML).toBe("```!! not a fence<br>next");
+  });
+
+  test("a fence with an info string after its language is still that language", async () => {
+    const code = "class A {}";
+    render(`\`\`\`java title="A.java"\n${code}\n\`\`\``);
+    await act(async () => {
+      await highlight(code, "java");
+    });
+    expect(container.querySelector("pre code .tok-keyword")?.textContent).toBe("class");
+  });
+
+  test("an untagged fence names no language", () => {
+    render("```\nplain\n```");
+    expect(container.querySelector("figcaption .eyebrow")).toBeNull();
+  });
+
+  test("a list keeps the number it was typed with", () => {
+    render("2. second point\n3. third");
+    expect(container.querySelector("ol")?.getAttribute("start")).toBe("2");
+    rerender("2024. was a good year");
+    expect(container.querySelector("ol")?.getAttribute("start")).toBe("2024");
+    expect(container.textContent).toBe("was a good year");
+  });
+
+  test("a code block re-rendered with other code shows that code, highlighted or not", async () => {
+    render("```java\nclass A {}\n```");
+    await act(async () => {
+      await highlight("class A {}", "java");
+    });
+    rerender("```javax\nclass B {}\n```");
+    expect(container.querySelector("pre code")?.textContent).toBe("class B {}");
+    rerender("```java\nclass C {}\n```");
+    expect(container.querySelector("pre code")?.textContent).toBe("class C {}");
+  });
+
+  test("a message keeps its tabs, runs of spaces, indentation and extra blank lines", () => {
+    render(<Markdown source={"col1\tcol2\n    indented\n\n\n\nb"} message />);
+    expect(container.querySelector(".markdown")?.innerHTML).toBe(
+      "<p>col1\tcol2<br>    indented</p><br><br><p>b</p>",
+    );
+    const rule = componentsCss.match(/\.room-message-body \.markdown :is\(p, li, blockquote\) \{[^}]*\}/)?.[0];
+    expect(rule).toContain("white-space: pre-wrap");
+  });
+
+  test("a lone asterisk between spaces is text", () => {
+    render("2 * 3 * 4, and *this* is emphasis");
+    expect(container.textContent).toBe("2 * 3 * 4, and this is emphasis");
+    expect(container.querySelector("em")?.textContent).toBe("this");
+  });
+
+  test("a URL with balanced parentheses keeps them, bare or in a link", () => {
+    const url = "https://en.wikipedia.org/wiki/Foo_(bar)";
+    render(`see ${url}, or [Foo](${url}).`);
+    expect([...container.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([url, url]);
+  });
+
+  test("a bare URL's last character is not the sentence's punctuation", () => {
+    render(<Markdown source={'go https://x.com! or "https://y.com";'} message />);
+    expect([...container.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
+      "https://x.com",
+      "https://y.com",
+    ]);
+  });
+
+  test("a document's relative and anchor links show their label, and mailto is a link", () => {
+    render("[guide](./guide.md), [top](#top) and [mail](mailto:a@b.co)");
+    expect(container.textContent).toBe("guide, top and mail");
+    expect([...container.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
+      "mailto:a@b.co",
+    ]);
+  });
+
+  test("a message shows a link it cannot open exactly as typed", () => {
+    render(<Markdown source="[guide](./guide.md)" message />);
+    expect(container.textContent).toBe("[guide](./guide.md)");
+  });
+
+  test("a mention inside a word is not marked", () => {
+    render(<Markdown source="x@uday and @uday" me="uday" message />);
+    expect(container.querySelectorAll(".mention-me").length).toBe(1);
+  });
+
+  test("a handle ending in an underscore is mentioned whole, and only it", () => {
+    render(<Markdown source="@ada_ and @ada." me="ada_" message />);
+    expect([...container.querySelectorAll(".mention-me")].map((mark) => mark.textContent)).toEqual([
+      "@ada_",
+    ]);
+  });
+});
+
+describe("Markdown code block Copy", () => {
+  function scheduled() {
+    const pending: (() => void)[] = [];
+    return {
+      pending,
+      schedule: (run: () => void) => {
+        pending.push(run);
+        return () => {};
+      },
+    };
+  }
+
+  test("Copy says Copied, announces it, and is Copy again after a moment", async () => {
+    const timers = scheduled();
+    render(
+      <CopyReset.Provider value={timers.schedule}>
+        <Markdown source={"```\nls -la\n```"} />
+      </CopyReset.Provider>,
+    );
+    expect(copyButton().textContent).toBe("Copy");
+    await act(async () => copyButton().click());
+
+    expect(copyButton().textContent).toBe("Copied");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Copied");
+    act(() => timers.pending.forEach((run) => run()));
+    expect(copyButton().textContent).toBe("Copy");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+  });
+
+  test("a refused clipboard says Copy failed", async () => {
+    const writeText = navigator.clipboard.writeText;
+    navigator.clipboard.writeText = async () => {
+      throw new Error("denied");
+    };
+    render("```\nls\n```");
+    await act(async () => copyButton().click());
+    navigator.clipboard.writeText = writeText;
+
+    expect(copyButton().textContent).toBe("Copy failed");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Copy failed");
   });
 });

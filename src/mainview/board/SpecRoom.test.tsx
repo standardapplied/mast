@@ -2414,21 +2414,25 @@ describe("SpecRoom parses only what changed", () => {
   const said = (index: number): SpecMessage => ({
     id: `m-${String(index).padStart(3, "0")}`,
     spec_id: "s1",
-    author: index % 3 === 0 ? "ravi" : "uday",
+    author: "ravi",
     body: `message **${index}**\nwith \`code\``,
     created_at: at(index),
   });
 
-  test("with 500 messages loaded, one streamed delta parses none and one new message parses one", async () => {
+  test("with 500 messages loaded, earlier pages, a delta, a new message and a send each parse only what is new", async () => {
     const fake = makeGateway({ runs: [] });
     for (let index = 0; index < 500; index++) fake.store(said(index));
+    const parses = spyOn(markdown, "markdownBlocks");
     await mount(fake.gateway);
+    expect(parses).toHaveBeenCalledTimes(100);
+
     for (let page = 0; page < 4; page++) {
       act(() => container.querySelector<HTMLButtonElement>(".room-load-earlier")!.click());
       await settle();
     }
     expect(container.querySelectorAll('[data-testid^="room-message-"]').length).toBe(500);
-    const parses = spyOn(markdown, "markdownBlocks");
+    expect(parses, "an earlier page parses its own messages, and no message twice").toHaveBeenCalledTimes(500);
+    parses.mockClear();
 
     act(() =>
       fake.roomStreams.emit("s1", {
@@ -2451,6 +2455,11 @@ describe("SpecRoom parses only what changed", () => {
     act(() => container.querySelector<HTMLButtonElement>(".room-new-pill")!.click());
     expect(container.querySelectorAll('[data-testid^="room-message-"]').length).toBe(501);
     expect(parses, "the new message is the one parse").toHaveBeenCalledTimes(1);
+
+    enterMessage("my own **reply**");
+    await settle();
+    expect(container.querySelector('[data-testid="room-message-message-1"]')).not.toBeNull();
+    expect(parses, "a send parses once; its ack, the same text, parses nothing").toHaveBeenCalledTimes(2);
     parses.mockRestore();
   });
 });
