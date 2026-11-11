@@ -4,6 +4,7 @@ import { BoardScreen } from "./board/BoardScreen";
 import { catalogStore, connectCatalog } from "./board/catalogStore";
 import { notification } from "./board/notifyPolicy";
 import { connectPresence, presenceStore } from "./board/presenceStore";
+import { roomDrafts } from "./board/roomDrafts";
 import { RoomsScreen } from "./board/RoomsScreen";
 import { RoomTerminalRoute } from "./board/RoomTerminalRoute";
 import { SpecDetail } from "./board/SpecDetail";
@@ -168,6 +169,7 @@ export function App({
     scrollbackBudget.connect(window.localStorage);
     terminalFontSize.connect(window.localStorage);
     latencyChip.connect(window.localStorage);
+    roomDrafts.connect(window.localStorage);
   }, []);
 
   useEffect(() => {

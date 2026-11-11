@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { ConnectCodeCheck, ConnectionStatus } from "../shared/sail-models";
 import { App } from "./App";
 import { catalogStore } from "./board/catalogStore";
+import { roomDrafts } from "./board/roomDrafts";
 import { FORGOTTEN_NOTICE } from "./components/ConnectScreen";
 import { createDemoGateway, type DemoGateway } from "./gateway";
 import { dispatchPush } from "./push";
@@ -845,6 +846,83 @@ describe("App cockpit", () => {
     expect(localStorage.getItem("mast.terminal.scrollback-mib")).toBe("5");
     localStorage.removeItem("mast.terminal.scrollback-mib");
     scrollbackBudget.reset();
+  });
+});
+
+describe("App keeps what you were typing", () => {
+  const ROOM_A = "chorus-auth-flow";
+  const ROOM_B = "chorus-invoice-ui";
+  const composer = () =>
+    container.querySelector<HTMLTextAreaElement>(
+      '[data-testid="view-rooms"] textarea[aria-label="Message this room"]',
+    );
+
+  async function openRoom(id: string) {
+    await act(async () => container.querySelector<HTMLButtonElement>(`[data-testid="room-${id}"]`)!.click());
+    await flush();
+  }
+
+  function type(text: string) {
+    const textarea = composer()!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    act(() => {
+      setter.call(textarea, text);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  async function restart() {
+    act(() => root.unmount());
+    container.remove();
+    roomDrafts.reset();
+    catalogStore.reset();
+    await render(undefined, "rooms");
+  }
+
+  beforeEach(() => {
+    localStorage.removeItem("mast.room.drafts");
+    roomDrafts.reset();
+  });
+
+  test("a draft survives opening another room, the Board, and the room again", async () => {
+    await render(undefined, "rooms");
+    await openRoom(ROOM_A);
+    type("half a thought");
+
+    await openRoom(ROOM_B);
+    expect(composer()!.value, "room B has a draft of its own").toBe("");
+    await act(async () => navBtn("board")!.click());
+    await act(async () => navBtn("rooms")!.click());
+    await flush();
+    await openRoom(ROOM_A);
+
+    expect(composer()!.value).toBe("half a thought");
+  });
+
+  test("a draft survives quitting and reopening the app", async () => {
+    await render(undefined, "rooms");
+    await openRoom(ROOM_A);
+    type("half a thought");
+
+    await restart();
+    await openRoom(ROOM_A);
+
+    expect(composer()!.value).toBe("half a thought");
+  });
+
+  test("a sent draft is gone, also after a restart", async () => {
+    await render(undefined, "rooms");
+    await openRoom(ROOM_A);
+    type("half a thought");
+    act(() => composer()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await flush();
+    expect(composer()!.value).toBe("");
+
+    await restart();
+    await openRoom(ROOM_A);
+
+    expect(composer()!.value).toBe("");
+    expect(localStorage.getItem("mast.room.drafts")).toBe("{}");
   });
 });
 

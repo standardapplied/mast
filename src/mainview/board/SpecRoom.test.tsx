@@ -741,7 +741,7 @@ describe("SpecRoom", () => {
     expect(sendButton.textContent).toBe("");
     expect(sendButton.disabled).toBe(true);
     expect(container.querySelector(".room-composer-hint")?.textContent).toBe(
-      "shift + enter for new line",
+      "shift + enter for new line · @ to mention",
     );
 
     const textarea = container.querySelector<HTMLTextAreaElement>(

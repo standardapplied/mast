@@ -19,3 +19,23 @@ export function mentions(text: string, handle: string): boolean {
   }
   return false;
 }
+
+/** The `@query` the caret is in, or null: where it starts and what is typed after the `@`. */
+export function mentionQuery(text: string, caret: number): { start: number; query: string } | null {
+  const before = text.slice(0, caret);
+  const match = /@([A-Za-z0-9._-]*)$/.exec(before);
+  if (!match || !opensMention(before, match.index)) return null;
+  return { start: match.index, query: match[1]! };
+}
+
+/** `text` with the query at `start` replaced by `@handle` and a space, and where the caret goes. */
+export function insertMention(
+  text: string,
+  caret: number,
+  start: number,
+  handle: string,
+): { text: string; caret: number } {
+  const inserted = `@${handle} `;
+  const rest = text.slice(caret).replace(/^[A-Za-z0-9._-]*\s?/, "");
+  return { text: text.slice(0, start) + inserted + rest, caret: start + inserted.length };
+}

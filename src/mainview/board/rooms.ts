@@ -36,7 +36,7 @@ function timestamp(value: string): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-function storedMap(storage: StorageLike, key: string): Record<string, string> {
+export function storedMap(storage: StorageLike, key: string): Record<string, string> {
   try {
     const value = JSON.parse(storage.getItem(key) ?? "{}");
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};

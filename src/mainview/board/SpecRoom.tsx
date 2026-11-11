@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent,
   type UIEvent,
 } from "react";
 import type {
@@ -18,10 +17,8 @@ import type {
   SailEvent,
 } from "../../shared/sail-models";
 import { Avatar } from "../components/Avatar";
-import { Logo, Send, Spinner } from "../components/icons";
+import { Logo, Spinner } from "../components/icons";
 import { LoadingMark } from "../components/Loading";
-import { Textarea } from "../components/Textarea";
-import { Tooltip } from "../components/Tooltip";
 import { useToast } from "../components/Toast";
 import { Badge, Button, type BadgeTone } from "../components/ui";
 import type { Gateway } from "../gateway";
@@ -37,6 +34,7 @@ import {
   type LiveTurns,
 } from "./liveTurns";
 import { Markdown } from "../markdown";
+import { RoomComposer } from "./RoomComposer";
 import { coalesce, isTelemetryEvent, roomRefreshFor } from "./roomRouting";
 import { SnapshotsPanel } from "./SnapshotsPanel";
 import {
@@ -385,7 +383,6 @@ export function SpecRoom({
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [hasEarlier, setHasEarlier] = useState(false);
   const [historyFailed, setHistoryFailed] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
   const [live, setLive] = useState<LiveTurns>(NO_LIVE_TURNS);
   const [failureReasons, setFailureReasons] = useState<ReadonlyMap<string, string>>(new Map());
   const [repliesUnseen, setRepliesUnseen] = useState(0);
@@ -935,29 +932,21 @@ export function SpecRoom({
     if (missed) void refreshMessages(true);
   };
 
-  const send = () => {
-    if (!canWrite || !draft.trim()) return;
+  const send = (body: string) => {
     const message: RoomMessage = {
       id: `pending:${crypto.randomUUID()}`,
       spec_id: specId,
       author: currentUser ?? "you",
-      body: draft,
+      body,
       created_at: new Date().toISOString(),
       delivery: "pending",
     };
-    setDraft("");
     follow(true);
     applySources(
       { ...sources.current, messages: mergeMessages(sources.current.messages, [message]) },
       "replace",
     );
     void submitMessage(message);
-  };
-
-  const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.shiftKey) return;
-    event.preventDefault();
-    send();
   };
 
   const groups = groupTimeline(tail.visible);
@@ -1187,32 +1176,7 @@ export function SpecRoom({
         </button>
       )}
       {canWrite ? (
-        <div className="room-composer">
-          <Textarea
-            value={draft}
-            maxLength={65_536}
-            autoGrow
-            rows={1}
-            placeholder="Message this room…"
-            aria-label="Message this room"
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={onComposerKeyDown}
-          />
-          <div className="room-composer-row">
-            <span className="room-composer-hint">shift + enter for new line</span>
-            <Tooltip content="Send">
-              <button
-                type="button"
-                className="room-send"
-                aria-label="Send"
-                disabled={!draft.trim()}
-                onClick={send}
-              >
-                <Send size={16} />
-              </button>
-            </Tooltip>
-          </div>
-        </div>
+        <RoomComposer roomId={roomId} me={currentUser} onSend={send} />
       ) : (
         <p className="room-readonly">
           {["done", "cancelled", "archived"].includes(specStatus ?? "")
