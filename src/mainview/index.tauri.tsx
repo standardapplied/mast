@@ -52,7 +52,7 @@ const syncFullscreen = () => {
 syncFullscreen();
 void getCurrentWindow().onResized(syncFullscreen);
 
-openLinksOutside(document, tauriTerminalServices.link.openUrl);
+openLinksOutside(window, tauriTerminalServices.link.openUrl);
 
 const gateway = createTauriGateway();
 // The bell's transport is the Rust `attention` command; the store is connected where the
