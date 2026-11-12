@@ -157,3 +157,20 @@ describe("ChatRoomPane live turns", () => {
     );
   });
 });
+
+describe("ChatRoomPane conversation", () => {
+  test("the room knows who is reading: what they post is theirs, and a mention of them is marked", async () => {
+    await render([]);
+    const composer = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    act(() => {
+      setter.call(composer, "@uday ship it");
+      composer.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await flush();
+
+    expect(container.querySelector(".room-message-head strong")?.textContent).toBe("uday");
+    expect(container.querySelector(".mention-me")?.textContent).toBe("@uday");
+  });
+});

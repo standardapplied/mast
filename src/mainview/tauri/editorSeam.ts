@@ -30,3 +30,12 @@ export type EditorFactory = (config: EditorConfig) => Promise<EditorHandle>;
 /** The production factory: pull in the CodeMirror chunk on first use. */
 export const loadCodeMirrorEditor: EditorFactory = async (config) =>
   (await import("./codemirrorEditor")).createCodeMirrorEditor(config);
+
+/** A run of code and the `tok-*` classes it is colored by; no classes is plain text. */
+export type HighlightedSpan = { text: string; classes: string };
+
+/** Colors `code` as the editor would, from the same lazily loaded chunk; null for a language the
+ *  app does not load. */
+export async function highlight(code: string, language: string): Promise<HighlightedSpan[] | null> {
+  return (await import("./codemirrorEditor")).highlight(code, language);
+}

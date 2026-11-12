@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { openLinksOutside } from "./externalLinks";
 import { createDemoGateway } from "./gateway";
 import { browserThemeDeps, createThemeController } from "./theme";
 
@@ -11,6 +12,8 @@ import { browserThemeDeps, createThemeController } from "./theme";
  * without a macOS build or a live control plane.
  */
 document.documentElement.classList.add("in-shell");
+
+openLinksOutside(window, async (url) => void window.open(url, "_blank", "noopener"));
 
 const container = document.getElementById("root");
 if (!container) throw new Error("Missing #root element");

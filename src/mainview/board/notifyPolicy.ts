@@ -1,12 +1,16 @@
 import type { SailEvent } from "../../shared/sail-models";
+import { mentions } from "./mentions";
 
 /**
- * The one notification policy (Herdr's lesson: one pure function, not badge
- * logic scattered across hooks). Exactly two things page a human: an agent
- * question appearing in a room (`needs_reply`), and a run reaching a terminal
- * state. Everything else — tool events, log chunks, presence — is ambient and
- * never notifies. The room currently in focus is suppressed: the human is
- * already looking at it.
+ * The one notification policy (Herdr's lesson: one pure function, not badge logic scattered
+ * across hooks): whether an event notifies, and how — the toast, the OS notification and the Dock
+ * badge all ask it. A person's message in another room notifies: a toast while the window is the
+ * one in use, an OS notification and a badge count while it is not. A message that mentions you
+ * raises the OS notification and the badge wherever a plain one would only toast. Your own
+ * messages, and the room you are looking at, never notify. For agents, exactly two things page a
+ * human, as toasts: an agent question appearing in a room (`needs_reply`), and a run reaching a
+ * terminal state; an engaged agent's reply too. Everything else — tool events, log chunks,
+ * presence — is ambient and never notifies.
  *
  * The event-name vocabulary consumed by the log panel lives here too, so
  * "what does this event mean to a human" has a single home.
@@ -32,15 +36,59 @@ const RUN_END_LABELS: Record<string, string> = {
 };
 
 export type Notification = {
-  kind: "needs-reply" | "run-ended" | "agent-reply";
+  kind: "needs-reply" | "run-ended" | "agent-reply" | "message" | "mention";
   tone: "info" | "error";
   specId: string;
   message: string;
+  /** What the message said, as the event previews it: an OS notification's body. */
+  detail?: string;
+  toast: boolean;
+  /** Raised as an OS notification and counted on the Dock badge. */
+  desktop: boolean;
+};
+
+export type NotifyFacts = {
+  /** Whether `id` names the conversation on screen: a spec's own id, or the room it lives in. */
+  onScreen: (id: string) => boolean;
+  /** The window is the one the person is using. */
+  windowFocused: boolean;
+  /** The reader's handle, once whoami has said. */
+  me?: string;
+  /** The message's whole body, read when {@link needsBody} says its preview cannot be trusted. */
+  body?: string;
+  isEngaged?: (specId: string) => boolean;
+  roomTitle?: (roomId: string) => string | undefined;
 };
 
 /** Agent principals carry a `/` (claude/run-…); FDE handles and `sail` never do. */
 function agentAuthor(author: string): boolean {
   return author.includes("/");
+}
+
+const SAIL = "sail";
+
+/** The box previews a message as its first 160 code points, whitespace collapsed, unmarked. */
+const PREVIEW_CODE_POINTS = 160;
+
+function previewOf(event: SailEvent): string {
+  return typeof event.data?.preview === "string" ? event.data.preview : "";
+}
+
+function clipped(preview: string): boolean {
+  return [...preview].length >= PREVIEW_CODE_POINTS;
+}
+
+/** Whether a message to `me` may have a mention past its preview's cut: read its body first. */
+export function needsBody(event: SailEvent, me: string | undefined): boolean {
+  if (event.type !== "spec_message_posted" || !me) return false;
+  return event.agent !== me && event.agent !== SAIL && clipped(previewOf(event));
+}
+
+/** What a mention is read in: the whole body when read, else the preview, less the last word of
+ *  one the box cut, which may be the start of a longer handle. */
+function mentionText(preview: string, body: string | undefined): string {
+  if (body !== undefined) return body;
+  return clipped(preview) ? preview.replace(/\S*$/, "") : preview;
 }
 
 const QUIET_LANES = new Set(["room", "room-full", "review", "fix"]);
@@ -59,38 +107,53 @@ export function quietStop(event: SailEvent): boolean {
   return exit === undefined || exit === null || exit === 0 || exit === "0";
 }
 
-export function notification(
-  event: SailEvent,
-  focusedSpecId: string | null,
-  isEngaged: (specId: string) => boolean = () => false,
-): Notification | null {
+function paged(
+  kind: Notification["kind"],
+  specId: string,
+  message: string,
+  tone: Notification["tone"] = "info",
+): Notification {
+  return { kind, tone, specId, message, toast: true, desktop: false };
+}
+
+/**
+ * A message from someone else that is news to the reader: a mention of them, or any person's.
+ * Null leaves an agent's plain message to the agent rules.
+ */
+function personal(event: SailEvent, specId: string, facts: NotifyFacts): Notification | null {
+  const { me } = facts;
+  if (!me || event.agent === me || event.agent === SAIL) return null;
+  const preview = previewOf(event);
+  const mentioned = mentions(mentionText(preview, facts.body), me);
+  if (!mentioned && agentAuthor(event.agent)) return null;
+  if (facts.windowFocused && facts.onScreen(specId)) return null;
+  const who = event.agent.split("/")[0];
+  const where = facts.roomTitle?.(specId) ?? specId;
+  return {
+    kind: mentioned ? "mention" : "message",
+    tone: "info",
+    specId,
+    message: `${who} ${mentioned ? "mentioned you" : "wrote"} · ${where}`,
+    detail: preview,
+    toast: facts.windowFocused,
+    desktop: mentioned || !facts.windowFocused,
+  };
+}
+
+export function notification(event: SailEvent, facts: NotifyFacts): Notification | null {
   const specId = event.spec;
-  if (!specId || specId === focusedSpecId) return null;
+  if (!specId) return null;
   if (event.type === "spec_message_posted") {
-    if (!agentAuthor(event.agent)) return null;
+    const decision = personal(event, specId, facts);
+    if (decision || !agentAuthor(event.agent) || facts.onScreen(specId)) return decision;
     if (event.data?.question === true) {
-      return {
-        kind: "needs-reply",
-        tone: "info",
-        specId,
-        message: `${specId} needs your reply`,
-      };
+      return paged("needs-reply", specId, `${specId} needs your reply`);
     }
-    if (!isEngaged(specId)) return null;
-    const agent = event.agent.split("/")[0];
-    return {
-      kind: "agent-reply",
-      tone: "info",
-      specId,
-      message: `${agent} replied · ${specId}`,
-    };
+    if (!facts.isEngaged?.(specId)) return null;
+    return paged("agent-reply", specId, `${event.agent.split("/")[0]} replied · ${specId}`);
   }
   const label = RUN_END_LABELS[event.type];
-  if (!label || quietStop(event)) return null;
-  return {
-    kind: "run-ended",
-    tone: event.type === "agent_failed" ? "error" : "info",
-    specId,
-    message: `${label} · ${specId}`,
-  };
+  if (!label || facts.onScreen(specId) || quietStop(event)) return null;
+  const tone = event.type === "agent_failed" ? "error" : "info";
+  return paged("run-ended", specId, `${label} · ${specId}`, tone);
 }

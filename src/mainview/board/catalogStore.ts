@@ -5,6 +5,8 @@ import type {
   DisengageResponse,
   EngageRequest,
   EngageResponse,
+  FdeListResponse,
+  FdeView,
   GlobalSpecDetailResponse,
   GlobalSpecView,
   ProjectResponse,
@@ -47,6 +49,27 @@ import { foldActivity, isRoomActivityEvent, roomIdFromTitle } from "./rooms";
 
 export type MoveOutcome = "ok" | "conflict" | "blocked" | "error";
 export type MoveResult = { outcome: MoveOutcome; error?: SailWireError };
+
+/**
+ * The FDE roster: who can be assigned a spec and mentioned in a room. A failed or empty roster is
+ * an error its reader shows and can retry, never a silent downgrade to free text.
+ */
+export type Roster =
+  | { state: "loading" }
+  | { state: "loaded"; fdes: FdeView[] }
+  | { state: "failed"; message: string };
+
+function rosterFrom(result: SailResult<FdeListResponse>): Roster {
+  if (!result.ok) return rosterFailed(result.error.message);
+  const fdes = result.value.fdes;
+  if (!Array.isArray(fdes)) return rosterFailed("the roster is malformed");
+  if (fdes.length === 0) return rosterFailed("the roster is empty");
+  return { state: "loaded", fdes };
+}
+
+function rosterFailed(detail: string): Roster {
+  return { state: "failed", message: detail };
+}
 
 export type CreateRoomResult =
   | { ok: true; value: ServerRoomView; engageError?: string }
@@ -97,6 +120,10 @@ export class CatalogStore {
   private projectHolds = new Map<string, number>();
   private activity = new Map<string, string>();
   private fde: string | undefined;
+  private roster: Roster = { state: "loading" };
+  /** Surfaces reading the roster; like run holds, interest outlives a reset. */
+  private rosterHolds = 0;
+  private rosterInFlight = false;
   private roomsError: SailWireError | null = null;
   private specsError: SailWireError | null = null;
 
@@ -179,6 +206,8 @@ export class CatalogStore {
     this.definitionsInFlight = new Set();
     this.activity = new Map();
     this.fde = undefined;
+    this.roster = { state: "loading" };
+    this.rosterInFlight = false;
     this.roomsError = null;
     this.specsError = null;
     this.runsBySpec = new Map();
@@ -205,6 +234,7 @@ export class CatalogStore {
     this.worldRefresher();
     for (const specId of this.runHolds.keys()) this.kickRuns(specId);
     for (const project of this.projectHolds.keys()) this.loadProject(project);
+    if (this.rosterHolds > 0) this.refreshPeople();
     const gateway = this.gateway;
     if (!gateway) return;
     const epoch = this.epoch;
@@ -482,6 +512,45 @@ export class CatalogStore {
   /** Null until the first listing lands. */
   roomList(): ServerRoomView[] | null {
     return this.roomsById === null ? null : [...this.roomsById.values()];
+  }
+
+  roomOf(id: string): ServerRoomView | undefined {
+    return this.roomsById?.get(id);
+  }
+
+  people(): Roster {
+    return this.roster;
+  }
+
+  /** Declares interest in the roster: the first interest reads it, and every reconcile point
+   *  reads it again while any is held. */
+  retainPeople(): () => void {
+    if (this.rosterHolds++ === 0) this.refreshPeople();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.rosterHolds--;
+    };
+  }
+
+  /** Reads the roster again, one read in flight at a time; a failed read keeps a roster already
+   *  loaded. */
+  refreshPeople(): void {
+    const gateway = this.gateway;
+    if (!gateway || this.rosterInFlight) return;
+    this.rosterInFlight = true;
+    const epoch = this.epoch;
+    void gateway
+      .listFdes()
+      .then(rosterFrom, (e: unknown) => rosterFailed(message(e)))
+      .then((roster) => {
+        if (this.epoch !== epoch) return;
+        this.rosterInFlight = false;
+        if (roster.state === "failed" && this.roster.state === "loaded") return;
+        this.roster = roster;
+        this.emit();
+      });
   }
 
   specList(): GlobalSpecView[] {

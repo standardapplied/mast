@@ -1009,3 +1009,71 @@ describe("project definitions", () => {
     expect(await store.writeSection("acme", "image", "x", "t")).toEqual(unwired);
   });
 });
+
+describe("the FDE roster", () => {
+  const ravi = { handle: "ravi", role: "member" };
+  const down = { ok: false as const, error: { status: 502, code: "bad_gateway", message: "down" } };
+
+  test("the first interest reads it once, however many surfaces hold it", async () => {
+    const { gateway, store } = await seeded();
+    let reads = 0;
+    gateway.listFdes = async () => {
+      reads++;
+      return { ok: true as const, value: { fdes: [ravi] } };
+    };
+
+    expect(store.people()).toEqual({ state: "loading" });
+    const releases = [store.retainPeople(), store.retainPeople()];
+    await settle();
+
+    expect(store.people()).toEqual({ state: "loaded", fdes: [ravi] });
+    expect(reads).toBe(1);
+    releases.forEach((release) => release());
+  });
+
+  test("a held roster is read again at a reconcile point, and a failed read keeps it", async () => {
+    const { gateway, store } = await seeded();
+    const answers = [{ ok: true as const, value: { fdes: [ravi] } }, down];
+    gateway.listFdes = async () => answers.shift()!;
+    const release = store.retainPeople();
+    await settle();
+
+    store.refreshAll();
+    await settle();
+
+    expect(store.people()).toEqual({ state: "loaded", fdes: [ravi] });
+    release();
+  });
+
+  test("an unheld roster is not read at a reconcile point", async () => {
+    const { gateway, store } = await seeded();
+    let reads = 0;
+    gateway.listFdes = async () => {
+      reads++;
+      return down;
+    };
+    store.retainPeople()();
+    await settle();
+
+    store.refreshAll();
+    await settle();
+
+    expect(reads).toBe(1);
+    expect(store.people()).toEqual({ state: "failed", message: "down" });
+  });
+
+  test("a sign-out forgets the roster, and the next sign-in reads it for a surface still holding it", async () => {
+    const { gateway, store } = await seeded();
+    const release = store.retainPeople();
+    await settle();
+    expect(store.people().state).toBe("loaded");
+
+    store.reset();
+    expect(store.people()).toEqual({ state: "loading" });
+    store.connect(gateway);
+    await settle();
+
+    expect(store.people().state).toBe("loaded");
+    release();
+  });
+});

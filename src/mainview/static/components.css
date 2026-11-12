@@ -385,8 +385,13 @@
   cursor: pointer;
 }
 
-.option:hover {
+.option:hover,
+.option.is-active {
   background: var(--surface-hover);
+}
+
+.mention-options .option:hover:not(.is-active) {
+  background: none;
 }
 
 .option.is-selected {
@@ -3487,6 +3492,10 @@ button.room-section-head:hover {
   line-height: 1.58;
 }
 
+.room-message-body .markdown :is(p, li, blockquote) {
+  white-space: pre-wrap;
+}
+
 .room-message-body .markdown > :first-child {
   margin-top: 0;
 }
@@ -3786,12 +3795,29 @@ button.room-section-head:hover {
   overflow-wrap: anywhere;
 }
 
-.markdown pre {
+.markdown-code {
+  margin: 0 0 12px;
   background: var(--background-deep);
   border: 1px solid var(--border);
+}
+
+.markdown-code__bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 4px 6px 4px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown-code__bar .eyebrow {
+  margin-right: auto;
+}
+
+.markdown pre {
   padding: 12px 14px;
   overflow-x: auto;
-  margin: 0 0 12px;
+  margin: 0;
 }
 
 .markdown pre code {
@@ -3814,6 +3840,13 @@ button.room-section-head:hover {
   color: var(--foreground);
   text-decoration-color: var(--primary);
   text-underline-offset: 3px;
+}
+
+.mention-me {
+  padding: 0 2px;
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--foreground);
+  font-weight: 600;
 }
 
 .markdown img {
@@ -4623,57 +4656,57 @@ button.room-section-head:hover {
   font-size: 11px;
   color: var(--muted-foreground);
 }
-/* classHighlighter token classes → palette accents. */
-.viewer__editor .tok-keyword,
-.viewer__editor .tok-modifier,
-.viewer__editor .tok-operatorKeyword {
+/* classHighlighter token classes → palette accents, for the editor and code blocks alike. */
+.tok-keyword,
+.tok-modifier,
+.tok-operatorKeyword {
   color: var(--warning);
 }
-.viewer__editor .tok-string,
-.viewer__editor .tok-string2,
-.viewer__editor .tok-docString,
-.viewer__editor .tok-character {
+.tok-string,
+.tok-string2,
+.tok-docString,
+.tok-character {
   color: var(--success);
 }
-.viewer__editor .tok-number,
-.viewer__editor .tok-bool,
-.viewer__editor .tok-atom,
-.viewer__editor .tok-literal,
-.viewer__editor .tok-unit,
-.viewer__editor .tok-null,
-.viewer__editor .tok-self {
+.tok-number,
+.tok-bool,
+.tok-atom,
+.tok-literal,
+.tok-unit,
+.tok-null,
+.tok-self {
   color: var(--syntax-number);
 }
-.viewer__editor .tok-typeName,
-.viewer__editor .tok-className,
-.viewer__editor .tok-namespace,
-.viewer__editor .tok-macroName {
+.tok-typeName,
+.tok-className,
+.tok-namespace,
+.tok-macroName {
   color: var(--syntax-type);
 }
-.viewer__editor .tok-propertyName,
-.viewer__editor .tok-function {
+.tok-propertyName,
+.tok-function {
   color: var(--info);
 }
-.viewer__editor .tok-comment,
-.viewer__editor .tok-meta,
-.viewer__editor .tok-punctuation {
+.tok-comment,
+.tok-meta,
+.tok-punctuation {
   color: var(--subtle-foreground);
 }
-.viewer__editor .tok-heading {
+.tok-heading {
   font-weight: 600;
 }
-.viewer__editor .tok-emphasis {
+.tok-emphasis {
   font-style: italic;
 }
-.viewer__editor .tok-strong {
+.tok-strong {
   font-weight: 600;
 }
-.viewer__editor .tok-link,
-.viewer__editor .tok-url {
+.tok-link,
+.tok-url {
   color: var(--info);
   text-decoration: underline;
 }
-.viewer__editor .tok-invalid {
+.tok-invalid {
   color: var(--error);
 }
 .file-tree--dropping {

@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type {
-  FdeListResponse,
   FdeView,
   RunView,
   SpecRevisionView,
   SpecStatus,
   SpecUpdateRequest,
 } from "../../shared/sail-models";
-import type { SailResult, SailWireError } from "../../shared/types";
+import type { SailWireError } from "../../shared/types";
 import { Dialog } from "../components/Dialog";
 import { DetailsDrawer } from "../components/DetailsDrawer";
 import { ContextMenu, type MenuNode } from "../components/ContextMenu";
@@ -73,28 +72,6 @@ function assigneeOptions(fdes: FdeView[], current: string | undefined): SelectOp
     options.unshift({ value: current, label: current, description: "not in the FDE roster" });
   }
   return [{ value: "", label: "Unassigned" }, ...options];
-}
-
-/**
- * The roster arrives asynchronously, so the assignee field is read-only until
- * it lands. A failed or empty roster is an error the editor sees and can
- * retry — never a silent downgrade to free text.
- */
-type Roster =
-  | { state: "loading" }
-  | { state: "loaded"; fdes: FdeView[] }
-  | { state: "failed"; message: string };
-
-function rosterFrom(result: SailResult<FdeListResponse>): Roster {
-  if (!result.ok) return rosterFailed(result.error.message);
-  const fdes = result.value.fdes;
-  if (!Array.isArray(fdes)) return rosterFailed("the roster is malformed");
-  if (fdes.length === 0) return rosterFailed("the roster is empty");
-  return { state: "loaded", fdes };
-}
-
-function rosterFailed(message: string): Roster {
-  return { state: "failed", message };
 }
 
 const EDITOR_PANES = [
@@ -168,7 +145,6 @@ export function SpecDetail({
     canWrite: false,
     known: false,
   });
-  const [roster, setRoster] = useState<Roster>({ state: "loading" });
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -186,19 +162,12 @@ export function SpecDetail({
     });
   }, [gateway]);
 
-  const loadRoster = useCallback(() => {
-    setRoster({ state: "loading" });
-    void gateway
-      .listFdes()
-      .then(rosterFrom, (e: unknown) => rosterFailed(e instanceof Error ? e.message : String(e)))
-      .then(setRoster);
-  }, [gateway]);
-  useEffect(loadRoster, [loadRoster]);
-
   useEffect(() => connectCatalog(gateway), [gateway]);
-  // Subscribed for re-render: the catalog row and dependency graph are read
+  useEffect(() => catalogStore.retainPeople(), []);
+  // Subscribed for re-render: the catalog row, the roster and the dependency graph are read
   // straight off the store below, fresh on every store change.
   useSyncExternalStore(catalogStore.subscribe, () => catalogStore.version);
+  const roster = catalogStore.people();
 
   const load = useCallback(async () => {
     // Core first — the catalog row (through the store, so no surface races it)
@@ -537,7 +506,6 @@ export function SpecDetail({
               spec.status !== "cancelled" &&
               spec.status !== "archived"
             }
-            currentUser={role.fde}
           />
         </main>
 
@@ -596,7 +564,7 @@ export function SpecDetail({
                         onChange={(assignee) => setDraft((d) => ({ ...d, assignee }))}
                       />
                       {roster.state === "failed" && (
-                        <Button variant="ghost" onClick={loadRoster}>
+                        <Button variant="ghost" onClick={() => catalogStore.refreshPeople()}>
                           Retry
                         </Button>
                       )}

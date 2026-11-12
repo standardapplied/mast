@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type {
@@ -8,9 +8,12 @@ import type {
   SailEvent,
   SpecMessage,
 } from "../../shared/sail-models";
+import { catalogLaneStubs } from "../../../test/catalogStubs";
 import { fakeRoomStreams } from "../../../test/roomStreams";
 import { ToastProvider } from "../components/Toast";
 import type { Gateway } from "../gateway";
+import * as markdown from "../markdown";
+import { catalogStore } from "./catalogStore";
 import { SpecRoom } from "./SpecRoom";
 
 let root: Root;
@@ -304,7 +307,6 @@ async function mount(
           specStatus={specStatus}
           specTitle={specTitle}
           canWrite
-          currentUser="uday"
           engagement={engagement}
         />
       </ToastProvider>,
@@ -328,9 +330,20 @@ function enterMessage(body: string) {
   act(() => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
 }
 
+beforeEach(() => {
+  catalogStore.connect({
+    ...catalogLaneStubs(),
+    whoami: async () => ({
+      ok: true as const,
+      value: { name: "uday", fde: "uday", role: "admin", capabilities: ["read", "write"] },
+    }),
+  } as unknown as Gateway);
+});
+
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  catalogStore.reset();
 });
 
 describe("SpecRoom", () => {
@@ -356,6 +369,20 @@ describe("SpecRoom", () => {
 
     expect(container.textContent).toContain("Full body from the server");
     expect(container.textContent).toContain("codex (for uday)");
+  });
+
+  test("a message keeps its line breaks, and a mention of the reader is marked", async () => {
+    const fake = makeGateway();
+    await mount(fake.gateway);
+
+    act(() => fake.receive(remoteMessage("message-2", "@uday look at\nthe second line; @ravi too")));
+    await settle();
+
+    const body = container.querySelector('[data-testid="room-message-message-2"] p')!;
+    expect(body.querySelectorAll("br").length).toBe(1);
+    expect([...body.querySelectorAll(".mention-me")].map((mark) => mark.textContent)).toEqual([
+      "@uday",
+    ]);
   });
 
   test("a live snapshot_created event renders as a system row naming the label", async () => {
@@ -570,8 +597,7 @@ describe("SpecRoom", () => {
             gateway={fake.gateway}
             specId="s1"
             canWrite
-            currentUser="uday"
-          />
+            />
         </ToastProvider>,
       ),
     );
@@ -653,7 +679,7 @@ describe("SpecRoom", () => {
     act(() =>
       root.render(
         <ToastProvider>
-          <SpecRoom gateway={fake.gateway} specId="s2" roomId="s2" canWrite currentUser="uday" />
+          <SpecRoom gateway={fake.gateway} specId="s2" roomId="s2" canWrite />
         </ToastProvider>,
       ),
     );
@@ -740,7 +766,7 @@ describe("SpecRoom", () => {
     expect(sendButton.textContent).toBe("");
     expect(sendButton.disabled).toBe(true);
     expect(container.querySelector(".room-composer-hint")?.textContent).toBe(
-      "shift + enter for new line",
+      "shift + enter for new line · @ to mention",
     );
 
     const textarea = container.querySelector<HTMLTextAreaElement>(
@@ -773,8 +799,7 @@ describe("SpecRoom", () => {
             specId="s1"
             specStatus="done"
             canWrite={false}
-            currentUser="uday"
-          />
+            />
         </ToastProvider>,
       ),
     );
@@ -2391,5 +2416,65 @@ describe("SpecRoom live turns", () => {
     act(() => fake.roomStreams.setState("s1", "connected"));
 
     expect(draft()?.querySelector(".room-draft-text")?.textContent).toBe("Whole so far");
+  });
+});
+
+describe("SpecRoom parses only what changed", () => {
+  const at = (second: number) => new Date(Date.UTC(2026, 6, 28, 9, 0, second)).toISOString();
+  const said = (index: number): SpecMessage => ({
+    id: `m-${String(index).padStart(3, "0")}`,
+    spec_id: "s1",
+    author: "ravi",
+    body: `message **${index}**\nwith \`code\``,
+    created_at: at(index),
+  });
+
+  test("with 500 messages loaded, earlier pages, a delta, a new message and a send each parse only what is new", async () => {
+    const fake = makeGateway({ runs: [] });
+    for (let index = 0; index < 500; index++) fake.store(said(index));
+    const parses = spyOn(markdown, "markdownBlocks");
+    const renders = spyOn(markdown.Markdown as unknown as { type: () => unknown }, "type");
+    await mount(fake.gateway);
+    expect(parses).toHaveBeenCalledTimes(100);
+    expect(renders, "each drawn message renders through the memo").toHaveBeenCalledTimes(100);
+
+    for (let page = 0; page < 4; page++) {
+      act(() => container.querySelector<HTMLButtonElement>(".room-load-earlier")!.click());
+      await settle();
+    }
+    expect(container.querySelectorAll('[data-testid^="room-message-"]').length).toBe(500);
+    expect(parses, "an earlier page parses its own messages, and no message twice").toHaveBeenCalledTimes(500);
+    parses.mockClear();
+    renders.mockClear();
+
+    act(() =>
+      fake.roomStreams.emit("s1", {
+        v: 1,
+        ts: at(600),
+        project: "mast",
+        spec: "s1",
+        type: "agent_text_delta",
+        agent: "claude-code",
+        host: "devbox",
+        data: { run_id: "run-7", room_id: "s1", principal: "claude/run-7", turn: 7, text: "Half" },
+      }),
+    );
+    await settle();
+    expect(container.querySelector(".room-new-pill")?.textContent, "the delta was drawn").toBe("1 new");
+    expect(parses, "a delta is drawn as text: no message parses again").toHaveBeenCalledTimes(0);
+    expect(renders, "nor does any drawn message render again").toHaveBeenCalledTimes(0);
+
+    fake.receive(said(501));
+    await settle();
+    act(() => container.querySelector<HTMLButtonElement>(".room-new-pill")!.click());
+    expect(container.querySelectorAll('[data-testid^="room-message-"]').length).toBe(501);
+    expect(parses, "the new message is the one parse").toHaveBeenCalledTimes(1);
+
+    enterMessage("my own **reply**");
+    await settle();
+    expect(container.querySelector('[data-testid="room-message-message-1"]')).not.toBeNull();
+    expect(parses, "a send parses once; its ack, the same text, parses nothing").toHaveBeenCalledTimes(2);
+    parses.mockRestore();
+    renders.mockRestore();
   });
 });

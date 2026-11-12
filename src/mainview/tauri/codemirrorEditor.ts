@@ -1,5 +1,10 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { bracketMatching, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import {
+  bracketMatching,
+  indentOnInput,
+  syntaxHighlighting,
+  type LanguageSupport,
+} from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { EditorState, type Extension } from "@codemirror/state";
 import {
@@ -10,8 +15,8 @@ import {
   keymap,
   lineNumbers,
 } from "@codemirror/view";
-import { classHighlighter } from "@lezer/highlight";
-import type { EditorConfig, EditorHandle } from "./editorSeam";
+import { classHighlighter, highlightCode } from "@lezer/highlight";
+import type { EditorConfig, EditorHandle, HighlightedSpan } from "./editorSeam";
 
 /**
  * The real editor behind the seam — the one lazily-imported CodeMirror chunk.
@@ -20,7 +25,7 @@ import type { EditorConfig, EditorHandle } from "./editorSeam";
  * live with the app, the same lockstep the terminal has.
  */
 
-async function languageExtension(id: string | null): Promise<Extension> {
+async function languageSupport(id: string | null): Promise<LanguageSupport | null> {
   switch (id) {
     case "markdown":
       return (await import("@codemirror/lang-markdown")).markdown();
@@ -47,12 +52,27 @@ async function languageExtension(id: string | null): Promise<Extension> {
     case "html":
       return (await import("@codemirror/lang-html")).html();
     default:
-      return [];
+      return null;
   }
 }
 
+/** `code` as the editor would color it, or null for a language the app does not load. */
+export async function highlight(code: string, language: string): Promise<HighlightedSpan[] | null> {
+  const support = await languageSupport(language);
+  if (!support) return null;
+  const spans: HighlightedSpan[] = [];
+  highlightCode(
+    code,
+    support.language.parser.parse(code),
+    classHighlighter,
+    (text, classes) => spans.push({ text, classes }),
+    () => spans.push({ text: "\n", classes: "" }),
+  );
+  return spans;
+}
+
 export async function createCodeMirrorEditor(config: EditorConfig): Promise<EditorHandle> {
-  const language = await languageExtension(config.language);
+  const language: Extension = (await languageSupport(config.language)) ?? [];
 
   let baseline = config.doc;
   let dirty = false;

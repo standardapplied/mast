@@ -232,6 +232,45 @@ fn url_scheme(url: &str) -> Option<&str> {
     valid.then_some(scheme)
 }
 
+/// What a navigation the webview is asked to make becomes. The page holds every live session, so it
+/// never leaves the app: its own pages and the content it made (`blob:`, `about:`) load in place,
+/// an address `open_url` admits opens in the browser instead — a link no listener routed, a URL
+/// dropped on the window — and anything else is refused.
+#[derive(Debug, PartialEq)]
+enum Navigation {
+    Stay,
+    OpenOutside,
+    Refuse,
+}
+
+fn navigation(url: &tauri::Url) -> Navigation {
+    let app_host = url.host_str().is_some_and(|host| host.ends_with(".localhost"));
+    match url.scheme() {
+        "tauri" | "blob" | "about" => Navigation::Stay,
+        "http" | "https" if app_host => Navigation::Stay,
+        _ if admit_url(url.as_str()).is_ok() => Navigation::OpenOutside,
+        _ => Navigation::Refuse,
+    }
+}
+
+fn links_open_outside<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("links")
+        .on_navigation(|webview, url| match navigation(url) {
+            Navigation::Stay => true,
+            Navigation::OpenOutside => {
+                if let Err(e) = webview.opener().open_url(url.as_str(), None::<&str>) {
+                    eprintln!("mast: could not open {url}: {e}");
+                }
+                false
+            }
+            Navigation::Refuse => {
+                eprintln!("mast: refused to navigate the window to a {}: address", url.scheme());
+                false
+            }
+        })
+        .build()
+}
+
 /// Brings a project's stack up, forwards every port that listens, and names the address to open.
 #[tauri::command]
 async fn portal_open(state: Bound<'_>, project: String) -> Result<portal::PortalView, String> {
@@ -738,6 +777,7 @@ async fn stream_close(state: Bound<'_>, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(links_open_outside())
         .setup(|app| {
             // Auto-update + relaunch are desktop-only (the app self-updates from
             // the signed GitHub release; mobile updates ship through the store).
@@ -855,6 +895,49 @@ mod bound_command_tests {
         let source = include_str!("lib.rs");
         assert_eq!(source.matches(unbound).count(), 1);
         assert!(source.contains(&format!("async fn connection_status(state: {unbound})")));
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::*;
+
+    fn to(url: &str) -> Navigation {
+        navigation(&tauri::Url::parse(url).unwrap())
+    }
+
+    #[test]
+    fn the_app_and_what_it_made_load_in_place() {
+        for url in [
+            "tauri://localhost/index.html",
+            "tauri://localhost/#/spec/s1",
+            "https://tauri.localhost/",
+            "http://ipc.localhost/plugin",
+            "blob:tauri://localhost/3f1c",
+            "about:blank",
+        ] {
+            assert_eq!(to(url), Navigation::Stay, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_web_or_mail_address_opens_in_the_browser_instead() {
+        for url in [
+            "https://example.com/x",
+            "http://localhost:3000/",
+            "HTTPS://Example.COM/",
+            "https://tauri.localhost.evil.com/",
+            "mailto:uday@standardapplied.com",
+        ] {
+            assert_eq!(to(url), Navigation::OpenOutside, "{url}");
+        }
+    }
+
+    #[test]
+    fn anything_else_is_refused() {
+        for url in ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,<p>", "ssh://box"] {
+            assert_eq!(to(url), Navigation::Refuse, "{url}");
+        }
     }
 }
 

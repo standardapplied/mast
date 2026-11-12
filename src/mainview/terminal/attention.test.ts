@@ -140,3 +140,30 @@ describe("attentionStore", () => {
     expect(heard).toBe(2);
   });
 });
+
+describe("a room's messages on the Dock badge", () => {
+  test("each message that asked for you counts, beside the panes that rang, until its room is seen", () => {
+    const { calls } = connect();
+    attentionStore.noticeRoom("design");
+    attentionStore.noticeRoom("design");
+    attentionStore.ring("mast-app", unfocused);
+    attentionStore.noticeRoom("ops");
+
+    expect(calls.map((call) => call.badge)).toEqual([1, 2, 3, 4]);
+    expect(calls.every((call, index) => index === 2 || (!call.sound && !call.bounce))).toBe(true);
+
+    attentionStore.roomSeen("design");
+    attentionStore.roomSeen("design");
+    attentionStore.seen("mast-app");
+    attentionStore.roomSeen("ops");
+
+    expect(calls.slice(4).map((call) => call.badge)).toEqual([2, 1, null]);
+  });
+
+  test("a room seen with nothing counted calls nothing", () => {
+    const { calls } = connect();
+    attentionStore.roomSeen("design");
+
+    expect(calls).toEqual([]);
+  });
+});
